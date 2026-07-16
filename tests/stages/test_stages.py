@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
@@ -697,7 +698,7 @@ class TestStageExecuteRecording:
 
         assert result == expected
 
-    async def test_streaming_tts_skips_frame_inspection_without_capture(self):
+    async def test_streaming_tts_skips_frame_inspection_without_capture(self, monkeypatch):
         class _OpaqueEvent:
             @property
             def audio(self):
@@ -707,6 +708,19 @@ class TestStageExecuteRecording:
             async def synthesize(self, payload):
                 _ = payload
                 yield _OpaqueEvent()
+
+        monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+        monkeypatch.setattr(observability, "_get_meter", lambda: None)
+        monkeypatch.setattr(
+            observability,
+            "span",
+            lambda *args, **kwargs: pytest.fail("unavailable tracing must be skipped"),
+        )
+        monkeypatch.setattr(
+            observability,
+            "record_histogram",
+            lambda *args, **kwargs: pytest.fail("unavailable metrics must be skipped"),
+        )
 
         stage = TTSStage(_StreamingTTS())
         stream = await stage.execute("hello", _make_ctx(), _make_turn())
