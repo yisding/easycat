@@ -1,5 +1,9 @@
 # Chapter 14 — Bring your own agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 15 of 16** · [← Chapter 13](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 →](../15-operate-in-production/)
+<!-- END auto:navigation -->
+
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
 > the OpenAI Agents SDK. `create_session` silently wrapped it in an
 > `OpenAIAgentsBridge`. In this chapter we drop the framework
@@ -11,6 +15,11 @@
 - [Chapter 13.](../13-swap-providers-and-transports/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -98,13 +107,14 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,21 +29,30 @@
+@@ -40,22 +29,31 @@
 
  from __future__ import annotations
 
 -import argparse
  import asyncio
  import os
+ import shlex
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
@@ -130,7 +140,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,85 +72,105 @@
+@@ -75,85 +73,105 @@
      )
 
 
@@ -292,7 +302,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -165,4 +183,7 @@
+@@ -166,4 +184,7 @@
 
 
  if __name__ == "__main__":

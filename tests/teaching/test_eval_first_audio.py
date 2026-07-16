@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = REPO_ROOT / "docs" / "teaching" / "12-evals-and-latency"
 
 
-def _load_chapter_module(filename: str):
+def _load_chapter_module(filename: str) -> types.ModuleType:
     path = CHAPTER / filename
     module_name = f"teaching_ch12_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -24,7 +26,7 @@ def _load_chapter_module(filename: str):
     return module
 
 
-def _first(records, name: str):
+def _first(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return next(record for record in records if record["name"] == name)
 
 
@@ -49,6 +51,16 @@ def test_checked_in_eval_fixtures_end_turn_gap_at_first_audio() -> None:
     tool_records = list(load_bundle(CHAPTER / "bundles" / "tools_01_weather.bundle").records())
     tool_names = [record["name"] for record in tool_records]
     assert tool_names.index("tts.first_audio") < tool_names.index("tool.call.started")
+
+
+def test_eval_p95_includes_the_checked_in_slow_tail() -> None:
+    evals = _load_chapter_module("evals.py")
+
+    p50, p95 = evals._latency_percentiles([650, 670, 710, 910, 1160, 2420])
+
+    assert p50 == 810
+    assert p95 == 2420
+    assert p95 > 1200
 
 
 def test_slow_agent_budget_does_not_blame_all_sentence_tts(capsys) -> None:

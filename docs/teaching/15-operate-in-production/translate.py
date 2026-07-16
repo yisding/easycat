@@ -16,13 +16,17 @@ evals.py / latency_budget.py can consume directly if you stage it
 into a fresh bundle.
 
     uv run python docs/teaching/15-operate-in-production/translate.py \\
-        path/to/ch13-openai-local.bundle \\
-        out.ndjson
+        'docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle' \\
+        docs/teaching/15-operate-in-production/runs/translated.ndjson
+
+Quoted glob patterns are resolved by the script. If several bundles match,
+the newest one is translated.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 from pathlib import Path
 
@@ -75,19 +79,30 @@ def _elapsed_ms(start: dict, complete: dict) -> float:
     return (int(end_t) - int(start_t)) / 1e6
 
 
+def _resolve_bundle(pattern: str) -> Path:
+    direct = Path(pattern)
+    if direct.is_file():
+        return direct
+
+    matches = [Path(match) for match in glob.glob(pattern) if Path(match).is_file()]
+    if not matches:
+        raise SystemExit(f"No bundle matches {pattern!r}.")
+    return max(matches, key=lambda path: (path.stat().st_mtime_ns, path.name))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("bundle", type=Path, help="ch 13 bundle to translate")
+    ap.add_argument("bundle", help="ch 13 bundle path or quoted glob (newest match wins)")
     ap.add_argument("out", type=Path, help="output NDJSON path")
     args = ap.parse_args()
-    if not args.bundle.exists():
-        raise SystemExit(f"{args.bundle} does not exist.")
+    bundle_path = _resolve_bundle(args.bundle)
 
-    records = translate(args.bundle)
+    records = translate(bundle_path)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
-    print(f"Translated {len(records)} paired stages → {args.out}")
+    print(f"Translated {len(records)} paired stages from {bundle_path} → {args.out}")
 
 
 if __name__ == "__main__":

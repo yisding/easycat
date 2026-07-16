@@ -1,5 +1,9 @@
 # Chapter 15 — Operate in production
 
+<!-- BEGIN auto:navigation -->
+**Progress: 16 of 16** · [← Chapter 14](../14-bring-your-own-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md)
+<!-- END auto:navigation -->
+
 > Chapters 0-14 built and generalised a single session. Production
 > means running N of them at once, tearing them down cleanly, and
 > being able to debug the one that misbehaved yesterday. This
@@ -11,6 +15,11 @@
 - [Chapter 14.](../14-bring-your-own-agent/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -69,9 +78,9 @@
 
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,27 +18,19 @@
- import asyncio
+@@ -33,27 +19,19 @@
  import os
+ import shlex
  import time
 -from collections.abc import AsyncIterator
  from pathlib import Path
@@ -99,7 +108,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -72,114 +50,84 @@
+@@ -73,114 +51,84 @@
      )
 
 
@@ -596,9 +605,13 @@ uv run python docs/teaching/13-swap-providers-and-transports/main.py \
 
 # 2. Translate the resulting bundle.
 uv run python docs/teaching/15-operate-in-production/translate.py \
-    docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle \
-    runs/translated.ndjson
+    'docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle' \
+    docs/teaching/15-operate-in-production/runs/translated.ndjson
 ```
+
+Keep the glob quoted so the translator receives one pattern instead of an
+arbitrary number of shell arguments. If earlier chapter 13 runs also match,
+it selects the newest bundle. The output parent is created automatically.
 
 `translate.py` is ~50 lines of state machine. Read it top to
 bottom — it's the smallest possible thing that explains why
