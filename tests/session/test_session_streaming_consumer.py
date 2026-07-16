@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
+import pytest
+
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import AgentDelta
@@ -522,3 +524,64 @@ async def test_first_clause_defers_inside_open_markdown_span():
     # the full bolded clause (not a comma-truncated fragment).
     assert streaming, "expected emission once the markdown span closed"
     assert streaming[0].startswith("Let me look into that for you")
+
+
+async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
+    """Cancellation after queueing must not leave emitted text pending."""
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    task = asyncio.create_task(
+        buffer.add_delta("**Let me look into that for you, please** and continue.")
+    )
+    first = await tts_queue.get()
+    assert first is not None
+    assert first.text == "Let me look into that for you, "
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await buffer.flush()
+    remainder = await tts_queue.get()
+    assert remainder is not None
+    assert remainder.text == "please and continue."
+
+
+async def test_flush_commits_text_before_first_payload_handoff():
+    """Cancellation after queueing a final payload must not queue it twice."""
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    class SelfCancellingQueue(asyncio.Queue[TTSInput | None]):
+        cancel_next_put = True
+
+        async def put(self, item: TTSInput | None) -> None:
+            await super().put(item)
+            if item is not None and self.cancel_next_put:
+                self.cancel_next_put = False
+                task = asyncio.current_task()
+                assert task is not None
+                task.cancel()
+
+    tts_queue = SelfCancellingQueue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=False,
+    )
+    buffer.replace("A short final reply.")
+
+    with pytest.raises(asyncio.CancelledError):
+        await buffer.flush()
+
+    first = await tts_queue.get()
+    assert first is not None
+    assert first.text == "A short final reply."
+    assert await buffer.flush() is False
+    assert tts_queue.empty()

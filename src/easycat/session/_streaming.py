@@ -174,6 +174,7 @@ class _SentenceStreamBuffer:
         # non-space, non-``(`` continuation disambiguates that case, so we
         # recheck eagerly rather than waiting for a markdown-closer character.
         self._awaiting_link_dest = False
+        self._payload_count = 0
 
     def replace(self, text: str) -> None:
         """Replace the pending buffer wholesale (used by the ``done`` event)."""
@@ -234,10 +235,14 @@ class _SentenceStreamBuffer:
 
         stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
         ready, remaining = self._split_pending(stripped_window)
+        # Commit the split before queueing.  The first-payload handoff yields
+        # after the payload is accepted, so cancellation in that window must
+        # not leave the already-emitted prefix in the pending buffer for a
+        # later flush to duplicate.
+        self._text = remaining
         queued = False
         if ready:
             queued = await self._put_payload(ready, is_final=False)
-        self._text = remaining
         return queued
 
     async def flush(self) -> bool:
@@ -247,6 +252,11 @@ class _SentenceStreamBuffer:
             text = self._text
             if self._strip_md:
                 text = strip_markdown(text, normalize_code_spans=True)
+            # Commit the flush before queueing. The first-payload handoff
+            # yields after the payload is accepted, so cancellation in that
+            # window must not leave the already-queued final text pending for
+            # a later flush to duplicate.
+            self._text = ""
             queued = await self._put_payload(text, is_final=True)
         self._text = ""
         return queued
@@ -280,6 +290,16 @@ class _SentenceStreamBuffer:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)
         if payload.text.strip():
             await self._tts_queue.put(payload)
+            first_payload = self._payload_count == 0
+            self._payload_count += 1
+            if first_payload:
+                # Two turns are intentional. The first wakes the waiting TTS
+                # consumer; that consumer creates the synthesis task and yields
+                # once to start it. The second lets the new task enter the TTS
+                # provider before this agent task consumes a terminal/done event.
+                # Public lifecycle/audio remains held by first_tts_payload_ready.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
             return True
         return False
 
