@@ -767,6 +767,8 @@ class WebRTCTransport(AudioQueueMixin):
     **GET /health** — Returns ``{"status": "ok"}``.
     """
 
+    send_audio_is_nonblocking = True
+
     transport_kind = "webrtc"
 
     _transport_name = "WebRTC"
