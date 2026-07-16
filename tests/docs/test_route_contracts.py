@@ -301,9 +301,9 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
 
 def test_feature_runtime_modes_docs_route_matches_chapter_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
-    readme = (
-        REPO_ROOT / "docs" / "using-easycat" / "01-runtime-modes" / "README.md"
-    ).read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "01-runtime-modes" / "README.md").read_text(
+        encoding="utf-8"
+    )
     route = entries["docs/using-easycat/01-runtime-modes/"]
 
     assert route["audience"] == "learners"
