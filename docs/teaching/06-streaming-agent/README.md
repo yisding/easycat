@@ -94,7 +94,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -74,49 +80,110 @@
+@@ -74,50 +80,110 @@
                  self._preroll.append(chunk)
  
  
@@ -107,9 +107,10 @@
 -
 -    async def send_audio(self, chunk: AudioChunk) -> bool:
 -        accepted = await self._transport.send_audio(chunk)
--        if accepted and self.first_audio_at is None:
+-        normalized = accepted is None or bool(accepted)
+-        if normalized and self.first_audio_at is None:
 -            self.first_audio_at = time.monotonic()
--        return accepted
+-        return normalized
 -
 -
 -def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -242,7 +243,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -127,52 +194,19 @@
+@@ -128,51 +194,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -277,10 +278,9 @@
 -        reply=reply,
 -    )
 -
--    # Sub-gap 3: agent response → the first TTS audio chunk is handed
--    # to the transport. ``speak`` itself returns only after every chunk
--    # has been enqueued, so a forwarding probe captures the earlier
--    # first-audio milestone without changing the helper.
+-    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+-    # accepts. ``speak`` returns after every produced chunk has been offered,
+-    # so a forwarding probe captures the earlier first-accepted milestone.
 -    tts_start = time.monotonic()
 -    print(f"  bot:  {reply!r}")
 -    audio_probe = FirstAudioProbe(transport)
@@ -307,7 +307,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -181,15 +215,12 @@
+@@ -181,11 +215,8 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -321,11 +321,6 @@
          },
      )
      if total_gap is None:
--        print("  (turn gap unavailable — TTS produced no audio)")
-+        print("  (turn gap unavailable — TTS produced no accepted audio)")
-     else:
-         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
- 
 @@ -203,6 +234,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)

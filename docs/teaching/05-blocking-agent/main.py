@@ -83,9 +83,10 @@ class FirstAudioProbe:
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         accepted = await self._transport.send_audio(chunk)
-        if accepted and self.first_audio_at is None:
+        normalized = accepted is None or bool(accepted)
+        if normalized and self.first_audio_at is None:
             self.first_audio_at = time.monotonic()
-        return accepted
+        return normalized
 
 
 def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -152,10 +153,9 @@ async def run_turn(transport, stt, client, journal) -> None:
         reply=reply,
     )
 
-    # Sub-gap 3: agent response → the first TTS audio chunk is handed
-    # to the transport. ``speak`` itself returns only after every chunk
-    # has been enqueued, so a forwarding probe captures the earlier
-    # first-audio milestone without changing the helper.
+    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+    # accepts. ``speak`` returns after every produced chunk has been offered,
+    # so a forwarding probe captures the earlier first-accepted milestone.
     tts_start = time.monotonic()
     print(f"  bot:  {reply!r}")
     audio_probe = FirstAudioProbe(transport)
@@ -189,9 +189,9 @@ async def run_turn(transport, stt, client, journal) -> None:
         },
     )
     if total_gap is None:
-        print("  (turn gap unavailable — TTS produced no audio)")
+        print("  (turn gap unavailable — TTS produced no accepted audio)")
     else:
-        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
 async def main() -> None:

@@ -322,7 +322,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
     if total_gap is None:
         print("  (turn gap unavailable — TTS produced no accepted audio)")
     else:
-        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
         if speech_end_to_first_audio is not None:
             print(
                 f"  (estimated user speech end → first audio: {speech_end_to_first_audio:.0f} ms)"

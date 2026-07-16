@@ -20,7 +20,7 @@ def _load_chapter(monkeypatch):
     return module
 
 
-async def test_turn_gap_ends_at_first_audio_not_full_enqueue(monkeypatch, capsys) -> None:
+async def test_turn_gap_ends_at_first_accepted_audio_not_full_enqueue(monkeypatch, capsys) -> None:
     chapter = _load_chapter(monkeypatch)
     clock = {"now": 1.0}
     rows: list[dict] = []
@@ -57,8 +57,23 @@ async def test_turn_gap_ends_at_first_audio_not_full_enqueue(monkeypatch, capsys
     assert gap["tts_enqueue_ms"] == 1_000.0
     assert gap["total_gap_ms"] == 2_500.0
     output = capsys.readouterr().out
-    assert "STT final → first audio enqueued" in output
+    assert "STT final → first audio accepted" in output
     assert "bot done speaking" not in output
+
+
+async def test_first_audio_probe_normalizes_legacy_none(monkeypatch) -> None:
+    chapter = _load_chapter(monkeypatch)
+    clock = {"now": 3.5}
+
+    class LegacyTransport:
+        async def send_audio(self, _chunk) -> None:
+            return None
+
+    monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
+    probe = chapter.FirstAudioProbe(LegacyTransport())
+
+    assert await probe.send_audio("chunk") is True
+    assert probe.first_audio_at == 3.5
 
 
 async def test_turn_gap_is_unavailable_when_transport_rejects_audio(monkeypatch, capsys) -> None:
@@ -97,4 +112,4 @@ async def test_turn_gap_is_unavailable_when_transport_rejects_audio(monkeypatch,
     assert gap["tts_ms"] is None
     assert gap["tts_enqueue_ms"] == 1_000.0
     assert gap["total_gap_ms"] is None
-    assert "turn gap unavailable — TTS produced no audio" in capsys.readouterr().out
+    assert "turn gap unavailable — TTS produced no accepted audio" in capsys.readouterr().out

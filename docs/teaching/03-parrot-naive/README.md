@@ -33,8 +33,9 @@ personally heard this fail on your own voice.
 ## Diff from chapter 2
 
 - **Added:** TTS via `easycat.recipes.speak`; a fixed silence-timeout
-  turn detector; a conversation loop that keeps running until
-  Ctrl-C.
+  turn detector; a conversation loop that keeps running until Ctrl-C;
+  `speak_acceptance_probe.py` and `parrot.delivery` records for
+  provider-free output-acceptance evidence.
 - **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
   timer keys off STT partials, which OpenAI's default STT only emits
   after the audio uploads.
@@ -70,7 +71,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -24,53 +27,91 @@
+@@ -24,53 +27,133 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -86,6 +87,48 @@ personally heard this fail on your own voice.
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch02-streaming-{int(time.time())}"
 +SESSION_ID = f"ch03-parrot-{int(time.time())}"
++
++
++def record_delivery(
++    journal: InMemoryRingBuffer,
++    *,
++    text: str,
++    accepted_chunks: int,
++    rejected_chunks: int,
++    offset_ms: float,
++) -> None:
++    """Record transport acceptance without claiming speaker playback."""
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name="parrot.delivery",
++        session_id=SESSION_ID,
++        data={
++            "stage": "parrot",
++            "committed_text": text,
++            "accepted_chunks": accepted_chunks,
++            "rejected_chunks": rejected_chunks,
++            "offset_ms": offset_ms,
++        },
++    )
++    if rejected_chunks:
++        print(
++            "  transport rejected "
++            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
++        )
++
++
++async def speak_and_record(
++    transport, journal: InMemoryRingBuffer, text: str, start: float
++) -> None:
++    """Speak once, then preserve every transport acceptance result."""
++    accepted_chunks, rejected_chunks = await speak(transport, text)
++    record_delivery(
++        journal,
++        text=text,
++        accepted_chunks=accepted_chunks,
++        rejected_chunks=rejected_chunks,
++        offset_ms=(time.monotonic() - start) * 1000,
++    )
  
  
  async def main() -> None:
@@ -164,7 +207,7 @@ personally heard this fail on your own voice.
 +                            "offset_ms": offset_ms,
 +                        },
 +                    )
-+                    await speak(transport, last_text)
++                    await speak_and_record(transport, journal, last_text, start)
 +                    last_text = ""
 +                continue
 +            if event is None:
@@ -188,7 +231,7 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -81,16 +122,15 @@
+@@ -81,16 +164,15 @@
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -209,7 +252,7 @@ personally heard this fail on your own voice.
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
-@@ -101,4 +141,7 @@
+@@ -101,4 +183,7 @@
  
  
  if __name__ == "__main__":
@@ -308,6 +351,21 @@ or a final. The `parrot.fire` offset will be **at least** 500 ms after
 that trigger; event-loop scheduling contributes the reported
 `scheduler_overshoot_ms`. The analyzer also separates that silence gap
 from the consumer stall while the parrot awaits `speak()`.
+
+### Output acceptance is separate evidence
+
+`recipes.speak()` returns `(accepted_chunks, rejected_chunks)` from the
+transport and the parrot writes those counts to `parrot.delivery`. Run the
+same contract without a microphone, TTS account, or speaker:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/speak_acceptance_probe.py
+```
+
+The scripted TTS produces three chunks; the transport accepts two and rejects
+one. These counts prove only transport acceptance. They do not prove that the
+accepted chunks reached a device or were heard—the playback-evidence lesson in
+chapter 9 adds that later boundary.
 
 ## Try breaking it
 

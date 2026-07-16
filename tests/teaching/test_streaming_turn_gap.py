@@ -65,7 +65,7 @@ async def test_streaming_turn_gap_ends_at_first_accepted_audio(monkeypatch, caps
     assert gap["total_gap_ms"] == 2_200.0
     assert gap["reply_enqueue_gap_ms"] == 3_000.0
     output = capsys.readouterr().out
-    assert "STT final → first audio enqueued" in output
+    assert "STT final → first audio accepted" in output
     assert "bot done speaking" not in output
 
 
