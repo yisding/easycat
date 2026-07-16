@@ -94,38 +94,38 @@ the workflow. How does the journal record the action's lifecycle?
 
 ## 3. Watch the pronunciation pipeline at work
 
-**Task.** Register the `default_pronunciation_processors()` stack
-and say *"Call me at 555-867-5309."* Open the bundle afterwards and
-look at: (a) the `output_processor.*` records (which processor ran,
-which strings changed), and (b) any `ssml_downgraded: true` flag the
-TTS scheduler emitted because no bundled provider supports SSML
-today. The pronunciation pipeline is *wired*; the audible part of
-the chain ends one stage short of the speaker for now.
+**Task.** The chapter now builds its stack with
+`default_pronunciation_processors()`. Say *"Call me at
+555-867-5309."* After the bundle is written, run the printed
+`easycat journal grep ... --query tts_payload_prepared --json`
+command. Which transformation survived into the provider-ready
+payload, and which guarantee was lost?
 
 **Hints**
 
-1. `default_pronunciation_processors()` wires
-   `PhoneticReplacementProcessor` (fixed-string swaps) and
-   `PauseProcessor` (regex-matched `<break>` insertion). The
-   default pause pattern targets phone-number-shaped digit groups.
-2. **Honesty check.** None of the bundled TTS providers currently
-   expose an `input_policy` that accepts SSML natively. That means
-   the session's `_tts_scheduler` calls `strip_ssml_tags` on any SSML
-   payload before sending it to the provider, and journals an
-   `ssml_downgraded: true` record. With today's providers you will
-   hear the same flat reading whether the `PauseProcessor` is
-   registered or not. The exercise is really "watch the journal record
-   the downgrade."
-3. To actually hear pauses, you'd need to plug in a TTS provider
-   with `TTSInputPolicy.native_ssml()` that accepts SSML break tags.
-   None ship with EasyCat as of this writing — a custom provider via
-   `create_tts_provider` is the path. File this as a capability you'd
-   add when a customer needs it.
-4. The PauseProcessor itself is wired correctly — it inserts
-   `<break time="...ms"/>` between matched units (see
-   `src/easycat/llm_output_processing.py`). The gap is only in
-   provider coverage. The journal is the source of truth: grep
-   `ssml_downgraded` to see every downgrade.
+1. `default_pronunciation_processors()` always adds a
+   `PauseProcessor` for phone-number-shaped digit groups. It adds a
+   `PhoneticReplacementProcessor` only when you pass a non-empty
+   `name_pronunciations` mapping, as `build_output_processors()` does.
+2. The scheduler writes one `tts_payload_prepared` record per payload,
+   not a family of `output_processor.*` records. Its `processors` list
+   tells you which processors were configured; `changed`,
+   `original_format`, `prepared_format`, and `ssml_downgraded` describe
+   the combined result. It does not retain every intermediate string or
+   attribute a change to one processor.
+3. None of the four bundled TTS providers currently accepts SSML.
+   `PauseProcessor` first inserts exact 120 ms `<break>` tags between
+   the phone-number digits, then the scheduler strips those tags before
+   calling the provider. The provider-ready plain text keeps the digits
+   separated by spaces, so pronunciation may change, but the exact
+   120 ms timing guarantee is gone. Do not expect identical audio or a
+   precise pause from that fallback.
+4. For provider-neutral pause cues, try
+   `PauseProcessor(..., style="ellipsis")`; it stays plain text, but the
+   provider still decides the timing. Exact break duration requires a
+   provider whose `input_policy` is `TTSInputPolicy.native_ssml()`.
+   With such a provider, the record would show `prepared_format: ssml`
+   and `ssml_downgraded: false`.
 
 ## Self-check
 

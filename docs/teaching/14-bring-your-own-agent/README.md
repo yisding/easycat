@@ -110,7 +110,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,22 +29,32 @@
+@@ -40,22 +29,34 @@
 
  from __future__ import annotations
 
@@ -121,17 +121,15 @@
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
-+
-+from openai import AsyncOpenAI
++from typing import TYPE_CHECKING
 
  from easycat import (
      EasyConfig,
      LocalTransportConfig,
 +    MarkdownStripProcessor,
-+    PauseProcessor,
-+    PhoneticReplacementProcessor,
      attach_runtime_feedback,
      create_session,
++    default_pronunciation_processors,
      export_debug_bundle,
      wait_for_shutdown_signal,
  )
@@ -139,13 +137,17 @@
 +from easycat.cancel import CancelToken
 +from easycat.integrations.agents import GenericWorkflowBridge
 +from easycat.integrations.agents.base import AgentRecorder, CancellationMode
++from easycat.llm_output_processing import LLMOutputProcessor
 +from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
++
++if TYPE_CHECKING:
++    from openai import AsyncOpenAI
 +
 +MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,85 +74,128 @@
+@@ -75,85 +76,153 @@
      )
 
 
@@ -157,9 +159,23 @@
 -    return Agent(
 -        name="assistant",
 -        instructions="You are a helpful voice assistant. Keep replies brief.",
--    )
--
--
++def pronunciation_command(path: Path) -> str:
++    """Inspect the scheduler's provider-ready pronunciation payloads."""
++    return shlex.join(
++        [
++            "uv",
++            "run",
++            "easycat",
++            "journal",
++            "grep",
++            str(_display_path(path)),
++            "--query",
++            "tts_payload_prepared",
++            "--json",
++        ]
+     )
+
+
 -def transport_config(name: str):
 -    if name == "local":
 -        return LocalTransportConfig()
@@ -185,6 +201,17 @@
 -
 -    All values are string shortcuts — ``EasyConfig.__post_init__``
 -    parses them into concrete config objects via the factory.
++def build_output_processors() -> list[LLMOutputProcessor]:
++    """Build the chapter's pronunciation stack from the public factory."""
++    return [
++        MarkdownStripProcessor(),
++        *default_pronunciation_processors(
++            name_pronunciations={"easycat": "ee zee cat"},
++            phone_pause_ms=120,
++        ),
++    ]
++
++
 +class MyWorkflow:
 +    """Our brain. No framework — just async + OpenAI chat completions.
 +
@@ -286,6 +313,8 @@
 -    print(f"=== {tag} ===")
 -
 -    mix = provider_mix(args.provider_mix)
++    from openai import AsyncOpenAI
++
 +    client = AsyncOpenAI()
 +    actions = SessionActions()  # shared: workflow enqueues, session drains
 +    workflow = MyWorkflow(client, actions)
@@ -295,12 +324,7 @@
 +    # A tiny pronunciation pipeline. Processors run serially on every
 +    # committed assistant utterance before the text reaches TTS; a
 +    # raise in one is logged and the next runs (fail-open).
-+    processors = [
-+        MarkdownStripProcessor(),
-+        PhoneticReplacementProcessor({"easycat": "ee zee cat"}),
-+        # 120 ms pause between digit groups in a phone number.
-+        PauseProcessor(pattern=r"\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b", pause_ms=120),
-+    ]
++    processors = build_output_processors()
 +
      config = EasyConfig(
 -        agent=build_agent(),
@@ -335,7 +359,14 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -166,4 +208,7 @@
+@@ -161,9 +230,14 @@
+             print("Measure this production-shaped bundle directly:")
+             print(f"  {human_command}")
+             print(f"  {json_command}")
++            print("Inspect its provider-ready pronunciation payloads:")
++            print(f"  {pronunciation_command(path)}")
+         except Exception as exc:  # noqa: BLE001 — teaching script
+             print(f"(no bundle written: {exc})")
 
 
  if __name__ == "__main__":
@@ -562,8 +593,20 @@ phonetic replacements and pauses shape what the user *hears* but
 the LLM still sees the original text next turn.
 
 `default_pronunciation_processors(...)` is a factory that wires the
-common stack (phonetic swaps + phone-number pauses) if you don't
-want to hand-build the list.
+common stack if you don't want to hand-build the list. It always adds
+phone-number pauses and adds phonetic swaps when you pass a non-empty
+`name_pronunciations` mapping.
+
+The scheduler emits one `tts_payload_prepared` journal record for each
+provider-ready payload. Its `processors` list names the configured
+stack, while `changed`, the original/prepared formats, and
+`ssml_downgraded` describe the combined result. There are no
+per-processor `output_processor.*` records or intermediate strings.
+The four bundled providers currently accept plain text only, so the
+default SSML break tags are stripped: spaced digits remain, but exact
+pause timing does not. Use `style="ellipsis"` for a provider-neutral
+plain-text cue, or a native-SSML provider when exact break duration is
+required.
 
 ## MCP (a short sidebar)
 
@@ -712,10 +755,11 @@ does not leak the prior list.
 2. Add a `CustomAction` and a 10-line executor that prints it.
    Trigger it from the workflow. How does the journal record the
    action's lifecycle?
-3. Register the `default_pronunciation_processors()` stack and say
-   "Call me at 555-867-5309." Listen for the pause. Now drop the
-   `PauseProcessor` and say it again. How does the stress pattern
-   change?
+3. Say "Call me at 555-867-5309," then run the printed
+   `journal grep` command for `tts_payload_prepared`. Which parts of
+   the transformation reached the provider, and which SSML timing
+   guarantee was downgraded? Try `style="ellipsis"` and compare the
+   prepared format.
 
 ## What's next
 
