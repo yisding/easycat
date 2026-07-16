@@ -1,7 +1,7 @@
 # Chapter 6 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -196,5 +196,6 @@ uv run python docs/teaching/offline_spine.py --run --through 6 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 7 — Tools, Mid-stream →](../07-tools/)
 <!-- END auto:exercise-completion -->

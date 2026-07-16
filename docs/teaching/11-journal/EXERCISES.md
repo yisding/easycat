@@ -1,7 +1,7 @@
 # Chapter 11 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
 <!-- END auto:navigation -->
 
 The README's three planted-bug investigations *are* the chapter's
@@ -261,5 +261,6 @@ uv run python docs/teaching/offline_spine.py --run --through 11 --jobs 4 --show-
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
 <!-- END auto:exercise-completion -->

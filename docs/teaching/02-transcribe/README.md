@@ -1,7 +1,7 @@
 # Chapter 2 — Transcribe
 
 <!-- BEGIN auto:navigation -->
-**Progress: 3 of 16** · [← Chapter 1 — Echo](../01-echo/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+**Progress: 3 of 16** · [← Chapter 1 — Echo](../01-echo/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:navigation -->
 
 > Speak, see text. Twice — once batch, once streaming. Feel the

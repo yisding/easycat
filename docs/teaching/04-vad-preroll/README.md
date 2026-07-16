@@ -1,7 +1,7 @@
 # Chapter 4 — VAD + Pre-roll
 
 <!-- BEGIN auto:navigation -->
-**Progress: 5 of 16** · [← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+**Progress: 5 of 16** · [← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
 <!-- END auto:navigation -->
 
 > Real speech detection. And why the buffer *before* the detection

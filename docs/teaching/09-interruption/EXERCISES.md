@@ -1,7 +1,7 @@
 # Chapter 9 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -214,5 +214,6 @@ uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
 <!-- END auto:exercise-completion -->

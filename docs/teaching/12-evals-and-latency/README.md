@@ -1,7 +1,7 @@
 # Chapter 12 — Evals + the Latency Budget
 
 <!-- BEGIN auto:navigation -->
-**Progress: 13 of 16** · [← Chapter 11 — The Journal as Mental Model](../11-journal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+**Progress: 13 of 16** · [← Chapter 11 — The Journal as Mental Model](../11-journal/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
 <!-- END auto:navigation -->
 
 > The difference between *building* a voice bot and *operating* one

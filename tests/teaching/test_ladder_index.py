@@ -282,7 +282,9 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "one or more applied tasks in the dedicated `EXERCISES.md`" in normalized_index
     assert "Generated source diffs can make a README long" in normalized_index
     assert "Generated handoffs connect those steps" in normalized_index
-    assert "point the learner to the next chapter" in normalized_index
+    assert (
+        "return to the progress worksheet before pointing to the next chapter" in normalized_index
+    )
     assert "concealed behind a reveal-after-attempt disclosure" in normalized_index
     assert "A task is complete when the learner has kept an initial plan" in normalized_index
     assert "Closing self-checks are closed-book retrieval gates" in normalized_index

@@ -1,7 +1,7 @@
 # Chapter 1 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -129,5 +129,6 @@ uv run python docs/teaching/offline_spine.py --run --through 1 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:exercise-completion -->

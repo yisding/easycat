@@ -1,7 +1,7 @@
 # Chapter 0 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 1 — Echo →](../01-echo/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:navigation -->
 
 One exercise from the chapter README, plus hints if you get stuck.
@@ -169,5 +169,6 @@ uv run python docs/teaching/offline_spine.py --run --through 0 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:exercise-completion -->

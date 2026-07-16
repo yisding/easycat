@@ -1,7 +1,7 @@
 # Chapter 7 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -175,5 +175,6 @@ uv run python docs/teaching/offline_spine.py --run --through 7 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:exercise-completion -->

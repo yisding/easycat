@@ -1,7 +1,7 @@
 # Chapter 14 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -257,5 +257,6 @@ uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4 --show-
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 15 — Operate in production →](../15-operate-in-production/)
 <!-- END auto:exercise-completion -->

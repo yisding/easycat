@@ -1,7 +1,7 @@
 # Chapter 10 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -210,5 +210,6 @@ uv run python docs/teaching/offline_spine.py --run --through 10 --jobs 4 --show-
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 11 — The Journal as Mental Model →](../11-journal/)
 <!-- END auto:exercise-completion -->

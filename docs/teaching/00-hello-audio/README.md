@@ -1,7 +1,7 @@
 # Chapter 0 — Hello, Audio
 
 <!-- BEGIN auto:navigation -->
-**Progress: 1 of 16** · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)
+**Progress: 1 of 16** · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:navigation -->
 
 > Record, play, and *understand* raw PCM. No framework. Just bytes
