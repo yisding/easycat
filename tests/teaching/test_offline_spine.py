@@ -159,6 +159,14 @@ def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     assert noisy["status"] == "fail"
     assert noisy["detail"] == "unexpected stderr: unexpected noise"
 
+    script.write_text(
+        "import json, sys\nprint(json.dumps({'ok': True}))\nprint(' ', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    whitespace_only_stderr = spine._run_checkpoint(checkpoint, timeout_s=5)
+    assert whitespace_only_stderr["status"] == "fail"
+    assert whitespace_only_stderr["detail"] == "unexpected stderr: ' \\n'"
+
 
 def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
     spine = _load_spine()
