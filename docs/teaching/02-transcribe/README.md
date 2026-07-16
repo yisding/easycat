@@ -1,7 +1,7 @@
 # Chapter 2 — Transcribe
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 1 — Echo](../01-echo/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+**Progress: 3 of 16** · [← Chapter 1 — Echo](../01-echo/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:navigation -->
 
 > Speak, see text. Twice — once batch, once streaming. Feel the
@@ -35,6 +35,11 @@
   `uv sync --extra quickstart --extra deepgram --group dev`.
 - Export the selected provider's key: `OPENAI_API_KEY` for the default or
   `DEEPGRAM_API_KEY` for `--provider deepgram`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -306,6 +311,16 @@
 
 ## The two scripts
 
+Start with the chapter's canonical entry point. It delegates to the
+streaming version:
+
+```bash
+uv run python docs/teaching/02-transcribe/main.py
+```
+
+Then run the two named scripts directly to compare batch and streaming
+STT side by side:
+
 ```bash
 uv run python docs/teaching/02-transcribe/batch.py
 uv run python docs/teaching/02-transcribe/streaming.py --provider openai
@@ -385,7 +400,9 @@ a microphone, or a provider SDK:
 uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 ```
 
-In `feed_failure.events`, `stt.events.cancelled` appears before `stt.end`,
+In `partial_connect_failure.events`, `transport.input.stop` proves that a
+speaker-startup failure releases the microphone that started first. In
+`feed_failure.events`, `stt.events.cancelled` appears before `stt.end`,
 `stt.close`, and `transport.disconnect`. In `start_failure`, the provider and
 transport still close, but `stt.end` is correctly absent because
 `start_stream()` never succeeded. The main script exports a success bundle

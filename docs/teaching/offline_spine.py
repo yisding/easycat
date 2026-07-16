@@ -276,8 +276,10 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
     if completed.returncode:
         lines = [line for line in completed.stderr.splitlines() if line.strip()]
         detail = lines[-1] if lines else "checkpoint exited without stderr"
-    elif stderr_lines := [line for line in completed.stderr.splitlines() if line.strip()]:
-        detail = f"unexpected stderr: {stderr_lines[-1]}"
+    elif completed.stderr != "":
+        stderr_lines = [line for line in completed.stderr.splitlines() if line.strip()]
+        unexpected_output = stderr_lines[-1] if stderr_lines else repr(completed.stderr)
+        detail = f"unexpected stderr: {unexpected_output}"
     else:
         try:
             observed = json.loads(completed.stdout)

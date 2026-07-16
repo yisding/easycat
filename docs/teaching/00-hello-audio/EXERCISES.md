@@ -1,7 +1,7 @@
 # Chapter 0 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 1 — Echo →](../01-echo/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:navigation -->
 
 One exercise from the chapter README, plus hints if you get stuck.
@@ -69,13 +69,16 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
 
 **Hints**
 
-1. Local capture defaults to 24 kHz, while Deepgram's streaming STT target
-   defaults to 16 kHz. The provider adapter resamples at that input boundary.
+1. `LocalTransport` defaults its capture/playback pipeline to 24 kHz, while
+   this chapter's separate raw-`sounddevice` demo explicitly records at 16 kHz.
+   Deepgram's streaming STT target also defaults to 16 kHz, and the provider
+   adapter resamples at that input boundary when its upstream format differs.
 2. WebRTC receives and sends 48 kHz media frames, but its default pipeline
    target is 16 kHz. Those are two boundaries of one transport, not a
    contradiction.
-3. OpenAI TTS defaults to 24 kHz. A WebRTC session resamples that output to
-   48 kHz for media; a Local session already has a matching 24 kHz target.
+3. OpenAI returns provider-native 24 kHz PCM. A default WebRTC session first
+   normalizes that to its resolved 16 kHz TTS output, then resamples to 48 kHz
+   media; a Local session already has a matching 24 kHz target.
 4. Twilio's wire is 8 kHz μ-law while EasyCat's default internal pipeline
    target is 16 kHz PCM. Decoding and upsampling make the representation
    compatible but do not restore telephone-band frequencies.
@@ -109,10 +112,12 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 3. ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
    requests 16 kHz from the provider and exposes 8 kHz transport output
    after the adapter's final resample.
-4. The `twilio_explicit_16k_preserved` control proves explicit caller intent
+4. OpenAI returns fixed 24 kHz PCM even when EasyCat's resolved output target
+   is 8 or 16 kHz. `TTSBase` performs that post-provider normalization.
+5. The `twilio_explicit_16k_preserved` control proves explicit caller intent
    wins over automatic default alignment. Twilio still converts that PCM to
    its 8 kHz μ-law wire format later.
-5. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
+6. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
    Disable alignment only when you deliberately own the downstream format
    conversion or need a provider-specific output.
 
