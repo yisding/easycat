@@ -276,6 +276,26 @@ uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py
 uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast
 ```
 
+## Feature tools and actions
+
+- Path: docs/using-easycat/04-tools-actions/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/04-tools-actions
+- Audience: learners
+- Separate agent tools, session actions, events, and spoken-output rules.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/04-tools-actions/main.py preview
+uv run python docs/using-easycat/04-tools-actions/main.py run
+uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run
+```
+
 ## Examples
 
 - Path: examples/README.md

@@ -405,3 +405,5 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/03-conversation-controls/main.py balanced"
         in conversation["commands"]
     )
+    tools = entries["docs/using-easycat/04-tools-actions/"]
+    assert "uv run python docs/using-easycat/04-tools-actions/main.py preview" in tools["commands"]

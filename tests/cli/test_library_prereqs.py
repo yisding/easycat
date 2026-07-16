@@ -134,23 +134,31 @@ def test_run_session_uses_existing_session_async_context(
     assert session.events == ["start", "stop(force=True)"]
 
 
+@pytest.mark.parametrize("handlers_installed", [True, False])
 def test_run_session_exits_when_session_stops_itself(
     monkeypatch: pytest.MonkeyPatch,
+    handlers_installed: bool,
 ) -> None:
     """Session actions can end the synchronous run path without an OS signal."""
     from easycat.helpers import run_session
 
     class SelfStoppingSession(_StubSession):
+        stop_task: asyncio.Task[None] | None = None
+
         async def __aenter__(self) -> SelfStoppingSession:
             await self.start()
-            await self.stop()
+            self.stop_task = asyncio.create_task(self._stop_after_entry())
             return self
+
+        async def _stop_after_entry(self) -> None:
+            await asyncio.sleep(0)
+            await self.stop()
 
     session = SelfStoppingSession()
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
     monkeypatch.setattr(
         "easycat.helpers._install_shutdown_signal_handlers",
-        lambda _loop, _stop_event: True,
+        lambda _loop, _stop_event: handlers_installed,
     )
 
     real_asyncio_run = asyncio.run
@@ -166,6 +174,8 @@ def test_run_session_exits_when_session_stops_itself(
     run_session(session)
 
     assert session.events == ["start", "stop(force=False)", "stop(force=True)"]
+    assert session.stop_task is not None
+    assert session.stop_task.done()
 
 
 def test_run_does_not_attach_feedback_under_pytest(
