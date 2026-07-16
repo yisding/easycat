@@ -149,10 +149,13 @@
 - The reader has heard the difference between "tool with filler"
   and "tool without filler" on the same prompt and can defend the
   choice for each.
-- The reader can name the five `SessionAction` types
+- The reader can name the seven `SessionAction` types
   (`EndCallAction`, `TransferCallAction`, `SendDTMFAction`,
-  `SendSMSAction`, `CustomAction`) and explain why each one is a
-  session action rather than a tool.
+  `SendSMSAction`, `AddToDNCAction`, `RemoveFromDNCAction`,
+  `CustomAction`), explain why each one is a session action rather
+  than an inline tool, and identify the end-call and DNC actions as
+  built-in `CoreSessionActionExecutor` behavior while the remaining
+  four need a configured provider or application executor.
 - The reader has caught and fixed at least one "tool result leaks
   to TTS" bug — either induced by an exercise or in their own
   implementation.

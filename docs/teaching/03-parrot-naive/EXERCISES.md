@@ -1,5 +1,7 @@
 # Chapter 3 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 The whole chapter is one big exercise: feel a bad pipeline
 viscerally so the next chapter's fix lands. The README walks you
 through four sentences that break it; this file deepens that into
@@ -103,8 +105,8 @@ uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
 ```
 
 Predict each event list first. Why does `normal_event_end` cancel the
-microphone feeder, why is that not reported as an error, and which two cases
-correctly omit `stt.end`?
+microphone feeder without reporting an error, why does `failed_event_end`
+propagate, and which two cases correctly omit `stt.end`?
 
 **Hints**
 
@@ -117,8 +119,10 @@ correctly omit `stt.end`?
    sentinel. Its wrapper then raises `ParrotEventStreamEndedError`, causing the
    infinite feeder to be cancelled and joined.
 4. `except* ParrotEventStreamEndedError` handles that private terminal signal.
-   A real feed, listener, or parrot failure remains in the exception group and
-   still propagates after cleanup.
+   A provider `Error` observed before stream exhaustion makes the listener
+   raise the underlying failure instead of queueing the normal sentinel. A real
+   feed, listener, or parrot failure remains in the exception group and still
+   propagates after cleanup.
 5. Removing the timeout would fix the intended Chapter 3 lesson. Removing
    `AsyncExitStack` or `TaskGroup` would instead reintroduce unrelated bugs.
 

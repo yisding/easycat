@@ -116,7 +116,7 @@ def _make_deepgram(
     async def connect(url, **kw):
         return ws
 
-    return DeepgramSTT(DeepgramSTTConfig(api_key="k", ws_connect=connect))
+    return DeepgramSTT(DeepgramSTTConfig(api_key="k", persistent_ws=False, ws_connect=connect))
 
 
 def _make_elevenlabs_batch(
