@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -9,6 +10,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "10-cleaning-signal"
+
+
+def load_replay():
+    module_name = "test_chapter_10_replay"
+    spec = importlib.util.spec_from_file_location(module_name, CHAPTER / "replay.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
 
 
 def test_replay_metrics_probe_enforces_reference_and_records_signal_change() -> None:
@@ -65,6 +79,31 @@ def test_replay_source_records_promised_per_frame_and_summary_metrics() -> None:
     assert 'raise SystemExit("--ref is required when --aec on")' in source
 
 
+def test_replay_journal_retains_more_than_default_capacity() -> None:
+    replay = load_replay()
+    audio_format = replay.AudioFormat(sample_rate=8_000, channels=1, sample_width=2)
+    frame_bytes = audio_format.sample_rate * replay.FRAME_MS // 1000 * audio_format.frame_size
+    frame_count = 10_050
+    capacity = (
+        replay._frame_count(bytes(frame_bytes * frame_count), audio_format)
+        + replay.REPLAY_METADATA_RECORDS
+    )
+    journal = replay.InMemoryRingBuffer(capacity=capacity)
+
+    for name in ["audio.config", *(["replay.frame"] * frame_count), "replay.summary"]:
+        journal.append(
+            kind=replay.JournalRecordKind.EVENT,
+            name=name,
+            session_id="retention-regression",
+        )
+
+    records = journal.read()
+    assert len(records) == frame_count + 2
+    assert records[0].name == "audio.config"
+    assert sum(record.name == "replay.frame" for record in records) == frame_count
+    assert records[-1].name == "replay.summary"
+
+
 def test_lesson_treats_rms_as_signal_evidence_not_quality_score() -> None:
     readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
     exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
@@ -75,3 +114,4 @@ def test_lesson_treats_rms_as_signal_evidence_not_quality_score() -> None:
     assert "RMS is not a quality score" in lesson
     assert "reference_frames_fed" in lesson
     assert "per-frame `replay.frame`" in lesson
+    assert "long recordings cannot evict earlier frame evidence" in lesson
