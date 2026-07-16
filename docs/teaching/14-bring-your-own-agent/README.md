@@ -147,7 +147,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,115 +76,172 @@
+@@ -75,115 +76,189 @@
      )
 
 
@@ -317,6 +317,23 @@
 +                # No assistant output was generated for this turn. Do not
 +                # rewrite the previous turn's already-committed response.
 +                return
++
++    def snapshot_state(self) -> dict[str, object]:
++        """Allowlist privacy-safe workflow metadata for debug artifacts."""
++        last_assistant = next(
++            (
++                str(message["content"])
++                for message in reversed(self._history)
++                if message["role"] == "assistant"
++            ),
++            "",
++        )
++        return {
++            "message_count": len(self._history),
++            "history_roles": [str(message["role"]) for message in self._history],
++            "last_assistant_chars": len(last_assistant),
++            "session_action_pending": self._actions.has_pending,
++        }
 
 
  async def main() -> None:
@@ -603,8 +620,50 @@ class MyWorkflow:
                 # No assistant output was generated for this turn. Do not
                 # rewrite the previous turn's already-committed response.
                 return
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Allowlist privacy-safe workflow metadata for debug artifacts."""
+        last_assistant = next(
+            (
+                str(message["content"])
+                for message in reversed(self._history)
+                if message["role"] == "assistant"
+            ),
+            "",
+        )
+        return {
+            "message_count": len(self._history),
+            "history_roles": [str(message["role"]) for message in self._history],
+            "last_assistant_chars": len(last_assistant),
+            "session_action_pending": self._actions.has_pending,
+        }
 ```
 <!-- END auto:snippet -->
+
+Deep mode exposes state hooks; it does not decide which of your state is
+safe to persist. `GenericWorkflowBridge` prefers a workflow's
+`snapshot_state()` dictionary when it writes interruption artifacts. Without
+that hook it falls back to serializing the workflow's `__dict__`, which is a
+much broader boundary and can pull caller-owned client or queue objects into
+the payload as string representations.
+
+`MyWorkflow.snapshot_state()` therefore returns an intentional metadata-only
+allowlist: message count, role sequence, last-assistant character count, and
+whether a session action is pending. It omits prompt text, user text, the
+`AsyncOpenAI` client, and the `SessionActions` object. The explicit dictionary
+is author-owned artifact data; do not put credentials or sensitive message
+content in it and assume another redaction pass will rescue it.
+
+Run the provider-free state-boundary probe:
+
+```bash
+uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
+```
+
+It takes the real workflow's goodbye branch, shows the queued
+`EndCallAction`, and prints both the public bridge snapshot and the exact
+metadata payload used for interruption artifacts. The payload contains the
+allowlisted values, not reachable Python objects.
 
 ### 2. Session actions
 
@@ -829,6 +888,10 @@ does not leak the prior list.
    the transformation reached the provider, and which SSML timing
    guarantee was downgraded? Try `style="ellipsis"` and compare the
    prepared format.
+4. Run `workflow_state_probe.py`, then temporarily add a harmless
+   `api_key: "demo"` field to `snapshot_state()`. The explicit snapshot is
+   author-owned artifact data, so the probe exposes that field. Remove it;
+   the lesson is to allowlist safe metadata, never to test with a real secret.
 
 ## What's next
 

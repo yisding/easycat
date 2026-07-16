@@ -148,6 +148,32 @@ that caller-owned `AsyncOpenAI` object?
    journal survives session teardown, while the outer client remains
    open until the export finishes.
 
+## 5. Define the workflow-state artifact boundary
+
+**Task.** Run the provider-free state probe:
+
+```bash
+uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
+```
+
+Compare `bridge_snapshot.workflow_state` with `artifact_payload`. Why do
+neither contain `_client`, `_actions`, prompt text, or user text even though
+all four are reachable from `MyWorkflow`?
+
+**Hints**
+
+1. `GenericWorkflowBridge.snapshot_state()` exposes generic bridge metadata
+   plus the dictionary returned by `MyWorkflow.snapshot_state()`.
+2. Interruption artifacts use that explicit workflow dictionary as their
+   payload. If the hook is absent, the generic bridge falls back to a much
+   broader `workflow.__dict__` serialization.
+3. The chapter's hook deliberately reports counts, roles, and booleans. Those
+   values are enough to see history growth and a pending action without
+   copying conversation content or caller-owned object representations.
+4. Treat the explicit dictionary as author-owned persisted data. Temporarily
+   add `"api_key": "demo"` and rerun the probe: the field is visible. Remove
+   it immediately, and never use a real credential for this experiment.
+
 ## Self-check
 
 You should be able to: (a) explain the difference between deep and
@@ -155,4 +181,5 @@ shallow mode in one sentence each, (b) name when to use a tool vs
 a session action without re-reading chapter 7, and (c) describe
 where in the pipeline output processors run (TTS only? history
 too?) without checking the source, and (d) distinguish session-owned
-providers from caller-owned workflow dependencies.
+providers from caller-owned workflow dependencies, and (e) explain why a
+deep workflow should define an explicit metadata-only state snapshot.
