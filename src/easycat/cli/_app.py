@@ -443,6 +443,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature tools and actions",
+        "path": "docs/using-easycat/04-tools-actions/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Separate agent tools, session actions, events, and spoken-output rules.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/04-tools-actions/main.py preview",
+            "uv run python docs/using-easycat/04-tools-actions/main.py run",
+            "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

@@ -197,5 +197,5 @@ has begun.
 
 ## What's next
 
-Chapter 4 adds agent tools, filler audio, session actions, and pronunciation
+Chapter 4 adds agent tools, tool events, session actions, and pronunciation
 rules while keeping this conversation pipeline intact.
