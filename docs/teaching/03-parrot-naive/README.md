@@ -35,7 +35,9 @@ personally heard this fail on your own voice.
 - **Added:** TTS via `easycat.recipes.speak`; a fixed silence-timeout
   turn detector; a conversation loop that keeps running until Ctrl-C;
   `speak_acceptance_probe.py` and `parrot.delivery` records for
-  provider-free output-acceptance evidence.
+  provider-free output-acceptance evidence; correlated `stt.received` and
+  `stt.partial`/`stt.final` records that separate provider ingress from queue
+  consumption.
 - **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
   timer keys off STT partials, which OpenAI's default STT only emits
   after the audio uploads.
@@ -74,7 +76,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -17,178 +18,183 @@
+@@ -17,178 +18,260 @@
 
  from __future__ import annotations
 
@@ -89,7 +91,8 @@ personally heard this fail on your own voice.
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
- from easycat.events import EventBus, STTEventType
+-from easycat.events import EventBus, STTEventType
++from easycat.events import EventBus, STTEvent, STTEventType
 +from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
@@ -111,7 +114,106 @@ personally heard this fail on your own voice.
 -
 -
 -def _display_path(path: Path) -> Path:
--    try:
++SESSION_ID = f"ch03-parrot-{int(time.time())}"
++STTQueueItem = tuple[int, STTEvent, float] | None
++
++
++def record_stt_received(
++    journal: InMemoryRingBuffer,
++    *,
++    event_id: int,
++    event: STTEvent,
++    offset_ms: float,
++    queue_depth: int,
++) -> None:
++    """Record provider ingress before the consumer can be blocked by TTS."""
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name="stt.received",
++        session_id=SESSION_ID,
++        data={
++            "stage": "stt",
++            "event_id": event_id,
++            "event_type": event.type.value,
++            "text": event.text,
++            "offset_ms": offset_ms,
++            "queue_depth_before_put": queue_depth,
++        },
++    )
++
++
++def record_stt_consumed(
++    journal: InMemoryRingBuffer,
++    *,
++    event_id: int,
++    event: STTEvent,
++    received_offset_ms: float,
++    consumed_offset_ms: float,
++    queue_depth: int,
++) -> None:
++    """Record when the parrot finally dequeues one provider event."""
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name=f"stt.{event.type.value}",
++        session_id=SESSION_ID,
++        data={
++            "stage": "stt",
++            "event_id": event_id,
++            "event_type": event.type.value,
++            "text": event.text,
++            "offset_ms": consumed_offset_ms,
++            "received_offset_ms": received_offset_ms,
++            "consumer_lag_ms": consumed_offset_ms - received_offset_ms,
++            "queue_depth_after_get": queue_depth,
++        },
++    )
++
++
++def record_delivery(
++    journal: InMemoryRingBuffer,
++    *,
++    text: str,
++    accepted_chunks: int,
++    rejected_chunks: int,
++    offset_ms: float,
++) -> None:
++    """Record transport acceptance without claiming speaker playback."""
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name="parrot.delivery",
++        session_id=SESSION_ID,
++        data={
++            "stage": "parrot",
++            "committed_text": text,
++            "accepted_chunks": accepted_chunks,
++            "rejected_chunks": rejected_chunks,
++            "offset_ms": offset_ms,
++        },
++    )
++    if rejected_chunks:
++        print(
++            "  transport rejected "
++            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
++        )
++
++
++async def speak_and_record(
++    transport, journal: InMemoryRingBuffer, text: str, start: float
++) -> None:
++    """Speak once, then preserve every transport acceptance result."""
++    accepted_chunks, rejected_chunks = await speak(transport, text)
++    record_delivery(
++        journal,
++        text=text,
++        accepted_chunks=accepted_chunks,
++        rejected_chunks=rejected_chunks,
++        offset_ms=(time.monotonic() - start) * 1000,
++    )
++
++
++async def shutdown(stt, transport) -> None:
++    """End the logical STT stream, close its provider, then disconnect."""
+     try:
 -        return path.relative_to(Path.cwd())
 -    except ValueError:
 -        return path
@@ -142,21 +244,47 @@ personally heard this fail on your own voice.
 -
 -
 -async def run_streaming(
--    stt,
--    transport,
-+SESSION_ID = f"ch03-parrot-{int(time.time())}"
++        await stt.end_stream()
++    finally:
++        try:
++            await close_if_supported(stt)
++        finally:
++            await transport.disconnect()
 +
 +
-+def record_delivery(
-     journal: InMemoryRingBuffer,
++async def feed_audio(stt, transport) -> None:
++    async for chunk in transport.receive_audio():
++        await stt.send_audio(chunk)
++
++
++async def listen_stt(
+     stt,
++    ev_queue: asyncio.Queue[STTQueueItem],
++    journal: InMemoryRingBuffer,
++    start: float,
++) -> None:
++    event_id = 0
++    async for event in stt.events():
++        event_id += 1
++        received_offset_ms = (time.monotonic() - start) * 1000
++        record_stt_received(
++            journal,
++            event_id=event_id,
++            event=event,
++            offset_ms=received_offset_ms,
++            queue_depth=ev_queue.qsize(),
++        )
++        await ev_queue.put((event_id, event, received_offset_ms))
++    await ev_queue.put(None)
++
++
++async def parrot_events(
+     transport,
+-    journal: InMemoryRingBuffer,
 -    session_id: str,
-     *,
+-    *,
 -    duration_s: float = DURATION_S,
-+    text: str,
-+    accepted_chunks: int,
-+    rejected_chunks: int,
-+    offset_ms: float,
- ) -> None:
+-) -> None:
 -    """Run one stream with acquisition rollback and joined sibling tasks."""
 -    # Register each cleanup as soon as ownership begins. If connect() or
 -    # start_stream() raises after partial acquisition, the earlier callbacks
@@ -187,24 +315,42 @@ personally heard this fail on your own voice.
 -        async def consume_events() -> None:
 -            """Print every partial / final as soon as it arrives."""
 -            async for event in stt.events():
--                offset_ms = (time.monotonic() - start) * 1000
++    ev_queue: asyncio.Queue[STTQueueItem],
++    journal: InMemoryRingBuffer,
++    start: float,
++) -> None:
++    last_text = ""
++    while True:
++        try:
++            # If no new event arrives within SILENCE_TIMEOUT_S, we
++            # interpret silence as "user is done" — the whole bug.
++            item = await asyncio.wait_for(ev_queue.get(), timeout=SILENCE_TIMEOUT_S)
++        except TimeoutError:
++            if last_text:
+                 offset_ms = (time.monotonic() - start) * 1000
 -                kind = "FINAL" if event.type == STTEventType.FINAL else "part "
 -                print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
++                print(f"  t+{offset_ms:6.0f}ms  PARROT → {last_text!r}")
+                 journal.append(
+                     kind=JournalRecordKind.EVENT,
 -                    name=f"stt.{event.type.value}",
 -                    session_id=session_id,
--                    data={
++                    name="parrot.fire",
++                    session_id=SESSION_ID,
+                     data={
 -                        "stage": "stt",
 -                        "event_type": event.type.value,
 -                        "text": event.text,
--                        "offset_ms": offset_ms,
++                        "stage": "parrot",
++                        "committed_text": last_text,
++                        "silence_timeout_s": SILENCE_TIMEOUT_S,
+                         "offset_ms": offset_ms,
 -                        # t_ms mirrors the later chapters' field so downstream
 -                        # scripts (ch 12's evals.py, etc.) can read this bundle
 -                        # without a translator.
 -                        "t_ms": time.monotonic() * 1000,
--                    },
--                )
+                     },
+                 )
 -
 -        # TaskGroup cancels and joins one sibling before it lets the failure
 -        # escape. Resource cleanup therefore never races a live feeder or
@@ -217,69 +363,27 @@ personally heard this fail on your own voice.
 -async def main(provider: str = "openai") -> None:
 -    config = build_stt_config(provider)
 -    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
--
--    journal = InMemoryRingBuffer(capacity=10_000)
--    # The same STT factory from batch.py — the CLI changes only its config.
--    # The start/send/events consumer below is provider-independent.
--    stt = create_stt_provider(config)
--
--    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
--    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--
-+    """Record transport acceptance without claiming speaker playback."""
-     journal.append(
-         kind=JournalRecordKind.EVENT,
--        name="stt.provider.selected",
--        session_id=session_id,
-+        name="parrot.delivery",
-+        session_id=SESSION_ID,
-         data={
--            "provider": provider,
--            "credential_env": PROVIDER_ENV_VARS[provider],
--            "event_timing": PROVIDER_TIMING[provider],
--            "input_sample_rate_hz": PCM16_MONO_24K.sample_rate,
--            "provider_target_sample_rate_hz": (
--                PCM16_MONO_24K.sample_rate if provider == "deepgram" else None
--            ),
-+            "stage": "parrot",
-+            "committed_text": text,
-+            "accepted_chunks": accepted_chunks,
-+            "rejected_chunks": rejected_chunks,
-+            "offset_ms": offset_ms,
-         },
-     )
--
--    await run_streaming(stt, transport, journal, session_id)
-+    if rejected_chunks:
-+        print(
-+            "  transport rejected "
-+            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
++                await speak_and_record(transport, journal, last_text, start)
++                last_text = ""
++            continue
++        if item is None:
++            break
++        event_id, event, received_offset_ms = item
++        # Deliberately acting on partials — chapter 2's rule, broken
++        # on purpose. Chapter 4 restores it by waiting for a real
++        # turn boundary from the VAD.
++        last_text = event.text
++        kind = "FINAL" if event.type == STTEventType.FINAL else "part "
++        offset_ms = (time.monotonic() - start) * 1000
++        print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
++        record_stt_consumed(
++            journal,
++            event_id=event_id,
++            event=event,
++            received_offset_ms=received_offset_ms,
++            consumed_offset_ms=offset_ms,
++            queue_depth=ev_queue.qsize(),
 +        )
-+
-+
-+async def speak_and_record(
-+    transport, journal: InMemoryRingBuffer, text: str, start: float
-+) -> None:
-+    """Speak once, then preserve every transport acceptance result."""
-+    accepted_chunks, rejected_chunks = await speak(transport, text)
-+    record_delivery(
-+        journal,
-+        text=text,
-+        accepted_chunks=accepted_chunks,
-+        rejected_chunks=rejected_chunks,
-+        offset_ms=(time.monotonic() - start) * 1000,
-+    )
-+
-+
-+async def shutdown(stt, transport) -> None:
-+    """End the logical STT stream, close its provider, then disconnect."""
-+    try:
-+        await stt.end_stream()
-+    finally:
-+        try:
-+            await close_if_supported(stt)
-+        finally:
-+            await transport.disconnect()
 +
 +
 +async def main() -> None:
@@ -287,10 +391,31 @@ personally heard this fail on your own voice.
 +    dg_key = os.getenv("DEEPGRAM_API_KEY")
 +    if not oai_key or not dg_key:
 +        raise SystemExit("Set OPENAI_API_KEY (for TTS) and DEEPGRAM_API_KEY (for STT).")
-+
-+    journal = InMemoryRingBuffer(capacity=10_000)
-+    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-+
+
+     journal = InMemoryRingBuffer(capacity=10_000)
+-    # The same STT factory from batch.py — the CLI changes only its config.
+-    # The start/send/events consumer below is provider-independent.
+-    stt = create_stt_provider(config)
+-
+-    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
+     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="stt.provider.selected",
+-        session_id=session_id,
+-        data={
+-            "provider": provider,
+-            "credential_env": PROVIDER_ENV_VARS[provider],
+-            "event_timing": PROVIDER_TIMING[provider],
+-            "input_sample_rate_hz": PCM16_MONO_24K.sample_rate,
+-            "provider_target_sample_rate_hz": (
+-                PCM16_MONO_24K.sample_rate if provider == "deepgram" else None
+-            ),
+-        },
+-    )
+-
+-    await run_streaming(stt, transport, journal, session_id)
 +    # Deepgram emits partials mid-speech, which is what this chapter needs
 +    # to feel break. Its STT factory config takes provider-specific args via
 +    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -312,65 +437,14 @@ personally heard this fail on your own voice.
 +
 +    # Bridge STT events into an asyncio.Queue so the parrot loop can use
 +    # ``asyncio.wait_for`` to implement "silence timeout since last event."
-+    ev_queue: asyncio.Queue = asyncio.Queue()
-+
-+    async def feed_audio() -> None:
-+        async for chunk in transport.receive_audio():
-+            await stt.send_audio(chunk)
-+
-+    async def listen_stt() -> None:
-+        async for event in stt.events():
-+            await ev_queue.put(event)
-+        await ev_queue.put(None)
-+
-+    async def parrot() -> None:
-+        last_text = ""
-+        while True:
-+            try:
-+                # If no new event arrives within SILENCE_TIMEOUT_S, we
-+                # interpret silence as "user is done" — the whole bug.
-+                event = await asyncio.wait_for(ev_queue.get(), timeout=SILENCE_TIMEOUT_S)
-+            except TimeoutError:
-+                if last_text:
-+                    offset_ms = (time.monotonic() - start) * 1000
-+                    print(f"  t+{offset_ms:6.0f}ms  PARROT → {last_text!r}")
-+                    journal.append(
-+                        kind=JournalRecordKind.EVENT,
-+                        name="parrot.fire",
-+                        session_id=SESSION_ID,
-+                        data={
-+                            "stage": "parrot",
-+                            "committed_text": last_text,
-+                            "silence_timeout_s": SILENCE_TIMEOUT_S,
-+                            "offset_ms": offset_ms,
-+                        },
-+                    )
-+                    await speak_and_record(transport, journal, last_text, start)
-+                    last_text = ""
-+                continue
-+            if event is None:
-+                break
-+            # Deliberately acting on partials — chapter 2's rule, broken
-+            # on purpose. Chapter 4 restores it by waiting for a real
-+            # turn boundary from the VAD.
-+            last_text = event.text
-+            kind = "FINAL" if event.type == STTEventType.FINAL else "part "
-+            offset_ms = (time.monotonic() - start) * 1000
-+            print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
-+            journal.append(
-+                kind=JournalRecordKind.EVENT,
-+                name=f"stt.{event.type.value}",
-+                session_id=SESSION_ID,
-+                data={
-+                    "stage": "stt",
-+                    "event_type": event.type.value,
-+                    "text": event.text,
-+                    "offset_ms": offset_ms,
-+                },
-+            )
++    ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
 +
 +    try:
-+        await asyncio.gather(feed_audio(), listen_stt(), parrot())
++        await asyncio.gather(
++            feed_audio(stt, transport),
++            listen_stt(stt, ev_queue, journal, start),
++            parrot_events(transport, ev_queue, journal, start),
++        )
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
 +    finally:
@@ -428,12 +502,15 @@ a partial so you can feel why it exists.
 ## Architecture
 
 ```
- ┌─────┐    ┌─────┐   partials+finals   ┌─────────────────┐    ┌─────┐
- │ Mic │ ──►│ STT │ ──────────────────► │ silence-timeout │──► │ TTS │
- └─────┘    └─────┘                     │     parrot      │    └─────┘
-                                        └─────────────────┘
-                                        (fires on 500 ms
-                                         of no STT events)
+ ┌─────┐    ┌─────┐   partials+finals   ┌───────────────┐
+ │ Mic │ ──►│ STT │ ──────────────────► │ ingress queue │
+ └─────┘    └─────┘                     └───────┬───────┘
+                                               ▼
+                                      ┌─────────────────┐    ┌─────┐
+                                      │ silence-timeout │──► │ TTS │
+                                      │     parrot      │    └─────┘
+                                      └─────────────────┘
+                                      (blocks on speak())
 ```
 
 ## Break it, deliberately
@@ -442,7 +519,9 @@ Say each of these and watch the parrot commit to the wrong thing:
 
 1. **"The capital of France is... uh... Paris."** The 500 ms
    timeout fires during the "uh." The parrot speaks "The capital
-   of France is" and then you say "Paris" to an ignoring bot.
+   of France is" while you continue with "Paris." New STT events queue behind
+   the blocking TTS call, then may be treated as a second fragment after the
+   first audio finishes.
 2. **"I was thinking... [long pause] ...we should order pizza."**
    Same story. Thinking pauses indistinguishable from done.
 3. **A list: "apples, bananas, pears."** Commas are 300-500 ms
@@ -487,11 +566,22 @@ uv run python docs/teaching/03-parrot-naive/inspect_timeout.py \
   docs/teaching/03-parrot-naive/runs/<file>.bundle
 ```
 
-The timeout starts after the latest STT event, which can be a partial
-or a final. The `parrot.fire` offset will be **at least** 500 ms after
+Each provider event now has one `event_id` across two records:
+
+- `stt.received.offset_ms` is when `listen_stt()` received the provider event
+  and queued it. This is the ingress clock.
+- `stt.partial` or `stt.final` records when the parrot dequeued that same
+  event. Its `received_offset_ms`, `consumer_lag_ms`, and queue depth expose
+  head-of-line blocking.
+
+The timeout starts after the latest *consumed* STT event, which can be a
+partial or a final. The `parrot.fire` offset will be **at least** 500 ms after
 that trigger; event-loop scheduling contributes the reported
-`scheduler_overshoot_ms`. The analyzer also separates that silence gap
-from the consumer stall while the parrot awaits `speak()`.
+`scheduler_overshoot_ms`. For the next partial, the analyzer reports both
+`post_fire_ingress_gap_ms` (when the provider event reached the process) and
+`post_fire_consumer_gap_ms` (when the parrot finally handled it).
+`consumer_backlog_ms` is the difference. A large backlog proves delay behind
+`speak()`; it is not provider latency and it is not a dropped event.
 
 ### Output acceptance is separate evidence
 

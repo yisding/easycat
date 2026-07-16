@@ -49,13 +49,13 @@ find:
   before the parrot fired.
 - The `parrot.fire` record itself.
 - The following `parrot.delivery` record and its accepted/rejected counts.
-- The first `stt.partial` *after* the parrot fired (the "Paris"
-  the parrot ignored).
+- The first `stt.partial` *consumed* after the parrot fired and its correlated
+  `next_partial_ingress` record (the "Paris" queued while the bot spoke).
 
 Compare `observed_silence_ms` with `configured_timeout_ms`. Why is
-the former at least the latter rather than exactly equal? How large is
-`post_fire_consumer_gap_ms`, and what work was the parrot loop doing
-during that gap?
+the former at least the latter rather than exactly equal? Compare
+`post_fire_ingress_gap_ms` with `post_fire_consumer_gap_ms`. How much of the
+latter is `consumer_backlog_ms`, and what work was the parrot loop doing then?
 
 **Hints**
 
@@ -66,14 +66,16 @@ during that gap?
    earlier than the deadline. Event-loop scheduling adds the reported
    `scheduler_overshoot_ms`, so an exact equality is not a valid
    invariant.
-3. The parrot awaits `speak()` before it consumes another queued STT
-   event. `post_fire_consumer_gap_ms` therefore includes that blocked
-   consumer time; it is not the provider-side arrival latency of the
-   next partial.
-4. The "Paris" partial consumed after the parrot's fire is evidence
-   the user was *not done speaking*. Production
-   pipelines (chapter 9) preserve that audio across barge-in;
-   this naive one drops it on the floor.
+3. `stt.received` marks provider ingress; the correlated `stt.partial` marks
+   consumer dequeue. Their shared `event_id` prevents repeated text from being
+   matched by guesswork.
+4. The parrot awaits `speak()` before it consumes another queued STT event.
+   `post_fire_consumer_gap_ms` therefore includes blocked consumer time;
+   `post_fire_ingress_gap_ms` does not.
+5. The "Paris" partial is delayed, not dropped. After TTS returns, the parrot
+   consumes it and may fire again on that fragment. Production interruption
+   handling in chapter 9 instead cancels or ignores current bot audio and
+   routes the continuing user turn deliberately.
 
 ## 3. Reject one synthesized chunk
 
@@ -98,4 +100,5 @@ the audio?
 
 You should be unable to defend the silence-timeout architecture for a serious
 voice product, actively reaching for "is the microphone currently carrying
-speech?", and able to distinguish synthesized, accepted, and played audio.
+speech?", able to distinguish provider ingress from consumer dequeue, and able
+to distinguish synthesized, accepted, and played audio.
