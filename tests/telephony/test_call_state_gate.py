@@ -42,6 +42,53 @@ class TestClassificationGate:
             gate.stop()
 
     @pytest.mark.asyncio
+    async def test_stale_timeout_cannot_mutate_reopened_gate(self) -> None:
+        from easycat.audio_format import AudioChunk, AudioFormat
+
+        bus = EventBus()
+        replay_started = asyncio.Event()
+        release_replay = asyncio.Event()
+        replay_completed = asyncio.Event()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=0)
+
+        async def _replay(_events: list[TTSAudio]) -> None:
+            replay_started.set()
+            await release_replay.wait()
+            replay_completed.set()
+
+        gate.set_flush_async_callback(_replay)
+        gate.start()
+        old_timeout: asyncio.Task[None] | None = None
+        try:
+            gate.close()
+            old_timeout = gate._timeout_task
+            assert old_timeout is not None
+            fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"old", format=fmt)))
+            await asyncio.wait_for(replay_started.wait(), timeout=1)
+
+            gate.stop()
+            gate._timeout_s = 60
+            gate.start()
+            gate.close()
+            new_event = TTSAudio(chunk=AudioChunk(data=b"new", format=fmt))
+            await bus.emit(new_event)
+
+            release_replay.set()
+            await asyncio.gather(old_timeout, return_exceptions=True)
+
+            assert old_timeout.cancelled()
+            assert not replay_completed.is_set()
+            assert gate.is_buffering
+            assert gate.buffer == [new_event]
+            assert gate._started
+        finally:
+            release_replay.set()
+            gate.stop()
+            if old_timeout is not None:
+                await asyncio.gather(old_timeout, return_exceptions=True)
+
+    @pytest.mark.asyncio
     async def test_gate_overflow_drops_newest_preserving_opener_start(self) -> None:
         from easycat.audio_format import AudioChunk, AudioFormat
 
@@ -134,6 +181,74 @@ class TestClassificationGate:
             assert len(gate.buffer) == 0  # Flushed.
         finally:
             gate.stop()
+
+    @pytest.mark.asyncio
+    async def test_timeout_replay_survives_concurrent_gate_release(self) -> None:
+        from easycat.audio_format import AudioChunk, AudioFormat
+
+        bus = EventBus()
+        replay_started = asyncio.Event()
+        release_replay = asyncio.Event()
+        replay_finished = asyncio.Event()
+        replayed: list[list[TTSAudio]] = []
+        gate = ClassificationGate(bus, enabled=True, timeout_s=0)
+
+        async def _replay(events: list[TTSAudio]) -> None:
+            replayed.append(events)
+            replay_started.set()
+            await release_replay.wait()
+            replay_finished.set()
+
+        gate.set_flush_async_callback(_replay)
+        gate.start()
+        timeout_task: asyncio.Task[None] | None = None
+        try:
+            gate.close()
+            timeout_task = gate._tasks.tasks()[0]
+            event = TTSAudio(
+                chunk=AudioChunk(
+                    data=b"\x00" * 100,
+                    format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
+                )
+            )
+            await bus.emit(event)
+            await asyncio.wait_for(replay_started.wait(), timeout=1)
+
+            # A classification signal arriving during replay opens the gate.
+            # It must not cancel the timeout task after that task dequeued the
+            # only copy of the opener audio.
+            gate.release()
+            release_replay.set()
+            await asyncio.wait_for(replay_finished.wait(), timeout=1)
+
+            assert replayed == [[event]]
+            assert not timeout_task.cancelled()
+        finally:
+            release_replay.set()
+            gate.stop()
+            if timeout_task is not None:
+                await asyncio.gather(timeout_task, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_reclosing_gate_replaces_existing_timeout(self) -> None:
+        bus = EventBus()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0)
+        gate.start()
+        try:
+            gate.close()
+            first_timeout = gate._tasks.tasks()[0]
+
+            gate.close()
+            second_timeout = gate._tasks.tasks()[0]
+            await asyncio.sleep(0)
+
+            assert first_timeout.cancelled()
+            assert second_timeout is not first_timeout
+            assert gate._tasks.active("classification_gate_timeout")
+        finally:
+            gate.stop()
+
+        assert gate._tasks.empty
 
     @pytest.mark.asyncio
     async def test_gate_releases_on_first_signal(self) -> None:

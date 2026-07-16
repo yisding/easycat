@@ -1,7 +1,7 @@
 # Chapter 1 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -146,7 +146,8 @@ shape.
 1. What inbound and outbound audio shape does the echo loop require, and which
    probe result confirms that contract?
 2. What evidence distinguishes a produced chunk from one accepted by
-   `send_audio(...)`?
+   `send_audio(...)`, and why does the loop consume inbound audio with async
+   iteration?
 3. Why can the same control flow use Local, WebSocket, WebRTC, or Twilio
    transports, and which boundary owns their differences?
 

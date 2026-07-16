@@ -12,6 +12,20 @@ sync with the chapter's source code and ladder order:
       ```
       <!-- END auto:snippet -->
 
+* Previous/index/next navigation derived from the chapter folders::
+
+      <!-- BEGIN auto:navigation -->
+      **Progress: 2 of 16** · [← Chapter 0 — Hello, Audio](../00-hello-audio/) ·
+      [Ladder index](../) · [Progress worksheet](../PROGRESS.md) ·
+      [Exercises](./EXERCISES.md) ·
+      [Chapter 2 — Transcribe →](../02-transcribe/)
+      <!-- END auto:navigation -->
+
+  The renderer inserts this block immediately after the H1 when it is missing
+  and refreshes adjacent chapter titles/links when the ladder changes. Exercise
+  pages get a companion block linking back to the narrative, index, and next
+  chapter.
+
 * The unified diff against the previous chapter's source::
 
       <!-- BEGIN auto:diff prev=04-vad-preroll src=main.py -->
@@ -42,21 +56,6 @@ sync with the chapter's source code and ladder order:
 
   The script rewrites the line-range fragment of the link that immediately
   follows the marker.
-
-* A chapter breadcrumb derived from the ordered chapter directories::
-
-      <!-- BEGIN auto:navigation -->
-      [← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) ·
-      [Teaching ladder](../) ·
-      [Progress](../PROGRESS.md) ·
-      [Exercises](./EXERCISES.md) ·
-      [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
-      <!-- END auto:navigation -->
-
-  The renderer inserts this block immediately after the H1 when it is missing
-  and refreshes adjacent chapter titles/links when the ladder changes. Exercise
-  pages get a companion block linking back to the narrative, index, and next
-  chapter.
 
 * A chapter-local hardware-free checkpoint derived from
   ``docs/teaching/offline_spine.py``::
@@ -251,6 +250,12 @@ SNIPPET_RE = re.compile(
     r"(?P<end><!-- END auto:snippet -->)",
     re.DOTALL,
 )
+NAVIGATION_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:navigation -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:navigation -->)",
+    re.DOTALL,
+)
 DIFF_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:diff (?P<attrs>[^>]*?) -->)"
     r"(?P<body>.*?)"
@@ -261,12 +266,6 @@ LINERANGE_RE = re.compile(r"(<!-- auto:linerange (?P<attrs>[^>]*?) -->)`L\d+(?:-
 LINKHASH_RE = re.compile(
     r"(<!-- auto:linkhash (?P<attrs>[^>]*?) -->\s*\[[^\]]*\]\([^)\s]+?\.py)"
     r"#L\d+(?:-L\d+)?"
-)
-NAVIGATION_RE = re.compile(
-    r"(?P<begin><!-- BEGIN auto:navigation -->)"
-    r"(?P<body>.*?)"
-    r"(?P<end><!-- END auto:navigation -->)",
-    re.DOTALL,
 )
 OFFLINE_CHECKPOINT_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:offline-checkpoint -->)"
@@ -320,6 +319,7 @@ HINT_DISCLOSURE_RE = re.compile(
     re.DOTALL,
 )
 NUMBERED_HINT_RE = re.compile(r"^(?P<number>\d+)\. ", re.MULTILINE)
+MARKDOWN_FENCE_RE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>[^\n]*)$")
 BARE_EXERCISE_HINTS_RE = re.compile(
     r"^\*\*Hints\*\*\n\n(?P<body>.*?)(?=^## )",
     re.DOTALL | re.MULTILINE,
@@ -391,6 +391,76 @@ def render_snippet(chapter: Chapter, attrs: dict[str, str]) -> str:
     return f"\n```{lang}\n{body}```\n"
 
 
+def _chapter_title(chapter: Chapter) -> str:
+    readme = chapter.path / "README.md"
+    heading = readme.read_text(encoding="utf-8").splitlines()[0]
+    if not heading.startswith("# "):
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    return heading.removeprefix("# ")
+
+
+def _chapter_position(chapter: Chapter) -> tuple[list[Chapter], int]:
+    chapters = discover_chapters()
+    try:
+        index = next(i for i, candidate in enumerate(chapters) if candidate.slug == chapter.slug)
+    except StopIteration as exc:
+        raise ValueError(f"unknown teaching chapter: {chapter.slug}") from exc
+    return chapters, index
+
+
+def render_navigation(chapter: Chapter) -> str:
+    chapters, index = _chapter_position(chapter)
+
+    links: list[str] = []
+    if index:
+        previous = chapters[index - 1]
+        links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
+    links.append("[Ladder index](../)")
+    links.append("[Progress worksheet](../PROGRESS.md)")
+    links.append("[Exercises](./EXERCISES.md)")
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
+
+    progress = f"**Progress: {index + 1} of {len(chapters)}**"
+    return f"{progress} · {' · '.join(links)}"
+
+
+def render_exercise_navigation(chapter: Chapter) -> str:
+    chapters, index = _chapter_position(chapter)
+
+    links = [
+        "[← Back to chapter](./README.md)",
+        "[Ladder index](../)",
+        "[Progress worksheet](../PROGRESS.md)",
+    ]
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
+    return " · ".join(links)
+
+
+def _render_navigation_block(navigation: str) -> str:
+    return f"<!-- BEGIN auto:navigation -->\n{navigation}\n<!-- END auto:navigation -->"
+
+
+def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
+    block = _render_navigation_block(navigation)
+    if NAVIGATION_RE.search(text):
+        updated = NAVIGATION_RE.sub(lambda _match: block, text)
+        match = NAVIGATION_RE.search(updated)
+        assert match is not None
+        remainder = updated[match.end() :].lstrip("\n")
+        return f"{updated[: match.end()]}\n\n{remainder}"
+
+    heading = re.match(r"^# [^\n]+\n", text)
+    if heading is None:
+        readme = chapter.path / "README.md"
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    remainder = text[heading.end() :].lstrip("\n")
+    return f"{text[: heading.end()]}\n{block}\n\n{remainder}"
+
+
 def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     prev_slug = attrs["prev"]
     src_name = attrs.get("src", "main.py")
@@ -429,59 +499,12 @@ def render_linkhash(chapter: Chapter, attrs: dict[str, str], prefix: str) -> str
     return prefix + anchor
 
 
-def _chapter_title(chapter: Chapter) -> str:
-    readme = chapter.path / "README.md"
-    heading = readme.read_text(encoding="utf-8").splitlines()[0]
-    if not heading.startswith("# "):
-        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
-    return heading.removeprefix("# ")
-
-
-def _chapter_position(chapter: Chapter) -> tuple[list[Chapter], int]:
-    chapters = discover_chapters()
-    try:
-        index = next(i for i, candidate in enumerate(chapters) if candidate.path == chapter.path)
-    except StopIteration as exc:
-        raise ValueError(f"unknown teaching chapter: {chapter.slug}") from exc
-    return chapters, index
-
-
 def _spaced_retrieval_for(chapter: Chapter) -> tuple[Chapter, dict[str, object]] | None:
     chapters, index = _chapter_position(chapter)
     if index < 2:
         return None
     earlier = chapters[index - 2]
     return earlier, _offline_checkpoint_for(earlier)
-
-
-def render_navigation(chapter: Chapter) -> str:
-    chapters, index = _chapter_position(chapter)
-
-    links: list[str] = []
-    if index:
-        previous = chapters[index - 1]
-        links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
-    links.append("[Teaching ladder](../)")
-    links.append("[Progress](../PROGRESS.md)")
-    links.append("[Exercises](./EXERCISES.md)")
-    if index + 1 < len(chapters):
-        following = chapters[index + 1]
-        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
-    return " · ".join(links)
-
-
-def render_exercise_navigation(chapter: Chapter) -> str:
-    chapters, index = _chapter_position(chapter)
-
-    links = [
-        "[← Chapter narrative](./README.md)",
-        "[Teaching ladder](../)",
-        "[Progress](../PROGRESS.md)",
-    ]
-    if index + 1 < len(chapters):
-        following = chapters[index + 1]
-        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
-    return " · ".join(links)
 
 
 def render_exercise_protocol() -> str:
@@ -612,18 +635,37 @@ def render_exercise_hints(body: str) -> str:
 
 def _split_numbered_hints(body: str) -> list[str]:
     body = body.strip()
-    matches = list(NUMBERED_HINT_RE.finditer(body))
-    if not matches or matches[0].start() != 0:
+    starts: list[tuple[int, int]] = []
+    active_fence: tuple[str, int] | None = None
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        if fence := MARKDOWN_FENCE_RE.match(content):
+            marker = fence.group("marker")
+            fence_key = (marker[0], len(marker))
+            if active_fence is None:
+                active_fence = fence_key
+            elif (
+                fence_key[0] == active_fence[0]
+                and fence_key[1] >= active_fence[1]
+                and not fence.group("rest").strip()
+            ):
+                active_fence = None
+        elif active_fence is None and (numbered := NUMBERED_HINT_RE.match(content)):
+            starts.append((offset, int(numbered.group("number"))))
+        offset += len(line)
+
+    if not starts or starts[0][0] != 0:
         raise ValueError("exercise hints must start with a numbered `1. ` item")
-    numbers = [int(match.group("number")) for match in matches]
-    expected = list(range(1, len(matches) + 1))
+    numbers = [number for _, number in starts]
+    expected = list(range(1, len(starts) + 1))
     if numbers != expected:
         raise ValueError(f"exercise hints must be sequential; found {numbers}")
     return [
-        body[match.start() : matches[index + 1].start()].strip()
-        if index + 1 < len(matches)
-        else body[match.start() :].strip()
-        for index, match in enumerate(matches)
+        body[start : starts[index + 1][0]].strip()
+        if index + 1 < len(starts)
+        else body[start:].strip()
+        for index, (start, _) in enumerate(starts)
     ]
 
 
@@ -727,8 +769,7 @@ def render_progress_worksheet() -> str:
                 "",
                 f"## {_chapter_title(chapter)}",
                 "",
-                f"[Narrative](./{chapter.slug}/) · "
-                f"[Exercises](./{chapter.slug}/EXERCISES.md)",
+                f"[Narrative](./{chapter.slug}/) · [Exercises](./{chapter.slug}/EXERCISES.md)",
                 "",
             ]
         )
@@ -751,8 +792,14 @@ def render_progress_worksheet() -> str:
                     prefix="from the repository root, run ",
                 ),
                 _progress_command_item("Run", checkpoint["command"]),
-                _progress_item("Find", f"{checkpoint['evidence']}.",),
-                _progress_item("Reflect", f"{checkpoint['reflection']}.",),
+                _progress_item(
+                    "Find",
+                    f"{checkpoint['evidence']}.",
+                ),
+                _progress_item(
+                    "Reflect",
+                    f"{checkpoint['reflection']}.",
+                ),
                 _progress_item(
                     "Practice",
                     f"complete [the chapter exercises](./{chapter.slug}/EXERCISES.md) and keep "
@@ -832,10 +879,7 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
     return (
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
-        ">\n"
-        + "".join(f"> {line}\n" for line in prediction_lines)
-        + ">\n"
-        + "> ```bash\n"
+        ">\n" + "".join(f"> {line}\n" for line in prediction_lines) + ">\n" + "> ```bash\n"
         f"> {command}\n"
         "> ```\n"
         ">\n"
@@ -845,10 +889,6 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         + ">\n"
         + "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )
-
-
-def _render_navigation_block(navigation: str) -> str:
-    return f"<!-- BEGIN auto:navigation -->\n{navigation}\n<!-- END auto:navigation -->"
 
 
 def _render_offline_checkpoint_block(chapter: Chapter) -> str:
@@ -863,11 +903,7 @@ def _render_spaced_retrieval_block(chapter: Chapter) -> str | None:
     rendered = render_spaced_retrieval(chapter)
     if rendered is None:
         return None
-    return (
-        "<!-- BEGIN auto:spaced-retrieval -->\n"
-        f"{rendered}"
-        "<!-- END auto:spaced-retrieval -->"
-    )
+    return f"<!-- BEGIN auto:spaced-retrieval -->\n{rendered}<!-- END auto:spaced-retrieval -->"
 
 
 def _render_practice_handoff_block() -> str:
@@ -900,23 +936,6 @@ def _render_self_check_protocol_block() -> str:
         f"{render_self_check_protocol()}\n"
         "<!-- END auto:self-check-protocol -->"
     )
-
-
-def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
-    block = _render_navigation_block(navigation)
-    if NAVIGATION_RE.search(text):
-        updated = NAVIGATION_RE.sub(lambda _match: block, text)
-        match = NAVIGATION_RE.search(updated)
-        assert match is not None
-        remainder = updated[match.end() :].lstrip("\n")
-        return f"{updated[: match.end()]}\n\n{remainder}"
-
-    heading = re.match(r"^# [^\n]+\n", text)
-    if heading is None:
-        readme = chapter.path / "README.md"
-        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
-    remainder = text[heading.end() :].lstrip("\n")
-    return f"{text[: heading.end()]}\n{block}\n\n{remainder}"
 
 
 def _ensure_offline_checkpoint(chapter: Chapter, text: str) -> str:
@@ -958,8 +977,7 @@ def _ensure_spaced_retrieval(chapter: Chapter, text: str) -> str:
 
 def _ensure_practice_handoff(chapter: Chapter, text: str) -> str:
     block = _render_practice_handoff_block()
-    if PRACTICE_HANDOFF_RE.search(text):
-        return PRACTICE_HANDOFF_RE.sub(lambda _match: block, text)
+    text = PRACTICE_HANDOFF_RE.sub("", text)
 
     target = re.search(
         r"^## (?:What's next|The ladder, complete \(really\))$",
@@ -991,11 +1009,9 @@ def _ensure_exercise_protocol(chapter: Chapter, text: str) -> str:
 
 def _ensure_exercise_completion(chapter: Chapter, text: str) -> str:
     block = _render_exercise_completion_block(chapter)
+    text = EXERCISE_COMPLETION_RE.sub("", text)
     if "## Self-check" not in text:
         raise ValueError(f"{chapter.slug}/EXERCISES.md is missing its self-check")
-    if EXERCISE_COMPLETION_RE.search(text):
-        updated = EXERCISE_COMPLETION_RE.sub(lambda _match: block, text)
-        return updated.rstrip() + "\n"
     return text.rstrip() + f"\n\n{block}\n"
 
 
@@ -1130,9 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.chapter:
         original = (
-            PROGRESS_WORKSHEET.read_text(encoding="utf-8")
-            if PROGRESS_WORKSHEET.exists()
-            else ""
+            PROGRESS_WORKSHEET.read_text(encoding="utf-8") if PROGRESS_WORKSHEET.exists() else ""
         )
         _update(PROGRESS_WORKSHEET, original, render_progress_worksheet())
 

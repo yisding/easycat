@@ -1,7 +1,7 @@
 # Chapter 6 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->

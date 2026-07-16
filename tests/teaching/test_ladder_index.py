@@ -13,6 +13,8 @@ _CHAPTER_ROW_RE = re.compile(
 )
 _API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
 _UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
+_SELF_CHECK_HEADING_RE = re.compile(r"^## Self-check[ \t]*$", re.MULTILINE)
+_LEVEL_TWO_HEADING_RE = re.compile(r"^## .+$", re.MULTILINE)
 _ENV_FILE_RUN_HINT = "add `--env-file .env` after `uv run`"
 
 
@@ -62,6 +64,54 @@ def _python_docstring_and_key_literals(path: Path) -> tuple[str, set[str]]:
 
 def _has_env_file_run_hint(text: str) -> bool:
     return _ENV_FILE_RUN_HINT in text.replace("``", "`").lower()
+
+
+def _without_fenced_code(markdown: str) -> str:
+    """Mask fenced code while preserving line boundaries for heading scans."""
+    visible: list[str] = []
+    fence_char = ""
+    fence_length = 0
+
+    for line in markdown.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        line_ending = line[len(body) :]
+        stripped = body.lstrip(" ")
+        indent = len(body) - len(stripped)
+
+        if fence_char:
+            closing = stripped.rstrip(" \t")
+            if indent <= 3 and len(closing) >= fence_length and set(closing) == {fence_char}:
+                fence_char = ""
+                fence_length = 0
+            visible.append(line_ending)
+            continue
+
+        if indent <= 3:
+            opening = re.match(r"(?P<fence>`{3,}|~{3,})", stripped)
+            if opening is not None:
+                fence = opening.group("fence")
+                info = stripped[opening.end() :]
+                if fence[0] != "`" or "`" not in info:
+                    fence_char = fence[0]
+                    fence_length = len(fence)
+                    visible.append(line_ending)
+                    continue
+
+        visible.append(line)
+
+    return "".join(visible)
+
+
+def _self_check_sections(markdown: str) -> list[str]:
+    markdown = _without_fenced_code(markdown)
+    sections: list[str] = []
+
+    for heading in _SELF_CHECK_HEADING_RE.finditer(markdown):
+        next_heading = _LEVEL_TWO_HEADING_RE.search(markdown, heading.end())
+        end = next_heading.start() if next_heading is not None else len(markdown)
+        sections.append(markdown[heading.end() : end])
+
+    return sections
 
 
 def test_teaching_ladder_index_matches_chapter_directories() -> None:
@@ -252,15 +302,51 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
         exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
         self_check_count = len(re.findall(r"^## Self-check$", exercises, re.M))
         applied_task_count = len(re.findall(r"^## (?:\d+\.|Bonus\b)", exercises, re.M))
-        if self_check_count != 1 or applied_task_count < 1:
+        level_two_headings = re.findall(r"^## .+$", exercises, re.M)
+        has_closing_self_check = bool(level_two_headings) and (
+            level_two_headings[-1] == "## Self-check"
+        )
+        if self_check_count != 1 or applied_task_count < 1 or not has_closing_self_check:
             invalid_exercises.append(
                 f"{chapter_dir.name}: {applied_task_count} applied task(s), "
-                f"{self_check_count} self-check(s)"
+                f"{self_check_count} self-check(s), closing={has_closing_self_check}"
             )
 
     assert not invalid_exercises, "Teaching exercise contract drifted: " + "; ".join(
         invalid_exercises
     )
+
+
+def test_teaching_exercise_pages_link_back_to_the_chapter_and_ladder() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
+        if "[← Back to chapter](./README.md)" not in exercises:
+            stale.append(f"{chapter_dir.name}: chapter link")
+        if "[Ladder index](../)" not in exercises:
+            stale.append(f"{chapter_dir.name}: ladder link")
+
+    assert not stale, "Teaching exercise navigation is incomplete: " + ", ".join(stale)
+
+
+def test_teaching_solution_keys_are_linked_into_the_lesson_flow() -> None:
+    stale: list[str] = []
+    solution_paths = sorted(TEACHING_DIR.glob("[0-9][0-9]-*/solutions.md"))
+
+    assert solution_paths, "Teaching ladder has no discoverable solution keys"
+    for solutions_path in solution_paths:
+        chapter_dir = solutions_path.parent
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        solutions = solutions_path.read_text(encoding="utf-8")
+        if "[`solutions.md`](./solutions.md)" not in readme:
+            stale.append(f"{chapter_dir.name}: README link")
+        if "[← Back to chapter](./README.md)" not in solutions:
+            stale.append(f"{chapter_dir.name}: chapter return link")
+        if "[Ladder index](../)" not in solutions:
+            stale.append(f"{chapter_dir.name}: ladder return link")
+
+    assert not stale, "Teaching solution-key navigation is incomplete: " + ", ".join(stale)
 
 
 def test_teaching_chapter_readmes_include_runnable_commands() -> None:
@@ -273,6 +359,23 @@ def test_teaching_chapter_readmes_include_runnable_commands() -> None:
             missing.append(chapter_dir.name)
 
     assert not missing, "Teaching chapter READMEs missing runnable commands: " + ", ".join(missing)
+
+
+def test_teaching_main_entrypoints_are_documented_in_chapter_readmes() -> None:
+    missing: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        entrypoint = chapter_dir / "main.py"
+        if not entrypoint.exists():
+            continue
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        command = f"uv run python docs/teaching/{chapter_dir.name}/main.py"
+        if command not in readme:
+            missing.append(chapter_dir.name)
+
+    assert not missing, "Teaching main.py commands missing from chapter READMEs: " + ", ".join(
+        missing
+    )
 
 
 def test_teaching_script_run_commands_are_documented_in_chapter_docs() -> None:
@@ -596,3 +699,67 @@ def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
     assert not stale_mentions, "Teaching docs claim tests/teaching/ is missing: " + ", ".join(
         stale_mentions
     )
+
+
+def test_teaching_exercise_pages_include_one_mastery_self_check() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
+        self_check_sections = _self_check_sections(exercises)
+        if len(self_check_sections) != 1:
+            stale.append(f"{chapter_dir.name}: expected one Self-check heading")
+            continue
+        question_numbers = [
+            int(number)
+            for number in re.findall(r"^(\d+)\. ", self_check_sections[0], re.MULTILINE)
+        ]
+        if (
+            question_numbers != list(range(1, len(question_numbers) + 1))
+            or len(question_numbers) < 3
+        ):
+            stale.append(f"{chapter_dir.name}: missing sequential learner questions")
+
+    assert not stale, "Teaching exercise mastery checks are incomplete: " + ", ".join(stale)
+
+
+def test_self_check_sections_require_an_exact_level_two_heading() -> None:
+    malformed = """\
+### Self-check
+
+You should not make a level-three heading count.
+
+Ordinary prose containing ## Self-check should not count either.
+"""
+
+    assert _self_check_sections(malformed) == []
+
+
+def test_self_check_sections_ignore_fenced_heading_lookalikes() -> None:
+    fenced = """\
+```markdown
+## Self-check
+
+You should not let a code sample satisfy the exercise guard.
+```
+"""
+
+    assert _self_check_sections(fenced) == []
+
+
+def test_self_check_sections_stop_at_the_next_level_two_heading() -> None:
+    markdown = """\
+## Self-check
+
+The outcome is missing from this section.
+
+## What's next
+
+You should not let this later outcome satisfy the self-check.
+"""
+
+    sections = _self_check_sections(markdown)
+
+    assert len(sections) == 1
+    assert "The outcome is missing" in sections[0]
+    assert "You should" not in sections[0]
