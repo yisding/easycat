@@ -202,7 +202,7 @@ class MiniTurnDetector:
         t0 = time.monotonic()
         result = await self._smart.detect(self._turn_audio)
         inference_ms = (time.monotonic() - t0) * 1000
-        confirmed = result.probability >= self._threshold
+        confirmed = result.probability > self._threshold
         if self._journal is not None:
             self._journal.append(
                 kind=JournalRecordKind.EVENT,
