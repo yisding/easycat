@@ -32,7 +32,8 @@
 - **Added:** STT provider via `create_stt_provider`; the first
   `RunBundle` written to `runs/`; the partial-vs-final event shape
   (`stt.partial`, `stt.final`); `partial_policy_probe.py` for the
-  reversible-speculation boundary.
+  reversible-speculation boundary; `transcribe_ownership_probe.py` for
+  logical-stream versus provider-resource ownership.
 - **Modified:** the pipeline forks — audio still flows out of the
   transport, but it now goes to STT instead of back to the speaker.
 - **Removed:** the speaker output (no echo in this chapter; this is
@@ -227,6 +228,30 @@ Same STT provider, two usage patterns:
 - **streaming** — start the STT stream, push audio as it arrives,
   consume events concurrently. When the stream ends, partials and a
   final flow back.
+
+### Ending a stream is not the same as closing a provider
+
+`start_stream()` / `end_stream()` delimit one logical utterance. A provider may
+still own a persistent WebSocket, HTTP client, or background task after that
+utterance. `transcribe_file()` therefore follows the same ownership rule as
+the Chapter 3 `speak()` recipe:
+
+| Provider came from | Logical stream | Final resource cleanup |
+|---|---|---|
+| `transcribe_file(path, provider=...)` | Helper starts and ends it | Helper closes the helper-created STT |
+| `transcribe_file(path, stt=my_stt)` | Helper starts and ends it | Caller closes the caller-supplied STT |
+
+Run both paths without credentials:
+
+```bash
+uv run python docs/teaching/02-transcribe/transcribe_ownership_probe.py
+```
+
+The helper-created provider reports `owned_provider_closed: true`; the
+caller-supplied provider reports `caller_provider_closed: false`. The logical
+stream ends in both cases. This distinction matters for persistent providers
+such as OpenAI Realtime: ending a turn intentionally keeps its warmed socket
+available, while final provider cleanup closes it.
 
 ## A note on which provider you run
 

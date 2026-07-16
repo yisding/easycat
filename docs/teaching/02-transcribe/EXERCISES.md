@@ -89,8 +89,29 @@ consumers may observe the cancellation hypothesis, and which must wait?
 3. Tool calls, database writes, agent-history commits, and spoken audio cross
    the irreversible boundary. Dispatch those from `FINAL`, not `PARTIAL`.
 
+## 4. Separate stream end from provider close
+
+**Task.** Run the provider-free ownership probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/transcribe_ownership_probe.py
+```
+
+Predict the four lifecycle booleans before reading the output. Then remove the
+helper's final `close_if_supported(owned_stt)` call temporarily and rerun. Which
+contract breaks, and why would a persistent provider make that visible?
+
+**Hints**
+
+1. The logical stream ends in both cases because this helper owns the one-file
+   transcription operation.
+2. The helper-created STT's final cleanup also belongs to the helper.
+3. A caller-supplied STT may be reused for another operation, so closing it
+   would violate the caller's ownership.
+
 ## Self-check
 
 You should be able to read any bundle from any chapter from now on without
 consulting the README that produced it, and explain why observing a partial is
-different from committing a side effect from one.
+different from committing a side effect from one. You should also be able to
+distinguish ending one STT stream from closing the provider that owns it.
