@@ -1,0 +1,208 @@
+"""Latency and reliability budget policy."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from easycat.validation._latency_models import ReliabilitySample
+
+__all__ = [
+    "DEFAULT_BUDGETS",
+    "DEFAULT_RELIABILITY_BUDGETS",
+    "LatencyBudget",
+    "LatencyBudgetViolation",
+    "ReliabilityBudget",
+    "ReliabilityBudgetViolation",
+    "evaluate_budgets",
+    "evaluate_reliability_budgets",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyBudget:
+    stage: str
+    max_ms: float
+    percentile: str = "p95"
+
+    def __post_init__(self) -> None:
+        if self.percentile not in ("p50", "p90", "p95", "p99"):
+            raise ValueError(
+                f"LatencyBudget percentile must be one of p50, p90, p95, p99; "
+                f"got {self.percentile!r}"
+            )
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {"stage": self.stage, "max_ms": self.max_ms, "percentile": self.percentile}
+
+
+# Calibrated against the live-stack SLO defaults in
+# tests/e2e/test_plan_7_latency_benchmark.py. These tolerate provider jitter
+# while still catching order-of-magnitude regressions.
+DEFAULT_BUDGETS: tuple[LatencyBudget, ...] = (
+    LatencyBudget(stage="total_ms", max_ms=8000.0, percentile="p95"),
+    LatencyBudget(stage="tts_ttfb_ms", max_ms=1500.0, percentile="p95"),
+    LatencyBudget(stage="llm_ttft_ms", max_ms=2500.0, percentile="p95"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyBudgetViolation:
+    stage: str
+    percentile: str
+    observed_ms: float
+    budget_ms: float
+    scope: str
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "stage": self.stage,
+            "percentile": self.percentile,
+            "observed_ms": self.observed_ms,
+            "budget_ms": self.budget_ms,
+            "scope": self.scope,
+        }
+
+
+def evaluate_budgets(
+    percentiles: Mapping[str, Any],
+    budgets: Sequence[LatencyBudget],
+) -> list[LatencyBudgetViolation]:
+    violations: list[LatencyBudgetViolation] = []
+    overall = percentiles.get("overall")
+    if isinstance(overall, Mapping):
+        violations.extend(_evaluate_scope(overall, budgets, scope="overall"))
+    by_condition = percentiles.get("by_condition")
+    if isinstance(by_condition, Mapping):
+        for condition_id, stage_stats in sorted(
+            by_condition.items(), key=lambda item: str(item[0])
+        ):
+            if not isinstance(stage_stats, Mapping):
+                continue
+            violations.extend(
+                _evaluate_scope(stage_stats, budgets, scope=f"condition:{condition_id}")
+            )
+    return violations
+
+
+def _evaluate_scope(
+    stage_stats: Mapping[str, Any],
+    budgets: Sequence[LatencyBudget],
+    *,
+    scope: str,
+) -> list[LatencyBudgetViolation]:
+    results: list[LatencyBudgetViolation] = []
+    for budget in budgets:
+        stats = stage_stats.get(budget.stage)
+        if not isinstance(stats, Mapping):
+            continue
+        observed = stats.get(budget.percentile)
+        if observed is None:
+            continue
+        observed_ms = float(observed)
+        if observed_ms > budget.max_ms:
+            results.append(
+                LatencyBudgetViolation(
+                    stage=budget.stage,
+                    percentile=budget.percentile,
+                    observed_ms=observed_ms,
+                    budget_ms=float(budget.max_ms),
+                    scope=scope,
+                )
+            )
+    return results
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilityBudget:
+    """Maximum accepted value for one reliability signal."""
+
+    signal: str
+    max_value: float
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {"signal": self.signal, "max_value": self.max_value}
+
+
+DEFAULT_RELIABILITY_BUDGETS: tuple[ReliabilityBudget, ...] = (
+    ReliabilityBudget(signal="event_loop_lag_ms", max_value=250.0),
+    ReliabilityBudget(signal="memory_growth_kib", max_value=512_000.0),
+    ReliabilityBudget(signal="dropped_frames", max_value=0.0),
+    ReliabilityBudget(signal="journal_degraded", max_value=0.0),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilityBudgetViolation:
+    signal: str
+    observed: float
+    budget: float
+    scope: str
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "signal": self.signal,
+            "observed": self.observed,
+            "budget": self.budget,
+            "scope": self.scope,
+        }
+
+
+def evaluate_reliability_budgets(
+    samples: Sequence[ReliabilitySample],
+    budgets: Sequence[ReliabilityBudget],
+) -> list[ReliabilityBudgetViolation]:
+    """Evaluate eligible samples overall and for each condition."""
+    eligible = [sample for sample in samples if sample.eligible]
+    if not eligible:
+        return []
+    by_condition: dict[str, list[ReliabilitySample]] = defaultdict(list)
+    for sample in eligible:
+        by_condition[sample.condition_id].append(sample)
+    violations = _evaluate_reliability_scope(eligible, budgets, scope="overall")
+    for condition_id, condition_samples in sorted(by_condition.items()):
+        violations.extend(
+            _evaluate_reliability_scope(
+                condition_samples, budgets, scope=f"condition:{condition_id}"
+            )
+        )
+    return violations
+
+
+def _evaluate_reliability_scope(
+    samples: Sequence[ReliabilitySample],
+    budgets: Sequence[ReliabilityBudget],
+    *,
+    scope: str,
+) -> list[ReliabilityBudgetViolation]:
+    results: list[ReliabilityBudgetViolation] = []
+    for budget in budgets:
+        observed_values = [
+            value
+            for sample in samples
+            if (value := _reliability_signal_value(sample, budget.signal)) is not None
+        ]
+        if not observed_values:
+            continue
+        observed = max(observed_values)
+        if observed > budget.max_value:
+            results.append(
+                ReliabilityBudgetViolation(
+                    signal=budget.signal,
+                    observed=observed,
+                    budget=float(budget.max_value),
+                    scope=scope,
+                )
+            )
+    return results
+
+
+def _reliability_signal_value(sample: ReliabilitySample, signal: str) -> float | None:
+    value = getattr(sample.signals, signal, None)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    return float(value)

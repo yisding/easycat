@@ -4,7 +4,158 @@ import asyncio
 
 import pytest
 
-from easycat.runtime.scope import JournalSink, RuntimeScope
+from easycat.runtime.scope import BackgroundTaskScope, JournalSink, RuntimeScope
+
+
+def test_background_scope_closes_coroutine_when_task_creation_fails() -> None:
+    scope = BackgroundTaskScope()
+
+    async def work() -> None:
+        pass
+
+    coro = work()
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        scope.create_task("timer", coro)
+
+    assert coro.cr_frame is None
+
+
+def test_background_scope_closes_coroutine_for_empty_name() -> None:
+    scope = BackgroundTaskScope()
+
+    async def work() -> None:
+        pass
+
+    coro = work()
+    with pytest.raises(ValueError, match="must be non-empty"):
+        scope.create_task("", coro)
+
+    assert coro.cr_frame is None
+
+
+@pytest.mark.asyncio
+async def test_background_scope_closes_coroutine_for_duplicate_name() -> None:
+    scope = BackgroundTaskScope()
+    release = asyncio.Event()
+    active = scope.create_task("timer", release.wait())
+
+    async def rejected_work() -> None:
+        pass
+
+    rejected = rejected_work()
+    with pytest.raises(RuntimeError, match="already active"):
+        scope.create_task("timer", rejected)
+
+    assert rejected.cr_frame is None
+    release.set()
+    await active
+
+
+@pytest.mark.asyncio
+async def test_background_scope_prunes_completed_task() -> None:
+    scope = BackgroundTaskScope()
+
+    task = scope.create_task("timer", asyncio.sleep(0))
+    assert scope.active("timer")
+
+    await task
+    await asyncio.sleep(0)
+
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_background_scope_replaces_named_task() -> None:
+    scope = BackgroundTaskScope()
+    first_started = asyncio.Event()
+    first_cleaned_up = asyncio.Event()
+    release_second = asyncio.Event()
+
+    async def first_timer() -> None:
+        first_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            first_cleaned_up.set()
+
+    first = scope.create_task("timer", first_timer())
+    await first_started.wait()
+
+    second = scope.create_task("timer", release_second.wait(), replace=True)
+    await asyncio.sleep(0)
+
+    assert first.cancelled()
+    assert first_cleaned_up.is_set()
+    assert scope.active("timer")
+    assert scope.tasks() == (second,)
+
+    release_second.set()
+    await second
+    await asyncio.sleep(0)
+
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_background_scope_cancel_detaches_name_immediately() -> None:
+    scope = BackgroundTaskScope()
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def timer() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    task = scope.create_task("timer", timer())
+    await started.wait()
+
+    assert scope.cancel("timer") == (task,)
+    assert not scope.active("timer")
+    assert scope.empty
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleaned_up.is_set()
+
+
+@pytest.mark.asyncio
+async def test_background_scope_cancel_detaches_current_task_without_cancelling_it() -> None:
+    scope = BackgroundTaskScope()
+    completed = asyncio.Event()
+
+    async def cancel_owner() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        assert scope.cancel("timer") == (current,)
+        await asyncio.sleep(0)
+        completed.set()
+
+    task = scope.create_task("timer", cancel_owner())
+    await task
+
+    assert not task.cancelled()
+    assert completed.is_set()
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_background_scope_observes_task_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scope = BackgroundTaskScope()
+
+    async def fail() -> None:
+        raise RuntimeError("boom")
+
+    scope.create_task("timer", fail())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert scope.empty
+    assert "Background task 'timer' failed" in caplog.text
 
 
 def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:

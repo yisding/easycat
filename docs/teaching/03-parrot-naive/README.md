@@ -1,7 +1,7 @@
 # Chapter 3 — Parrot, the Naive Way
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 2 — Transcribe](../02-transcribe/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
+**Progress: 4 of 16** · [← Chapter 2 — Transcribe](../02-transcribe/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
 <!-- END auto:navigation -->
 
 > A bot that repeats what you said. Except it breaks the instant
@@ -38,6 +38,11 @@ personally heard this fail on your own voice.
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -103,12 +108,12 @@ personally heard this fail on your own voice.
  import asyncio
  import os
  import time
-@@ -28,167 +28,269 @@
+@@ -28,167 +28,286 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
 -from easycat.events import EventBus, STTEventType
-+from easycat.events import EventBus, STTEvent, STTEventType
++from easycat.events import Error, EventBus, STTEvent, STTEventType
 +from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
@@ -268,10 +273,11 @@ personally heard this fail on your own voice.
 +
 +
 +async def listen_stt(
-     stt,
++    stt,
 +    ev_queue: asyncio.Queue[STTQueueItem],
 +    journal: InMemoryRingBuffer,
 +    start: float,
++    provider_errors: list[BaseException] | None = None,
 +) -> None:
 +    event_id = 0
 +    async for event in stt.events():
@@ -285,20 +291,17 @@ personally heard this fail on your own voice.
 +            queue_depth=ev_queue.qsize(),
 +        )
 +        await ev_queue.put((event_id, event, received_offset_ms))
++    # Provider errors are emitted on a task immediately before the terminal
++    # sentinel is queued. Yield once so the synchronous subscriber records an
++    # exhausted-socket failure before we classify stream exhaustion as normal.
++    await asyncio.sleep(0)
++    if provider_errors:
++        raise provider_errors[-1]
 +    await ev_queue.put(None)
 +
 +
 +async def parrot_events(
-     transport,
--    journal: InMemoryRingBuffer,
--    session_id: str,
--    *,
--    duration_s: float = DURATION_S,
--) -> None:
--    """Run one stream with acquisition rollback and joined sibling tasks."""
--    # Register each cleanup as soon as ownership begins. If connect() or
--    # start_stream() raises after partial acquisition, the earlier callbacks
--    # still run. Successful acquisition unwinds as end → close → disconnect.
++    transport,
 +    ev_queue: asyncio.Queue[STTQueueItem],
 +    journal: InMemoryRingBuffer,
 +    start: float,
@@ -358,7 +361,20 @@ personally heard this fail on your own voice.
 +    raise ParrotEventStreamEndedError
 +
 +
-+async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
++async def run_parrot(
+     stt,
+     transport,
+     journal: InMemoryRingBuffer,
+-    session_id: str,
+-    *,
+-    duration_s: float = DURATION_S,
+-) -> None:
+-    """Run one stream with acquisition rollback and joined sibling tasks."""
+-    # Register each cleanup as soon as ownership begins. If connect() or
+-    # start_stream() raises after partial acquisition, the earlier callbacks
+-    # still run. Successful acquisition unwinds as end → close → disconnect.
++    provider_errors: list[BaseException] | None = None,
++) -> None:
 +    """Own one parrot stream until cancellation, failure, or STT exhaustion."""
      async with AsyncExitStack() as resources:
 +        # These objects exist before connect(), so register final cleanup
@@ -406,7 +422,16 @@ personally heard this fail on your own voice.
 -                        # without a translator.
 -                        "t_ms": time.monotonic() * 1000,
 -                    },
--                )
++        print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
++        ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
++        observed_provider_errors = provider_errors if provider_errors is not None else []
++
++        try:
++            async with asyncio.TaskGroup() as streams:
++                streams.create_task(feed_audio(stt, transport))
++                streams.create_task(
++                    listen_stt(stt, ev_queue, journal, start, observed_provider_errors)
+                 )
 -
 -        # TaskGroup cancels and joins one sibling before it lets the failure
 -        # escape. Resource cleanup therefore never races a live feeder or
@@ -419,13 +444,6 @@ personally heard this fail on your own voice.
 -async def main(provider: str = "openai") -> None:
 -    config = build_stt_config(provider)
 -    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
-+        print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
-+        ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
-+
-+        try:
-+            async with asyncio.TaskGroup() as streams:
-+                streams.create_task(feed_audio(stt, transport))
-+                streams.create_task(listen_stt(stt, ev_queue, journal, start))
 +                streams.create_task(stop_when_parrot_ends(transport, ev_queue, journal, start))
 +        except* ParrotEventStreamEndedError:
 +            # ``parrot_events`` consumed the listener's None sentinel. Raising
@@ -467,19 +485,21 @@ personally heard this fail on your own voice.
 +    # Deepgram emits partials mid-speech, which is what this chapter needs
 +    # to feel break. Its STT factory config takes provider-specific args via
 +    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
-+    # format; ``event_bus`` is only used by Deepgram for WebSocket-reconnect
-+    # telemetry — we wire a fresh bus here with no subscribers to satisfy
-+    # the provider's constructor.
++    # format. Capture terminal provider errors so an exhausted reconnect loop
++    # cannot look like an ordinary end of the STT event stream.
++    provider_errors: list[BaseException] = []
++    event_bus = EventBus()
++    event_bus.subscribe(Error, lambda event: provider_errors.append(event.exception))
 +    stt = create_stt_provider(
 +        STTProviderConfig(
 +            provider="deepgram",
 +            api_key=dg_key,
-+            params={"sample_rate": 24000, "event_bus": EventBus()},
++            params={"sample_rate": 24000, "event_bus": event_bus},
 +        )
 +    )
 +
 +    try:
-+        await run_parrot(stt, transport, journal)
++        await run_parrot(stt, transport, journal, provider_errors)
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
 
@@ -572,23 +592,26 @@ The surrounding scaffold is inherited from chapter 2:
   A failure in any child cancels and joins the other two before resource
   teardown.
 - A long-running parrot has one extra case: the STT listener can end normally
-  while the microphone feeder is intentionally infinite. After the parrot
-  drains the listener's `None` sentinel, a private
+  while the microphone feeder is intentionally infinite. Provider `Error`
+  events are captured first, so failed WebSocket exhaustion propagates instead
+  of sharing this path. After a genuinely normal end, the parrot drains the
+  listener's `None` sentinel and a private
   `ParrotEventStreamEndedError` turns that terminal condition into a caught
   TaskGroup stop signal. The feeder is cancelled and joined; the sentinel does
   not escape as an application error.
 
-Run all four paths without credentials or audio hardware:
+Run all five paths without credentials or audio hardware:
 
 ```bash
 uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
 ```
 
 `normal_event_end` shows `transport.receive.cancelled` before `stt.end`,
-`stt.close`, and `transport.disconnect`. The two startup failures never record
-`stt.end`, while the feed failure cancels the STT listener before the same
-ordered teardown. That leaves the silence timeout as the only deliberate
-failure introduced by this chapter.
+`stt.close`, and `transport.disconnect`. `failed_event_end` follows the same
+ordered teardown but reports the STT failure instead of suppressing it. The two
+startup failures never record `stt.end`, while the feed failure cancels the STT
+listener before teardown. That leaves the silence timeout as the only
+deliberate failure introduced by this chapter.
 
 ## Break it, deliberately
 

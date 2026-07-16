@@ -296,6 +296,7 @@ class _FakeTransport:
     def __init__(self, chunks_in: list[AudioChunk]) -> None:
         self._chunks_in = chunks_in
         self.sent: list[AudioChunk] = []
+        self.sent_queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
 
     async def connect(self) -> None:
         pass
@@ -309,6 +310,7 @@ class _FakeTransport:
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent.append(chunk)
+        self.sent_queue.put_nowait(chunk)
 
     async def clear_audio(self) -> None:
         pass
@@ -417,9 +419,10 @@ async def test_voice_session_replay_is_byte_identical(tmp_path: pathlib.Path) ->
     session = Session(config)
 
     await session.start()
-    # Give the pipeline enough time for one full turn: VAD start/stop,
-    # STT final, agent run, TTS synthesize, outbound drain to transport.
-    await asyncio.sleep(0.3)
+    # Wait for the three deterministic TTS chunks to reach the transport
+    # instead of guessing how long the full turn takes under coverage load.
+    for _ in range(3):
+        await asyncio.wait_for(transport.sent_queue.get(), timeout=2.0)
     await session.stop()
 
     # Ground truth: what the transport actually received.
