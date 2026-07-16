@@ -21,8 +21,8 @@ where the wrong guess stuck. Compare it to the final.
    earlier point and threw it away. That's a recall failure (the
    right hypothesis was on the table; the LM-prior overruled it).
 4. The opposite case is also interesting: the final is *right* but
-   the user heard wrong-looking partials flap by. That's why
-   chapter 6 reinforces "never act on partials."
+   the user saw wrong-looking partials flap by. That's why chapter 6
+   reinforces "never commit spoken output from a partial."
 
 **Wider points to check yourself on**
 
@@ -69,7 +69,28 @@ When does each shape pay off?
    a `JournalView` whose query helpers return typed `JournalRecord`
    objects. Chapter 11 compares those two representations explicitly.
 
+## 3. Draw the partial-commit boundary
+
+**Task.** Run the deterministic policy probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/partial_policy_probe.py
+```
+
+Change the second partial to "cancel my timer" while leaving the final as
+"set a timer for fifty minutes." Predict every list before rerunning it. Which
+consumers may observe the cancellation hypothesis, and which must wait?
+
+**Hints**
+
+1. A caption can replace text freely; no external state was committed.
+2. Speculation is safe only when it is keyed, cancellable, or discardable when
+   the hypothesis changes.
+3. Tool calls, database writes, agent-history commits, and spoken audio cross
+   the irreversible boundary. Dispatch those from `FINAL`, not `PARTIAL`.
+
 ## Self-check
 
-You should be able to read any bundle from any chapter from now on
-without consulting the README of the chapter that produced it.
+You should be able to read any bundle from any chapter from now on without
+consulting the README that produced it, and explain why observing a partial is
+different from committing a side effect from one.
