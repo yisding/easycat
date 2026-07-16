@@ -637,7 +637,6 @@ def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> Non
     assert "PASS bind guard: public unauthenticated endpoint failed closed" in result.stdout
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
 async def test_multi_caller_start_failure_releases_capacity(failure_type) -> None:
     script = FEATURE_LADDER / "09-multi-caller" / "main.py"
@@ -667,7 +666,6 @@ async def test_multi_caller_start_failure_releases_capacity(failure_type) -> Non
     assert replacement is not None
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
 async def test_multi_caller_stop_failure_releases_capacity(failure_type) -> None:
     script = FEATURE_LADDER / "09-multi-caller" / "main.py"
