@@ -19,6 +19,7 @@ from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     EXERCISE_COMPLETION_RE,
     EXERCISE_HINTS_RE,
+    EXERCISE_PROTOCOL_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
     PRACTICE_HANDOFF_RE,
@@ -37,6 +38,7 @@ from scripts.regen_teaching_chapters import (
     render_exercise_completion,
     render_exercise_hints,
     render_exercise_navigation,
+    render_exercise_protocol,
     render_navigation,
     render_offline_checkpoint,
     render_practice_handoff,
@@ -251,6 +253,21 @@ def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> 
     )
 
 
+def test_render_exercise_protocol_defines_completion_evidence() -> None:
+    assert render_exercise_protocol() == (
+        "> **Completion evidence for every task**\n"
+        ">\n"
+        "> 1. **Before hints:** keep your initial prediction or plan.\n"
+        "> 2. **After the attempt:** keep the exact command or change and one observed field,\n"
+        ">    measurement, or behavior.\n"
+        "> 3. **Before moving on:** explain in one sentence why the evidence supports or changes\n"
+        ">    your model.\n"
+        ">\n"
+        "> A task is complete when all three are present. Keep a wrong first answer visible;\n"
+        "> it is evidence to explain after revealing hints, not an answer to rewrite."
+    )
+
+
 def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
@@ -298,6 +315,20 @@ def test_each_exercise_page_has_one_current_generated_navigation_block() -> None
         assert matches[0].group("body").strip() == render_exercise_navigation(chapter)
         assert matches[0].start() > exercises.index("# ")
         assert matches[0].start() < exercises.find("\n## ")
+
+
+def test_each_exercise_page_sets_completion_evidence_before_its_first_task() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        matches = list(EXERCISE_PROTOCOL_RE.finditer(exercises))
+        navigation = NAVIGATION_RE.search(exercises)
+        first_task = re.search(r"^## (?:\d+\.|Bonus\b)", exercises, re.MULTILINE)
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_exercise_protocol()
+        assert navigation is not None
+        assert first_task is not None
+        assert navigation.end() < matches[0].start() < first_task.start()
 
 
 def test_each_exercise_page_ends_with_current_generated_completion() -> None:

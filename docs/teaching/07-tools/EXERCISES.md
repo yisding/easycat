@@ -4,6 +4,19 @@
 [← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:navigation -->
 
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
+
 ## 1. Add a "still working on it" update for slow tools
 
 **Task.** Change `get_weather` to sleep 5 seconds. Run. One filler
