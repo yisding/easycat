@@ -1,7 +1,7 @@
 # Chapter 11 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
 <!-- END auto:navigation -->
 
 The README's three planted-bug investigations *are* the chapter's

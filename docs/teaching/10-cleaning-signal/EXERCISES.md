@@ -1,7 +1,7 @@
 # Chapter 10 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -187,9 +187,9 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-The journal records `vad.processed_raw` followed by
+The journal records `vad.processed_before_nr` followed by
    `nr.applied_after_vad` with the same `frame_index`. NR is still
-   running, but only after VAD consumed the raw frame, so its output
+   running, but only after VAD consumed the pre-NR frame, so its output
    cannot influence that verdict.
 
 </details>
@@ -198,8 +198,8 @@ The journal records `vad.processed_raw` followed by
 <summary>Hint 2 of 4</summary>
 
 The `audio.config` record names the live backend, so you can
-   confirm RNNoise is loaded. `vad.processed_raw.data.events` names
-   any VAD transitions produced from each raw frame. The paired record
+   confirm RNNoise is loaded. `vad.processed_before_nr.data.events` names
+   any VAD transitions produced before NR runs on that frame. The paired record
    order proves NR cannot affect those transitions; a matched baseline
    run is still required before claiming the false-fire rate is
    unchanged.

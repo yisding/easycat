@@ -1,7 +1,7 @@
 # Chapter 9 — Interruption / Barge-in
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 8 — Smart-turn](../08-smart-turn/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+**Progress: 10 of 16** · [← Chapter 8 — Smart-turn](../08-smart-turn/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
 <!-- END auto:navigation -->
 
 > Three versions of the same feature. Each one better. Each one
@@ -59,6 +59,11 @@
 - [Chapter 8](../08-smart-turn/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -84,6 +89,15 @@
 - **Removed:** smart-turn — to isolate the barge-in concept.
 
 ## The three scripts
+
+Start with the chapter's canonical entry point. It delegates to version A,
+the deliberately limited baseline:
+
+```bash
+uv run python docs/teaching/09-interruption/main.py
+```
+
+Then run all three named versions in order:
 
 ```bash
 uv run python docs/teaching/09-interruption/ignore.py    # A: answering-machine
@@ -351,9 +365,10 @@ Expect:
 
 ## Try breaking it
 
-1. Run `estimate.py`. Interrupt exactly after one word. Open the
-   bundle — does `heard_text` end at that word, or does it over- or
-   under-shoot?
+1. Run `estimate.py`. Interrupt as close as you can after hearing one
+   word, and repeat several times because human reaction time is not an
+   exact clock. In each bundle, does `heard_text` end at that word, or
+   does it over- or under-shoot?
 2. Have the agent reply with markdown-heavy output (ask it for a
    table). The stripped text fed to TTS is shorter than the
    original. How does this affect `heard_text` vs reality?

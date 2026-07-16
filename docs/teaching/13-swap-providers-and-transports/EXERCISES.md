@@ -1,7 +1,7 @@
 # Chapter 13 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -133,7 +133,9 @@ the next hint; keep each attempt in your evidence record.
    to update the active call with `<Play digits="1">`. A successful
    journal path is `session_action_requested`,
    `session_action_started`, then `session_action_completed`; the
-   started record names `TwilioSessionActionExecutor`.
+   started record names `TwilioSessionActionExecutor`. The Twilio
+   preset wires it through `TelephonyConfig.twilio_actions` using
+   `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`.
 
 </details>
 

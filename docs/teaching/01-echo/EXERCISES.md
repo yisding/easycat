@@ -1,7 +1,7 @@
 # Chapter 1 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -143,11 +143,11 @@ shape.
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) state the inbound/outbound audio shape that the
-echo loop needs without looking at the protocol, (b) distinguish a chunk
-being produced from `send_audio(...)` accepting it, and (c) explain why the
-same loop can use Local, WebSocket, WebRTC, or Twilio transports without
-changing its control flow.
+You should be able to: (a) state and trace the inbound/outbound audio shape
+from microphone input to speaker output, (b) distinguish a chunk being
+produced from `send_audio(...)` accepting it and explain why the loop uses
+async iteration, and (c) explain why the same control flow works with Local,
+WebSocket, WebRTC, or Twilio transports.
 
 <!-- BEGIN auto:exercise-completion -->
 ---

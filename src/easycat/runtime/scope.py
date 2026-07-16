@@ -5,11 +5,100 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Coroutine
+from functools import partial
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+
+class BackgroundTaskScope:
+    """Own self-pruning, fire-and-forget tasks for synchronous components.
+
+    Unlike :class:`RuntimeScope`, this scope has no async drain boundary. It
+    retains each task until completion, consumes its terminal result, and
+    removes it automatically. Named tasks can be replaced or cancelled while
+    the owning component keeps a synchronous ``stop()`` contract.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
+
+    def create_task(
+        self,
+        name: str,
+        coro: Coroutine[Any, Any, _T],
+        *,
+        replace: bool = False,
+    ) -> asyncio.Task[_T]:
+        """Create a named task, optionally cancelling an active predecessor."""
+        if not name:
+            coro.close()
+            raise ValueError("BackgroundTaskScope task name must be non-empty")
+
+        existing = self._tasks.get(name)
+        if existing is not None and not existing.done():
+            if not replace:
+                coro.close()
+                raise RuntimeError(f"Background task {name!r} is already active")
+            self.cancel(name)
+
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except BaseException:
+            coro.close()
+            raise
+        self._tasks[name] = task
+        task.add_done_callback(partial(self._on_done, name))
+        return task
+
+    def active(self, name: str) -> bool:
+        """Return whether *name* currently maps to an unfinished task."""
+        task = self._tasks.get(name)
+        return task is not None and not task.done()
+
+    def tasks(self) -> tuple[asyncio.Task[Any], ...]:
+        """Return the tasks that are still owned by this scope."""
+        return tuple(task for task in self._tasks.values() if not task.done())
+
+    @property
+    def empty(self) -> bool:
+        """Whether the scope owns no unfinished tasks."""
+        return not self.tasks()
+
+    def cancel(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
+        """Detach and cancel one named task or every task in the scope.
+
+        The calling task is detached but not cancelled when it belongs to this
+        scope, allowing event callbacks triggered by that task to tear down the
+        owner without interrupting their own cleanup.
+        """
+        if name is None:
+            tasks = tuple(self._tasks.values())
+            self._tasks.clear()
+        else:
+            task = self._tasks.pop(name, None)
+            tasks = () if task is None else (task,)
+
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        for task in tasks:
+            if task is not current and not task.done():
+                task.cancel()
+        return tasks
+
+    def _on_done(self, name: str, task: asyncio.Task[Any]) -> None:
+        if self._tasks.get(name) is task:
+            self._tasks.pop(name, None)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Background task %r failed", name)
 
 
 @runtime_checkable

@@ -1,7 +1,7 @@
 # Chapter 5 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
