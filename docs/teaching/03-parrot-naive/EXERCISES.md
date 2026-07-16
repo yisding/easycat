@@ -1,5 +1,7 @@
 # Chapter 3 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 The whole chapter is one big exercise: feel a bad pipeline
 viscerally so the next chapter's fix lands. The README walks you
 through four sentences that break it; this file deepens that into

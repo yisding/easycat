@@ -4,8 +4,8 @@ Replace chapter 3's fixed silence timeout with a real voice-activity
 detector plus a pre-roll ring buffer. The same parrot loop, now gated
 on VAD turn boundaries instead of "500 ms since the last STT event."
 
-Run with ``--no-preroll`` to hear the start-of-utterance truncation
-this chapter was designed to fix.
+Run with ``--no-preroll`` to compare a stream that omits cached audio
+received before VAD-on.
 
 Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
@@ -160,7 +160,7 @@ async def main() -> None:
     parser.add_argument(
         "--no-preroll",
         action="store_true",
-        help="Disable pre-roll; start-of-utterance will be clipped.",
+        help="Disable pre-roll; omit cached frames received before VAD-on.",
     )
     args = parser.parse_args()
 

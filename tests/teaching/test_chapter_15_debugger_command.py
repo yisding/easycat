@@ -6,7 +6,7 @@ import importlib.util
 import shlex
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "15-operate-in-production"
 
 
-def _load_main_module():
+def _load_main_module() -> ModuleType:
     path = CHAPTER / "main.py"
     spec = importlib.util.spec_from_file_location("teaching_ch15_debugger", path)
     assert spec is not None and spec.loader is not None
@@ -34,7 +34,8 @@ def test_printed_debugger_command_invokes_the_registered_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     chapter = _load_main_module()
-    bundle = tmp_path / "ch15.bundle"
+    bundle = tmp_path / "path with spaces" / "ch15.bundle"
+    bundle.parent.mkdir()
     record = JournalRecord(sequence=1, session_id="ch15", name="session_started")
     journal = SimpleNamespace(read=lambda: [record])
     export_debug_bundle(SimpleNamespace(journal=journal), bundle)

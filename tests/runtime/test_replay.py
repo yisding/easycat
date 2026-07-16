@@ -8,6 +8,7 @@ committable-boundary enforcement (T4.8), tool-policy enforcement
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -64,6 +65,10 @@ def _write_bundle(
 
 _SHA_A = "a" * 64
 _SHA_B = "b" * 64
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _spec(**overrides) -> ReplaySpec:
@@ -281,6 +286,10 @@ class TestCheckProviderVersions:
 
 class TestReplayRunner:
     def _basic_bundle(self, tmp_path: Path) -> RunBundle:
+        input_blob = b"audio-in"
+        output_blob = b"audio-out"
+        input_ref = _sha256(input_blob)
+        output_ref = _sha256(output_blob)
         records = [
             {"sequence": 1, "kind": "event", "name": "turn_started", "turn_id": "t1"},
             {
@@ -289,7 +298,7 @@ class TestReplayRunner:
                 "name": "stage_start",
                 "turn_id": "t1",
                 "data": {"stage": "stt"},
-                "input_ref": _SHA_A,
+                "input_ref": input_ref,
             },
             {
                 "sequence": 3,
@@ -301,14 +310,14 @@ class TestReplayRunner:
                     "transcript": "hello world",
                     "timing": {"wall_ns": 123, "stage_ms": 42},
                 },
-                "output_ref": _SHA_B,
+                "output_ref": output_ref,
             },
             {"sequence": 4, "kind": "event", "name": "turn_ended", "turn_id": "t1"},
         ]
         path = _write_bundle(
             tmp_path,
             records=records,
-            artifacts={_SHA_A: b"audio-in", _SHA_B: b"audio-out"},
+            artifacts={input_ref: input_blob, output_ref: output_blob},
         )
         return RunBundle.load(path)
 
@@ -643,25 +652,29 @@ class TestStageReplayViaCassette:
             async def send_audio(self, chunk):
                 pass
 
+        input_blob = b"audio"
+        output_blob = b"xyz"
+        input_ref = _sha256(input_blob)
+        output_ref = _sha256(output_blob)
         records = [
             {
                 "sequence": 1,
                 "name": "stage_start",
                 "data": {"stage": "stt"},
-                "input_ref": _SHA_A,
+                "input_ref": input_ref,
             },
             {
                 "sequence": 2,
                 "name": "stage_complete",
                 "data": {"stage": "stt", "transcript": "from cassette"},
-                "output_ref": _SHA_B,
+                "output_ref": output_ref,
             },
         ]
         bundle = RunBundle.load(
             _write_bundle(
                 tmp_path,
                 records=records,
-                artifacts={_SHA_A: b"audio", _SHA_B: b"xyz"},
+                artifacts={input_ref: input_blob, output_ref: output_blob},
             )
         )
         stage = STTStage(_Stub())
@@ -676,16 +689,18 @@ class TestStageReplayViaCassette:
             def synthesize(self, text):
                 return b"live"
 
+        audio = b"replay-audio"
+        audio_ref = _sha256(audio)
         records = [
             {
                 "sequence": 1,
                 "name": "stage_complete",
                 "data": {"stage": "tts"},
-                "output_ref": _SHA_B,
+                "output_ref": audio_ref,
             },
         ]
         bundle = RunBundle.load(
-            _write_bundle(tmp_path, records=records, artifacts={_SHA_B: b"replay-audio"})
+            _write_bundle(tmp_path, records=records, artifacts={audio_ref: audio})
         )
         stage = TTSStage(_Stub())
         cassette = bundle.cassette_for_stage("tts")
@@ -699,16 +714,18 @@ class TestStageReplayViaCassette:
             async def send_audio(self, chunk):
                 pass
 
+        audio = b"input-audio"
+        audio_ref = _sha256(audio)
         records = [
             {
                 "sequence": 1,
                 "name": "stage_start",
                 "data": {"stage": "stt"},
-                "input_ref": _SHA_A,
+                "input_ref": audio_ref,
             },
         ]
         bundle = RunBundle.load(
-            _write_bundle(tmp_path, records=records, artifacts={_SHA_A: b"input-audio"})
+            _write_bundle(tmp_path, records=records, artifacts={audio_ref: audio})
         )
         stage = STTStage(_Stub())
         cassette = bundle.cassette_for_stage("stt")
@@ -750,20 +767,23 @@ class TestArtifactBlobsRoundTrip:
     def test_load_populates_artifact_blobs(self, tmp_path):
         blob_a = b"content-A"
         blob_b = b"content-B"
+        ref_a = _sha256(blob_a)
+        ref_b = _sha256(blob_b)
         bundle = RunBundle.load(
             _write_bundle(
                 tmp_path,
                 records=[],
-                artifacts={_SHA_A: blob_a, _SHA_B: blob_b},
+                artifacts={ref_a: blob_a, ref_b: blob_b},
             )
         )
-        assert bundle.artifact_blobs[_SHA_A] == blob_a
-        assert bundle.artifact_blobs[_SHA_B] == blob_b
+        assert bundle.artifact_blobs[ref_a] == blob_a
+        assert bundle.artifact_blobs[ref_b] == blob_b
         # artifact_index is still populated with size info.
-        assert bundle.artifact_index[_SHA_A].size_bytes == len(blob_a)
+        assert bundle.artifact_index[ref_a].size_bytes == len(blob_a)
 
     def test_cassette_resolver_reads_from_blobs(self, tmp_path):
         blob = b"abc"
+        ref = _sha256(blob)
         bundle = RunBundle.load(
             _write_bundle(
                 tmp_path,
@@ -772,14 +792,14 @@ class TestArtifactBlobsRoundTrip:
                         "sequence": 1,
                         "name": "stage_complete",
                         "data": {"stage": "stt"},
-                        "output_ref": _SHA_A,
+                        "output_ref": ref,
                     },
                 ],
-                artifacts={_SHA_A: blob},
+                artifacts={ref: blob},
             )
         )
         cassette = bundle.cassette_for_stage("stt")
-        assert cassette.blob(_SHA_A) == blob
+        assert cassette.blob(ref) == blob
 
 
 # ── ReplaySpec re-export: package-level only, not stages.base ─────

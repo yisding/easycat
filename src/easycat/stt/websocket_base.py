@@ -51,6 +51,12 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._provider_event_bus: Any | None = None
+        # Persistent providers set this while deliberately discarding a socket
+        # whose drained frames must still reach the current turn's queue: the
+        # receive loop then skips its terminal sentinel so events emitted after
+        # the drain (e.g. a promoted interim transcript) are not stranded
+        # behind it in a queue the consumer has already stopped reading.
+        self._suppress_terminal_sentinel = False
         self._init_emit_tasks()
 
     def _resolve_event_bus(self) -> Any | None:
@@ -194,7 +200,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             # one-shot providers retain the socket-bound queue so a late old
             # receive loop cannot terminate a newly opened stream.
             terminal_queue = self._event_queue if self._dynamic_event_queue else queue
-            terminal_queue.put_nowait(None)
+            if not self._suppress_terminal_sentinel:
+                terminal_queue.put_nowait(None)
 
     async def _handle_ws_bytes_message(self, message: bytes) -> None:
         """Handle binary messages from the provider. Default policy ignores them."""
