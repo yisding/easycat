@@ -31,11 +31,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-
-from openai import AsyncOpenAI
+from typing import TYPE_CHECKING
 
 from easycat import (
     EasyConfig,
@@ -53,6 +53,9 @@ from easycat.integrations.agents.base import AgentRecorder, CancellationMode
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
 MODEL = "gpt-4o-mini"
 RUNS_DIR = Path(__file__).parent / "runs"
 
@@ -66,16 +69,28 @@ def _display_path(path: Path) -> Path:
 
 def measurement_commands(path: Path) -> tuple[str, str]:
     """Commands that read this production-shaped bundle directly."""
-    display_path = _display_path(path)
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
     return (
-        f"uv run easycat latency {display_path}",
-        f"uv run easycat latency {display_path} --json",
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
     )
 
 
 def pronunciation_command(path: Path) -> str:
     """Inspect the scheduler's provider-ready pronunciation payloads."""
-    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
+    return shlex.join(
+        [
+            "uv",
+            "run",
+            "easycat",
+            "journal",
+            "grep",
+            str(_display_path(path)),
+            "--query",
+            "tts_payload_prepared",
+            "--json",
+        ]
+    )
 
 
 def build_output_processors() -> list[LLMOutputProcessor]:
@@ -136,16 +151,22 @@ class MyWorkflow:
             model=MODEL, messages=self._history, stream=True
         )
         full = ""
-        async for chunk in stream:
-            if cancel_token is not None and cancel_token.is_cancelled:
-                break
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            full += delta
-            yield delta  # the bridge wraps each chunk as a text_delta event
-        if full:
-            self._history.append({"role": "assistant", "content": full})
+        try:
+            async with stream as response_stream:
+                async for chunk in response_stream:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        break
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full += delta
+                    yield delta  # the bridge wraps each chunk as a text_delta event
+        finally:
+            # BridgeTemplate closes this generator on barge-in. Commit the
+            # delivered prefix before apply_interruption rewrites it to what
+            # the caller actually heard.
+            if full:
+                self._history.append({"role": "assistant", "content": full})
 
     def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         """Rewrite private history to the portion the caller actually heard."""
@@ -167,6 +188,8 @@ class MyWorkflow:
 async def main() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY.")
+
+    from openai import AsyncOpenAI
 
     client = AsyncOpenAI()
     actions = SessionActions()  # shared: workflow enqueues, session drains

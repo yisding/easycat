@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = REPO_ROOT / "docs" / "teaching" / "12-evals-and-latency"
 
 
-def _load_chapter_module(filename: str):
+def _load_chapter_module(filename: str) -> types.ModuleType:
     path = CHAPTER / filename
     module_name = f"teaching_ch12_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -24,7 +26,7 @@ def _load_chapter_module(filename: str):
     return module
 
 
-def _first(records, name: str):
+def _first(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return next(record for record in records if record["name"] == name)
 
 
@@ -51,17 +53,13 @@ def test_checked_in_eval_fixtures_end_turn_gap_at_first_audio() -> None:
     assert tool_names.index("tts.first_audio") < tool_names.index("tool.call.started")
 
 
-def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys) -> None:
+def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys, monkeypatch) -> None:
     evals = _load_chapter_module("evals.py")
     bundles = CHAPTER / "bundles"
     ground_truth = CHAPTER / "ground_truth.csv"
 
-    original_argv = sys.argv
-    try:
-        sys.argv = ["evals.py", str(bundles), str(ground_truth)]
-        evals.main()
-    finally:
-        sys.argv = original_argv
+    monkeypatch.setattr(sys, "argv", ["evals.py", str(bundles), str(ground_truth)])
+    evals.main()
 
     output = capsys.readouterr().out
     assert "P50                                        810 ms" in output

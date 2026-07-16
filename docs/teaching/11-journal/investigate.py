@@ -23,11 +23,20 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
+from easycat.debug.bundle import RunBundle
 from easycat.debug.testing import load_bundle
 
 
-def query_records(bundle, *, stage=None, turn=None, sequence=None, name=None):
+def query_records(
+    bundle: RunBundle,
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> list[dict[str, Any]]:
     """Query a ``RunBundle`` through its public read-only helpers.
 
     Start with the most selective public operation, then apply any
