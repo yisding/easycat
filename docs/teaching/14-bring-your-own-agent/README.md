@@ -1,7 +1,7 @@
 # Chapter 14 — Bring your own agent
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 13 — Swap Providers AND Transports](../13-swap-providers-and-transports/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
+**Progress: 15 of 16** · [← Chapter 13 — Swap Providers AND Transports](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
 <!-- END auto:navigation -->
 
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
@@ -15,6 +15,11 @@
 - [Chapter 13.](../13-swap-providers-and-transports/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -105,18 +110,18 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,21 +29,31 @@
+@@ -40,22 +29,34 @@
 
  from __future__ import annotations
 
 -import argparse
  import asyncio
  import os
+ import shlex
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
-+
-+from openai import AsyncOpenAI
++from typing import TYPE_CHECKING
 
  from easycat import (
      EasyConfig,
@@ -135,11 +140,14 @@
 +from easycat.llm_output_processing import LLMOutputProcessor
 +from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 +
++if TYPE_CHECKING:
++    from openai import AsyncOpenAI
++
 +MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,93 +73,167 @@
+@@ -75,115 +76,189 @@
      )
 
 
@@ -151,9 +159,23 @@
 -    return Agent(
 -        name="assistant",
 -        instructions="You are a helpful voice assistant. Keep replies brief.",
--    )
--
--
++def pronunciation_command(path: Path) -> str:
++    """Inspect the scheduler's provider-ready pronunciation payloads."""
++    return shlex.join(
++        [
++            "uv",
++            "run",
++            "easycat",
++            "journal",
++            "grep",
++            str(_display_path(path)),
++            "--query",
++            "tts_payload_prepared",
++            "--json",
++        ]
+     )
+
+
 -def transport_config(name: str):
 -    if name == "local":
 -        return LocalTransportConfig()
@@ -174,16 +196,21 @@
 -    raise SystemExit(f"Unknown transport: {name}")
 -
 -
--def provider_mix(name: str) -> dict:
--    """Return the STT/TTS strings for the named mix.
+-def telephony_config(name: str):
+-    """Wire Twilio-backed session actions for the phone transport."""
+-    if name != "twilio":
+-        return None
+-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+-    if not account_sid or not auth_token:
+-        raise SystemExit("Twilio actions need TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN.")
 -
--    All values are string shortcuts — ``EasyConfig.__post_init__``
--    parses them into concrete config objects via the factory.
-+def pronunciation_command(path: Path) -> str:
-+    """Inspect the scheduler's provider-ready pronunciation payloads."""
-+    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
-+
-+
+-    from easycat import TelephonyConfig, TwilioSessionActionConfig
+-
+-    return TelephonyConfig(
+-        twilio_actions=TwilioSessionActionConfig(
+-            account_sid=account_sid,
+-            auth_token=auth_token,
 +def build_output_processors() -> list[LLMOutputProcessor]:
 +    """Build the chapter's pronunciation stack from the public factory."""
 +    return [
@@ -204,14 +231,7 @@
 +    actually need the recorder here (we aren't journalling tool
 +    calls), but naming it is the switch. The history hooks below
 +    keep our private message list aligned with what the caller heard.
-     """
--    if name == "openai":
--        return {"stt": "openai", "tts": "openai"}
--    if name == "deepgram-eleven":
--        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
--            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
--        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
--    raise SystemExit(f"Unknown provider mix: {name}")
++    """
 +
 +    def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
 +        self._client = client
@@ -247,18 +267,40 @@
 +
 +        stream = await self._client.chat.completions.create(
 +            model=MODEL, messages=self._history, stream=True
-+        )
+         )
+-    )
+-
+-
+-def provider_mix(name: str) -> dict:
+-    """Return the STT/TTS strings for the named mix.
+-
+-    All values are string shortcuts — ``EasyConfig.__post_init__``
+-    parses them into concrete config objects via the factory.
+-    """
+-    if name == "openai":
+-        return {"stt": "openai", "tts": "openai"}
+-    if name == "deepgram-eleven":
+-        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
+-            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
+-        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
+-    raise SystemExit(f"Unknown provider mix: {name}")
 +        full = ""
-+        async for chunk in stream:
-+            if cancel_token is not None and cancel_token.is_cancelled:
-+                break
-+            delta = chunk.choices[0].delta.content or ""
-+            if not delta:
-+                continue
-+            full += delta
-+            yield delta  # the bridge wraps each chunk as a text_delta event
-+        if full:
-+            self._history.append({"role": "assistant", "content": full})
++        try:
++            async with stream as response_stream:
++                async for chunk in response_stream:
++                    if cancel_token is not None and cancel_token.is_cancelled:
++                        break
++                    delta = chunk.choices[0].delta.content or ""
++                    if not delta:
++                        continue
++                    full += delta
++                    yield delta  # the bridge wraps each chunk as a text_delta event
++        finally:
++            # BridgeTemplate closes this generator on barge-in. Commit the
++            # delivered prefix before apply_interruption rewrites it to what
++            # the caller actually heard.
++            if full:
++                self._history.append({"role": "assistant", "content": full})
 +
 +    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
 +        """Rewrite private history to the portion the caller actually heard."""
@@ -299,7 +341,8 @@
 -    ap.add_argument("--provider-mix", choices=("openai", "deepgram-eleven"), default="openai")
 -    ap.add_argument("--transport", choices=("local", "webrtc", "twilio"), default="local")
 -    args = ap.parse_args()
--
++    from openai import AsyncOpenAI
+
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
 
@@ -310,21 +353,13 @@
 -    config = EasyConfig(
 -        agent=build_agent(),
 -        transport=transport_config(args.transport),
+-        telephony=telephony_config(args.transport),
 -        debug="light",  # journal must be on so export_debug_bundle works
 -        **mix,
 -    )
 -    session = create_session(config)
 -    attach_runtime_feedback(session)
 -
--    async with session:
--        print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
--        await wait_for_shutdown_signal(session)
--
--    # Context exit force-stops cancellation paths. The normal signal helper
--    # already stopped gracefully, so that second stop is an idempotent no-op.
--    # The session preserves a read-only journal view for postmortem export.
--    RUNS_DIR.mkdir(exist_ok=True)
--    path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
 +    # The custom workflow owns this client; EasyCat only owns providers and
 +    # transports it creates from EasyConfig. Keep the caller-owned scope outer.
 +    async with AsyncOpenAI() as client:
@@ -351,37 +386,50 @@
 +        session = create_session(config)
 +        attach_runtime_feedback(session)
 +
-+        async with session:
-+            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
-+            await wait_for_shutdown_signal(session)
-+
-+        # Session exit preserves the read-only journal view. Export while the
-+        # custom workflow's client is still in its separately owned scope.
-+        RUNS_DIR.mkdir(exist_ok=True)
-+        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
 +        try:
-+            export_debug_bundle(session, path, overwrite=True)
-+            print(f"Wrote bundle → {_display_path(path)}")
-+            human_command, json_command = measurement_commands(path)
-+            print("Measure this production-shaped bundle directly:")
-+            print(f"  {human_command}")
-+            print(f"  {json_command}")
-+            print("Inspect its provider-ready pronunciation payloads:")
-+            print(f"  {pronunciation_command(path)}")
-+        except Exception as exc:  # noqa: BLE001 — teaching script
-+            print(f"(no bundle written: {exc})")
++            async with session:
++                print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
++                await wait_for_shutdown_signal(session)
++        finally:
++            # Session exit preserves the read-only journal view. Export while
++            # the custom workflow's client is still in its separately owned
++            # scope, including when shutdown arrives through cancellation.
++            RUNS_DIR.mkdir(exist_ok=True)
++            path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
++            try:
++                export_debug_bundle(session, path, overwrite=True)
++                print(f"Wrote bundle → {_display_path(path)}")
++                human_command, json_command = measurement_commands(path)
++                print("Measure this production-shaped bundle directly:")
++                print(f"  {human_command}")
++                print(f"  {json_command}")
++                print("Inspect its provider-ready pronunciation payloads:")
++                print(f"  {pronunciation_command(path)}")
++            except Exception as exc:  # noqa: BLE001 — teaching script
++                print(f"(no bundle written: {exc})")
 +
 +
 +if __name__ == "__main__":
      try:
--        export_debug_bundle(session, path, overwrite=True)
--        print(f"Wrote bundle → {_display_path(path)}")
--        human_command, json_command = measurement_commands(path)
--        print("Measure this production-shaped bundle directly:")
--        print(f"  {human_command}")
--        print(f"  {json_command}")
--    except Exception as exc:  # noqa: BLE001 — teaching script
--        print(f"(no bundle written: {exc})")
+-        async with session:
+-            print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+-            await wait_for_shutdown_signal(session)
+-    finally:
+-        # Context exit force-stops cancellation paths. The normal signal helper
+-        # already stopped gracefully, so that second stop is an idempotent no-op.
+-        # Export from the preserved read-only postmortem view even when shutdown
+-        # reached this scope through cancellation.
+-        RUNS_DIR.mkdir(exist_ok=True)
+-        path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
+-        try:
+-            export_debug_bundle(session, path, overwrite=True)
+-            print(f"Wrote bundle → {_display_path(path)}")
+-            human_command, json_command = measurement_commands(path)
+-            print("Measure this production-shaped bundle directly:")
+-            print(f"  {human_command}")
+-            print(f"  {json_command}")
+-        except Exception as exc:  # noqa: BLE001 — teaching script
+-            print(f"(no bundle written: {exc})")
 -
 -
 -if __name__ == "__main__":
@@ -540,16 +588,22 @@ class MyWorkflow:
             model=MODEL, messages=self._history, stream=True
         )
         full = ""
-        async for chunk in stream:
-            if cancel_token is not None and cancel_token.is_cancelled:
-                break
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            full += delta
-            yield delta  # the bridge wraps each chunk as a text_delta event
-        if full:
-            self._history.append({"role": "assistant", "content": full})
+        try:
+            async with stream as response_stream:
+                async for chunk in response_stream:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        break
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full += delta
+                    yield delta  # the bridge wraps each chunk as a text_delta event
+        finally:
+            # BridgeTemplate closes this generator on barge-in. Commit the
+            # delivered prefix before apply_interruption rewrites it to what
+            # the caller actually heard.
+            if full:
+                self._history.append({"role": "assistant", "content": full})
 
     def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         """Rewrite private history to the portion the caller actually heard."""

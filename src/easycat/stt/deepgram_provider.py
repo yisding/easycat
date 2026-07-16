@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
@@ -11,6 +16,8 @@ from easycat._provider_helpers import get_package_version, word_timestamps_from_
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
 from easycat.stt.websocket_base import WebSocketSTTBase
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,11 +44,51 @@ class DeepgramSTTConfig:
     interim_results: bool = True
     smart_format: bool = False
     base_url: str = "wss://api.deepgram.com/v1/listen"
+    # Reuse one Nova WebSocket across turns by default. ``None`` selects the
+    # model-aware default: enabled for v1/Nova and disabled for Flux, whose v2
+    # endpoint does not support the explicit Finalize control message needed
+    # to delimit EasyCat-managed turns without closing the connection.
+    persistent_ws: bool | None = None
+    # Deepgram closes an idle streaming socket after 10 seconds. Its documented
+    # recommendation is one text-frame KeepAlive every 3-5 seconds.
+    keepalive_interval_s: float = 4.0
+    # Keep best-effort session startup bounded independently of the socket's
+    # reconnect/backoff policy. A timed-out attempt is discarded and first use
+    # retries through the normal stream lifecycle.
+    warmup_timeout_s: float = 5.0
+    # Bound the wait for the Finalize-triggered result. On timeout the socket
+    # is discarded (draining any result already buffered in the close window)
+    # and the latest interim transcript is promoted only if no final arrived
+    # during that drain; the next turn reconnects transparently.
+    final_transcript_timeout_s: float = 2.0
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
     ws_connect: Any = field(default=None, repr=False)
     # Optional EventBus for reconnect observability
     event_bus: Any = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        requested_persistence = self.persistent_ws
+        if requested_persistence is None:
+            self.persistent_ws = not self.is_flux
+        if requested_persistence is True and self.is_flux:
+            raise ValueError(
+                "Deepgram persistent_ws=True is not supported for Flux; "
+                "the v2 endpoint does not support Finalize"
+            )
+        for name in (
+            "keepalive_interval_s",
+            "warmup_timeout_s",
+            "final_transcript_timeout_s",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"Deepgram {name} must be positive and finite")
 
     @property
     def is_flux(self) -> bool:
@@ -52,9 +99,10 @@ class DeepgramSTTConfig:
 class DeepgramSTT(WebSocketSTTBase):
     """Real-time streaming STT using Deepgram WebSocket API.
 
-    Opens a WebSocket on ``start_stream``, forwards audio chunks via
-    ``send_audio``, and parses incoming transcript messages (partial + final)
-    in a background receive loop.
+    Nova keeps one warmed WebSocket across logical turns by default, delimiting
+    each turn with ``Finalize`` and sending Deepgram ``KeepAlive`` text frames
+    while idle. Flux and explicit ``persistent_ws=False`` configurations keep
+    the one-socket-per-turn lifecycle.
     """
 
     def __init__(self, config: DeepgramSTTConfig) -> None:
@@ -67,10 +115,54 @@ class DeepgramSTT(WebSocketSTTBase):
             provider_error_name="deepgram",
             expected_sample_rate=None,
             close_timeout=5.0,
+            dynamic_event_queue=bool(config.persistent_ws and not config.is_flux),
         )
         self._config = config
+        self._keepalive_task: asyncio.Task[None] | None = None
+        self._final_received: asyncio.Event | None = None
+        self._partial_text = ""
+        self._audio_epoch = 0
+        self._finalize_seq = 0
+        self._pending_finalizes: deque[tuple[int, int]] = deque()
+        self._finalized_epoch = 0
+        self._final_wait_sequence: int | None = None
+        # Set when a bare ``{"from_finalize": true}`` ack (no Results body)
+        # confirmed a Finalize that covered unflushed audio: the transcript
+        # for that audio has not arrived yet, so the socket must not be
+        # reused by the next turn until it is contained.
+        self._bare_finalize_ack_pending = False
+
+    def _persistent_enabled(self) -> bool:
+        return bool(self._config.persistent_ws and not self._config.is_flux)
+
+    async def warmup(self) -> None:
+        """Best-effort establish the reusable Nova socket before user audio."""
+        if not self._persistent_enabled():
+            return
+        async with self._lifecycle_lock:
+            try:
+                await asyncio.wait_for(
+                    self._ensure_persistent_connection(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+            except Exception as exc:
+                logger.debug("Deepgram STT warmup skipped: %s", exc)
+                # Keep cleanup serialized with a concurrently queued first
+                # stream so it cannot close that stream's replacement socket.
+                await self._discard_connection()
 
     async def _on_start(self) -> None:
+        self._partial_text = ""
+        self._final_received = None
+        self._final_wait_sequence = None
+        self._bare_finalize_ack_pending = False
+        if self._persistent_enabled():
+            await self._ensure_persistent_connection()
+            return
+        self._pending_finalizes.clear()
+        await self._connect_new_websocket()
+
+    async def _connect_new_websocket(self) -> None:
         url = self._build_url()
         headers = {"Authorization": f"Token {self._config.api_key}"}
         await self._connect_websocket(
@@ -80,10 +172,80 @@ class DeepgramSTT(WebSocketSTTBase):
             connect_fn=self._config.ws_connect,
         )
 
+    async def _ensure_persistent_connection(self) -> None:
+        ws = self._ws
+        if (
+            ws is not None
+            and ws.is_connected
+            and self._receive_task is not None
+            and not self._receive_task.done()
+        ):
+            self._ensure_keepalive_task()
+            return
+        if ws is not None:
+            await self._discard_connection()
+            # Draining the stale socket may parse leftover frames (or, when
+            # the loop died on its own, a terminal sentinel) into the queue
+            # that was current at that instant. Start/re-warm on a fresh
+            # queue so stale events cannot pollute the replacement stream.
+            self._event_queue = asyncio.Queue()
+        await self._connect_new_websocket()
+        self._ensure_keepalive_task()
+
+    def _ensure_keepalive_task(self) -> None:
+        if self._keepalive_task is None or self._keepalive_task.done():
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+    async def _keepalive_loop(self) -> None:
+        try:
+            while self._ws is not None:
+                await asyncio.sleep(self._config.keepalive_interval_s)
+                # Audio itself keeps an active stream alive. Send the
+                # application-level text control only between logical turns.
+                if self._running or self._ws is None:
+                    continue
+                if not await self._send_json_control(
+                    {"type": "KeepAlive"}, label="Deepgram KeepAlive"
+                ):
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Deepgram KeepAlive loop stopped", exc_info=True)
+
+    async def _cancel_keepalive(self) -> None:
+        task = self._keepalive_task
+        self._keepalive_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _discard_connection(self) -> None:
+        await self._cancel_keepalive()
+        # Frames already buffered on the closing socket are still parsed while
+        # the receive loop drains, so a late Finalize-triggered final is
+        # emitted into the current turn's queue. Suppress the loop's terminal
+        # sentinel during this deliberate discard so an event emitted after
+        # the drain (e.g. a promoted interim) cannot land behind it.
+        self._suppress_terminal_sentinel = True
+        try:
+            await self._close_active_websocket(close_before_drain=True)
+        finally:
+            self._suppress_terminal_sentinel = False
+        self._pending_finalizes.clear()
+        self._bare_finalize_ack_pending = False
+        # A discarded socket cannot deliver any more results. Treat its audio
+        # epochs as closed so only fresh audio on the replacement connection
+        # needs a future Finalize.
+        self._finalized_epoch = self._audio_epoch
+
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.sample_rate != self._config.sample_rate:
             chunk = resample_chunk(chunk, self._config.sample_rate)
         await self._send_ws(chunk.data)
+        self._audio_epoch += 1
 
     async def _on_commit_segment(self) -> bool:
         # Flux uses provider-side EndOfTurn endpointing, so an explicit
@@ -91,15 +253,124 @@ class DeepgramSTT(WebSocketSTTBase):
         # v2 endpoint); keep returning the base ``False`` for Flux models.
         if self._config.is_flux:
             return False
-        return await self._send_json_control({"type": "Finalize"}, label="Deepgram Finalize")
+        return await self._send_finalize() is not None
+
+    async def _send_finalize(self, *, wait_for_ack: bool = False) -> int | None:
+        # Deepgram acknowledgments carry no request identifier. Keep at most
+        # one Finalize in flight so a later waiter cannot mistake which audio
+        # epoch a bare ``from_finalize`` frame covers.
+        if self._pending_finalizes:
+            sequence, _ = self._pending_finalizes[-1]
+            if wait_for_ack:
+                self._final_wait_sequence = sequence
+            return sequence
+
+        # Reserve the sequence before sending: the receive loop can process a
+        # very fast acknowledgment while ``ws.send`` is still yielding.
+        self._finalize_seq += 1
+        sequence = self._finalize_seq
+        self._pending_finalizes.append((sequence, self._audio_epoch))
+        if wait_for_ack:
+            self._final_wait_sequence = sequence
+        sent = await self._send_json_control({"type": "Finalize"}, label="Deepgram Finalize")
+        if not sent:
+            if self._pending_finalizes and self._pending_finalizes[-1][0] == sequence:
+                self._pending_finalizes.pop()
+            if self._final_wait_sequence == sequence:
+                self._final_wait_sequence = None
+            return None
+        return sequence
 
     async def _on_end(self) -> None:
+        if self._persistent_enabled():
+            await self._finish_persistent_turn()
+            return
         if self._ws is not None:
             await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
 
         await self._close_active_websocket()
 
+    async def _finish_persistent_turn(self) -> None:
+        # A pause-triggered commit may already have finalized every audio frame.
+        # In that common case there is nothing to flush; keep the socket warm.
+        while self._audio_epoch > self._finalized_epoch:
+            final_received = asyncio.Event()
+            self._final_received = final_received
+            wait_sequence = await self._send_finalize(wait_for_ack=True)
+            if wait_sequence is None:
+                self._final_received = None
+                await self._contain_unflushed_turn()
+                return
+            try:
+                await asyncio.wait_for(
+                    final_received.wait(), timeout=self._config.final_transcript_timeout_s
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Timed out after %.1fs waiting for Deepgram Finalize; "
+                    "draining the stale socket and reconnecting next turn",
+                    self._config.final_transcript_timeout_s,
+                )
+                await self._contain_unflushed_turn()
+                return
+            finally:
+                if self._final_received is final_received:
+                    self._final_received = None
+                    self._final_wait_sequence = None
+        if self._bare_finalize_ack_pending:
+            # A bare ``{"from_finalize": true}`` ack confirmed this turn's
+            # audio without carrying its transcript, and Deepgram acks have no
+            # request id. A warm socket could deliver that transcript into the
+            # next turn's queue (or into this turn's closed queue, silently
+            # losing it). Contain it exactly like a Finalize timeout.
+            logger.warning(
+                "Deepgram acknowledged Finalize without a transcript; draining "
+                "the socket and reconnecting so the late final cannot cross "
+                "the turn boundary"
+            )
+            await self._contain_unflushed_turn()
+
+    async def _contain_unflushed_turn(self) -> None:
+        """Discard the socket first, then emit whichever transcript survived.
+
+        Frames already buffered on the closing socket are parsed while
+        ``_discard_connection`` drains the receive loop (with the terminal
+        sentinel suppressed), so a Finalize-triggered final that arrives
+        inside the close window is emitted normally into this turn's queue
+        and clears the interim. Promoting afterwards therefore yields exactly
+        one FINAL for the turn: the real drained final when it made it, the
+        latest interim otherwise — never both.
+        """
+        await self._discard_connection()
+        self._promote_partial_to_final()
+
+    def _promote_partial_to_final(self) -> None:
+        """Emit the latest interim transcript when Finalize cannot complete."""
+        if not self._partial_text:
+            return
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=self._partial_text,
+                language=self._config.language,
+            )
+        )
+        self._partial_text = ""
+
+    async def aclose(self) -> None:
+        """Close a persistent socket during Session teardown."""
+        await self._cancel_keepalive()
+        if self._ws is not None:
+            await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
+        await self._close_active_websocket(close_before_drain=True)
+
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
+        # Deepgram may acknowledge Finalize with a bare
+        # ``{"from_finalize": true}`` control frame: advance lifecycle state
+        # before any type/channel/transcript guards. A Results-shaped ack then
+        # continues below so its transcript is still emitted normally.
+        if msg.get("from_finalize") is True:
+            self._handle_finalize_ack(results_shaped=msg.get("type") == "Results")
         msg_type = msg.get("type", "")
         if msg_type == "Error":
             # Deepgram error frames carry the human-readable text under
@@ -115,9 +386,37 @@ class DeepgramSTT(WebSocketSTTBase):
         if self._config.is_flux:
             self._handle_flux_message(msg_type, msg)
             return
-        if msg_type != "Results":
-            return
+        if msg_type == "Results":
+            self._handle_results_message(msg)
 
+    def _handle_finalize_ack(self, *, results_shaped: bool) -> None:
+        """Advance the oldest pending Finalize and release its matching waiter."""
+        if results_shaped and self._bare_finalize_ack_pending:
+            # Acks are FIFO on one socket, so this Results frame is the late
+            # transcript for the Finalize that a bare ack already confirmed.
+            # Resolve that bare ack instead of consuming the entry for a
+            # still-outstanding Finalize.
+            self._bare_finalize_ack_pending = False
+            return
+        if not self._pending_finalizes:
+            return
+        sequence, finalize_epoch = self._pending_finalizes.popleft()
+        if not results_shaped and finalize_epoch > self._finalized_epoch:
+            # A bare ack (no Results body) confirmed audio whose transcript
+            # has not arrived. ``_finish_persistent_turn`` must not keep this
+            # socket warm: the real ``from_finalize`` Results frame may still
+            # be in flight and would bleed into the next turn's stream.
+            self._bare_finalize_ack_pending = True
+        self._finalized_epoch = max(self._finalized_epoch, finalize_epoch)
+        if (
+            self._final_received is not None
+            and self._final_wait_sequence is not None
+            and sequence >= self._final_wait_sequence
+        ):
+            self._final_received.set()
+
+    def _handle_results_message(self, msg: dict[str, Any]) -> None:
+        """Parse one Nova Results frame and advance finalize bookkeeping."""
         channel = msg.get("channel", {})
         alternatives = channel.get("alternatives", [])
         if not alternatives:
@@ -125,6 +424,14 @@ class DeepgramSTT(WebSocketSTTBase):
 
         best = alternatives[0]
         transcript = best.get("transcript", "")
+        is_final = bool(msg.get("is_final", False))
+        if is_final:
+            self._partial_text = ""
+        elif transcript:
+            # Deepgram interim Results replace the current hypothesis rather
+            # than append a delta; keep the latest for timeout degradation.
+            self._partial_text = transcript
+
         if not transcript:
             return
 
@@ -133,7 +440,6 @@ class DeepgramSTT(WebSocketSTTBase):
         # session reads only ``text``/``track``); populate them so the data is
         # available to future observability/journal wiring.
         confidence = best.get("confidence")
-        is_final = msg.get("is_final", False)
         word_timestamps = word_timestamps_from_words(best.get("words"))
         event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
         self._emit_event(

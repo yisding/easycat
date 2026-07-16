@@ -1,7 +1,7 @@
 # Chapter 1 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 ## 1. Insert a 500 ms delay line
@@ -70,3 +70,11 @@ Forget `Transport` for a minute. Write the same echo in pure
 how you'd add *one more downstream consumer* (like STT). The
 contrast is the whole pedagogical point of choosing the Protocol
 shape.
+
+## Self-check
+
+You should be able to: (a) trace one audio chunk from microphone
+input to speaker output, (b) explain why the loop uses async
+iteration instead of blocking callbacks, and (c) describe how the
+`Transport` protocol lets chapter 13 swap the audio boundary without
+rewriting that loop.
