@@ -29,17 +29,15 @@ def test_chunk_demo_models_source_wait_without_claiming_acoustic_latency(
     now = 10.0
 
     class FakeStream:
-        def start(self) -> None:
+        def __enter__(self):
             events.append("start")
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            events.extend(("stop", "close"))
 
         def write(self, block) -> None:
             events.append(("write", len(block)))
-
-        def stop(self) -> None:
-            events.append("stop")
-
-        def close(self) -> None:
-            events.append("close")
 
     def output_stream(**kwargs):
         events.append(("open", kwargs))
@@ -59,8 +57,24 @@ def test_chunk_demo_models_source_wait_without_claiming_acoustic_latency(
 
     chapter.play_chunked(np.zeros(3_200, dtype=np.int16), chunk_ms=200)
 
-    assert events[1:4] == [("sleep", 0.2), "start", ("write", 3_200)]
+    assert events == [
+        ("sleep", 0.2),
+        (
+            "open",
+            {
+                "blocksize": 3_200,
+                "channels": 1,
+                "dtype": "int16",
+                "latency": "low",
+                "samplerate": 16_000,
+            },
+        ),
+        "start",
+        ("write", 3_200),
+        "stop",
+        "close",
+    ]
     output = capsys.readouterr().out
-    assert "source-buffer= 200ms" in output
-    assert "time-to-first-write= 200.0ms" in output
+    assert "collecting first chunk" in output
+    assert "time-to-first-write-return= 200.0ms" in output
     assert "time-to-first-sound" not in output

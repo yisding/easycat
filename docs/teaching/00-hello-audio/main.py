@@ -41,7 +41,7 @@ def play_one_shot(samples: np.ndarray) -> None:
 
 
 def play_chunked(samples: np.ndarray, chunk_ms: int) -> None:
-    """Play the buffer in fixed-size chunks with a live-source delay.
+    """Play the buffer in fixed-size chunks with a live-source startup delay.
 
     This recording is already complete, so every chunk would otherwise
     be ready immediately. A real source has to collect one full chunk
@@ -49,35 +49,39 @@ def play_chunked(samples: np.ndarray, chunk_ms: int) -> None:
     first write makes that source-buffering cost explicit in the demo.
 
     ``latency='low'`` and a matching ``blocksize`` keep PortAudio
-    from pre-buffering a full second of audio before it starts —
-    which would hide the whole point of the demo.
+    from letting a large host buffer hide the source-side delay that
+    this demo is meant to expose.
     """
     chunk_samples = SAMPLE_RATE * chunk_ms // 1000
-    stream = sd.OutputStream(
+    requested_at = time.monotonic()
+    print(f"  chunk_ms={chunk_ms:>4}  collecting first chunk...", flush=True)
+
+    # The recording is already in memory, so its first chunk would otherwise
+    # be available instantly. Model the time a live source needs to accumulate
+    # one complete chunk before downstream playback can begin.
+    time.sleep(chunk_ms / 1000)
+
+    # OutputStream's context starts the stream on entry and stops + closes it
+    # on every exit, including a failed write or Ctrl-C.
+    with sd.OutputStream(
         samplerate=SAMPLE_RATE,
         channels=CHANNELS,
         dtype="int16",
         blocksize=chunk_samples,
         latency="low",
-    )
+    ) as stream:
+        first_chunk = samples[:chunk_samples].reshape(-1, CHANNELS)
+        stream.write(first_chunk)
+        first_write_return = time.monotonic()
+        for offset in range(chunk_samples, len(samples), chunk_samples):
+            block = samples[offset : offset + chunk_samples].reshape(-1, CHANNELS)
+            stream.write(block)
 
-    print(f"  {chunk_ms:>4} ms chunks — buffering one live-source chunk...", flush=True)
-    demo_start = time.monotonic()
-    time.sleep(chunk_ms / 1000)
-    stream.start()
-    first_chunk = samples[:chunk_samples].reshape(-1, CHANNELS)
-    stream.write(first_chunk)
-    first_write = time.monotonic()
-    for offset in range(chunk_samples, len(samples), chunk_samples):
-        block = samples[offset : offset + chunk_samples].reshape(-1, CHANNELS)
-        stream.write(block)
-    stream.stop()
-    stream.close()
-    total = time.monotonic() - demo_start
+    total = time.monotonic() - requested_at
     print(
-        f"       source-buffer={chunk_ms:>4}ms  "
-        f"time-to-first-write={1000 * (first_write - demo_start):6.1f}ms  "
-        f"wall-clock={total:.2f}s"
+        "    "
+        f"time-to-first-write-return={1000 * (first_write_return - requested_at):6.1f}ms  "
+        f"total={total:.2f}s"
     )
 
 

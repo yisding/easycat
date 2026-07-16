@@ -77,27 +77,32 @@ downstream: 10ms chunks become available every 10ms; 200ms chunks
 become available every 200ms. Smaller chunks reduce that batching
 delay, while larger chunks reduce scheduling overhead.
 
-This script replays an already-complete recording, so all of its
-chunks would normally be ready at once. To model a live source
-honestly, each replay deliberately waits for one chunk before the
-first write. Watch the line appear in the terminal, then listen:
+Because this recording is already in memory, the script deliberately
+waits one chunk duration before opening playback. That models a live
+microphone or provider accumulating its first complete chunk; without
+the wait, every pre-recorded variant would have data ready immediately
+and would not demonstrate source-side chunking latency.
 
-- **10ms chunks** — the simulated source-buffer wait feels instant.
-- **200ms chunks** — there is a perceptible hesitation before the
-  first syllable, then smooth playback.
+The script prints *time-to-first-write-return* and total wall-clock.
+The first number runs from “start collecting a live-sized chunk” until
+PortAudio returns from the first `write()`. It is an observable enqueue
+boundary, **not proof that the speaker played the sample**—there is no
+playback acknowledgement in this small demo. Use your ears for the
+actual onset comparison:
 
-The script reports *time-to-first-write*: time from the start of the
-simulated source wait until the first blocking `stream.write()`
-returns. That is a useful code-path milestone, but it is **not** a
-measurement of when sound reaches your ears. Measuring acoustic
-time-to-first-sound requires an audio loopback or a second microphone;
-device and operating-system buffers add latency after our code writes.
-The reported wall-clock includes the simulated wait and playback.
+- **10ms chunks** — one short source wait plus host latency. Feels
+  effectively instant.
+- **200ms chunks** — at least a 200ms source wait before the first
+  syllable, then smooth playback. Feels slow-start.
 
 We pass `latency='low'` and a matching `blocksize` to
-`sd.OutputStream`. The default `latency='high'` can let host buffering
-dominate the comparison and flatten the difference we are trying to
-hear.
+`sd.OutputStream`. The default `latency='high'` can let the host buffer
+dominate the delay and flatten the difference we are trying to hear.
+
+The stream is also a context manager. Entering starts it; leaving stops
+and closes it even if `write()` raises or you press Ctrl-C. The ladder
+keeps this ownership rule from its first hardware handle onward: the
+scope that opens a resource also guarantees its teardown.
 
 This is the whole justification for streaming the rest of the
 ladder.
