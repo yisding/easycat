@@ -591,9 +591,13 @@ uv run python docs/teaching/13-swap-providers-and-transports/main.py \
 
 # 2. Translate the resulting bundle.
 uv run python docs/teaching/15-operate-in-production/translate.py \
-    docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle \
-    runs/translated.ndjson
+    'docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle' \
+    docs/teaching/15-operate-in-production/runs/translated.ndjson
 ```
+
+Keep the glob quoted so the translator receives one pattern instead of an
+arbitrary number of shell arguments. If earlier chapter 13 runs also match,
+it selects the newest bundle. The output parent is created automatically.
 
 `translate.py` is ~50 lines of state machine. Read it top to
 bottom — it's the smallest possible thing that explains why
