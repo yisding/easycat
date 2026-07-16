@@ -52,6 +52,10 @@ from scripts.regen_teaching_chapters import (
     render_progress_worksheet,
     render_self_check_protocol,
     render_spaced_retrieval,
+    self_check_questions,
+)
+from scripts.regen_teaching_chapters import (
+    main as regen_main,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -120,6 +124,7 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
     assert "- [x]" not in worksheet.lower()
     for chapter_number, chapter in enumerate(discover_chapters()):
         checkpoint = _offline_checkpoint_for(chapter)
+        question_count = len(self_check_questions(chapter))
         assert f"[Narrative](./{chapter.slug}/)" in worksheet
         assert f"[Exercises](./{chapter.slug}/EXERCISES.md)" in worksheet
         assert str(checkpoint["prediction"]) in normalized_worksheet
@@ -128,6 +133,12 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
         assert str(checkpoint["evidence"]) in normalized_worksheet
         assert str(checkpoint["reflection"]) in normalized_worksheet
         assert f"--through {checkpoint['chapter']} --jobs 4 --show-evidence" in worksheet
+        mastery_record = (
+            f"pass all {question_count} numbered questions in [the closed-book self-check]"
+            f"(./{chapter.slug}/EXERCISES.md#self-check); record "
+            f"{question_count}/{question_count}"
+        )
+        assert mastery_record in normalized_worksheet
         recall_link = f"./{chapter.slug}/#recall-before-reading"
         if chapter_number >= 2:
             assert recall_link in worksheet
@@ -366,10 +377,11 @@ def test_render_self_check_protocol_requires_evidence_backed_retrieval() -> None
         "> 2. Answer every numbered question below from memory, aloud or in writing.\n"
         "> 3. Support each answer with at least one observed field, measurement, or behavior\n"
         ">    from your attempt record.\n"
+        "> 4. Mark each answer **pass** or **retry** in your progress record.\n"
         ">\n"
         "> If an answer needs notes, reopen only the section that owns the weak concept,\n"
-        "> correct your explanation, close it, and retry. Continue only when you can answer\n"
-        "> without looking."
+        "> correct your explanation, close it, and retry. Continue only when every answer\n"
+        "> passes without looking."
     )
 
 
@@ -501,25 +513,40 @@ def test_each_self_check_starts_with_current_closed_book_retrieval_gate() -> Non
 
 
 def test_each_self_check_uses_sequential_answerable_questions() -> None:
+    total_questions = 0
     for chapter in discover_chapters():
-        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
-        protocol = SELF_CHECK_PROTOCOL_RE.search(exercises)
-        completion = exercises.index("<!-- BEGIN auto:exercise-completion -->")
+        questions = self_check_questions(chapter)
 
-        assert protocol is not None
-        next_heading = exercises.find("\n## ", protocol.end(), completion)
-        question_end = next_heading if next_heading >= 0 else completion
-        body = exercises[protocol.end() : question_end].strip()
-        starts = list(re.finditer(r"^(?P<number>\d+)\. ", body, re.MULTILINE))
+        assert 3 <= len(questions) <= 6, chapter.slug
+        total_questions += len(questions)
+        for number, question in enumerate(questions, start=1):
+            assert question.startswith(f"{number}. "), chapter.slug
+            assert "?" in question, chapter.slug
+            assert "You should" not in question, chapter.slug
 
-        assert len(starts) >= 3, chapter.slug
-        assert [int(match.group("number")) for match in starts] == list(
-            range(1, len(starts) + 1)
-        ), chapter.slug
-        assert "You should" not in body, chapter.slug
-        for index, start in enumerate(starts):
-            end = starts[index + 1].start() if index + 1 < len(starts) else len(body)
-            assert "?" in body[start.start() : end], chapter.slug
+    assert total_questions == 68
+
+
+@pytest.mark.parametrize("question_count", [2, 7])
+def test_self_check_question_count_must_stay_between_three_and_six(
+    question_count: int,
+) -> None:
+    chapter = discover_chapters()[0]
+    questions = "\n".join(
+        f"{number}. What evidence answers question {number}?"
+        for number in range(1, question_count + 1)
+    )
+    exercises = (
+        "## Self-check\n\n"
+        "<!-- BEGIN auto:self-check-protocol -->\n"
+        f"{render_self_check_protocol()}\n"
+        "<!-- END auto:self-check-protocol -->\n\n"
+        f"{questions}\n\n"
+        "<!-- BEGIN auto:exercise-completion -->"
+    )
+
+    with pytest.raises(ValueError, match="needs between three and six self-check questions"):
+        self_check_questions(chapter, exercises=exercises)
 
 
 def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
@@ -653,6 +680,25 @@ def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
         "Teaching exercise auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_exercises)
     )
+
+
+def test_check_mode_reports_missing_generated_self_check_gates(monkeypatch, capsys) -> None:
+    exercises_path = TEACHING / "00-hello-audio" / "EXERCISES.md"
+    original_read_text = Path.read_text
+    stale_exercises = original_read_text(exercises_path, encoding="utf-8")
+    stale_exercises = SELF_CHECK_PROTOCOL_RE.sub("", stale_exercises)
+    stale_exercises = EXERCISE_COMPLETION_RE.sub("", stale_exercises)
+
+    def read_with_stale_exercises(path: Path, *args, **kwargs) -> str:
+        if path == exercises_path:
+            return stale_exercises
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_with_stale_exercises)
+
+    assert regen_main(["--check"]) == 1
+    stderr = capsys.readouterr().err
+    assert "would update docs/teaching/00-hello-audio/EXERCISES.md" in stderr
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

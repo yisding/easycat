@@ -207,8 +207,8 @@ Each chapter's README lists its own prerequisites up front.
   kept an initial plan, the exact command or change plus an observation, and a
   causal explanation. Closing self-checks are closed-book retrieval gates:
   answer every numbered question, support each answer with attempt evidence,
-  repair only weak concepts, and retry before advancing. From chapter 2 onward,
-  a generated prompt also
+  mark each answer pass or retry, and advance only at the chapter's N/N
+  threshold. From chapter 2 onward, a generated prompt also
   revisits the checkpoint from two chapters earlier before the new narrative,
   then asks the learner to connect both concepts before checking the old probe.
 - **Journals are the single source of truth.** From chapter 2
