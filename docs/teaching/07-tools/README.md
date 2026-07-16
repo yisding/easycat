@@ -479,7 +479,9 @@ Two different things live in `easycat.session.actions`:
   turn. The result is fed back to the LLM, which then speaks an
   answer informed by the tool output.
 - **Session actions**: requested by the agent, run *after* the
-  turn, and do *not* return data to the LLM. Five types ship:
+  turn, and do *not* return data to the LLM. Run the maintained
+  [`action_catalog.py`](action_catalog.py) probe to discover the seven
+  types currently shipped:
 
 | Action | What it does |
 |---|---|
@@ -487,6 +489,8 @@ Two different things live in `easycat.session.actions`:
 | `TransferCallAction` | Hands off to a human or another number |
 | `SendDTMFAction` | Plays DTMF tones on a telephony leg |
 | `SendSMSAction` | Sends a text-message side effect |
+| `AddToDNCAction` | Adds the current caller or a supplied number to the DNC store |
+| `RemoveFromDNCAction` | Removes the current caller or a supplied number from the DNC store |
 | `CustomAction` | Escape hatch — anything else |
 
 A weather lookup is a tool. "Hang up" is not a tool — there is
@@ -533,13 +537,13 @@ visible.
 
 1. Change `get_weather` to sleep 5 s. Listen — one filler is no
    longer enough. Add a "still working on it" at the 2.5 s mark.
-2. Open `src/easycat/session/actions.py` and read the five
-   action dataclasses. For each one, answer in one sentence:
-   *why is this a session action and not a tool?* (The test is
-   whether the LLM has anything useful to do with the return
-   value.) The chapter ships no concrete action wiring because
-   the executors live at the Session layer, which we don't have
-   yet — but the reasoning is the payload.
+2. Run [`action_catalog.py`](action_catalog.py) and read the seven
+   action dataclasses it discovers. For each one, answer in one
+   sentence: *why is this a session action and not an inline tool?*
+   Then compare `core_supported`: every session registers
+   `CoreSessionActionExecutor` for `EndCallAction`, `AddToDNCAction`,
+   and `RemoveFromDNCAction`; transfer, DTMF, SMS, and custom actions
+   need a configured provider or application executor.
 3. Make a tool that returns a 5 KB JSON blob. Verify none of it
    reaches TTS. If it does, find the leak.
 
