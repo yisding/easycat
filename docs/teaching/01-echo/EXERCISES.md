@@ -1,6 +1,8 @@
 # Chapter 1 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
+<!-- END auto:navigation -->
 
 ## 1. Insert a 500 ms delay line
 

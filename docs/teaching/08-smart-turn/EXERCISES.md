@@ -1,6 +1,8 @@
 # Chapter 8 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+<!-- END auto:navigation -->
 
 ## 1. Separate threshold changes from classification errors
 

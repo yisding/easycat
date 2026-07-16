@@ -1,6 +1,8 @@
 # Chapter 13 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+<!-- END auto:navigation -->
 
 ## 1. Add a Cartesia provider preset
 

@@ -1,6 +1,8 @@
 # Chapter 5 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+<!-- END auto:navigation -->
 
 ## 1. Three controlled experiments on the same question
 

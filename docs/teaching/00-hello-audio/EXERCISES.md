@@ -1,6 +1,8 @@
 # Chapter 0 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 1 — Echo →](../01-echo/)
+<!-- END auto:navigation -->
 
 One exercise from the chapter README, plus hints if you get stuck.
 No worked solutions checked in — the point is that you take a swing

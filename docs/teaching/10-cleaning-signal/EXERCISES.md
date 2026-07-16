@@ -1,6 +1,8 @@
 # Chapter 10 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+<!-- END auto:navigation -->
 
 ## 1. Type while you talk
 

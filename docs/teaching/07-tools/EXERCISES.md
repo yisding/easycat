@@ -1,6 +1,8 @@
 # Chapter 7 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+<!-- END auto:navigation -->
 
 ## 1. Add a "still working on it" update for slow tools
 

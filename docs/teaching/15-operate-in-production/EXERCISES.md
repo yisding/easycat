@@ -1,6 +1,8 @@
 # Chapter 15 — Exercises
 
+<!-- BEGIN auto:navigation -->
 [← Back to chapter](./README.md) · [Ladder index](../)
+<!-- END auto:navigation -->
 
 ## 1. Probe `SessionManager` without two microphones
 

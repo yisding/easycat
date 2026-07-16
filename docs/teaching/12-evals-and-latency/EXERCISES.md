@@ -1,6 +1,8 @@
 # Chapter 12 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
 
 ## 1. Find the budget-blower, propose a fix without coding it
 

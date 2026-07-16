@@ -1,6 +1,8 @@
 # Chapter 9 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+<!-- END auto:navigation -->
 
 ## 1. Probe the over-/under-shoot of `heard_text`
 

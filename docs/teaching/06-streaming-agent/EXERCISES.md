@@ -1,6 +1,8 @@
 # Chapter 6 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+<!-- END auto:navigation -->
 
 ## 1. Isolate which knob buys you what
 

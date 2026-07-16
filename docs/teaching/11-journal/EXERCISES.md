@@ -1,6 +1,8 @@
 # Chapter 11 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
+<!-- END auto:navigation -->
 
 The README's three planted-bug investigations *are* the chapter's
 core exercises. This file adds two follow-ups for once you've

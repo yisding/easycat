@@ -1,6 +1,8 @@
 # Chapter 4 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+<!-- END auto:navigation -->
 
 ## 1. Diff your breakers across preroll on/off
 

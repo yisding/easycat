@@ -1,6 +1,8 @@
 # Chapter 2 — Exercises
 
-[← Back to chapter](./README.md) · [Ladder index](../)
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:navigation -->
 
 ## 1. Find the moment STT committed to the wrong guess
 
