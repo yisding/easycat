@@ -1,9 +1,8 @@
 """Shared prologue/epilogue for every validation lane module.
 
-The lanes in :mod:`easycat.validation.runner` and
-:mod:`easycat.validation._slice_runner` share a run-id/run-dir/report-path
-prologue and git/env-stamp plus triple atomic-write epilogue. This module owns
-just those two shared halves so a report-format change is a one-site edit:
+The lane modules under :mod:`easycat.validation` share a run-id/run-dir/report-
+path prologue and git/env-stamp plus triple atomic-write epilogue. This module
+owns just those two shared halves so a report-format change is a one-site edit:
 
 - :func:`_start_lane_run` creates the run id, the run directory, resolves the
   report paths, and seeds the base artifacts dict.
@@ -28,8 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from easycat.validation._environment import PROVIDER_ENV_VARS
-from easycat.validation.latency import _is_ci
+from easycat.validation._environment import PROVIDER_ENV_VARS, is_ci
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -177,7 +175,7 @@ def _collect_environment_metadata() -> ValidationEnvironment:
     return ValidationEnvironment(
         python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         platform=platform.platform(),
-        ci=_is_ci(),
+        ci=is_ci(),
         env_vars={name: name in os.environ for name in PROVIDER_ENV_VARS},
     )
 
