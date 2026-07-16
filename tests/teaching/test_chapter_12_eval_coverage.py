@@ -15,6 +15,11 @@ ROOT = Path(__file__).parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "12-evals-and-latency"
 
 
+@pytest.fixture(autouse=True)
+def _stub_optional_openai(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=object))
+
+
 def load_script(filename: str):
     path = CHAPTER / filename
     name = f"teaching_ch12_coverage_{path.stem}"

@@ -54,6 +54,8 @@ def test_context_join_does_not_mix_unscoped_records_from_other_sessions() -> Non
         {"sequence": 2, "session_id": "a", "turn_id": "target", "name": "turn", "data": {}},
         {"sequence": 3, "session_id": "b", "turn_id": None, "name": "config", "data": {}},
         {"sequence": 4, "session_id": "b", "turn_id": "other", "name": "turn", "data": {}},
+        {"sequence": 5, "session_id": None, "turn_id": None, "name": "config", "data": {}},
+        {"sequence": 6, "session_id": None, "turn_id": "target", "name": "turn", "data": {}},
     ]
 
     class Bundle:
@@ -70,7 +72,7 @@ def test_context_join_does_not_mix_unscoped_records_from_other_sessions() -> Non
             return next((record for record in records if record["sequence"] == sequence), None)
 
     matches = investigator.query_records(Bundle(), turn="target", include_session_context=True)
-    assert [record["sequence"] for record in matches] == [1, 2]
+    assert [record["sequence"] for record in matches] == [1, 2, 6]
 
 
 def test_cli_requires_turn_and_reports_context_coverage() -> None:
