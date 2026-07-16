@@ -249,7 +249,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # ── Complexity-lint grandfather list (M4) ─────────────────────────
 # Pre-existing C901/PLR0912/PLR0915 offenders at the time the rules were
 # enabled.  Fix a file → delete its line.  Do not add new entries.
-"docs/teaching/03-parrot-naive/main.py" = ["C901"]
 "docs/teaching/07-tools/blocking_tool.py" = ["C901", "PLR0912"]
 "docs/teaching/07-tools/main.py" = ["C901", "PLR0912"]
 "docs/teaching/09-interruption/estimate.py" = ["B006"]
