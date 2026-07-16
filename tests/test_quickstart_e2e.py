@@ -230,6 +230,10 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
             "[Teaching ladder](docs/teaching/)",
             "starting-point table",
         ),
+        "Learn EasyCat feature by feature": (
+            "[EasyCat feature ladder](docs/using-easycat/)",
+            "VoiceApp",
+        ),
         "Choose a runnable example": (
             "[Examples matrix](examples/README.md)",
             "no-key, browser, provider, or debugging examples",
@@ -261,6 +265,8 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "docs/teaching/",
         "docs/teaching/11-journal/",
         "docs/teaching/12-evals-and-latency/",
+        "docs/using-easycat/",
+        "docs/using-easycat/00-first-voice-app/",
         "examples/README.md",
         "examples/journal_demo.py",
         "CONTRIBUTING.md",

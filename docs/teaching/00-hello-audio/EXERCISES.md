@@ -1,7 +1,7 @@
 # Chapter 0 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 1 — Echo →](../01-echo/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:navigation -->
 
 One exercise from the chapter README, plus hints if you get stuck.
@@ -106,8 +106,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 5</summary>
 
-Local capture defaults to 24 kHz, while Deepgram's streaming STT target
-   defaults to 16 kHz. The provider adapter resamples at that input boundary.
+`LocalTransport` defaults its capture/playback pipeline to 24 kHz, while
+   this chapter's separate raw-`sounddevice` demo explicitly records at 16 kHz.
+   Deepgram's streaming STT target also defaults to 16 kHz, and the provider
+   adapter resamples at that input boundary when its upstream format differs.
 
 </details>
 
@@ -123,8 +125,9 @@ WebRTC receives and sends 48 kHz media frames, but its default pipeline
 <details markdown="1">
 <summary>Hint 3 of 5</summary>
 
-OpenAI TTS defaults to 24 kHz. A WebRTC session resamples that output to
-   48 kHz for media; a Local session already has a matching 24 kHz target.
+OpenAI returns provider-native 24 kHz PCM. A default WebRTC session first
+   normalizes that to its resolved 16 kHz TTS output, then resamples to 48 kHz
+   media; a Local session already has a matching 24 kHz target.
 
 </details>
 
@@ -164,7 +167,7 @@ After your first attempt, open Hint 1 only. Close it and try again before openin
 the next hint; keep each attempt in your evidence record.
 
 <details markdown="1">
-<summary>Hint 1 of 5</summary>
+<summary>Hint 1 of 6</summary>
 
 A provider config default describes the object before `EasyConfig`
    resolves the whole session. It is not the final transport boundary.
@@ -172,7 +175,7 @@ A provider config default describes the object before `EasyConfig`
 </details>
 
 <details markdown="1">
-<summary>Hint 2 of 5</summary>
+<summary>Hint 2 of 6</summary>
 
 With alignment enabled, untouched defaults follow the transport:
    Local 24 kHz, WebSocket/WebRTC 16 kHz, and Twilio 8 kHz output.
@@ -180,7 +183,7 @@ With alignment enabled, untouched defaults follow the transport:
 </details>
 
 <details markdown="1">
-<summary>Hint 3 of 5</summary>
+<summary>Hint 3 of 6</summary>
 
 ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
    requests 16 kHz from the provider and exposes 8 kHz transport output
@@ -189,7 +192,15 @@ ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
 </details>
 
 <details markdown="1">
-<summary>Hint 4 of 5</summary>
+<summary>Hint 4 of 6</summary>
+
+OpenAI returns fixed 24 kHz PCM even when EasyCat's resolved output target
+   is 8 or 16 kHz. `TTSBase` performs that post-provider normalization.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 6</summary>
 
 The `twilio_explicit_16k_preserved` control proves explicit caller intent
    wins over automatic default alignment. Twilio still converts that PCM to
@@ -198,7 +209,7 @@ The `twilio_explicit_16k_preserved` control proves explicit caller intent
 </details>
 
 <details markdown="1">
-<summary>Hint 5 of 5</summary>
+<summary>Hint 6 of 6</summary>
 
 The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
    Disable alignment only when you deliberately own the downstream format
@@ -223,8 +234,9 @@ The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
 > passes without looking.
 <!-- END auto:self-check-protocol -->
 
-1. Without running code, how would the same utterance change at 4 kHz, 8 kHz,
-   16 kHz, and 44.1 kHz, and which observed result supports each prediction?
+1. For the same utterance, how do waveform representation, available bandwidth,
+   and transcription behavior differ at 4 kHz, 8 kHz, 16 kHz, and 44.1 kHz,
+   and what evidence from both the 4 kHz and 44.1 kHz runs anchors your comparison?
 2. When you quote a sample rate, which boundary—wire, provider input, config
    default, pipeline, or media—do you mean, and where is conversion required?
 3. Which observed fields distinguish a raw provider config default from the

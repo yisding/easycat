@@ -8,10 +8,38 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
-import main as chapter
+SCRIPTED_INFERENCE_MS = 40
+_MISSING = object()
+
+
+def _load_chapter():
+    """Load the sibling lesson while keeping the probe provider-free."""
+    module_name = "easycat_teaching_chapter_08_main"
+    spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name("main.py"))
+    if spec is None or spec.loader is None:  # pragma: no cover - importlib contract guard
+        raise RuntimeError("could not load Chapter 8")
+    module = importlib.util.module_from_spec(spec)
+    previous_openai = sys.modules.get("openai", _MISSING)
+    sys.modules["openai"] = SimpleNamespace(AsyncOpenAI=object)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+        if previous_openai is _MISSING:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = previous_openai
+    return module
+
+
+chapter = _load_chapter()
 
 
 class ProbeJournal:
@@ -41,12 +69,13 @@ class ScriptedVAD:
 
 
 class ScriptedSmartTurn:
-    def __init__(self, clock: dict[str, float], probability: float) -> None:
+    def __init__(self, clock: dict[str, float], probability: float, inference_ms: int) -> None:
         self._clock = clock
         self._probability = probability
+        self._inference_ms = inference_ms
 
     async def detect(self, _audio):
-        self._clock["now"] += 0.04
+        self._clock["now"] += self._inference_ms / 1000
         return SimpleNamespace(
             probability=self._probability,
             prediction="complete" if self._probability >= 0.5 else "incomplete",
@@ -62,7 +91,12 @@ def rounded(value: float | None) -> float | None:
     return None if value is None else round(value, 3)
 
 
-async def run_case(*, mode: str, probability: float | None = None) -> dict[str, object]:
+async def run_case(
+    *,
+    mode: str,
+    probability: float | None = None,
+    inference_ms: int = SCRIPTED_INFERENCE_MS,
+) -> dict[str, object]:
     clock = {"now": 0.0}
     journal = ProbeJournal()
     fallback = probability is not None and probability < chapter.SMART_THRESHOLD
@@ -73,9 +107,17 @@ async def run_case(*, mode: str, probability: float | None = None) -> dict[str, 
             stop_at=stop_at,
             # Step infinitesimally beyond the inclusive 800 ms boundary
             # so binary float representation cannot leave it just below.
-            fallback_at=2.040000000000001 if fallback else None,
+            fallback_at=(
+                stop_at + inference_ms / 1000 + chapter.SMART_FALLBACK_MS / 1000 + 1e-12
+                if fallback
+                else None
+            ),
         ),
-        smart_turn=(ScriptedSmartTurn(clock, probability) if probability is not None else None),
+        smart_turn=(
+            ScriptedSmartTurn(clock, probability, inference_ms)
+            if probability is not None
+            else None
+        ),
         silence_wait_ms=(
             chapter.SMART_EARLY_SILENCE_MS if mode == "smart" else chapter.VAD_BASELINE_SILENCE_MS
         ),

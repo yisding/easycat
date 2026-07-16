@@ -34,7 +34,10 @@ from scripts.regen_teaching_chapters import (
     SPACED_RETRIEVAL_RE,
     TEACHING,
     Chapter,
+    _ensure_exercise_completion,
     _ensure_exercise_hints,
+    _ensure_navigation,
+    _ensure_practice_handoff,
     _offline_checkpoint_for,
     _resolve_child_path,
     discover_chapters,
@@ -52,6 +55,9 @@ from scripts.regen_teaching_chapters import (
     render_self_check_protocol,
     render_spaced_retrieval,
     self_check_questions,
+)
+from scripts.regen_teaching_chapters import (
+    main as regen_main,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -172,20 +178,54 @@ def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_navigation(chapters[0]) == (
-        "[Teaching ladder](../) · [Progress](../PROGRESS.md) · "
+        "**Progress: 1 of 16** · [Ladder index](../) · "
+        "[Progress worksheet](../PROGRESS.md) · "
         "[Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_navigation(chapters[8]) == (
+        "**Progress: 9 of 16** · "
         "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
-        "[Teaching ladder](../) · "
-        "[Progress](../PROGRESS.md) · "
+        "[Ladder index](../) · [Progress worksheet](../PROGRESS.md) · "
         "[Exercises](./EXERCISES.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_navigation(chapters[-1]) == (
+        "**Progress: 16 of 16** · "
         "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
-        "[Teaching ladder](../) · [Progress](../PROGRESS.md) · "
+        "[Ladder index](../) · [Progress worksheet](../PROGRESS.md) · "
         "[Exercises](./EXERCISES.md)"
+    )
+
+
+def test_missing_navigation_is_inserted_immediately_after_h1() -> None:
+    chapter = discover_chapters()[0]
+
+    updated = _ensure_navigation(
+        chapter,
+        "# Temporary chapter\n\nIntro text.\n",
+        render_navigation(chapter),
+    )
+
+    assert updated.startswith("# Temporary chapter\n\n<!-- BEGIN auto:navigation -->")
+    assert updated.count("<!-- BEGIN auto:navigation -->") == 1
+    assert updated.count("<!-- END auto:navigation -->") == 1
+    assert updated.index("<!-- END auto:navigation -->") < updated.index("Intro text.")
+
+
+def test_teaching_readmes_have_one_generated_navigation_block() -> None:
+    missing_or_duplicated: list[str] = []
+
+    for chapter in discover_chapters():
+        readme = chapter.path / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        if text.count("<!-- BEGIN auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+        if text.count("<!-- END auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+
+    assert not missing_or_duplicated, (
+        "Teaching chapter navigation markers are missing or duplicated: "
+        + ", ".join(sorted(set(missing_or_duplicated)))
     )
 
 
@@ -195,7 +235,7 @@ def test_each_chapter_has_one_current_generated_navigation_block() -> None:
         matches = list(NAVIGATION_RE.finditer(readme))
 
         assert len(matches) == 1, chapter.slug
-        assert matches[0].group("body").strip() == render_navigation(chapter)
+        assert matches[0].group("body").strip() == render_navigation(chapter).strip()
         assert matches[0].start() > readme.index("# ")
         assert matches[0].start() < readme.find("\n## ")
 
@@ -290,24 +330,44 @@ def test_each_chapter_has_one_current_generated_practice_handoff() -> None:
         assert matches[0].end() < closing_heading.start()
 
 
+def test_practice_handoff_is_moved_before_the_closing_section() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:practice-handoff -->\n"
+        f"{render_practice_handoff()}\n"
+        "<!-- END auto:practice-handoff -->"
+    )
+    text = (
+        f"# Temporary chapter\n\n{misplaced}\n\n"
+        "## Try breaking it\n\nTry this.\n\n"
+        "## What's next\n\nContinue.\n"
+    )
+
+    updated = _ensure_practice_handoff(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:practice-handoff -->") == 1
+    assert updated.index("## Try breaking it") < updated.index(misplaced)
+    assert updated.index(misplaced) < updated.index("## What's next")
+
+
 def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_exercise_navigation(chapters[0]) == (
-        "[← Chapter narrative](./README.md) · "
-        "[Teaching ladder](../) · "
-        "[Progress](../PROGRESS.md) · "
+        "[← Back to chapter](./README.md) · "
+        "[Ladder index](../) · "
+        "[Progress worksheet](../PROGRESS.md) · "
         "[Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_exercise_navigation(chapters[8]) == (
-        "[← Chapter narrative](./README.md) · "
-        "[Teaching ladder](../) · "
-        "[Progress](../PROGRESS.md) · "
+        "[← Back to chapter](./README.md) · "
+        "[Ladder index](../) · "
+        "[Progress worksheet](../PROGRESS.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_navigation(chapters[-1]) == (
-        "[← Chapter narrative](./README.md) · [Teaching ladder](../) · "
-        "[Progress](../PROGRESS.md)"
+        "[← Back to chapter](./README.md) · [Ladder index](../) · "
+        "[Progress worksheet](../PROGRESS.md)"
     )
 
 
@@ -474,7 +534,7 @@ def test_each_self_check_uses_sequential_answerable_questions() -> None:
     for chapter in discover_chapters():
         questions = self_check_questions(chapter)
 
-        assert len(questions) >= 3, chapter.slug
+        assert 3 <= len(questions) <= 6, chapter.slug
         total_questions += len(questions)
         for number, question in enumerate(questions, start=1):
             assert question.startswith(f"{number}. "), chapter.slug
@@ -482,6 +542,28 @@ def test_each_self_check_uses_sequential_answerable_questions() -> None:
             assert "You should" not in question, chapter.slug
 
     assert total_questions == 68
+
+
+@pytest.mark.parametrize("question_count", [2, 7])
+def test_self_check_question_count_must_stay_between_three_and_six(
+    question_count: int,
+) -> None:
+    chapter = discover_chapters()[0]
+    questions = "\n".join(
+        f"{number}. What evidence answers question {number}?"
+        for number in range(1, question_count + 1)
+    )
+    exercises = (
+        "## Self-check\n\n"
+        "<!-- BEGIN auto:self-check-protocol -->\n"
+        f"{render_self_check_protocol()}\n"
+        "<!-- END auto:self-check-protocol -->\n\n"
+        f"{questions}\n\n"
+        "<!-- BEGIN auto:exercise-completion -->"
+    )
+
+    with pytest.raises(ValueError, match="needs between three and six self-check questions"):
+        self_check_questions(chapter, exercises=exercises)
 
 
 def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
@@ -504,6 +586,30 @@ def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
     assert "Close it and try again before opening" in wrapped
     assert wrapped.index("<!-- END auto:exercise-hints -->") < wrapped.index("## Self-check")
     assert _ensure_exercise_hints(wrapped) == wrapped
+
+
+def test_exercise_hint_splitter_preserves_numbered_fence_and_nested_content() -> None:
+    source = (
+        "1. First clue.\n\n"
+        "   1. Nested numbered step.\n\n"
+        "```text\n"
+        "1. Literal fenced line.\n"
+        "```\n\n"
+        "~~~text\n"
+        "2. Another literal fenced line.\n"
+        "~~~\n\n"
+        "2. Second clue."
+    )
+
+    rendered = render_exercise_hints(source)
+    disclosures = list(HINT_DISCLOSURE_RE.finditer(rendered))
+
+    assert len(disclosures) == 2
+    assert "   1. Nested numbered step." in disclosures[0].group("body")
+    assert "1. Literal fenced line." in disclosures[0].group("body")
+    assert "2. Another literal fenced line." in disclosures[0].group("body")
+    assert disclosures[1].group("body").strip() == "Second clue."
+    assert _ensure_exercise_hints(rendered) == rendered
 
 
 def test_legacy_hint_wrapper_migrates_without_losing_clues() -> None:
@@ -557,7 +663,23 @@ def test_every_exercise_hint_is_revealed_one_at_a_time_between_attempts() -> Non
             assert re.search(r"^\d+\. ", outside_disclosures, re.MULTILINE) is None
 
     assert total_blocks == 72
-    assert total_disclosures == 279
+    assert total_disclosures == 281
+
+
+def test_exercise_completion_is_moved_after_the_self_check() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:exercise-completion -->\n"
+        f"{render_exercise_completion(chapter)}\n"
+        "<!-- END auto:exercise-completion -->"
+    )
+    text = f"# Exercises\n\n{misplaced}\n\n## Self-check\n\nAnswer from memory.\n"
+
+    updated = _ensure_exercise_completion(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:exercise-completion -->") == 1
+    assert updated.index("## Self-check") < updated.index(misplaced)
+    assert updated.rstrip().endswith("<!-- END auto:exercise-completion -->")
 
 
 def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
@@ -575,6 +697,25 @@ def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
         "Teaching exercise auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_exercises)
     )
+
+
+def test_check_mode_reports_missing_generated_self_check_gates(monkeypatch, capsys) -> None:
+    exercises_path = TEACHING / "00-hello-audio" / "EXERCISES.md"
+    original_read_text = Path.read_text
+    stale_exercises = original_read_text(exercises_path, encoding="utf-8")
+    stale_exercises = SELF_CHECK_PROTOCOL_RE.sub("", stale_exercises)
+    stale_exercises = EXERCISE_COMPLETION_RE.sub("", stale_exercises)
+
+    def read_with_stale_exercises(path: Path, *args, **kwargs) -> str:
+        if path == exercises_path:
+            return stale_exercises
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_with_stale_exercises)
+
+    assert regen_main(["--check"]) == 1
+    stderr = capsys.readouterr().err
+    assert "would update docs/teaching/00-hello-audio/EXERCISES.md" in stderr
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

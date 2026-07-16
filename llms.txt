@@ -21,6 +21,8 @@ Source: https://github.com/yisding/easycat
 - [Teaching ladder](https://github.com/yisding/easycat/tree/main/docs/teaching) — for learners: Learn voice pipelines chapter by chapter.
 - [Progress worksheet](https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md) — for learners: Track evidence-backed completion across all 16 teaching chapters.
 - [First lesson](https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio) — for learners: Start with audio chunks before agents or providers.
+- [EasyCat feature ladder](https://github.com/yisding/easycat/tree/main/docs/using-easycat) — for learners: Learn EasyCat's public features one app capability at a time.
+- [Feature first lesson](https://github.com/yisding/easycat/tree/main/docs/using-easycat/00-first-voice-app) — for learners: Build a local voice app with VoiceApp and automatic pipeline wiring.
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
 - [Architecture](https://github.com/yisding/easycat/blob/main/docs/architecture.md) — for maintainers: Understand the pipeline, session collaborators, stages, providers, and agent bridges.
 - [Maintainer guide](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.

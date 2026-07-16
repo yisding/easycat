@@ -267,6 +267,38 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     assert "easycat validate quick" not in first_lesson_commands
 
 
+def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    ladder_readme = (REPO_ROOT / "docs" / "using-easycat" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    lesson_readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "00-first-voice-app" / "README.md"
+    ).read_text(encoding="utf-8")
+    ladder_commands = entries["docs/using-easycat/"].get("commands", ())
+    lesson_commands = entries["docs/using-easycat/00-first-voice-app/"].get("commands", ())
+
+    shared_commands = (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/00-first-voice-app/main.py",
+        "uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py",
+    )
+    for command in shared_commands:
+        assert command in ladder_readme
+        assert command in lesson_readme
+        assert command in ladder_commands
+        assert command in lesson_commands
+
+    for command in (
+        "uv run easycat docs --audience learners",
+        "uv run easycat docs --audience learners --json",
+    ):
+        assert command in ladder_readme
+        assert command in ladder_commands
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
