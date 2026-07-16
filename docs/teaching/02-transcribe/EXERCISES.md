@@ -1,7 +1,7 @@
 # Chapter 2 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -291,9 +291,10 @@ uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 ```
 
 Before reading the JSON, predict which cleanup events appear after a transport
-connect failure, an STT start failure, and an audio-feed failure. Then replace
-the `TaskGroup` in a scratch copy of `streaming.py` with its old `gather()`
-call. Which ordering guarantee disappears?
+connect failure, a failure after microphone startup, an STT start failure, and
+an audio-feed failure. Then replace the `TaskGroup` in a scratch copy of
+`streaming.py` with its old `gather()` call. Which ordering guarantee
+disappears?
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -302,7 +303,7 @@ After your first attempt, open Hint 1 only. Close it and try again before openin
 the next hint; keep each attempt in your evidence record.
 
 <details markdown="1">
-<summary>Hint 1 of 5</summary>
+<summary>Hint 1 of 6</summary>
 
 The transport and provider objects exist before `connect()` returns, so
    their final cleanup is registered before that fallible await.
@@ -310,7 +311,16 @@ The transport and provider objects exist before `connect()` returns, so
 </details>
 
 <details markdown="1">
-<summary>Hint 2 of 5</summary>
+<summary>Hint 2 of 6</summary>
+
+In `partial_connect_failure`, the input stream starts before output startup
+   fails. `transport.input.stop` proves the partially acquired device is still
+   released.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 6</summary>
 
 `end_stream()` is registered only after `start_stream()` succeeds. A start
    failure must close the provider and disconnect the transport, but it did
@@ -319,7 +329,7 @@ The transport and provider objects exist before `connect()` returns, so
 </details>
 
 <details markdown="1">
-<summary>Hint 3 of 5</summary>
+<summary>Hint 4 of 6</summary>
 
 In the feed failure, `TaskGroup` cancels and joins the blocked event
    consumer first. `stt.events.cancelled` must therefore precede every
@@ -328,7 +338,7 @@ In the feed failure, `TaskGroup` cancels and joins the blocked event
 </details>
 
 <details markdown="1">
-<summary>Hint 4 of 5</summary>
+<summary>Hint 5 of 6</summary>
 
 The propagated feed error is an `ExceptionGroup` because `TaskGroup`
    preserves concurrent failures. The probe unwraps its first root message for
@@ -337,7 +347,7 @@ The propagated feed error is an `ExceptionGroup` because `TaskGroup`
 </details>
 
 <details markdown="1">
-<summary>Hint 5 of 5</summary>
+<summary>Hint 6 of 6</summary>
 
 `AsyncExitStack` and `TaskGroup` solve different problems: resource
    ownership versus task ownership. A correct streaming scope needs both.

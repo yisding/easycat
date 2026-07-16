@@ -1,7 +1,7 @@
 # Chapter 4 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
