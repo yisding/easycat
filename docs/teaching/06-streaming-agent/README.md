@@ -1,7 +1,7 @@
 # Chapter 6 — Streaming Agent + Sentence TTS
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 5 — The Blocking Agent](../05-blocking-agent/) · [Teaching ladder](../) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+**Progress: 7 of 16** · [← Chapter 5 — The Blocking Agent](../05-blocking-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
 <!-- END auto:navigation -->
 
 > Start speaking before the LLM is done thinking. First real
@@ -13,6 +13,11 @@
   diff against them.
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -90,7 +95,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -76,49 +82,120 @@
+@@ -76,50 +82,120 @@
                  self._preroll.append(chunk)
 
 
@@ -103,9 +108,10 @@
 -
 -    async def send_audio(self, chunk: AudioChunk) -> bool:
 -        accepted = await self._transport.send_audio(chunk)
--        if accepted and self.first_audio_at is None:
+-        normalized = accepted is None or bool(accepted)
+-        if normalized and self.first_audio_at is None:
 -            self.first_audio_at = time.monotonic()
--        return accepted
+-        return normalized
 -
 -
 -def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -247,7 +253,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -129,53 +206,20 @@
+@@ -130,53 +206,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -313,7 +319,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -184,13 +228,10 @@
+@@ -185,13 +228,10 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -329,8 +335,8 @@
          },
      )
      if total_gap is None:
-@@ -206,7 +247,7 @@
-         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+@@ -207,7 +247,7 @@
+         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
 -async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
@@ -338,7 +344,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -219,11 +260,11 @@
+@@ -220,11 +260,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -352,7 +358,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -259,10 +300,15 @@
+@@ -260,10 +300,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
@@ -702,13 +708,15 @@ Production uses `easycat._bounded_queue.BoundedAudioQueue` with a
 
 ## Sidebar — partials can flap (reprise)
 
-Chapter 2 named the rule: agents fire on `STTFinal`, never on
-`STTPartial`. This is the chapter where it bites: we are finally
-wiring the agent in. `run_turn` only drains `STTEventType.FINAL`
-from the STT event stream. A naïve implementation that kicked
-off `stream_sentences_to_tts` on a partial would commit — in
-audio, audibly — to a guess the provider may have revised away
-by the time the final arrived.
+Chapter 2 named the boundary: reversible consumers such as live
+captions or cancellable speculation may react to `STTPartial`, but
+irreversible agent commits and spoken output wait for `STTFinal`.
+This is the chapter where that boundary bites: we are finally wiring
+the agent to TTS. `run_turn` only drains `STTEventType.FINAL` from the
+STT event stream because a naïve implementation that kicked off
+`stream_sentences_to_tts` on a partial would commit — in audio,
+audibly — to a guess the provider may have revised away by the time
+the final arrived.
 
 ## Try breaking it
 

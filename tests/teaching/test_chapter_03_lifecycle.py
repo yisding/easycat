@@ -43,6 +43,20 @@ def test_parrot_lifecycle_probe_covers_normal_and_failure_paths() -> None:
                 "transport.disconnect",
             ],
         },
+        "failed_event_end": {
+            "error": "stt websocket died",
+            "events": [
+                "transport.connect",
+                "stt.start",
+                "transport.receive",
+                "stt.events.start",
+                "stt.events.end",
+                "transport.receive.cancelled",
+                "stt.end",
+                "stt.close",
+                "transport.disconnect",
+            ],
+        },
         "normal_event_end": {
             "error": None,
             "events": [
@@ -78,6 +92,7 @@ def test_parrot_carries_chapter_2_lifetime_scopes_forward() -> None:
     assert "resources.push_async_callback(close_if_supported, stt)" in source
     assert "resources.push_async_callback(stt.end_stream)" in source
     assert "except* ParrotEventStreamEndedError" in source
+    assert "provider_errors.append(event.exception)" in source
     assert "asyncio.gather(" not in source
 
 
@@ -88,6 +103,7 @@ def test_lesson_identifies_only_timeout_as_deliberately_broken() -> None:
 
     assert "Keep the intended bug isolated" in lesson
     assert "normal_event_end" in lesson
+    assert "failed_event_end" in lesson
     assert "ParrotEventStreamEndedError" in lesson
     assert "silence-timeout policy" in lesson
     assert "cleanup and cancellation are not" in lesson

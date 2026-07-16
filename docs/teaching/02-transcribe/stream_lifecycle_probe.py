@@ -19,20 +19,35 @@ from easycat.runtime import InMemoryRingBuffer
 
 
 class ScriptedTransport:
-    def __init__(self, events: list[str], *, fail_connect: bool = False) -> None:
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        fail_connect: bool = False,
+        fail_after_input_start: bool = False,
+    ) -> None:
         self.events = events
         self.fail_connect = fail_connect
+        self.fail_after_input_start = fail_after_input_start
+        self.input_started = False
 
     async def connect(self) -> None:
         self.events.append("transport.connect")
         if self.fail_connect:
             raise RuntimeError("transport connect failed")
+        if self.fail_after_input_start:
+            self.events.append("transport.input.start")
+            self.input_started = True
+            raise RuntimeError("transport output start failed")
 
     async def receive_audio(self):
         self.events.append("transport.receive")
         yield object()
 
     async def disconnect(self) -> None:
+        if self.input_started:
+            self.events.append("transport.input.stop")
+            self.input_started = False
         self.events.append("transport.disconnect")
 
 
@@ -92,6 +107,7 @@ def _root_message(exc: BaseException) -> str:
 async def run_case(
     *,
     fail_connect: bool = False,
+    fail_after_input_start: bool = False,
     fail_start: bool = False,
     fail_send: bool = False,
 ) -> dict[str, object]:
@@ -101,7 +117,11 @@ async def run_case(
         with redirect_stdout(io.StringIO()):
             await run_streaming(
                 ScriptedSTT(events, fail_start=fail_start, fail_send=fail_send),
-                ScriptedTransport(events, fail_connect=fail_connect),
+                ScriptedTransport(
+                    events,
+                    fail_connect=fail_connect,
+                    fail_after_input_start=fail_after_input_start,
+                ),
                 InMemoryRingBuffer(capacity=20),
                 "ch02-lifecycle-probe",
                 duration_s=0,
@@ -116,6 +136,7 @@ async def probe() -> dict[str, dict[str, object]]:
         "connect_failure": await run_case(fail_connect=True),
         "feed_failure": await run_case(fail_send=True),
         "normal": await run_case(),
+        "partial_connect_failure": await run_case(fail_after_input_start=True),
         "start_failure": await run_case(fail_start=True),
     }
 

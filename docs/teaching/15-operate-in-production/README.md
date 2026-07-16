@@ -1,7 +1,7 @@
 # Chapter 15 — Operate in production
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · [Teaching ladder](../)
+**Progress: 16 of 16** · [← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md)
 <!-- END auto:navigation -->
 
 > Chapters 0-14 built and generalised a single session. Production
@@ -15,6 +15,11 @@
 - [Chapter 14.](../14-bring-your-own-agent/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -72,14 +77,13 @@
 
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,28 +18,19 @@
- import asyncio
+@@ -33,30 +19,19 @@
  import os
+ import shlex
  import time
 -from collections.abc import AsyncIterator
  from pathlib import Path
--
--from openai import AsyncOpenAI
+-from typing import TYPE_CHECKING
 
  from easycat import (
      EasyConfig,
@@ -99,20 +103,38 @@
 -from easycat.llm_output_processing import LLMOutputProcessor
 -from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
+-if TYPE_CHECKING:
+-    from openai import AsyncOpenAI
+-
 -MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -73,163 +50,85 @@
+@@ -76,185 +51,96 @@
      )
 
 
 -def pronunciation_command(path: Path) -> str:
 -    """Inspect the scheduler's provider-ready pronunciation payloads."""
--    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
 +def debugger_command(path: Path, *, port: int = 8765) -> str:
 +    """Open the maintained debugger CLI on this captured bundle."""
-+    return f"uv run easycat debugger serve {_display_path(path)} --port {port}"
+     return shlex.join(
+         [
+             "uv",
+             "run",
+             "easycat",
+-            "journal",
+-            "grep",
++            "debugger",
++            "serve",
+             str(_display_path(path)),
+-            "--query",
+-            "tts_payload_prepared",
+-            "--json",
++            "--port",
++            str(port),
+         ]
+     )
 
 
 -def build_output_processors() -> list[LLMOutputProcessor]:
@@ -180,16 +202,22 @@
 -            model=MODEL, messages=self._history, stream=True
 -        )
 -        full = ""
--        async for chunk in stream:
--            if cancel_token is not None and cancel_token.is_cancelled:
--                break
--            delta = chunk.choices[0].delta.content or ""
--            if not delta:
--                continue
--            full += delta
--            yield delta  # the bridge wraps each chunk as a text_delta event
--        if full:
--            self._history.append({"role": "assistant", "content": full})
+-        try:
+-            async with stream as response_stream:
+-                async for chunk in response_stream:
+-                    if cancel_token is not None and cancel_token.is_cancelled:
+-                        break
+-                    delta = chunk.choices[0].delta.content or ""
+-                    if not delta:
+-                        continue
+-                    full += delta
+-                    yield delta  # the bridge wraps each chunk as a text_delta event
+-        finally:
+-            # BridgeTemplate closes this generator on barge-in. Commit the
+-            # delivered prefix before apply_interruption rewrites it to what
+-            # the caller actually heard.
+-            if full:
+-                self._history.append({"role": "assistant", "content": full})
 -
 -    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
 -        """Rewrite private history to the portion the caller actually heard."""
@@ -237,6 +265,8 @@
 
 
  async def main() -> None:
+-    from openai import AsyncOpenAI
+-
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
 
@@ -298,9 +328,27 @@
 +    for name, n in sorted(counts.items(), key=lambda kv: -kv[1])[:5]:
 +        print(f"  {n:>4}  {name}")
 
--        async with session:
--            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
--            await wait_for_shutdown_signal(session)
+-        try:
+-            async with session:
+-                print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
+-                await wait_for_shutdown_signal(session)
+-        finally:
+-            # Session exit preserves the read-only journal view. Export while
+-            # the custom workflow's client is still in its separately owned
+-            # scope, including when shutdown arrives through cancellation.
+-            RUNS_DIR.mkdir(exist_ok=True)
+-            path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
+-            try:
+-                export_debug_bundle(session, path, overwrite=True)
+-                print(f"Wrote bundle → {_display_path(path)}")
+-                human_command, json_command = measurement_commands(path)
+-                print("Measure this production-shaped bundle directly:")
+-                print(f"  {human_command}")
+-                print(f"  {json_command}")
+-                print("Inspect its provider-ready pronunciation payloads:")
+-                print(f"  {pronunciation_command(path)}")
+-            except Exception as exc:  # noqa: BLE001 — teaching script
+-                print(f"(no bundle written: {exc})")
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
 +    export_debug_bundle(session, bundle_path, overwrite=True)
@@ -309,22 +357,7 @@
 +    print("Measure this production-shaped bundle directly:")
 +    print(f"  {human_command}")
 +    print(f"  {json_command}")
-
--        # Session exit preserves the read-only journal view. Export while the
--        # custom workflow's client is still in its separately owned scope.
--        RUNS_DIR.mkdir(exist_ok=True)
--        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
--        try:
--            export_debug_bundle(session, path, overwrite=True)
--            print(f"Wrote bundle → {_display_path(path)}")
--            human_command, json_command = measurement_commands(path)
--            print("Measure this production-shaped bundle directly:")
--            print(f"  {human_command}")
--            print(f"  {json_command}")
--            print("Inspect its provider-ready pronunciation payloads:")
--            print(f"  {pronunciation_command(path)}")
--        except Exception as exc:  # noqa: BLE001 — teaching script
--            print(f"(no bundle written: {exc})")
++
 +    # ── 3. The debugger CLI ────────────────────────────────────────
 +    print("\nOpen the debugger UI on this bundle:")
 +    print(f"  {debugger_command(bundle_path)}")
@@ -427,9 +460,10 @@ Key properties:
 
 - `add(key, session)` reserves a unique key, then awaits
   `session.start()`. If start fails or the add task is cancelled, the
-  slot is released before the exception or cancellation is re-raised.
-  The session's own start path owns rollback of resources it opened
-  before that interrupted start.
+  manager's reservation is released before the exception or cancellation
+  is re-raised. If another session has already claimed the key, it is
+  preserved. The session's own start path owns rollback of resources it
+  opened before that interrupted start.
 - `stop_all()` gathers all sessions' `stop()` calls concurrently and
   logs exceptions per session without raising.
 - `connection(key, session)` is the context-manager sugar for
@@ -683,7 +717,7 @@ already reconstructs the waterfall and percentile distribution directly.
 ```bash
 uv run easycat latency PATH --json \
   | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
-      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
+      --metric 'vad->tts' --percentile p95 --max-ms 2000 --min-samples 5
 ```
 
 The gate fails separately for an exceeded budget and an insufficient
