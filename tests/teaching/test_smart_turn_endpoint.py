@@ -62,6 +62,8 @@ async def test_vad_baseline_reports_configured_endpoint_wait(monkeypatch) -> Non
     endpoint = next(row["data"] for row in journal.rows if row["name"] == "turn.endpoint_commit")
     assert endpoint["mode"] == "vad"
     assert endpoint["reason"] == "vad_timeout"
+    assert endpoint["classification_inference_ms"] is None
+    assert endpoint["pending_wait_ms"] == 0.0
     assert endpoint["endpoint_wait_ms"] == pytest.approx(800.0)
 
 
@@ -102,6 +104,8 @@ async def test_smart_turn_endpoint_wait_includes_classifier_time(monkeypatch) ->
     endpoint = next(row["data"] for row in journal.rows if row["name"] == "turn.endpoint_commit")
     assert endpoint["mode"] == "smart"
     assert endpoint["reason"] == "smart_turn"
+    assert endpoint["classification_inference_ms"] == pytest.approx(40.0)
+    assert endpoint["pending_wait_ms"] == 0.0
     assert endpoint["endpoint_wait_ms"] == pytest.approx(240.0)
 
 

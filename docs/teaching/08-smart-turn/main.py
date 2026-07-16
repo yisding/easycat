@@ -113,6 +113,7 @@ class MiniTurnDetector:
         self._state: str = "idle"  # idle | speaking | pending
         self._pending_since: float | None = None
         self._candidate_speech_end_t: float | None = None
+        self._last_inference_ms: float | None = None
         self._turn_audio: list[AudioChunk] = []
 
     async def frames(self, audio_iter):
@@ -127,8 +128,10 @@ class MiniTurnDetector:
                         self._state = "speaking"
                         self._pending_since = None
                         self._candidate_speech_end_t = None
+                        self._last_inference_ms = None
                     else:
                         self._candidate_speech_end_t = None
+                        self._last_inference_ms = None
                         yield "speech_started", None
                         while self._preroll:
                             buf = self._preroll.popleft()
@@ -173,6 +176,9 @@ class MiniTurnDetector:
 
     def _commit_endpoint(self, reason: str) -> float:
         committed_at = time.monotonic()
+        pending_wait_ms = (
+            0.0 if self._pending_since is None else (committed_at - self._pending_since) * 1000
+        )
         estimated_speech_end_t = self._candidate_speech_end_t
         if estimated_speech_end_t is None:
             estimated_speech_end_t = committed_at - self._silence_wait_ms / 1000
@@ -188,20 +194,26 @@ class MiniTurnDetector:
                     "mode": "smart" if self._smart is not None else "vad",
                     "reason": reason,
                     "silence_wait_ms": self._silence_wait_ms,
+                    "classification_inference_ms": self._last_inference_ms,
+                    "pending_wait_ms": pending_wait_ms,
                     "estimated_speech_end_ms": estimated_speech_end_t * 1000,
                     "committed_at_ms": committed_at * 1000,
                     "endpoint_wait_ms": (committed_at - estimated_speech_end_t) * 1000,
                 },
             )
+        self._pending_since = None
+        self._last_inference_ms = None
         return estimated_speech_end_t
 
     async def _classify(self) -> bool:
         """Return True if smart-turn confirms the turn is over."""
+        self._last_inference_ms = None
         if self._smart is None or not self._turn_audio:
             return True
         t0 = time.monotonic()
         result = await self._smart.detect(self._turn_audio)
         inference_ms = (time.monotonic() - t0) * 1000
+        self._last_inference_ms = inference_ms
         confirmed = result.probability > self._threshold
         if self._journal is not None:
             self._journal.append(
