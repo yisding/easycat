@@ -32,7 +32,10 @@ build movement (chapters 6-9) exists to close this gap.
 
 - **Added:** an `AsyncOpenAI` client + `blocking_agent` function
   between STT and TTS; three `turn.gap` sub-spans
-  (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn.
+  (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn;
+  `tts_outcome_probe.py` for first-audio failure attribution.
+- **Preserved:** TTS accepted/rejected chunk counts from chapter 4 now appear
+  in both `stage.tts.execute` and `turn.gap`.
 - **Removed:** the parrot — the bot now answers, instead of
   repeating.
 
@@ -124,7 +127,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -67,121 +61,160 @@
+@@ -67,121 +61,171 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -248,7 +251,7 @@ build movement (chapters 6-9) exists to close this gap.
 +    tts_start = time.monotonic()
 +    print(f"  bot:  {reply!r}")
 +    audio_probe = FirstAudioProbe(transport)
-+    await speak(audio_probe, reply)
++    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
 +    tts_end = time.monotonic()
 +    first_audio_t = audio_probe.first_audio_at
 +    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
@@ -260,6 +263,8 @@ build movement (chapters 6-9) exists to close this gap.
 +        text=reply,
 +        first_audio_ms=tts_first_audio_ms,
 +        enqueue_ms=tts_enqueue_ms,
++        accepted_chunks=accepted_chunks,
++        rejected_chunks=rejected_chunks,
 +    )
 +
 +    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
@@ -279,6 +284,8 @@ build movement (chapters 6-9) exists to close this gap.
 +            "agent_ms": (agent_end - agent_start) * 1000,
 +            "tts_ms": tts_first_audio_ms,
 +            "tts_enqueue_ms": tts_enqueue_ms,
++            "tts_accepted_chunks": accepted_chunks,
++            "tts_rejected_chunks": rejected_chunks,
 +            "text": reply,
          },
      )
@@ -298,7 +305,14 @@ build movement (chapters 6-9) exists to close this gap.
 -) -> None:
 -    """On each VAD turn, stream audio into STT, wait for final, speak it."""
 +    if total_gap is None:
-+        print("  (turn gap unavailable — TTS produced no accepted audio)")
++        if accepted_chunks:
++            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
++        elif rejected_chunks:
++            print(
++                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
++            )
++        else:
++            print("  (turn gap unavailable — TTS produced no audio)")
 +    else:
 +        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 +
@@ -364,7 +378,7 @@ build movement (chapters 6-9) exists to close this gap.
      finally:
          if stt is not None:
              try:
-@@ -191,22 +224,8 @@
+@@ -191,22 +235,8 @@
  
  
  async def main() -> None:
@@ -389,7 +403,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -215,7 +234,7 @@
+@@ -215,7 +245,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -398,7 +412,7 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
-@@ -226,16 +245,19 @@
+@@ -226,16 +256,19 @@
  
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
@@ -497,6 +511,10 @@ for r in bundle.records():
         print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
         print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
         print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
+        print(
+            f"  chunks accepted / rejected  {d['tts_accepted_chunks']} / "
+            f"{d['tts_rejected_chunks']}"
+        )
 ```
 
 You will see something like:
@@ -525,6 +543,33 @@ small speaker buffer, and measuring sound at the ear requires a
 loopback. `tts_enqueue_ms` ends later, after the complete reply has
 been synthesized and queued; it is useful for throughput and memory
 diagnosis but is not part of the silence before the bot starts.
+
+### A missing first-audio timestamp has multiple causes
+
+`total_gap_ms=null` means no chunk was accepted, not necessarily that TTS
+produced nothing. Chapter 5 preserves accepted/rejected totals in both the TTS
+span and turn-gap record so postmortem analysis can distinguish:
+
+| Counts | Interpretation |
+|---|---|
+| accepted > 0 | A first-acceptance timestamp should exist; if it does not, the instrumentation contract failed. |
+| accepted = 0, rejected > 0 | TTS produced chunks, but the transport rejected all of them. |
+| accepted = 0, rejected = 0 | TTS produced no chunks. |
+
+Run every branch without credentials:
+
+```bash
+uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+```
+
+The probe reports `first_audio_accepted`, `all_chunks_rejected`, and
+`no_chunks_produced` separately. The earlier message “TTS produced no audio”
+for every missing timestamp collapsed the last two causes and could send an
+operator toward the wrong provider.
+
+Acceptance still means scheduled for delivery, not rendered or heard. These
+counts improve failure attribution; they do not turn `turn.gap` into an
+acoustic measurement.
 
 Humans turn-take in 100-300 ms. Even before device buffering, we are
 an order of magnitude worse. That is why voice LLM products feel off

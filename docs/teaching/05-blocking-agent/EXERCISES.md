@@ -68,8 +68,36 @@ attribute the time to the three sub-spans:
    Excellent ones (OpenAI Realtime API, smart-turn-equipped
    pipelines) target 300-500 ms.
 
+## 4. Diagnose a missing first-audio milestone
+
+**Task.** Run the provider-free outcome probe:
+
+```bash
+uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+```
+
+For each case, explain why `gap_available` has its value. Then delete the
+accepted/rejected fields from `stage.tts.execute` and `turn.gap` in a scratch
+copy. Which two root causes become observationally identical?
+
+**Hints**
+
+1. `mixed` has an accepted chunk, so `FirstAudioProbe` captures the milestone
+   and the software turn gap is measurable.
+2. `all_rejected` proves TTS produced two chunks and the transport dropped
+   both. This is not a TTS-empty response.
+3. `no_audio` has zero accepted and zero rejected chunks. Only this case
+   supports the narrower “TTS produced no audio” diagnosis.
+4. An accepted count with no first-audio timestamp would indicate broken
+   instrumentation, so the runtime prints a fourth defensive outcome even
+   though the scripted probe cannot produce it through `FirstAudioProbe`.
+5. None of these counts proves playback. Chapter 9 adds delivery-progress
+   evidence later.
+
 ## Self-check
 
 You should be able to name the three sub-gaps in order without
 looking them up, predict which one each chapter-6/8 fix attacks,
-and have visceral evidence for why both fixes matter.
+and have visceral evidence for why both fixes matter. You should also be able
+to distinguish no synthesized audio from audio rejected before its first
+accepted chunk.

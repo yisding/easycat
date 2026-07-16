@@ -243,7 +243,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -130,51 +196,19 @@
+@@ -130,53 +196,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -288,7 +288,7 @@
 -    tts_start = time.monotonic()
 -    print(f"  bot:  {reply!r}")
 -    audio_probe = FirstAudioProbe(transport)
--    await speak(audio_probe, reply)
+-    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
 -    tts_end = time.monotonic()
 -    first_audio_t = audio_probe.first_audio_at
 -    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
@@ -300,13 +300,15 @@
 -        text=reply,
 -        first_audio_ms=tts_first_audio_ms,
 -        enqueue_ms=tts_enqueue_ms,
+-        accepted_chunks=accepted_chunks,
+-        rejected_chunks=rejected_chunks,
 -    )
 -
 +    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -183,11 +217,8 @@
+@@ -185,29 +217,17 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -314,13 +316,24 @@
 -            "agent_ms": (agent_end - agent_start) * 1000,
 -            "tts_ms": tts_first_audio_ms,
 -            "tts_enqueue_ms": tts_enqueue_ms,
+-            "tts_accepted_chunks": accepted_chunks,
+-            "tts_rejected_chunks": rejected_chunks,
 -            "text": reply,
 +            "reply_enqueue_gap_ms": reply_enqueue_gap,
 +            "text": final_text,
          },
      )
      if total_gap is None:
-@@ -196,7 +227,7 @@
+-        if accepted_chunks:
+-            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
+-        elif rejected_chunks:
+-            print(
+-                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
+-            )
+-        else:
+-            print("  (turn gap unavailable — TTS produced no audio)")
++        print("  (turn gap unavailable — TTS produced no accepted audio)")
+     else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
@@ -329,7 +342,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -209,11 +240,11 @@
+@@ -220,11 +240,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -343,7 +356,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -249,10 +280,15 @@
+@@ -260,10 +280,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)

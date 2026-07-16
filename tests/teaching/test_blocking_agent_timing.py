@@ -41,10 +41,11 @@ async def test_turn_gap_ends_at_first_accepted_audio_not_full_enqueue(monkeypatc
         clock["now"] = 3.0
         return "reply"
 
-    async def fake_speak(transport, _text: str) -> None:
+    async def fake_speak(transport, _text: str) -> tuple[int, int]:
         clock["now"] = 3.5
         await transport.send_audio("first chunk")
         clock["now"] = 4.0
+        return 1, 0
 
     monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(chapter, "blocking_agent", fake_agent)
@@ -55,6 +56,8 @@ async def test_turn_gap_ends_at_first_accepted_audio_not_full_enqueue(monkeypatc
     gap = next(row["data"] for row in rows if row["name"] == "turn.gap")
     assert gap["tts_ms"] == 500.0
     assert gap["tts_enqueue_ms"] == 1_000.0
+    assert gap["tts_accepted_chunks"] == 1
+    assert gap["tts_rejected_chunks"] == 0
     assert gap["total_gap_ms"] == 2_500.0
     output = capsys.readouterr().out
     assert "STT final → first audio accepted" in output
@@ -97,10 +100,11 @@ async def test_turn_gap_is_unavailable_when_transport_rejects_audio(monkeypatch,
         clock["now"] = 3.0
         return "reply"
 
-    async def fake_speak(transport, _text: str) -> None:
+    async def fake_speak(transport, _text: str) -> tuple[int, int]:
         clock["now"] = 3.5
         await transport.send_audio("rejected chunk")
         clock["now"] = 4.0
+        return 0, 1
 
     monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(chapter, "blocking_agent", fake_agent)
@@ -111,5 +115,7 @@ async def test_turn_gap_is_unavailable_when_transport_rejects_audio(monkeypatch,
     gap = next(row["data"] for row in rows if row["name"] == "turn.gap")
     assert gap["tts_ms"] is None
     assert gap["tts_enqueue_ms"] == 1_000.0
+    assert gap["tts_accepted_chunks"] == 0
+    assert gap["tts_rejected_chunks"] == 1
     assert gap["total_gap_ms"] is None
-    assert "turn gap unavailable — TTS produced no accepted audio" in capsys.readouterr().out
+    assert "turn gap unavailable — transport rejected all 1 TTS chunks" in capsys.readouterr().out
