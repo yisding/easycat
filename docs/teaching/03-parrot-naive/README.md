@@ -1,5 +1,9 @@
 # Chapter 3 — Parrot, the Naive Way
 
+<!-- BEGIN auto:navigation -->
+**Progress: 4 of 16** · [← Chapter 2](../02-transcribe/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 4 →](../04-vad-preroll/)
+<!-- END auto:navigation -->
+
 > A bot that repeats what you said. Except it breaks the instant
 > you say "um."
 
@@ -14,6 +18,11 @@ personally heard this fail on your own voice.
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -73,7 +82,7 @@ personally heard this fail on your own voice.
  import asyncio
  import os
  import time
-@@ -28,149 +28,173 @@
+@@ -28,60 +28,63 @@
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
  from easycat.events import EventBus, STTEventType
@@ -98,7 +107,54 @@ personally heard this fail on your own voice.
 -
 -
 -def _display_path(path: Path) -> Path:
--    try:
++SESSION_ID = f"ch03-parrot-{int(time.time())}"
++
++
++def record_delivery(
++    journal: InMemoryRingBuffer,
++    *,
++    text: str,
++    accepted_chunks: int,
++    rejected_chunks: int,
++    offset_ms: float,
++) -> None:
++    """Record transport acceptance without claiming speaker playback."""
++    journal.append(
++        kind=JournalRecordKind.EVENT,
++        name="parrot.delivery",
++        session_id=SESSION_ID,
++        data={
++            "stage": "parrot",
++            "committed_text": text,
++            "accepted_chunks": accepted_chunks,
++            "rejected_chunks": rejected_chunks,
++            "offset_ms": offset_ms,
++        },
++    )
++    if rejected_chunks:
++        print(
++            "  transport rejected "
++            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
++        )
++
++
++async def speak_and_record(
++    transport, journal: InMemoryRingBuffer, text: str, start: float
++) -> None:
++    """Speak once, then preserve every transport acceptance result."""
++    accepted_chunks, rejected_chunks = await speak(transport, text)
++    record_delivery(
++        journal,
++        text=text,
++        accepted_chunks=accepted_chunks,
++        rejected_chunks=rejected_chunks,
++        offset_ms=(time.monotonic() - start) * 1000,
++    )
++
++
++async def shutdown(stt, transport) -> None:
++    """End the logical STT stream, close its provider, then disconnect."""
+     try:
 -        return path.relative_to(Path.cwd())
 -    except ValueError:
 -        return path
@@ -128,37 +184,41 @@ personally heard this fail on your own voice.
 -    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
 -
 -
+-async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
+-    """End an active stream once, then close its provider and transport."""
+-    try:
+-        if needs_stream_end:
+-            await stt.end_stream()
++        await stt.end_stream()
+     finally:
+         try:
+             await close_if_supported(stt)
+@@ -89,97 +92,109 @@
+             await transport.disconnect()
+
+
 -async def main(provider: str = "openai") -> None:
 -    config = build_stt_config(provider)
 -    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
--
--    journal = InMemoryRingBuffer(capacity=10_000)
++async def main() -> None:
++    oai_key = os.getenv("OPENAI_API_KEY")
++    dg_key = os.getenv("DEEPGRAM_API_KEY")
++    if not oai_key or not dg_key:
++        raise SystemExit("Set OPENAI_API_KEY (for TTS) and DEEPGRAM_API_KEY (for STT).")
+
+     journal = InMemoryRingBuffer(capacity=10_000)
 -    # The same STT factory from batch.py — the CLI changes only its config.
 -    # The start/send/events consumer below is provider-independent.
 -    stt = create_stt_provider(config)
 -
 -    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
--    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--
-+SESSION_ID = f"ch03-parrot-{int(time.time())}"
-+
-+
-+def record_delivery(
-+    journal: InMemoryRingBuffer,
-+    *,
-+    text: str,
-+    accepted_chunks: int,
-+    rejected_chunks: int,
-+    offset_ms: float,
-+) -> None:
-+    """Record transport acceptance without claiming speaker playback."""
-     journal.append(
-         kind=JournalRecordKind.EVENT,
+     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
 -        name="stt.provider.selected",
 -        session_id=session_id,
-+        name="parrot.delivery",
-+        session_id=SESSION_ID,
-         data={
+-        data={
 -            "provider": provider,
 -            "credential_env": PROVIDER_ENV_VARS[provider],
 -            "event_timing": PROVIDER_TIMING[provider],
@@ -166,54 +226,7 @@ personally heard this fail on your own voice.
 -            "provider_target_sample_rate_hz": (
 -                PCM16_MONO_24K.sample_rate if provider == "deepgram" else None
 -            ),
-+            "stage": "parrot",
-+            "committed_text": text,
-+            "accepted_chunks": accepted_chunks,
-+            "rejected_chunks": rejected_chunks,
-+            "offset_ms": offset_ms,
-         },
-+    )
-+    if rejected_chunks:
-+        print(
-+            "  transport rejected "
-+            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
-+        )
-+
-+
-+async def speak_and_record(
-+    transport, journal: InMemoryRingBuffer, text: str, start: float
-+) -> None:
-+    """Speak once, then preserve every transport acceptance result."""
-+    accepted_chunks, rejected_chunks = await speak(transport, text)
-+    record_delivery(
-+        journal,
-+        text=text,
-+        accepted_chunks=accepted_chunks,
-+        rejected_chunks=rejected_chunks,
-+        offset_ms=(time.monotonic() - start) * 1000,
-+    )
-+
-+
-+async def shutdown(stt, transport) -> None:
-+    """End the logical STT stream, close its provider, then disconnect."""
-+    try:
-+        await stt.end_stream()
-+    finally:
-+        try:
-+            await close_if_supported(stt)
-+        finally:
-+            await transport.disconnect()
-+
-+
-+async def main() -> None:
-+    oai_key = os.getenv("OPENAI_API_KEY")
-+    dg_key = os.getenv("DEEPGRAM_API_KEY")
-+    if not oai_key or not dg_key:
-+        raise SystemExit("Set OPENAI_API_KEY (for TTS) and DEEPGRAM_API_KEY (for STT).")
-+
-+    journal = InMemoryRingBuffer(capacity=10_000)
-+    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-+
+-        },
 +    # Deepgram emits partials mid-speech, which is what this chapter needs
 +    # to feel break. Its STT factory config takes provider-specific args via
 +    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -230,6 +243,7 @@ personally heard this fail on your own voice.
 
      await transport.connect()
      await stt.start_stream()
+-    stream_end_started = False
      start = time.monotonic()
 -    print(f"Speak for {DURATION_S} seconds...")
 +    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
@@ -240,6 +254,7 @@ personally heard this fail on your own voice.
 
      async def feed_audio() -> None:
 -        """Push mic chunks into STT until DURATION_S seconds elapse."""
+-        nonlocal stream_end_started
          async for chunk in transport.receive_audio():
              await stt.send_audio(chunk)
 -            if time.monotonic() - start >= DURATION_S:
@@ -280,6 +295,7 @@ personally heard this fail on your own voice.
 -        # OpenAI's batch provider) or the final commit (for Deepgram).
 -        # For OpenAI this call blocks for the full round-trip: the
 -        # partials you see start arriving *after* we get here.
+-        stream_end_started = True
 -        await stt.end_stream()
 -
 -    async def consume_events() -> None:
@@ -316,13 +332,7 @@ personally heard this fail on your own voice.
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
      finally:
--        try:
--            await stt.end_stream()
--        finally:
--            try:
--                await close_if_supported(stt)
--            finally:
--                await transport.disconnect()
+-        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
 +        await shutdown(stt, transport)
 
      RUNS_DIR.mkdir(exist_ok=True)

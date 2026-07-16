@@ -77,6 +77,18 @@ def build_stt_config(provider: str) -> STTProviderConfig:
     return STTProviderConfig(provider=provider, api_key=api_key, params=params)
 
 
+async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
+    """End an active stream once, then close its provider and transport."""
+    try:
+        if needs_stream_end:
+            await stt.end_stream()
+    finally:
+        try:
+            await close_if_supported(stt)
+        finally:
+            await transport.disconnect()
+
+
 async def main(provider: str = "openai") -> None:
     config = build_stt_config(provider)
     session_id = f"ch02-streaming-{provider}-{int(time.time())}"
@@ -106,11 +118,13 @@ async def main(provider: str = "openai") -> None:
 
     await transport.connect()
     await stt.start_stream()
+    stream_end_started = False
     start = time.monotonic()
     print(f"Speak for {DURATION_S} seconds...")
 
     async def feed_audio() -> None:
         """Push mic chunks into STT until DURATION_S seconds elapse."""
+        nonlocal stream_end_started
         async for chunk in transport.receive_audio():
             await stt.send_audio(chunk)
             if time.monotonic() - start >= DURATION_S:
@@ -119,6 +133,7 @@ async def main(provider: str = "openai") -> None:
         # OpenAI's batch provider) or the final commit (for Deepgram).
         # For OpenAI this call blocks for the full round-trip: the
         # partials you see start arriving *after* we get here.
+        stream_end_started = True
         await stt.end_stream()
 
     async def consume_events() -> None:
@@ -146,13 +161,7 @@ async def main(provider: str = "openai") -> None:
     try:
         await asyncio.gather(feed_audio(), consume_events())
     finally:
-        try:
-            await stt.end_stream()
-        finally:
-            try:
-                await close_if_supported(stt)
-            finally:
-                await transport.disconnect()
+        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{session_id}.bundle"

@@ -1,5 +1,9 @@
 # Chapter 2 — Transcribe
 
+<!-- BEGIN auto:navigation -->
+**Progress: 3 of 16** · [← Chapter 1](../01-echo/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 3 →](../03-parrot-naive/)
+<!-- END auto:navigation -->
+
 > Speak, see text. Twice — once batch, once streaming. Feel the
 > latency difference. And meet the journal.
 
@@ -11,6 +15,11 @@
   `uv sync --extra quickstart --extra deepgram --group dev`.
 - Export the selected provider's key: `OPENAI_API_KEY` for the default or
   `DEEPGRAM_API_KEY` for `--provider deepgram`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -38,7 +47,7 @@
 ```diff
 --- docs/teaching/01-echo/main.py
 +++ docs/teaching/02-transcribe/streaming.py
-@@ -1,57 +1,176 @@
+@@ -1,57 +1,185 @@
 -"""Chapter 1 — Echo.
 +"""Chapter 2 — streaming transcription.
 
@@ -148,6 +157,18 @@
 +    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
 +
 +
++async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
++    """End an active stream once, then close its provider and transport."""
++    try:
++        if needs_stream_end:
++            await stt.end_stream()
++    finally:
++        try:
++            await close_if_supported(stt)
++        finally:
++            await transport.disconnect()
++
++
 +async def main(provider: str = "openai") -> None:
 +    config = build_stt_config(provider)
 +    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
@@ -178,11 +199,13 @@
      await transport.connect()
 -    print("Echoing mic to speakers. Ctrl-C to stop.")
 +    await stt.start_stream()
++    stream_end_started = False
 +    start = time.monotonic()
 +    print(f"Speak for {DURATION_S} seconds...")
 +
 +    async def feed_audio() -> None:
 +        """Push mic chunks into STT until DURATION_S seconds elapse."""
++        nonlocal stream_end_started
 +        async for chunk in transport.receive_audio():
 +            await stt.send_audio(chunk)
 +            if time.monotonic() - start >= DURATION_S:
@@ -191,6 +214,7 @@
 +        # OpenAI's batch provider) or the final commit (for Deepgram).
 +        # For OpenAI this call blocks for the full round-trip: the
 +        # partials you see start arriving *after* we get here.
++        stream_end_started = True
 +        await stt.end_stream()
 +
 +    async def consume_events() -> None:
@@ -221,13 +245,7 @@
 +        await asyncio.gather(feed_audio(), consume_events())
      finally:
 -        await transport.disconnect()
-+        try:
-+            await stt.end_stream()
-+        finally:
-+            try:
-+                await close_if_supported(stt)
-+            finally:
-+                await transport.disconnect()
++        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
 +
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"{session_id}.bundle"
@@ -259,6 +277,16 @@
 <!-- END auto:diff -->
 
 ## The two scripts
+
+Start with the chapter's canonical entry point. It delegates to the
+streaming version:
+
+```bash
+uv run python docs/teaching/02-transcribe/main.py
+```
+
+Then run the two named scripts directly to compare batch and streaming
+STT side by side:
 
 ```bash
 uv run python docs/teaching/02-transcribe/batch.py
