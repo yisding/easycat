@@ -163,11 +163,9 @@ class MiniTurnDetector:
                 self._turn_audio = []
                 yield "speech_ended", speech_end_t
 
-            if self._state == "speaking":
+            if self._state in ("speaking", "pending"):
                 self._turn_audio.append(chunk)
                 yield "frame", chunk
-            elif self._state == "pending":
-                self._turn_audio.append(chunk)
             else:
                 self._preroll.append(chunk)
 
@@ -202,7 +200,7 @@ class MiniTurnDetector:
         t0 = time.monotonic()
         result = await self._smart.detect(self._turn_audio)
         inference_ms = (time.monotonic() - t0) * 1000
-        confirmed = result.probability >= self._threshold
+        confirmed = result.probability > self._threshold
         if self._journal is not None:
             self._journal.append(
                 kind=JournalRecordKind.EVENT,
@@ -305,7 +303,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
         if first_audio_t is None or estimated_speech_end_t is None
         else (first_audio_t - estimated_speech_end_t) * 1000
     )
-    endpoint_to_stt_final = (
+    speech_end_to_stt_final = (
         None if estimated_speech_end_t is None else (stt_final_t - estimated_speech_end_t) * 1000
     )
     journal.append(
@@ -316,7 +314,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
             "stage": "turn",
             "total_gap_ms": total_gap,
             "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
-            "endpoint_to_stt_final_ms": endpoint_to_stt_final,
+            "estimated_speech_end_to_stt_final_ms": speech_end_to_stt_final,
             "reply_enqueue_gap_ms": reply_enqueue_gap,
             "text": final_text,
         },
@@ -324,7 +322,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
     if total_gap is None:
         print("  (turn gap unavailable — TTS produced no accepted audio)")
     else:
-        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
         if speech_end_to_first_audio is not None:
             print(
                 f"  (estimated user speech end → first audio: {speech_end_to_first_audio:.0f} ms)"
