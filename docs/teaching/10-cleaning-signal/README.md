@@ -245,7 +245,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -155,97 +168,61 @@
+@@ -155,119 +168,81 @@
      await sentence_queue.put(None)
  
  
@@ -278,11 +278,33 @@ hearing.
 -                "bytes_sent_so_far": ledger.bytes_sent,
 -                "cancelled": cancel.is_cancelled,
 -            },
+-        )
+-
+-
+-async def _reap_completed_bot_task(bot_task, active_cancel, active_ledger, journal):
 +            session_id=session_id,
 +            data={"stage": "tts", "text": sentence},
++        )
++
++
++async def _reap_completed_bot_task(bot_task, active_cancel, journal, session_id):
+     """Observe a finished bot task and clear its per-turn state."""
+     if bot_task is None or not bot_task.done():
+-        return bot_task, active_cancel, active_ledger
++        return bot_task, active_cancel
+     try:
+         await bot_task
+     except Exception as exc:
+         journal.append(
+             kind=JournalRecordKind.EVENT,
+             name="bot_task.error",
+-            session_id=SESSION_ID,
++            session_id=session_id,
+             data={"stage": "coordinator", "error": repr(exc)},
          )
- 
- 
+-    return None, None, None
+-
+-
 -async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 -    """Maintain a multi-turn history and rewrite it on cancel."""
 -    history: list[dict] = [
@@ -294,6 +316,9 @@ hearing.
 -            ),
 -        }
 -    ]
++    return None, None
++
++
 +async def coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal):
      stt = None
      bot_task: asyncio.Task | None = None
@@ -303,7 +328,17 @@ hearing.
      while True:
          tag, chunk = await mic_queue.get()
  
+-        # Clean completions update history inside ``_bot``. Reap both
+-        # successful and failed tasks before handling this microphone event.
+-        bot_task, active_cancel, active_ledger = await _reap_completed_bot_task(
+-            bot_task, active_cancel, active_ledger, journal
+-        )
+-
 -        # Barge-in during bot speech → cancel AND rewrite history.
++        bot_task, active_cancel = await _reap_completed_bot_task(
++            bot_task, active_cancel, journal, session_id
++        )
++
          if bot_task is not None and not bot_task.done():
 -            if tag != "speech_started" or active_cancel is None or active_ledger is None:
 +            if tag != "speech_started" or active_cancel is None:
@@ -357,7 +392,7 @@ hearing.
  
          if tag == "speech_started":
              if stt is None:
-@@ -263,33 +240,56 @@
+@@ -285,33 +260,56 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -426,7 +461,7 @@ hearing.
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -308,13 +308,14 @@
+@@ -330,13 +328,14 @@
          )
  
      await transport.connect()
@@ -444,7 +479,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -322,7 +323,7 @@
+@@ -344,7 +343,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

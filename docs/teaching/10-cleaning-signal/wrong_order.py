@@ -190,6 +190,22 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
         )
 
 
+async def _reap_completed_bot_task(bot_task, active_cancel, journal, session_id):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=session_id,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None
+
+
 async def coordinator(
     mic_queue, stt_factory, client, tts, transport, aec, session_id, journal, mode
 ):
@@ -199,6 +215,10 @@ async def coordinator(
 
     while True:
         tag, chunk = await mic_queue.get()
+
+        bot_task, active_cancel = await _reap_completed_bot_task(
+            bot_task, active_cancel, journal, session_id
+        )
 
         if bot_task is not None and not bot_task.done():
             if tag != "speech_started" or active_cancel is None:

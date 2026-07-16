@@ -181,6 +181,22 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
         )
 
 
+async def _reap_completed_bot_task(bot_task, active_cancel, active_ledger, journal):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel, active_ledger
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=SESSION_ID,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None, None
+
+
 async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     """Maintain a multi-turn history and rewrite it on cancel."""
     history: list[dict] = [
@@ -199,6 +215,12 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 
     while True:
         tag, chunk = await mic_queue.get()
+
+        # Clean completions update history inside ``_bot``. Reap both
+        # successful and failed tasks before handling this microphone event.
+        bot_task, active_cancel, active_ledger = await _reap_completed_bot_task(
+            bot_task, active_cancel, active_ledger, journal
+        )
 
         # Barge-in during bot speech → cancel AND rewrite history.
         if bot_task is not None and not bot_task.done():
