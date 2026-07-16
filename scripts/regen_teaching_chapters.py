@@ -408,10 +408,7 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
     return (
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
-        ">\n"
-        + "".join(f"> {line}\n" for line in prediction_lines)
-        + ">\n"
-        + "> ```bash\n"
+        ">\n" + "".join(f"> {line}\n" for line in prediction_lines) + ">\n" + "> ```bash\n"
         f"> {command}\n"
         "> ```\n"
         ">\n"
