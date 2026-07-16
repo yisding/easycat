@@ -213,7 +213,10 @@ class TTSSynthesizer:
                     if not gated_at_start and (
                         bypass_gate or not (self._audio_gate and self._audio_gate())
                     ):
-                        await self._send_or_queue_audio(tts_event.audio, first_audio=first_audio)
+                        await self._send_or_queue_audio(
+                            tts_event.audio,
+                            first_audio=first_audio,
+                        )
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
                     session_id, turn_id = (

@@ -39,7 +39,7 @@ from easycat.runtime.context import RunContext
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
 from easycat.timeouts import TimeoutConfig
-from easycat.tts.input import TTSInput, TTSInputPolicy, resolve_tts_input_policy, strip_ssml_tags
+from easycat.tts.input import TTSInput, resolve_tts_input_policy, strip_ssml_tags
 from easycat.turn_manager import TurnManager
 
 if TYPE_CHECKING:
@@ -82,8 +82,6 @@ class TTSScheduler:
 
         self._output_processors = output_processors
         self._strip_markdown = strip_markdown_enabled
-        self._input_policy_provider: object | None = None
-        self._input_policy: TTSInputPolicy | None = None
 
         self._current_turn = wiring.current_turn
         self._is_gated = wiring.is_gated
@@ -161,11 +159,7 @@ class TTSScheduler:
             is_streaming=is_streaming,
         )
         payload = processed_payload
-        provider = self._tts_getter()
-        if provider is not self._input_policy_provider or self._input_policy is None:
-            self._input_policy_provider = provider
-            self._input_policy = resolve_tts_input_policy(provider)
-        input_policy = self._input_policy
+        input_policy = resolve_tts_input_policy(self._tts_getter())
         ssml_downgraded = processed_payload.format == "ssml" and not input_policy.accepts("ssml")
         if ssml_downgraded:
             payload = TTSInput(text=strip_ssml_tags(processed_payload.text), format="plain")
@@ -333,8 +327,6 @@ class TTSScheduler:
         turn_id: str | None = None,
     ) -> None:
         """Append a journal record when final-response markdown stripping runs."""
-        if self._journal_sink.journal is None:
-            return
         self._journal_sink.append_record(
             name="markdown_stripped",
             turn_id=turn_id,
@@ -357,8 +349,6 @@ class TTSScheduler:
         is_final: bool,
         turn_id: str | None = None,
     ) -> None:
-        if self._journal_sink.journal is None:
-            return
         self._journal_sink.append_record(
             name="tts_payload_prepared",
             turn_id=turn_id,

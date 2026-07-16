@@ -708,8 +708,6 @@ class EventBus:
             handlers.remove(handler)
         except ValueError:
             pass
-        if not handlers:
-            self._handlers.pop(event_type, None)
 
     def subscribe_all(self, handler: EventHandler) -> EventSubscription:
         """Register a handler that receives every emitted event."""
@@ -731,8 +729,6 @@ class EventBus:
         Sync handlers are called directly; async handlers are awaited.
         Exceptions in handlers are logged but do not prevent other handlers from running.
         """
-        if not self._all_handlers and not self._handlers:
-            return
         event_type = type(event)
         # Build the handler list lazily.  This runs on the per-audio-chunk hot
         # path, so avoid the ``list(...)`` copy when there are no global

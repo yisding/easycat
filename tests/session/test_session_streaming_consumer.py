@@ -140,6 +140,38 @@ async def test_first_payload_gate_tracks_clause_completing_delta_dispatch():
     assert gate.result() is True
 
 
+async def test_first_payload_gate_rejects_prepare_failure():
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Hello world.")
+
+    def _fail_prepare(text: str, **_: object) -> TTSInput:
+        raise RuntimeError(f"cannot prepare {text!r}")
+
+    turn = TurnContext(turn_id="t-prepare-failure", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    gate: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    result = await asyncio.wait_for(
+        consume_agent_stream(
+            _stream,
+            cancel_token=turn.cancel_token,
+            tts_queue=tts_queue,
+            emit=AsyncMock(),
+            prepare_tts_payload=_fail_prepare,
+            strip_md=False,
+            turn=turn,
+            first_tts_payload_ready=gate,
+        ),
+        timeout=0.5,
+    )
+
+    assert isinstance(result.error, RuntimeError)
+    assert gate.result() is False
+    assert tts_queue.get_nowait() is None
+
+
 async def test_consume_agent_stream_strip_markdown_defers_work_until_flush(monkeypatch):
     """Tiny deltas without sentence boundaries should not re-strip the full buffer."""
     from easycat.session import _streaming
