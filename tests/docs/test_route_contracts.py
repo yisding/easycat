@@ -398,6 +398,27 @@ def test_feature_tools_actions_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_agent_bridges_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "05-agent-bridges" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/05-agent-bridges/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+        "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")

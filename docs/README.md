@@ -42,7 +42,8 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [01-runtime-modes](using-easycat/01-runtime-modes/) and
   [02-providers-and-voices](using-easycat/02-providers-and-voices/), followed by
   [03-conversation-controls](using-easycat/03-conversation-controls/) and
-  [04-tools-actions](using-easycat/04-tools-actions/). It begins with the public
+  [04-tools-actions](using-easycat/04-tools-actions/), and
+  [05-agent-bridges](using-easycat/05-agent-bridges/). It begins with the public
   `VoiceApp` API and adds runtime modes, providers, conversation controls,
   tools, sessions, debugging, evals, servers, telephony, and operations one
   capability at a time.

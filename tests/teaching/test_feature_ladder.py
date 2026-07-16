@@ -453,3 +453,7 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     )
     tools = entries["docs/using-easycat/04-tools-actions/"]
     assert "uv run python docs/using-easycat/04-tools-actions/main.py preview" in tools["commands"]
+    bridges = entries["docs/using-easycat/05-agent-bridges/"]
+    assert (
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix" in bridges["commands"]
+    )
