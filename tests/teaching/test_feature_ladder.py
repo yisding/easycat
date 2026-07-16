@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import re
@@ -8,6 +9,8 @@ import runpy
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from easycat import EasyConfig
 from easycat.cli._app import _docs_entries
@@ -586,6 +589,115 @@ def test_testing_evals_suite_passes_and_latency_budget_can_fail_without_credenti
     assert "exceeds budget 0.0 ms" in failing.stderr
 
 
+def test_multi_caller_chapter_uses_public_server_auth_capacity_and_lifecycle_surfaces() -> None:
+    chapter = FEATURE_LADDER / "09-multi-caller"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "BearerTokenAuth",
+        "CapacityGate",
+        "enforce_bind_guard",
+        'authorization_header=f"Bearer {TOKEN}"',
+        "LocalSupervisor(max_sessions=1",
+        '== ("capacity", None, 1)',
+        "gate.start_draining()",
+        "gate.drain(",
+    ):
+        assert surface in script
+    for concept in (
+        "One connection, one fresh session",
+        "Authentication happens before allocation",
+        "Non-loopback binds fail closed",
+        "Capacity rejects instead of queueing callers",
+        "The helper owns connection teardown",
+        "Use `VoiceServer` for one production process policy",
+        "Graceful shutdown is admission control plus a deadline",
+    ):
+        assert concept in readme
+
+
+def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+
+    assert "PASS auth: missing bearer token rejected before session creation" in result.stdout
+    assert "PASS capacity: extra caller rejected instead of queued" in result.stdout
+    assert "PASS isolation: released slot created fresh session 2" in result.stdout
+    assert "PASS shutdown: draining rejected new work and stopped session 2" in result.stdout
+    assert "PASS bind guard: public unauthenticated endpoint failed closed" in result.stdout
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+async def test_multi_caller_start_failure_releases_capacity(failure_type) -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    namespace = runpy.run_path(str(script))
+    demo_session = namespace["DemoSession"]
+
+    class FailingSession(demo_session):
+        async def start(self) -> None:
+            raise failure_type("startup failed")
+
+    supervisor_type = namespace["LocalSupervisor"]
+    module_globals = supervisor_type.connect.__globals__
+    module_globals["DemoSession"] = FailingSession
+    supervisor = supervisor_type(max_sessions=1, events=[])
+    authorized = namespace["Request"](authorization_header=f"Bearer {namespace['TOKEN']}")
+
+    with pytest.raises(failure_type, match="startup failed"):
+        await supervisor.connect("failed", authorized)
+
+    assert supervisor.sessions == {}
+    assert supervisor.gate.active_count == 0
+    assert supervisor.gate.reserved_count == 0
+
+    module_globals["DemoSession"] = demo_session
+    outcome, replacement = await supervisor.connect("replacement", authorized)
+    assert outcome == "accepted"
+    assert replacement is not None
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+async def test_multi_caller_stop_failure_releases_capacity(failure_type) -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    namespace = runpy.run_path(str(script))
+    demo_session = namespace["DemoSession"]
+
+    class FailingStopSession(demo_session):
+        async def stop(self, *, force: bool = False) -> None:
+            raise failure_type("shutdown failed")
+
+    supervisor_type = namespace["LocalSupervisor"]
+    module_globals = supervisor_type.connect.__globals__
+    module_globals["DemoSession"] = FailingStopSession
+    supervisor = supervisor_type(max_sessions=1, events=[])
+    authorized = namespace["Request"](authorization_header=f"Bearer {namespace['TOKEN']}")
+
+    outcome, session = await supervisor.connect("failed", authorized)
+    assert outcome == "accepted"
+    assert session is not None
+    with pytest.raises(failure_type, match="shutdown failed"):
+        await supervisor.disconnect("failed")
+
+    assert supervisor.sessions == {}
+    assert supervisor.gate.active_count == 0
+    assert supervisor.gate.reserved_count == 0
+
+    module_globals["DemoSession"] = demo_session
+    outcome, replacement = await supervisor.connect("replacement", authorized)
+    assert outcome == "accepted"
+    assert replacement is not None
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -669,3 +781,5 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     )
     testing_evals = entries["docs/using-easycat/08-testing-evals/"]
     assert "uv run python docs/using-easycat/08-testing-evals/main.py" in testing_evals["commands"]
+    multi_caller = entries["docs/using-easycat/09-multi-caller/"]
+    assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]
