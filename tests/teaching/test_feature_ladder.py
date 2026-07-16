@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from easycat import EasyConfig
@@ -178,6 +181,52 @@ def test_runtime_modes_chapter_covers_every_voice_app_mode_and_boundary() -> Non
         assert concept in readme
 
 
+def test_provider_chapter_teaches_shortcuts_typed_voices_and_discovery() -> None:
+    chapter = FEATURE_LADDER / "02-providers-and-voices"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for profile in ("list", "openai", "deepgram-stt", "elevenlabs-voice"):
+        assert f'"{profile}"' in script
+        assert f"main.py {profile}" in readme
+    for public_name in ("available_stt_providers", "available_tts_providers"):
+        assert public_name in script
+        assert public_name in readme
+    for provider_surface in (
+        'stt="deepgram/nova-2"',
+        "OpenAITTSConfig",
+        "ElevenLabsTTSConfig",
+        "voice=",
+        "voice_id=",
+    ):
+        assert provider_surface in script
+    for concept in (
+        "STT and TTS have separate registries",
+        "Typed configs take precedence",
+        "Specs are reusable; live providers are not",
+        "Audio alignment stays automatic",
+    ):
+        assert concept in readme
+
+
+def test_provider_chapter_lists_builtin_providers_without_credentials() -> None:
+    script = FEATURE_LADDER / "02-providers-and-voices" / "main.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "list"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")},
+    )
+
+    assert "STT providers:" in completed.stdout
+    assert "openai-realtime" in completed.stdout
+    assert "deepgram" in completed.stdout
+    assert "TTS providers:" in completed.stdout
+    assert "elevenlabs" in completed.stdout
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -226,4 +275,11 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert (
         "uv run python docs/using-easycat/01-runtime-modes/main.py browser"
         in runtime_modes["commands"]
+    )
+    providers = entries["docs/using-easycat/02-providers-and-voices/"]
+    assert providers["diataxis"] == "tutorial"
+    assert providers["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py list"
+        in providers["commands"]
     )

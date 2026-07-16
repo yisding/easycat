@@ -322,6 +322,36 @@ def test_feature_runtime_modes_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_provider_voices_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "02-providers-and-voices" / "README.md"
+    ).read_text(encoding="utf-8")
+    route = entries["docs/using-easycat/02-providers-and-voices/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --provider deepgram",
+        "uv run easycat doctor --provider elevenlabs",
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py list",
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py openai --voice alloy",
+        (
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+            "deepgram-stt --voice nova"
+        ),
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice",
+        (
+            "uv run --env-file .env python "
+            "docs/using-easycat/02-providers-and-voices/main.py deepgram-stt"
+        ),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
