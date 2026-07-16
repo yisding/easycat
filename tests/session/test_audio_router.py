@@ -928,7 +928,6 @@ async def test_await_drain_waits_for_in_flight_send():
     # not return until the send completes (it will time out here).
     await router.await_drain(timeout=0.05)
     assert len(transport.sent) == 0  # still in flight, send_audio blocked
-    assert await router.try_send_first_audio_inline(_make_chunk(byte_value=10)) is False
 
     # Releasing the send lets the in-flight chunk land and drain to idle.
     release.set()

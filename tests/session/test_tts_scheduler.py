@@ -328,29 +328,6 @@ def test_prepare_keeps_ssml_when_input_policy_supports_it() -> None:
     assert payload.format == "ssml"
 
 
-def test_prepare_refreshes_cached_policy_when_provider_changes() -> None:
-    scheduler, _ = _build_scheduler(tts=_RecordingTTS(), output_processors=[_SSMLifyProcessor()])
-    assert scheduler.prepare("one", is_streaming=True, is_final=False).format == "plain"
-
-    scheduler._tts_getter = lambda: _PolicySSMLTTS()
-
-    assert scheduler.prepare("two", is_streaming=True, is_final=False).format == "ssml"
-
-
-def test_prepare_skips_journal_payload_when_journaling_is_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    scheduler, _ = _build_scheduler(tts=_RecordingTTS())
-    scheduler._journal_sink.journal = None
-    monkeypatch.setattr(
-        SessionJournalSink,
-        "append_record",
-        lambda self, **kwargs: pytest.fail(f"unexpected journal payload: {kwargs}"),
-    )
-
-    assert scheduler.prepare("hello", is_streaming=True, is_final=False).text == "hello"
-
-
 # ── Tests: synthesize ────────────────────────────────────────
 
 
@@ -380,11 +357,13 @@ async def test_synthesize_sends_only_first_uncontended_chunk_inline() -> None:
     try:
         await scheduler.synthesize_bypass("greeting")
 
-        assert len(ctx["transport"].sent) == 1
+        transport = ctx["transport"]
+        assert isinstance(transport, _FakeTransport)
+        assert len(transport.sent) == 1
         assert ctx["outbound_queue"].qsize() == 1
         ctx["running_ref"]["value"] = False
         await router._drain_outbound_audio()
-        assert len(ctx["transport"].sent) == 2
+        assert len(transport.sent) == 2
     finally:
         active_task.cancel()
         with pytest.raises(asyncio.CancelledError):

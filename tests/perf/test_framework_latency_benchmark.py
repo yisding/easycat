@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from perf.bench_framework_latency import (
+    LOCK_EXCLUDE_NEWER,
     PINS,
     _lock_metadata,
     _validate_sample,
@@ -21,6 +22,10 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
 
     easycat, livekit, pipecat = specs
     assert easycat.command == (sys.executable, str(worker), "--framework", "easycat")
+    assert "--no-config" in livekit.command
+    assert "--no-config" in pipecat.command
+    assert livekit.command[livekit.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
+    assert pipecat.command[pipecat.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
     assert "--isolated" in livekit.command
     assert "--locked" in livekit.command
     assert "--locked" in pipecat.command
@@ -28,7 +33,7 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     assert pipecat.command[pipecat.command.index("--python") + 1] == sys.executable
     assert PINS == {
         "livekit": ("livekit-agents==1.6.4",),
-        "pipecat": ("pipecat-ai==1.0.0", "websockets==15.0.1"),
+        "pipecat": ("pipecat-ai==1.4.0", "websockets==15.0.1"),
     }
 
 
