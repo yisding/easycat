@@ -1,5 +1,7 @@
 # Chapter 1 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Insert a 500 ms delay line
 
 **Task.** Buffer chunks for 500 ms before forwarding them:
