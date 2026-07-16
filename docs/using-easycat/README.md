@@ -53,7 +53,7 @@ pretending unfinished lessons are runnable.
 | 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules | Available |
 | 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
 | 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle | Available |
-| 7 | See what happened | Journals, bundles, inspect, replay, diff, and the debugger | Planned |
+| 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger | Available |
 | 8 | Test the experience | Offline turns, assertions, evals, and latency budgets | Planned |
 | 9 | Serve many callers | Per-connection factories, authentication, limits, and supervision | Planned |
 | 10 | Answer the phone | Twilio streams, outbound calls, screening, IVR, and call control | Planned |

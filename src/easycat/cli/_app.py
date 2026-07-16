@@ -494,6 +494,30 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature observability",
+        "path": "docs/using-easycat/07-observability/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Record, inspect, replay, and compare journals and debug bundles.",
+        "commands": (
+            "uv sync --group dev",
+            "uv sync --extra debugger --group dev",
+            (
+                "uv run python docs/using-easycat/07-observability/main.py pair "
+                ".easycat/tutorial/ch07"
+            ),
+            ("uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json"),
+            (
+                "uv run easycat replay .easycat/tutorial/ch07/baseline.bundle "
+                "--fidelity artifact --tool-policy deny --json"
+            ),
+            (
+                "uv run easycat diff .easycat/tutorial/ch07/baseline.bundle "
+                ".easycat/tutorial/ch07/candidate.bundle --json"
+            ),
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

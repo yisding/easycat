@@ -29,6 +29,7 @@ Source: https://github.com/yisding/easycat
 - [Feature tools and actions](https://github.com/yisding/easycat/tree/main/docs/using-easycat/04-tools-actions) — for learners: Separate agent tools, session actions, events, and spoken-output rules.
 - [Feature agent bridges](https://github.com/yisding/easycat/tree/main/docs/using-easycat/05-agent-bridges) — for learners: Choose a framework adapter or bring a custom workflow.
 - [Feature session control](https://github.com/yisding/easycat/tree/main/docs/using-easycat/06-session-control) — for learners: Own session lifecycle, events, text turns, resets, and teardown.
+- [Feature observability](https://github.com/yisding/easycat/tree/main/docs/using-easycat/07-observability) — for learners: Record, inspect, replay, and compare journals and debug bundles.
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
 - [Architecture](https://github.com/yisding/easycat/blob/main/docs/architecture.md) — for maintainers: Understand the pipeline, session collaborators, stages, providers, and agent bridges.
 - [Maintainer guide](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
