@@ -1,5 +1,9 @@
 # Chapter 1 — Echo
 
+<!-- BEGIN auto:navigation -->
+**Progress: 2 of 16** · [← Chapter 0](../00-hello-audio/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 2 →](../02-transcribe/)
+<!-- END auto:navigation -->
+
 > Mic to speaker, continuously, through the `Transport` protocol.
 > First encounter with EasyCat and with async audio streams.
 

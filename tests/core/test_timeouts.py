@@ -83,6 +83,19 @@ class TestAgentTimeout:
         result = await with_agent_timeout(fast_agent(), timeout=1.0)
         assert result == "response"
 
+    async def test_agent_runs_in_caller_task(self):
+        caller_task = asyncio.current_task()
+        agent_task = None
+
+        async def fast_agent():
+            nonlocal agent_task
+            agent_task = asyncio.current_task()
+            return "response"
+
+        await with_agent_timeout(fast_agent(), timeout=1.0)
+
+        assert agent_task is caller_task
+
     async def test_timeout_fires_when_agent_hangs(self):
         async def hanging_agent():
             await _wait_forever()
@@ -132,26 +145,30 @@ class TestTTSTimeout:
 
         assert exc_info.value.timeout == 0.05
 
-    async def test_no_timeout_after_first_byte(self, monkeypatch):
-        """After the first byte arrives, subsequent events are not wrapped in wait_for."""
-        original_wait_for = asyncio.wait_for
-        wait_for_timeouts: list[float] = []
-
-        async def track_wait_for(awaitable, timeout=None):  # noqa: ANN001
-            if timeout is not None:
-                wait_for_timeouts.append(timeout)
-            return await original_wait_for(awaitable, timeout=timeout)
-
-        monkeypatch.setattr("easycat.timeouts.asyncio.wait_for", track_wait_for)
+    async def test_no_timeout_after_first_byte(self):
+        """After the first byte arrives, a slow later event remains eligible."""
 
         async def source():
             yield b"chunk1"
+            await asyncio.sleep(0.02)
             yield b"chunk2"
 
-        result = await _collect(with_tts_timeout(source(), timeout=0.1))
+        result = await _collect(with_tts_timeout(source(), timeout=0.005))
 
         assert result == [b"chunk1", b"chunk2"]
-        assert wait_for_timeouts == [0.1]
+
+    async def test_first_byte_iteration_runs_in_caller_task(self):
+        caller_task = asyncio.current_task()
+        source_task = None
+
+        async def source():
+            nonlocal source_task
+            source_task = asyncio.current_task()
+            yield b"chunk1"
+
+        await _collect(with_tts_timeout(source(), timeout=1.0))
+
+        assert source_task is caller_task
 
     async def test_timeout_emits_error_event(self):
         event_bus = EventBus()
