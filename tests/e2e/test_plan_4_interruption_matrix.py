@@ -7,8 +7,8 @@ canonical sequence: ControlSignalRecord -> FrameworkStateCommitted ->
 CancellationBoundaryReached (or InterruptionApplyFailed on rollback).
 
 Bridges covered:
-- ``GenericWorkflowBridge`` (shallow) — must emit
-  ``shallow_mode_downgrade``
+- ``GenericWorkflowBridge`` (shallow) — rejects state mutation without
+  an explicit workflow override
 - ``GenericWorkflowBridge`` (deep w/ recorder)
 - ``OpenAIAgentsBridge`` — integration_live
 - ``PydanticAIBridge`` (Agent mode) — integration_live-ish, depends on
@@ -56,7 +56,7 @@ def _framework_records_in_order(journal):  # type: ignore[no-untyped-def]
 
 
 # ---------------------------------------------------------------------------
-# 4a. Shallow-mode workflow emits downgrade signal
+# 4a. Shallow-mode workflow rejects opaque state mutation
 # ---------------------------------------------------------------------------
 
 

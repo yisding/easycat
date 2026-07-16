@@ -9,7 +9,9 @@ defaulting to ``OPENAI_API_KEY``.
 
 from __future__ import annotations
 
+import wave
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -17,8 +19,8 @@ import easycat.quick as quick
 import easycat.recipes as recipes
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.errors import EasyCatError
-from easycat.events import TTSEvent, TTSEventType
-from easycat.recipes import _resolve_api_key, speak
+from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
+from easycat.recipes import _resolve_api_key, speak, transcribe_file
 from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.tts.factory import _CATALOG as _TTS_CATALOG
 from easycat.tts.input import TTSInput
@@ -57,6 +59,76 @@ class TestResolveApiKey:
         assert _resolve_api_key("deepgram", None, catalog=_STT_CATALOG) == "dg-key"
 
 
+def _write_wav(path: Path, *, sample_width: int = 2) -> None:
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(sample_width)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00" * (320 * sample_width))
+
+
+class _FakeSTT:
+    def __init__(self) -> None:
+        self.closed = False
+        self.ended = False
+        self.chunks: list[AudioChunk] = []
+
+    async def start_stream(self) -> None:
+        pass
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        self.chunks.append(chunk)
+
+    async def end_stream(self) -> None:
+        self.ended = True
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        yield STTEvent(type=STTEventType.FINAL, text="hello")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestTranscribeResourceOwnership:
+    @pytest.mark.asyncio
+    async def test_helper_constructed_stt_is_closed(self, monkeypatch, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path)
+        fake = _FakeSTT()
+        monkeypatch.setattr(recipes, "create_stt_provider", lambda _config: fake)
+
+        transcript = await transcribe_file(wav_path, api_key="placeholder")
+
+        assert transcript == "hello"
+        assert fake.ended is True
+        assert fake.closed is True
+        assert fake.chunks
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_stt_is_not_closed(self, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path)
+        fake = _FakeSTT()
+
+        transcript = await transcribe_file(wav_path, stt=fake)
+
+        assert transcript == "hello"
+        assert fake.ended is True
+        assert fake.closed is False
+
+    @pytest.mark.asyncio
+    async def test_helper_constructed_stt_closes_on_invalid_wav(self, monkeypatch, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path, sample_width=1)
+        fake = _FakeSTT()
+        monkeypatch.setattr(recipes, "create_stt_provider", lambda _config: fake)
+
+        with pytest.raises(ValueError, match="16-bit PCM"):
+            await transcribe_file(wav_path, api_key="placeholder")
+
+        assert fake.closed is True
+
+
 class _FakeTTS:
     """TTS provider stub recording whether its persistent client was closed."""
 
@@ -74,11 +146,13 @@ class _FakeTTS:
 
 
 class _FakeTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, accepted: bool = True) -> None:
         self.received: list[AudioChunk] = []
+        self.accepted = accepted
 
-    async def send_audio(self, audio: AudioChunk) -> None:
+    async def send_audio(self, audio: AudioChunk) -> bool:
         self.received.append(audio)
+        return self.accepted
 
 
 class TestSpeakResourceOwnership:
@@ -91,10 +165,11 @@ class TestSpeakResourceOwnership:
         monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
         transport = _FakeTransport()
 
-        await speak(transport, "hello")
+        result = await speak(transport, "hello")
 
         assert fake.closed is True
         assert transport.received  # audio was forwarded
+        assert result == (1, 0)
 
     @pytest.mark.asyncio
     async def test_caller_supplied_tts_is_not_closed(self):
@@ -102,9 +177,38 @@ class TestSpeakResourceOwnership:
         fake = _FakeTTS()
         transport = _FakeTransport()
 
-        await speak(transport, "hello", tts=fake)
+        result = await speak(transport, "hello", tts=fake)
 
         assert fake.closed is False
+        assert transport.received
+        assert result == (1, 0)
+
+    @pytest.mark.asyncio
+    async def test_rejected_transport_chunks_are_reported(self):
+        fake = _FakeTTS()
+        transport = _FakeTransport(accepted=False)
+
+        result = await speak(transport, "hello", tts=fake)
+
+        assert result == (0, 1)
+        assert transport.received
+
+    @pytest.mark.asyncio
+    async def test_legacy_none_transport_result_is_accepted(self):
+        fake = _FakeTTS()
+
+        class _LegacyTransport:
+            def __init__(self) -> None:
+                self.received: list[AudioChunk] = []
+
+            async def send_audio(self, audio: AudioChunk) -> None:
+                self.received.append(audio)
+
+        transport = _LegacyTransport()
+
+        result = await speak(transport, "hello", tts=fake)  # type: ignore[arg-type]
+
+        assert result == (1, 0)
         assert transport.received
 
     @pytest.mark.asyncio
@@ -114,7 +218,7 @@ class TestSpeakResourceOwnership:
         monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
 
         class _BoomTransport:
-            async def send_audio(self, _audio: AudioChunk) -> None:
+            async def send_audio(self, _audio: AudioChunk) -> bool:
                 raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
