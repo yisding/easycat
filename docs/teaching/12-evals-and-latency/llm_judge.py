@@ -11,11 +11,10 @@ Add ``--env-file .env`` after ``uv run`` on script commands if keys live in
     uv run python docs/teaching/12-evals-and-latency/llm_judge.py \\
         docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
 
-This is *not* a replacement for human evaluation. Studies place
-LLM-as-judge at ~95% agreement with humans on most rubrics — a
-fast triage layer, nothing more. A score of 5 does not guarantee
-a good turn; it means the judge couldn't find something to complain
-about from the transcript alone.
+This is *not* a replacement for human evaluation. Judge agreement
+depends on the rubric, model, prompt, and dataset; calibrate it against
+human labels before using scores as a gate. A score of 5 only means the
+judge found no text-level problem under this prompt.
 """
 
 from __future__ import annotations
@@ -32,6 +31,7 @@ from openai import AsyncOpenAI
 from easycat.debug.testing import load_bundle
 
 JUDGE_MODEL = "gpt-4o-mini"
+SCORE_KEYS = ("relevance", "fluency", "appropriate_length")
 
 RUBRIC = """You are evaluating a single voice-bot turn.
 
@@ -57,26 +57,38 @@ def extract_transcript(bundle_path: Path) -> str:
     return "User: " + " ".join(user_lines) + "\nBot: " + " ".join(bot_lines)
 
 
+def parse_judgment(raw: str) -> dict:
+    """Validate the JSON object's score ranges before reporting it."""
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"error": "judge returned non-JSON", "raw": raw}
+    if not isinstance(result, dict):
+        return {"error": "judge returned a non-object", "raw": raw}
+    for key in SCORE_KEYS:
+        score = result.get(key)
+        if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5:
+            return {"error": f"judge returned invalid {key} score", "raw": raw}
+    if not isinstance(result.get("reasoning"), str):
+        return {"error": "judge returned invalid reasoning", "raw": raw}
+    return result
+
+
 async def judge(bundle_path: Path) -> dict:
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY to run the LLM judge.")
-    client = AsyncOpenAI()
     transcript = extract_transcript(bundle_path)
-    resp = await client.chat.completions.create(
-        model=JUDGE_MODEL,
-        messages=[
-            {"role": "system", "content": RUBRIC},
-            {"role": "user", "content": transcript},
-        ],
-        response_format={"type": "json_object"},
-    )
+    async with AsyncOpenAI() as client:
+        resp = await client.chat.completions.create(
+            model=JUDGE_MODEL,
+            messages=[
+                {"role": "system", "content": RUBRIC},
+                {"role": "user", "content": transcript},
+            ],
+            response_format={"type": "json_object"},
+        )
     raw = resp.choices[0].message.content or "{}"
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # response_format=json_object makes this rare, not impossible.
-        # Surface the raw text so a reader can still see what the judge said.
-        return {"error": "judge returned non-JSON", "raw": raw}
+    return parse_judgment(raw)
 
 
 def main() -> None:
@@ -87,7 +99,11 @@ def main() -> None:
         sys.exit(f"{args.bundle} does not exist.")
     result = asyncio.run(judge(args.bundle))
     print(f"=== {args.bundle.name} ===")
-    for k in ("relevance", "fluency", "appropriate_length"):
+    if "error" in result:
+        print(f"  {'error':>22}: {result['error']}")
+        print(f"  {'raw':>22}: {result.get('raw', '')}")
+        return
+    for k in SCORE_KEYS:
         print(f"  {k:>22}: {result.get(k)}")
     reasoning = result.get("reasoning", "")
     print(f"  {'reasoning':>22}: {reasoning}")

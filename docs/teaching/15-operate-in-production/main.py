@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -32,6 +33,38 @@ from easycat import (
 )
 
 RUNS_DIR = Path(__file__).parent / "runs"
+
+
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def measurement_commands(path: Path) -> tuple[str, str]:
+    """Commands that read this production-shaped bundle directly."""
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
+    return (
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
+    )
+
+
+def debugger_command(path: Path, *, port: int = 8765) -> str:
+    """Open the maintained debugger CLI on this captured bundle."""
+    return shlex.join(
+        [
+            "uv",
+            "run",
+            "easycat",
+            "debugger",
+            "serve",
+            str(_display_path(path)),
+            "--port",
+            str(port),
+        ]
+    )
 
 
 def build_session():
@@ -82,9 +115,9 @@ async def main() -> None:
     print("Session stopped; manager released the slot.")
 
     # ── 2. Post-stop: journal still works, bundle still exports ───
-    # The lifecycle invariant: after stop(), the
-    # journal is in a read-only postmortem state. .read() works,
-    # export_debug_bundle() works, .append() does not.
+    # The lifecycle invariant: Session.journal is always a read-only
+    # JournalView. After stop(), that same view reads a preserved
+    # postmortem backend, and export_debug_bundle() still works.
     assert session.journal is not None
     records = session.journal.read()
     counts: dict[str, int] = {}
@@ -99,15 +132,15 @@ async def main() -> None:
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
     export_debug_bundle(session, bundle_path, overwrite=True)
-    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    print(f"\nWrote bundle → {_display_path(bundle_path)}")
+    human_command, json_command = measurement_commands(bundle_path)
+    print("Measure this production-shaped bundle directly:")
+    print(f"  {human_command}")
+    print(f"  {json_command}")
 
-    # ── 3. The debugger one-liner ──────────────────────────────────
-    print(
-        "\nOpen the debugger UI on this bundle:\n"
-        f"  uv run python -c 'from easycat.debugger import serve_bundle; "
-        f'serve_bundle("{bundle_path}", port=8765)\'\n'
-        "  → browse http://127.0.0.1:8765"
-    )
+    # ── 3. The debugger CLI ────────────────────────────────────────
+    print("\nOpen the debugger UI on this bundle:")
+    print(f"  {debugger_command(bundle_path)}")
 
 
 if __name__ == "__main__":

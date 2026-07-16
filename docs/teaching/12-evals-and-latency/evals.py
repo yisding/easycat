@@ -11,21 +11,28 @@ Inputs:
     had_real_barge_in     — "1" if the interruption was intentional
 
 Outputs (stdout):
-- Per-bundle turn.gap ms, sorted.
+- Coverage counts after validating a one-bundle/one-turn manifest.
+- Per-bundle first-audio ``turn.gap`` ms, sorted.
 - P50 and P95 across the set.
 - WER aggregated across bundles with a reference transcript.
 - Barge-in F1 over the {had_real_barge_in, observed_interruption} matrix.
+
+The command fails closed when bundle/label coverage is incomplete or a
+fixture contains zero/multiple measured turns. Silent exclusions make
+point estimates look healthier, so this teaching evaluator forbids them.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import statistics
 import sys
 from pathlib import Path
 
 from easycat.debug.testing import load_bundle
+from easycat.validation.latency import LatencyPercentileStats
+
+REQUIRED_COLUMNS = {"bundle", "reference_transcript", "had_real_barge_in"}
 
 
 def _wer_words(ref: str, hyp: str) -> tuple[int, int]:
@@ -56,22 +63,121 @@ def _wer_words(ref: str, hyp: str) -> tuple[int, int]:
     return dp[n][m], n
 
 
+def _stats_from_records(records, *, bundle_name: str) -> dict:
+    """Validate and measure one single-turn teaching fixture."""
+    hypotheses = []
+    gaps = []
+    saw_interruption = False
+    for record in records:
+        if record["name"] == "stt.final":
+            hypotheses.append(record["data"].get("text", ""))
+        elif record["name"] == "turn.gap":
+            gaps.append(record["data"].get("total_gap_ms"))
+        elif record["name"] == "interruption.start":
+            saw_interruption = True
+
+    if len(hypotheses) != 1:
+        raise ValueError(
+            f"{bundle_name}: expected exactly one stt.final, found {len(hypotheses)}; "
+            "split multi-turn runs into one labeled fixture per turn"
+        )
+    if len(gaps) != 1:
+        raise ValueError(
+            f"{bundle_name}: expected exactly one turn.gap, found {len(gaps)}; "
+            "missing first-audio turns must not disappear from latency coverage"
+        )
+    gap = gaps[0]
+    hypothesis = hypotheses[0]
+    if not isinstance(hypothesis, str):
+        raise ValueError(f"{bundle_name}: stt.final.text must be a string")
+    if isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap < 0:
+        raise ValueError(f"{bundle_name}: turn.gap.total_gap_ms must be a non-negative number")
+
+    return {
+        "hypothesis": hypothesis,
+        "total_gap_ms": float(gap),
+        "observed_interruption": saw_interruption,
+    }
+
+
 def _bundle_stats(path: Path) -> dict:
     bundle = load_bundle(path)
-    hyp_text = ""
-    total_gap_ms: float | None = None
-    saw_interruption = False
-    for r in bundle.records():
-        if r["name"] == "stt.final":
-            hyp_text = r["data"].get("text", "") or hyp_text
-        elif r["name"] == "turn.gap":
-            total_gap_ms = r["data"].get("total_gap_ms")
-        elif r["name"] == "interruption.start":
-            saw_interruption = True
+    return _stats_from_records(bundle.records(), bundle_name=path.name)
+
+
+def _load_ground_truth(path: Path) -> dict[str, dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        missing_columns = REQUIRED_COLUMNS - set(reader.fieldnames or ())
+        if missing_columns:
+            raise ValueError(f"ground truth is missing columns: {sorted(missing_columns)}")
+
+        rows: dict[str, dict[str, str]] = {}
+        for line_number, row in enumerate(reader, start=2):
+            name = (row.get("bundle") or "").strip()
+            if not name:
+                raise ValueError(f"ground truth line {line_number}: bundle is empty")
+            if name in rows:
+                raise ValueError(f"ground truth line {line_number}: duplicate bundle {name!r}")
+            label = (row.get("had_real_barge_in") or "").strip()
+            if label not in {"0", "1"}:
+                raise ValueError(
+                    f"ground truth line {line_number}: had_real_barge_in must be 0 or 1"
+                )
+            if not (row.get("reference_transcript") or "").strip():
+                raise ValueError(f"ground truth line {line_number}: reference_transcript is empty")
+            row["bundle"] = name
+            row["had_real_barge_in"] = label
+            rows[name] = row
+    return rows
+
+
+def _validate_coverage(bundles: list[Path], rows: dict[str, dict[str, str]]) -> None:
+    bundle_names = {path.name for path in bundles}
+    row_names = set(rows)
+    missing_labels = sorted(bundle_names - row_names)
+    stale_labels = sorted(row_names - bundle_names)
+    if missing_labels or stale_labels:
+        details = []
+        if missing_labels:
+            details.append(f"missing labels for {missing_labels}")
+        if stale_labels:
+            details.append(f"labels without bundles {stale_labels}")
+        raise ValueError("coverage mismatch: " + "; ".join(details))
+
+
+def _p95(values: list[float]) -> float:
+    stats = LatencyPercentileStats.from_values(values)
+    assert stats.p95 is not None
+    return stats.p95
+
+
+def p95_sensitivity(samples: dict[str, float]) -> dict[str, object]:
+    """Show how much each single sample controls the reported P95.
+
+    This leave-one-out diagnostic measures influence only. It is not a
+    confidence interval and does not estimate unseen production traffic.
+    """
+    if len(samples) < 2:
+        raise ValueError("P95 sensitivity requires at least two samples")
+    full_p95 = _p95(list(samples.values()))
+    leave_one_out = {
+        omitted: _p95([value for name, value in samples.items() if name != omitted])
+        for omitted in sorted(samples)
+    }
+    influential = max(
+        leave_one_out,
+        key=lambda name: abs(leave_one_out[name] - full_p95),
+    )
+    influential_p95 = leave_one_out[influential]
     return {
-        "hypothesis": hyp_text,
-        "total_gap_ms": total_gap_ms,
-        "observed_interruption": saw_interruption,
+        "sample_count": len(samples),
+        "full_p95_ms": full_p95,
+        "leave_one_out_p95_ms": leave_one_out,
+        "leave_one_out_min_ms": min(leave_one_out.values()),
+        "leave_one_out_max_ms": max(leave_one_out.values()),
+        "most_influential_bundle": influential,
+        "most_influential_delta_ms": influential_p95 - full_p95,
     }
 
 
@@ -86,37 +192,64 @@ def main() -> None:
     if not args.ground_truth_csv.exists():
         sys.exit(f"{args.ground_truth_csv} does not exist.")
 
-    rows = {r["bundle"]: r for r in csv.DictReader(args.ground_truth_csv.open())}
     bundles = sorted(args.bundles_dir.glob("*.bundle"))
     if not bundles:
         sys.exit("No bundles found.")
+    try:
+        rows = _load_ground_truth(args.ground_truth_csv)
+        _validate_coverage(bundles, rows)
+        stats = {bundle.name: _bundle_stats(bundle) for bundle in bundles}
+    except ValueError as exc:
+        sys.exit(f"Invalid eval set: {exc}")
+
+    print("=== Coverage ===")
+    print(
+        f"  bundles={len(bundles)}  labels={len(rows)}  "
+        f"latency={len(stats)}  WER={len(stats)}  barge-in={len(stats)}"
+    )
 
     # Latency per-bundle.
-    print("=== Per-bundle latency (turn.gap ms) ===")
+    print("\n=== Per-bundle first-audio latency (turn.gap ms) ===")
     lat_ms = []
     for b in bundles:
-        s = _bundle_stats(b)
+        s = stats[b.name]
         val = s["total_gap_ms"]
-        if val is not None:
-            lat_ms.append(val)
-            print(f"  {b.name:38}  {val:>6.0f} ms")
-    if lat_ms:
-        lat_ms.sort()
-        p50 = statistics.median(lat_ms)
-        p95 = lat_ms[max(0, int(0.95 * len(lat_ms)) - 1)] if len(lat_ms) > 1 else lat_ms[0]
-        print(f"  {'P50':38}  {p50:>6.0f} ms")
-        print(f"  {'P95':38}  {p95:>6.0f} ms")
-        print(f"  {'P95 / P50 ratio':38}  {p95 / p50:>6.2f}")
+        lat_ms.append(val)
+        print(f"  {b.name:38}  {val:>6.0f} ms")
+    lat_ms.sort()
+    latency = LatencyPercentileStats.from_values(lat_ms)
+    assert latency.p50 is not None and latency.p95 is not None
+    p50 = latency.p50
+    p95 = latency.p95
+    ratio = p95 / p50 if p50 else float("inf")
+    print(f"  {'P50':38}  {p50:>6.0f} ms")
+    print(f"  {'P95':38}  {p95:>6.0f} ms")
+    print(f"  {'P95 / P50 ratio':38}  {ratio:>6.2f}")
+    if len(bundles) < 2:
+        print(f"  {'P95 leave-one-out range':38}  n/a (requires at least two bundles)")
+        print(f"  {'Most influential omission':38}  n/a (requires at least two bundles)")
+    else:
+        sensitivity = p95_sensitivity(
+            {bundle.name: stats[bundle.name]["total_gap_ms"] for bundle in bundles}
+        )
+        print(
+            f"  {'P95 leave-one-out range':38}  "
+            f"{sensitivity['leave_one_out_min_ms']:.0f}–"
+            f"{sensitivity['leave_one_out_max_ms']:.0f} ms"
+        )
+        print(
+            f"  {'Most influential omission':38}  "
+            f"{sensitivity['most_influential_bundle']} "
+            f"({sensitivity['most_influential_delta_ms']:+.0f} ms)"
+        )
 
     # WER aggregated.
     print("\n=== WER ===")
     total_edits = 0
     total_ref_words = 0
     for b in bundles:
-        gt = rows.get(b.name)
-        if gt is None:
-            continue
-        s = _bundle_stats(b)
+        gt = rows[b.name]
+        s = stats[b.name]
         edits, n_ref = _wer_words(gt["reference_transcript"], s["hypothesis"])
         total_edits += edits
         total_ref_words += n_ref
@@ -130,10 +263,8 @@ def main() -> None:
     print("\n=== Barge-in F1 ===")
     tp = fp = fn = tn = 0
     for b in bundles:
-        gt = rows.get(b.name)
-        if gt is None:
-            continue
-        s = _bundle_stats(b)
+        gt = rows[b.name]
+        s = stats[b.name]
         real = gt["had_real_barge_in"] == "1"
         observed = s["observed_interruption"]
         if real and observed:
@@ -144,11 +275,17 @@ def main() -> None:
             fn += 1
         else:
             tn += 1
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    precision = tp / (tp + fp) if (tp + fp) else None
+    recall = tp / (tp + fn) if (tp + fn) else None
+    f1 = None
+    if precision is not None and recall is not None:
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    def display(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.2f}"
+
     print(f"  TP={tp}  FP={fp}  FN={fn}  TN={tn}")
-    print(f"  precision = {precision:.2f}   recall = {recall:.2f}   F1 = {f1:.2f}")
+    print(f"  precision = {display(precision)}   recall = {display(recall)}   F1 = {display(f1)}")
 
 
 if __name__ == "__main__":

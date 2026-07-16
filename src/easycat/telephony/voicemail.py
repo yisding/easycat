@@ -546,15 +546,83 @@ def classify_greeting(text: str) -> Literal["human", "machine", "unknown"]:
 
 # ── SIT tone detection ─────────────────────────────────────────────
 
-# Special Information Tones (SIT) are three tones in sequence:
-# 950 Hz, 1400 Hz, 1800 Hz — used to signal "number not in service".
-# YouMail plays these to trick autodialers.
+# ITU-T E.180 Special Information Tones use three tones in sequence:
+# 950 Hz, 1400 Hz, 1800 Hz, typically for call-progress failures.
 
-_SIT_FREQUENCIES: list[tuple[float, float]] = [
+_SIT_FREQUENCIES: tuple[tuple[float, float], ...] = (
     (900.0, 1000.0),  # ~950 Hz
     (1350.0, 1450.0),  # ~1400 Hz
     (1750.0, 1850.0),  # ~1800 Hz
-]
+)
+_SIT_WINDOW_DURATION_MS = 50
+
+
+def _sit_frequency_index(
+    samples: Sequence[int],
+    sample_rate: int,
+    energy_threshold: float,
+) -> int | None:
+    """Classify one analysis window into a tolerated SIT frequency band."""
+    if _pcm16_rms(samples) < energy_threshold:
+        return None
+    frequency = _zero_crossing_freq(samples, sample_rate)
+    return next(
+        (
+            index
+            for index, (lower, upper) in enumerate(_SIT_FREQUENCIES)
+            if lower <= frequency <= upper
+        ),
+        None,
+    )
+
+
+@dataclass
+class _SITSequenceTracker:
+    """Track duration-qualified SIT bands in their required ascending order.
+
+    A qualified tone advances the sequence when it is the next expected band.
+    A repeat of the most recently committed band is tolerated (a tone split
+    into two qualified runs by a brief energy dropout). Any other qualified
+    band before the sequence completes marks the ordering invalid. Once the
+    full 950→1400→1800 sequence has been detected, later in-band audio (a
+    ~1000 Hz voicemail beep, a looped SIT recording) can never un-detect it.
+    """
+
+    min_windows: int
+    detected_tones: list[int] = field(default_factory=list)
+    current_tone: int | None = None
+    current_windows: int = 0
+    invalid_order: bool = False
+
+    def observe(self, tone: int | None) -> None:
+        if tone is not None and tone == self.current_tone:
+            self.current_windows += 1
+            return
+
+        self._commit_current()
+        self.current_tone = tone
+        self.current_windows = 1 if tone is not None else 0
+
+    def complete(self) -> bool:
+        self._commit_current()
+        return self._sequence_detected()
+
+    def _sequence_detected(self) -> bool:
+        return self.detected_tones == list(range(len(_SIT_FREQUENCIES)))
+
+    def _commit_current(self) -> None:
+        if self.current_tone is None or self.current_windows < self.min_windows:
+            return
+        if self._sequence_detected():
+            return
+        if self.invalid_order:
+            return
+        if self.current_tone == len(self.detected_tones):
+            self.detected_tones.append(self.current_tone)
+            return
+        if self.detected_tones and self.current_tone == self.detected_tones[-1]:
+            return
+        self.invalid_order = True
 
 
 def detect_sit_tones(
@@ -574,60 +642,19 @@ def detect_sit_tones(
     samples = _unpack_pcm16(pcm16_data)
 
     # Divide audio into 50ms windows and analyze each.
-    window_size = sample_rate // 20  # 50ms
+    window_size = sample_rate * _SIT_WINDOW_DURATION_MS // 1000
     if window_size < 2:
         return False
 
-    detected_tones: list[int] = []  # indices of SIT frequency bands detected in order
-    window_ms = 50
-    min_windows = max(1, min_tone_duration_ms // window_ms)
-    current_tone_idx: int | None = None
-    current_tone_windows = 0
+    tracker = _SITSequenceTracker(
+        min_windows=max(1, math.ceil(min_tone_duration_ms / _SIT_WINDOW_DURATION_MS))
+    )
 
-    for start in range(0, len(samples) - window_size, window_size):
+    for start in range(0, len(samples) - window_size + 1, window_size):
         window = samples[start : start + window_size]
+        tracker.observe(_sit_frequency_index(window, sample_rate, energy_threshold))
 
-        rms = _pcm16_rms(window)
-        if rms < energy_threshold:
-            if current_tone_idx is not None and current_tone_windows >= min_windows:
-                if not detected_tones or detected_tones[-1] < current_tone_idx:
-                    detected_tones.append(current_tone_idx)
-            current_tone_idx = None
-            current_tone_windows = 0
-            continue
-
-        freq_estimate = _zero_crossing_freq(window, sample_rate)
-
-        # Check against each SIT frequency band.
-        matched_idx: int | None = None
-        for idx, (lo, hi) in enumerate(_SIT_FREQUENCIES):
-            if lo <= freq_estimate <= hi:
-                matched_idx = idx
-                break
-
-        if matched_idx is not None and matched_idx == current_tone_idx:
-            current_tone_windows += 1
-        elif matched_idx is not None:
-            # New tone — commit the previous one if it met the duration threshold.
-            if current_tone_idx is not None and current_tone_windows >= min_windows:
-                if not detected_tones or detected_tones[-1] < current_tone_idx:
-                    detected_tones.append(current_tone_idx)
-            current_tone_idx = matched_idx
-            current_tone_windows = 1
-        else:
-            if current_tone_idx is not None and current_tone_windows >= min_windows:
-                if not detected_tones or detected_tones[-1] < current_tone_idx:
-                    detected_tones.append(current_tone_idx)
-            current_tone_idx = None
-            current_tone_windows = 0
-
-    # Commit the last tone if it met the duration threshold.
-    if current_tone_idx is not None and current_tone_windows >= min_windows:
-        if not detected_tones or detected_tones[-1] < current_tone_idx:
-            detected_tones.append(current_tone_idx)
-
-    # All three tones detected in sequence?
-    return detected_tones == [0, 1, 2]
+    return tracker.complete()
 
 
 # ── Enhanced voicemail: CNG (Comfort Noise) detection ──────────────

@@ -1,24 +1,83 @@
 # Chapter 8 — Exercises
 
-## 1. Drop the threshold and feel the false-positives
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+<!-- END auto:navigation -->
 
-**Task.** Set `SMART_THRESHOLD = 0.3`. Re-run. How often does the
-bot now interrupt you mid-sentence?
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
 
+## 1. Separate threshold changes from classification errors
+
+**Task.** Record several ambiguous pauses once with `--backend smart`,
+then re-score the same classifier outputs without another provider run:
+
+```bash
+uv run python docs/teaching/08-smart-turn/threshold_sweep.py PATH \
+  --baseline 0.5 --candidate 0.3
+```
+
+Replace `PATH` with the emitted bundle. The report identifies
+`newly_accepted` records. Create a JSON label file mapping each
+`smart_turn.classify` sequence to `true` when you were actually done at
+that pause and `false` when you intended to continue, then rerun with
+`--labels labels.json`. How do the baseline and candidate confusion
+counts differ? The file must label every classification sequence exactly;
+the sweep rejects missing and unknown keys instead of emitting partial metrics.
+
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The classifier outputs `P(end-of-turn)` — at threshold 0.3 you
-   accept way more "you're done" calls than you should. The
-   model's confidence is bimodal on clean utterances but mushy on
-   ambiguous ones (lists, trailing intonation), so lowering the
-   threshold pulls in the mushy ones.
-2. Read the journal: every `smart_turn.classify` record has
-   `probability` and `confirmed`. Count how many records have
-   `probability > 0.3` but `< 0.5` (the default). Those are the
-   new false-positives you bought.
-3. The tradeoff is real: tighter threshold = more latency wins
-   but more user-interruption. Production tunes this per
-   deployment based on barge-in F1 (chapter 12).
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
+   just below 0.5 are newly accepted by the candidate threshold, but
+   that fact alone says nothing about whether each decision is correct.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+A newly accepted decision is a false positive only when its
+   `user_was_done` label is `false`. Without labels the report leaves
+   `metrics` as `null` rather than inventing an error rate.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Re-scoring one bundle holds the audio and model probabilities fixed,
+   isolating the threshold policy. Re-recording after editing
+   `SMART_THRESHOLD` is still useful for experiencing the UX, but it is
+   not a controlled metric comparison.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Lower thresholds usually trade fewer false negatives and earlier
+   commits for more false positives and user interruption. Tune on a
+   representative labeled set, not on probability counts alone.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Find a real misfire and keep it
 
@@ -26,19 +85,47 @@ bot now interrupt you mid-sentence?
 right and `smart` gets it wrong. Save both bundles. (You will
 need this in chapter 12 when you build an eval set.)
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The easiest misfire to provoke: a list with level intonation
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The easiest misfire to provoke: a list with level intonation
    ("apples, bananas, pears"). Smart-turn may say "done" after
    "bananas" because pitch was flat at that word.
-2. Another one: trailing "and?" with rising intonation. Smart-turn
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Another one: trailing "and?" with rising intonation. Smart-turn
    should *not* fire (pitch up = continuation), but may
    misclassify on noisy mics.
-3. Save the bundle by copying it out of `runs/` before you re-run
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Save the bundle by copying it out of `runs/` before you re-run
    (the `runs/` directory is gitignored but the file persists
    until you re-run with the same session id).
-4. A single real misfire is a tiny eval set of 1. Chapter 12
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+A single real misfire is a tiny eval set of 1. Chapter 12
    teaches you to grow this into dozens.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 3. Predict the cost of the "I was thinking..." case
 
@@ -46,25 +133,154 @@ need this in chapter 12 when you build an eval set.)
 miss on the utterance *"I was thinking… we should order pizza."*
 Then run `--backend smart` and check.
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The "…" pause is ~500 ms of soft silence. VAD will fire
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The "…" pause is ~500 ms of soft silence. VAD will fire
    `VADStopSpeaking` during it.
-2. Smart-turn then sees the audio up to "thinking" and is asked
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+Smart-turn then sees the audio up to "thinking" and is asked
    "is this end-of-turn?" Pitch at "thinking" is mid-falling but
    not definitively final. Probability is likely in the 0.4-0.6
    range — coin-flippy.
-3. If the model says "not done" → pending state, no commit until
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+If the model says "not done" → pending state, no commit until
    either the user resumes (chapter 8's "we should order pizza"
    continues the same turn) or the fallback silence fires.
-4. If the model says "done" → bot interrupts the user. Bad.
-5. This is exactly why the *fallback* silence timeout exists.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+If the model says "done" → bot interrupts the user. Bad.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+This is exactly why the *fallback* silence timeout exists.
    Smart-turn is a speedup over the worst case, not a replacement
    for the safety net.
 
+</details>
+<!-- END auto:exercise-hints -->
+
+## 4. Account for the whole fallback wait
+
+**Task.** Run the provider-free endpoint path probe:
+
+```bash
+uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
+```
+
+Before reading its JSON, calculate the total for each path. Then change
+the scripted classifier cost from 40 ms to 120 ms and predict which
+fields and totals move.
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+Baseline VAD has no classifier or pending phase: its configured
+   800 ms silence wait is its whole endpoint wait.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+Smart accept is early silence plus classifier inference:
+   `200 + 40 = 240 ms` in the original probe.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Smart fallback adds all three components:
+   `200 + 40 + 800 = 1,040 ms`. `SMART_FALLBACK_MS` starts after
+   classification; it is not a cap on the total endpoint wait.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Raising only inference cost should move
+   `classification_inference_ms` and `endpoint_wait_ms`. It must not
+   change `silence_wait_ms` or `pending_wait_ms`.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+In a live run, compare the recorded components. Do not infer the
+   user-visible delay from a configured timeout alone.
+
+</details>
+<!-- END auto:exercise-hints -->
+
 ## Self-check
 
-You should be able to: (a) describe what input smart-turn takes
-and what it outputs, (b) explain why the fallback silence
-threshold still has to be there even with smart-turn on, and (c)
-name two utterance patterns that will reliably misclassify.
+<!-- BEGIN auto:self-check-protocol -->
+> **Closed-book retrieval gate**
+>
+> 1. Close the chapter narrative and every hint disclosure.
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
+>    from your attempt record.
+> 4. Mark each answer **pass** or **retry** in your progress record.
+>
+> If an answer needs notes, reopen only the section that owns the weak concept,
+> correct your explanation, close it, and retry. Continue only when every answer
+> passes without looking.
+<!-- END auto:self-check-protocol -->
+
+1. What input does smart-turn take, what does it output, and which record shows
+   the decision?
+2. Why must a fallback silence threshold remain when smart-turn is enabled,
+   and which fallback result demonstrates the need?
+3. Which two utterance patterns challenge the classifier, and what outcome
+   would reveal each failure?
+4. Why can STT-final-to-first-audio not measure an endpoint detector's latency
+   win, and which earlier timestamp is required?
+5. How do early silence, inference, and pending time add up to smart fallback
+   wait in your probe evidence?
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete? Prepare the cumulative spine, then replay it through this chapter:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4 --show-evidence
+```
+
+- [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
+- [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+<!-- END auto:exercise-completion -->
