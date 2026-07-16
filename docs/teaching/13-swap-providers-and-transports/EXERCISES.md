@@ -85,20 +85,26 @@ uv run python \
   docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
 ```
 
-Explain why postmortem export belongs after `session.stop(force=True)`
-but before the caller-owned client closes.
+Compare the `graceful` and `cancelled` traces. Explain why the graceful
+trace contains `stop(force=False)` followed by a force-stop no-op, while
+the cancelled trace has only an effective `stop(force=True)`. Then
+explain why postmortem export belongs after session scope exit but before
+the caller-owned client closes.
 
 **Hints**
 
-1. `async with session:` starts on entry and force-stops on exit. The
-   signal helper may already have stopped gracefully; the second stop
-   is deliberately idempotent.
-2. Clean stop preserves a read-only journal view while releasing live
+1. `wait_for_shutdown_signal()` calls default `stop(force=False)` after
+   SIGINT/SIGTERM so in-flight work can drain. An outer task cancellation
+   can bypass that call.
+2. `async with session:` starts on entry and always calls
+   `stop(force=True)` on exit. If graceful stop already closed the
+   session, the second call is deliberately idempotent.
+3. Clean stop preserves a read-only journal view while releasing live
    providers, transport, and writable storage.
-3. The outer client is not one of the providers constructed from
+4. The outer client is not one of the providers constructed from
    `EasyConfig`. A custom workflow captured it, so caller code retains
    ownership and chooses its scope.
-4. Move `session.export_postmortem()` inside the session block in the
+5. Move `session.export_postmortem()` inside the session block in the
    probe. The assertion no longer describes a postmortem export, even
    though the fake object can still append an event.
 

@@ -1,4 +1,4 @@
-"""Show production session and caller-owned client scopes without providers.
+"""Show graceful and cancelled session scopes without providers.
 
 Run with::
 
@@ -34,7 +34,14 @@ class Session:
         return self
 
     async def __aexit__(self, _exc_type, _exc, _tb) -> None:
-        self.events.append("session.stop(force=True)")
+        await self.stop(force=True)
+
+    async def stop(self, *, force: bool = False) -> None:
+        call = f"session.stop(force={force})"
+        if self.closed:
+            self.events.append(f"{call} -> no-op")
+            return
+        self.events.append(call)
         self.closed = True
 
     def export_postmortem(self) -> None:
@@ -42,16 +49,34 @@ class Session:
         self.events.append("session.export_postmortem")
 
 
-async def main() -> None:
+async def run_scenario(*, cancelled: bool) -> dict[str, object]:
     events: list[str] = []
     session = Session(events)
 
     async with Client(events):
-        async with session:
-            events.append("session.work")
+        try:
+            async with session:
+                events.append("session.work")
+                if cancelled:
+                    events.append("outer.cancel")
+                    raise asyncio.CancelledError
+
+                # Mirrors wait_for_shutdown_signal(): after SIGINT/SIGTERM,
+                # stop without force so in-flight work can drain.
+                events.append("shutdown.signal")
+                await session.stop()
+        except asyncio.CancelledError:
+            # The owner handles cancellation before doing postmortem work.
+            pass
         session.export_postmortem()
 
-    print(json.dumps({"events": events, "session_closed": session.closed}, indent=2))
+    return {"events": events, "session_closed": session.closed}
+
+
+async def main() -> None:
+    graceful = await run_scenario(cancelled=False)
+    cancelled = await run_scenario(cancelled=True)
+    print(json.dumps({"graceful": graceful, "cancelled": cancelled}, indent=2))
 
 
 if __name__ == "__main__":

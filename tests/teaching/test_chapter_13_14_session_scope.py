@@ -27,7 +27,7 @@ def load_script(path: Path):
     return module
 
 
-def test_session_scope_probe_orders_postmortem_before_client_close() -> None:
+def test_session_scope_probe_distinguishes_graceful_and_cancelled_stop() -> None:
     completed = subprocess.run(
         [sys.executable, str(CHAPTER_13 / "session_scope_probe.py")],
         cwd=ROOT,
@@ -36,15 +36,31 @@ def test_session_scope_probe_orders_postmortem_before_client_close() -> None:
         text=True,
     )
     assert json.loads(completed.stdout) == {
-        "events": [
-            "client.open",
-            "session.start",
-            "session.work",
-            "session.stop(force=True)",
-            "session.export_postmortem",
-            "client.close",
-        ],
-        "session_closed": True,
+        "graceful": {
+            "events": [
+                "client.open",
+                "session.start",
+                "session.work",
+                "shutdown.signal",
+                "session.stop(force=False)",
+                "session.stop(force=True) -> no-op",
+                "session.export_postmortem",
+                "client.close",
+            ],
+            "session_closed": True,
+        },
+        "cancelled": {
+            "events": [
+                "client.open",
+                "session.start",
+                "session.work",
+                "outer.cancel",
+                "session.stop(force=True)",
+                "session.export_postmortem",
+                "client.close",
+            ],
+            "session_closed": True,
+        },
     }
 
 
@@ -168,6 +184,9 @@ def test_chapters_teach_scope_and_custom_dependency_ownership() -> None:
     assert "The production session boundary" in chapter_13
     assert "session_scope_probe.py" in chapter_13
     assert "read-only postmortem" in normalized_13
+    assert "stop(force=False)" in chapter_13
+    assert "idempotent no-op" in chapter_13
+    assert "cancelled trace has only an effective `stop(force=True)`" in exercises_13
     assert "session_scope_probe.py" in exercises_13
     assert "Caller-owned workflow dependencies" in chapter_14
     assert "`GenericWorkflowBridge` does not infer" in normalized_14

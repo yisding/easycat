@@ -131,8 +131,18 @@ uv run python \
   docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
 ```
 
-It also previews Chapter 14's second boundary: a dependency created by
-your custom workflow remains caller-owned and gets its own outer scope.
+The two traces make the distinction observable. On the graceful path,
+the signal helper's `stop(force=False)` closes the session and context
+exit's `stop(force=True)` reports an idempotent no-op. On the cancelled
+path, the graceful call never happens, so context exit's force-stop does
+the cleanup. Both traces export only after the session scope has exited
+and before the caller-owned client closes.
+
+The probe also previews Chapter 14's second boundary: a dependency
+created by your custom workflow remains caller-owned and gets its own
+outer scope. In a real application, either complete postmortem work
+before re-raising cancellation or shield/bound that work according to
+the owner's shutdown policy.
 
 ## Architecture
 
