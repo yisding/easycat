@@ -56,29 +56,38 @@ class TransportStage:
         delivered for backward compatibility.
         """
         ctx = self._journal_ctx(ctx)
+        capture_enabled = ctx.journal is not None or ctx.artifact_store is not None
         started = time.perf_counter()
         result_attr = "pass"
-        state_before = self.snapshot_state()
+        state_before = self.snapshot_state() if capture_enabled else None
         audio_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        output_ref = put_artifact(ctx, audio_bytes)
-        extra = {
-            "audio_bytes": len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0,
-        }
-        extra.update(audio_format_fields(input))
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            data_extra=extra,
-        )
+        start_sequence = None
+        output_ref = None
+        extra: dict[str, Any] | None = None
+        if capture_enabled:
+            output_ref = put_artifact(ctx, audio_bytes)
+            extra = {
+                "audio_bytes": (
+                    len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0
+                ),
+            }
+            extra.update(audio_format_fields(input))
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                data_extra=extra,
+            )
+        metrics_available = observability.metrics_available()
         try:
-            with observability.span(
+            span = observability.span(
                 "easycat.transport.send",
                 {"easycat.stage": self.name, "easycat.surface": "tts"},
-            ):
-                if isinstance(audio_bytes, (bytes, bytearray)):
+            )
+            with span:
+                if metrics_available and isinstance(audio_bytes, (bytes, bytearray)):
                     observability.increment_counter(
                         "easycat.audio.bytes.total",
                         value=len(audio_bytes),
@@ -112,27 +121,29 @@ class TransportStage:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.stage.latency",
-                time.perf_counter() - started,
-                {"easycat.stage": self.name, "easycat.result": result_attr},
+            if metrics_available:
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {"easycat.stage": self.name, "easycat.result": result_attr},
+                )
+        if capture_enabled:
+            state_after = self.snapshot_state()
+            complete_extra = {
+                **(extra or {}),
+                "delivered": result,
+                "elapsed_ms": (time.perf_counter() - started) * 1000,
+            }
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+                output_ref=output_ref,
+                data_extra=complete_extra,
             )
-        state_after = self.snapshot_state()
-        complete_extra = {
-            **extra,
-            "delivered": result,
-            "elapsed_ms": (time.perf_counter() - started) * 1000,
-        }
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            output_ref=output_ref,
-            data_extra=complete_extra,
-        )
         return result
 
     def snapshot_state(self) -> StageStateSnapshot:

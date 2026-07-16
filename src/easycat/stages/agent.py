@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -10,7 +11,11 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.integrations.agents._agent_runner import AgentRunner, close_stream_after_done
+from easycat.integrations.agents._agent_runner import (
+    AgentRunner,
+    PreparedAgentResponse,
+    close_stream_after_done,
+)
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
@@ -115,6 +120,30 @@ class AgentStage:
         self._tracks_history = self._should_track_history(self._provider)
         self.reset_history()
 
+    @property
+    def supports_preemptive_generation(self) -> bool:
+        """Whether the provider can prepare a voice response transactionally."""
+        return bool(
+            isinstance(self._provider, AgentRunner)
+            and self._provider.supports_preemptive_generation
+        )
+
+    @property
+    def preemptive_max_retries(self) -> int:
+        """Maximum preemptive attempts allowed for one voice turn."""
+        if isinstance(self._provider, AgentRunner):
+            return self._provider.preemptive_max_retries
+        return 0
+
+    async def prepare_preemptive(self, input: Any, turn: TurnContext) -> PreparedAgentResponse:
+        """Prepare a simple-agent response without committing conversation state."""
+        if not isinstance(self._provider, AgentRunner):
+            raise RuntimeError("agent provider does not support preemptive generation")
+        input_text = input if isinstance(input, str) else str(input)
+        return await self._provider.prepare_response(
+            AgentTurnInput.from_text(input_text, turn_id=turn.id)
+        )
+
     # ── Recorder construction ───────────────────────────────────
 
     def _journal_ctx(self, ctx: RunContext) -> RunContext:
@@ -175,6 +204,7 @@ class AgentStage:
         *,
         cancel_token: Any | None = None,
         system_prefix: str | None = None,
+        prepared_response: PreparedAgentResponse | None = None,
     ) -> AsyncGenerator[AgentBridgeEvent, None]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
 
@@ -185,18 +215,21 @@ class AgentStage:
         ctx = self._journal_ctx(ctx)
         bridge = self._provider
         history_epoch = self._history_epoch
-        state_before = self.snapshot_state()
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            data_extra={"input": input if isinstance(input, str) else str(input)},
-        )
+        journal_enabled = ctx.journal is not None
+        input_text = input if isinstance(input, str) else str(input)
+        state_before = self.snapshot_state() if journal_enabled else None
+        start_sequence = None
+        if journal_enabled:
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                data_extra={"input": input_text},
+            )
 
         recorder = self._make_recorder(turn.id, ctx)
-        input_text = input if isinstance(input, str) else str(input)
         base_context = list(self._history) if self._tracks_history else []
         if (
             not self._tracks_history
@@ -223,11 +256,23 @@ class AgentStage:
         errored = False
         started = time.perf_counter()
         try:
-            with observability.span(
-                "easycat.agent.invoke",
-                {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
-            ):
-                stream = bridge.invoke(turn_input, recorder, cancel_token)
+            span = (
+                observability.span(
+                    "easycat.agent.invoke",
+                    {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
+                )
+                if observability.tracing_available()
+                else contextlib.nullcontext()
+            )
+            with span:
+                if prepared_response is not None:
+                    if not isinstance(bridge, AgentRunner):
+                        raise RuntimeError("prepared response requires AgentRunner")
+                    if prepared_response.input_text != input_text:
+                        raise RuntimeError("prepared response transcript does not match input")
+                    stream = bridge.invoke_prepared(prepared_response, recorder, cancel_token)
+                else:
+                    stream = bridge.invoke(turn_input, recorder, cancel_token)
                 try:
                     async for event in stream:
                         kind = getattr(event, "kind", None)
@@ -240,51 +285,55 @@ class AgentStage:
                             # post-yield code is not a reliable audit boundary
                             # for text already handed to downstream TTS or text
                             # clients.
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={"type": "TEXT_DELTA", "text": text},
-                            )
+                            if journal_enabled:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={"type": "TEXT_DELTA", "text": text},
+                                )
                             if not (cancel_token and cancel_token.is_cancelled):
                                 accumulated.append(text)
                             yield event
                             continue
                         elif kind == "done":
                             if text:
+                                if journal_enabled:
+                                    journal_append_event(
+                                        ctx,
+                                        stage=self.name,
+                                        name="agent_delta",
+                                        turn_id=turn.id,
+                                        data_extra={"type": "DONE", "text": text},
+                                    )
+                                accumulated = [text]
+                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
+                            if journal_enabled:
                                 journal_append_event(
                                     ctx,
                                     stage=self.name,
                                     name="agent_delta",
                                     turn_id=turn.id,
-                                    data_extra={"type": "DONE", "text": text},
+                                    data_extra={
+                                        "type": "TOOL_STARTED",
+                                        "tool_name": event.tool_name,
+                                        "call_id": getattr(event, "call_id", ""),
+                                    },
                                 )
-                                accumulated = [text]
-                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={
-                                    "type": "TOOL_STARTED",
-                                    "tool_name": event.tool_name,
-                                    "call_id": getattr(event, "call_id", ""),
-                                },
-                            )
                         elif kind == "tool_result":
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={
-                                    "type": "TOOL_RESULT",
-                                    "call_id": getattr(event, "call_id", ""),
-                                    "result": getattr(event, "result", ""),
-                                },
-                            )
+                            if journal_enabled:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={
+                                        "type": "TOOL_RESULT",
+                                        "call_id": getattr(event, "call_id", ""),
+                                        "result": getattr(event, "result", ""),
+                                    },
+                                )
                         if kind == "done":
                             await close_stream_after_done(stream)
                             yield event
@@ -317,14 +366,15 @@ class AgentStage:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.stage.latency",
-                time.perf_counter() - started,
-                {
-                    "easycat.stage": self.name,
-                    "easycat.result": "fail" if errored else "pass",
-                },
-            )
+            if observability.metrics_available():
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {
+                        "easycat.stage": self.name,
+                        "easycat.result": "fail" if errored else "pass",
+                    },
+                )
             # Use a finally block so shadow history is updated even when
             # the consumer breaks out of the stream early (e.g. send_text
             # stops iterating on the ``done`` event — triggering
@@ -344,16 +394,17 @@ class AgentStage:
                     # state.
                     self._history.append({"role": "user", "content": input_text})
                     self._history.append({"role": "assistant", "content": final_text})
-                state_after = self.snapshot_state()
-                journal_append_event(
-                    ctx,
-                    stage=self.name,
-                    name="stage_complete",
-                    turn_id=turn.id,
-                    state_before=state_before,
-                    state_after=state_after,
-                    data_extra={"response": final_text, "elapsed_ms": elapsed_ms},
-                )
+                if journal_enabled:
+                    state_after = self.snapshot_state()
+                    journal_append_event(
+                        ctx,
+                        stage=self.name,
+                        name="stage_complete",
+                        turn_id=turn.id,
+                        state_before=state_before,
+                        state_after=state_after,
+                        data_extra={"response": final_text, "elapsed_ms": elapsed_ms},
+                    )
 
     # ── Post-turn framework-state mutations ─────────────────────
     #

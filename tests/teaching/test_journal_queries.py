@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 
 from easycat.debug.testing import load_bundle
@@ -10,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = REPO_ROOT / "docs" / "teaching" / "11-journal"
 
 
-def _load_chapter_module(filename: str):
+def _load_chapter_module(filename: str) -> types.ModuleType:
     path = CHAPTER / filename
     module_name = f"teaching_ch11_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -66,11 +67,10 @@ def test_investigate_queries_combine_public_bundle_filters() -> None:
 
 def test_fixture_generator_preserves_turn_query_contract(tmp_path: Path) -> None:
     generator = _load_chapter_module("generate_bundles.py")
-    generator.BUNDLES = tmp_path
 
-    generator.main()
+    generator.main(["--output-root", str(tmp_path)])
 
-    generated = load_bundle(tmp_path / "bug_03_ghost_interruption.bundle")
+    generated = load_bundle(tmp_path / "bundles" / "bug_03_ghost_interruption.bundle")
     assert [
         record["sequence"] for record in generated.filter_by_turn("ch11-bug03-turn-2")
     ] == list(range(8, 14))
