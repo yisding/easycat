@@ -57,8 +57,8 @@
  
 -Run it and break it — "The capital of France is... uh... Paris" is
 -the canonical killer. Chapter 4 replaces this with a real VAD.
-+Run with ``--no-preroll`` to hear the start-of-utterance truncation
-+this chapter was designed to fix.
++Run with ``--no-preroll`` to compare a stream that omits cached audio
++received before VAD-on.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -204,7 +204,7 @@
 +    parser.add_argument(
 +        "--no-preroll",
 +        action="store_true",
-+        help="Disable pre-roll; start-of-utterance will be clipped.",
++        help="Disable pre-roll; omit cached frames received before VAD-on.",
 +    )
 +    args = parser.parse_args()
 +
@@ -348,10 +348,10 @@ you've heard it fail on your own voice, the rest of this chapter
 ## Run it
 
 ```bash
-# With pre-roll: the start of every word survives.
+# With pre-roll: cached leading frames are included in the STT stream.
 uv run python docs/teaching/04-vad-preroll/main.py
 
-# Without pre-roll: "Hello" becomes "ello."
+# Without pre-roll: compare the onset without those cached frames.
 uv run python docs/teaching/04-vad-preroll/main.py --no-preroll
 ```
 
@@ -370,17 +370,19 @@ model is bundled.
 
 ## The pre-roll problem
 
-A VAD is a decision made *after* it has seen enough audio. Fast
-backends fire 100-200 ms late — you said "Hello," but the VAD's
-"speech" verdict lands sometime during the "e." If you only forward
-audio chunks that arrive *after* VAD-on, your STT hears "ello"
-and confidently transcribes "Elo."
+A VAD is a decision made *after* it has seen enough audio. Its
+"speech" verdict can land after the utterance has already started.
+If you only forward chunks from VAD-on onward, the STT stream lacks
+the earlier frames and may mis-hear the leading sound (for example,
+a live run might turn "Hello" into "Elo"). The delay and transcript
+effect depend on the utterance, VAD backend, chunking, and STT provider.
 
 ## The pre-roll fix
 
 Keep a short ring buffer of recent audio (we use 300 ms, about 15
 chunks of 20 ms at 24 kHz). When VAD fires, flush the buffer into
-STT first, then forward live chunks. STT sees the full "Hello."
+STT first, then forward live chunks. STT receives the missing onset
+context as well; whether that changes a transcript is provider-dependent.
 
 ```mermaid
 flowchart LR
@@ -467,6 +469,18 @@ class MiniTurnDetector:
 
 ## Try breaking it
 
+Before involving a microphone or provider, run the deterministic frame
+trace:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/preroll_probe.py
+```
+
+Both traces include the frame that triggered `VADStartSpeaking` and the
+following live frame. Only `with_preroll` replays `cached-1` and
+`cached-2` first. That frame inclusion is the contract; any particular
+transcript change is a provider-dependent observation.
+
 Say the same breakers you tortured chapter 3 with ("the capital
 of France is... uh... Paris", "apples, bananas, pears", a yes/no
 question) and run the script **twice** — once with pre-roll on,
@@ -487,9 +501,11 @@ for which in ("preroll", "nopreroll"):
 
 You should see:
 
-- Fewer chopped first syllables in the `preroll` run.
-- The "uh… Paris" breaker now survives (the "uh" has speech energy,
-  so VAD stays on straight through).
+- The `preroll` run contains the cached leading audio; whether that
+  changes the transcript depends on what VAD initially missed and how
+  the STT provider decodes both versions.
+- The "uh… Paris" breaker remains one turn only when VAD stays active
+  through the pause. Pre-roll does not change the stop decision.
 - Lists are still fragile: commas are often below the speech
   threshold and VAD fires `VADStopSpeaking` between items.
 - New failures: a cough, a door slam, or keyboard clicks can

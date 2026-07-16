@@ -50,8 +50,8 @@ build movement (chapters 6-9) exists to close this gap.
 -detector plus a pre-roll ring buffer. The same parrot loop, now gated
 -on VAD turn boundaries instead of "500 ms since the last STT event."
 -
--Run with ``--no-preroll`` to hear the start-of-utterance truncation
--this chapter was designed to fix.
+-Run with ``--no-preroll`` to compare a stream that omits cached audio
+-received before VAD-on.
 +"""Chapter 5 — The blocking agent.
 +
 +Same pipeline as chapter 4, but instead of parroting the transcript
@@ -328,7 +328,7 @@ build movement (chapters 6-9) exists to close this gap.
 -    parser.add_argument(
 -        "--no-preroll",
 -        action="store_true",
--        help="Disable pre-roll; start-of-utterance will be clipped.",
+-        help="Disable pre-roll; omit cached frames received before VAD-on.",
 -    )
 -    args = parser.parse_args()
 -
