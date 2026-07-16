@@ -50,3 +50,5 @@ def test_interruption_lesson_does_not_call_local_delivery_a_playback_mark() -> N
     assert "`PlaybackMarkAck`" in readme
     assert "none proves sound reached a human ear" in readme
     assert "human reaction is not an exact clock" in normalized_exercises
+    assert "Interrupt exactly after one word" not in readme
+    assert "repeat several times" in readme

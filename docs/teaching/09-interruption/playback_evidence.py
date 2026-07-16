@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from easycat.runtime.capabilities import playback_acknowledgements
+from easycat.runtime.capabilities import (
+    playback_acknowledgements,
+    transport_reports_audio_delivery,
+)
 from easycat.transports.local import LocalTransport
 from easycat.transports.twilio_media import TwilioTransport
 
 
 def describe(transport: Any) -> dict[str, object]:
-    delivery_callbacks = bool(getattr(transport, "reports_audio_delivery", False))
+    delivery_callbacks = transport_reports_audio_delivery(transport)
     playback_marks = playback_acknowledgements(transport) is not None
     evidence: list[str] = []
     if delivery_callbacks:
