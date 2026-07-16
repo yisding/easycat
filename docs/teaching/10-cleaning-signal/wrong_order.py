@@ -6,8 +6,9 @@ bundle that looks healthy on a surface scan — but the journal
 shows neither one does anything useful.
 
     --mode nr-after-vad      NR runs *after* VAD has already decided.
-                             VAD's verdicts are unchanged → false-fires
-                             on keystrokes and fan noise persist.
+                             The ordering proves NR cannot affect that
+                             frame's VAD verdict; compare matched runs
+                             to measure any false-fire-rate difference.
 
     --mode aec-no-reference  AEC runs but no one ever calls
                              feed_reference(). The adaptive filter has
@@ -78,13 +79,13 @@ class MiniTurnDetector:
         journal,
         session_id: str,
         *,
-        record_raw_input: bool = False,
+        record_before_nr: bool = False,
         preroll_frames: int = PREROLL_FRAMES,
     ) -> None:
         self._vad = vad
         self._journal = journal
         self._session_id = session_id
-        self._record_raw_input = record_raw_input
+        self._record_before_nr = record_before_nr
         self._preroll: collections.deque[AudioChunk] = collections.deque(maxlen=preroll_frames)
         self._speaking = False
         self._frame_index = 0
@@ -93,10 +94,10 @@ class MiniTurnDetector:
         async for chunk in audio_iter:
             self._frame_index += 1
             events = [event async for event in self._vad.process(chunk)]
-            if self._record_raw_input:
+            if self._record_before_nr:
                 self._journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="vad.processed_raw",
+                    name="vad.processed_before_nr",
                     session_id=self._session_id,
                     data={
                         "stage": "vad",
@@ -122,8 +123,9 @@ class MiniTurnDetector:
 async def wrong_order_pipeline(transport, nr, aec, mode: str, journal, session_id):
     """Run NR + AEC, but in the wrong order or without a reference."""
     if mode == "nr-after-vad":
-        # VAD will run inside MiniTurnDetector on raw chunks. NR runs on
-        # whatever VAD passes through, *after* the verdict is recorded.
+        # VAD will run inside MiniTurnDetector before NR. AEC has already
+        # processed each chunk, so this is pre-NR input rather than raw mic
+        # audio. NR runs after the VAD verdict is recorded.
         # The journal records that NR ran but VAD never saw its output.
         frame_index = 0
         async for chunk in transport.receive_audio():
@@ -221,6 +223,22 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
         )
 
 
+async def _reap_completed_bot_task(bot_task, active_cancel, journal, session_id):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=session_id,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None
+
+
 async def coordinator(
     mic_queue, stt_factory, client, tts, transport, aec, session_id, journal, mode
 ):
@@ -231,17 +249,33 @@ async def coordinator(
     while True:
         tag, chunk = await mic_queue.get()
 
+        bot_task, active_cancel = await _reap_completed_bot_task(
+            bot_task, active_cancel, journal, session_id
+        )
+
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None:
+            if tag != "speech_started" or active_cancel is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=session_id,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            await transport.clear_audio()
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=session_id,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                await transport.clear_audio()
-            continue
+            bot_task = None
+            active_cancel = None
+            # Keep handling this start marker so the barge-in opens STT.
 
         if tag == "speech_started":
             if stt is None:
@@ -314,7 +348,7 @@ async def main() -> None:
         vad,
         journal,
         session_id,
-        record_raw_input=args.mode == "nr-after-vad",
+        record_before_nr=args.mode == "nr-after-vad",
     )
     client = AsyncOpenAI()
     tts = create_tts_provider(
@@ -333,7 +367,8 @@ async def main() -> None:
     await transport.connect()
     if args.mode == "nr-after-vad":
         print("Type loudly while you talk. NR is loaded but runs after VAD")
-        print("has already decided — keystrokes still fire VAD-on. Ctrl-C to stop.\n")
+        print("has already decided. Compare VAD events with a matched correct-order run.")
+        print("Ctrl-C to stop.\n")
     else:
         print("Use a speakerphone (no headphones) and ask the bot a long question.")
         print("AEC is loaded but never sees the TTS audio — bot will interrupt")
@@ -359,7 +394,7 @@ async def main() -> None:
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
     print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
     if args.mode == "nr-after-vad":
-        print("Check the journal: each `vad.processed_raw` record precedes the")
+        print("Check the journal: each `vad.processed_before_nr` record precedes the")
         print("matching `nr.applied_after_vad` frame index. NR's output went nowhere.")
     else:
         print("Check the journal: `aec.no_reference` is the smoking gun.")
