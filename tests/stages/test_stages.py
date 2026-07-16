@@ -660,6 +660,23 @@ class TestStageExecuteRecording:
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
 
+    async def test_agent_stage_skips_journal_metadata_without_journal(self, monkeypatch):
+        """The live agent path avoids replay-only work when journaling is disabled."""
+        stage = AgentStage(_StubAgent())
+        monkeypatch.setattr(
+            stage,
+            "snapshot_state",
+            lambda: pytest.fail("snapshot_state should not run without a journal"),
+        )
+        monkeypatch.setattr(
+            "easycat.stages.agent.journal_append_event",
+            lambda *args, **kwargs: pytest.fail("journal_append_event should not run"),
+        )
+
+        result = await stage.execute("hello", _make_ctx(), _make_turn())
+
+        assert result == "reply:hello"
+
     @pytest.mark.parametrize(
         ("stage", "input", "expected"),
         [

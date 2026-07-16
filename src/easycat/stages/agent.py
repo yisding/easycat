@@ -215,18 +215,21 @@ class AgentStage:
         ctx = self._journal_ctx(ctx)
         bridge = self._provider
         history_epoch = self._history_epoch
-        state_before = self.snapshot_state()
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            data_extra={"input": input if isinstance(input, str) else str(input)},
-        )
+        journal_enabled = ctx.journal is not None
+        input_text = input if isinstance(input, str) else str(input)
+        state_before = self.snapshot_state() if journal_enabled else None
+        start_sequence = None
+        if journal_enabled:
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                data_extra={"input": input_text},
+            )
 
         recorder = self._make_recorder(turn.id, ctx)
-        input_text = input if isinstance(input, str) else str(input)
         base_context = list(self._history) if self._tracks_history else []
         if (
             not self._tracks_history
@@ -282,51 +285,55 @@ class AgentStage:
                             # post-yield code is not a reliable audit boundary
                             # for text already handed to downstream TTS or text
                             # clients.
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={"type": "TEXT_DELTA", "text": text},
-                            )
+                            if journal_enabled:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={"type": "TEXT_DELTA", "text": text},
+                                )
                             if not (cancel_token and cancel_token.is_cancelled):
                                 accumulated.append(text)
                             yield event
                             continue
                         elif kind == "done":
                             if text:
+                                if journal_enabled:
+                                    journal_append_event(
+                                        ctx,
+                                        stage=self.name,
+                                        name="agent_delta",
+                                        turn_id=turn.id,
+                                        data_extra={"type": "DONE", "text": text},
+                                    )
+                                accumulated = [text]
+                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
+                            if journal_enabled:
                                 journal_append_event(
                                     ctx,
                                     stage=self.name,
                                     name="agent_delta",
                                     turn_id=turn.id,
-                                    data_extra={"type": "DONE", "text": text},
+                                    data_extra={
+                                        "type": "TOOL_STARTED",
+                                        "tool_name": event.tool_name,
+                                        "call_id": getattr(event, "call_id", ""),
+                                    },
                                 )
-                                accumulated = [text]
-                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={
-                                    "type": "TOOL_STARTED",
-                                    "tool_name": event.tool_name,
-                                    "call_id": getattr(event, "call_id", ""),
-                                },
-                            )
                         elif kind == "tool_result":
-                            journal_append_event(
-                                ctx,
-                                stage=self.name,
-                                name="agent_delta",
-                                turn_id=turn.id,
-                                data_extra={
-                                    "type": "TOOL_RESULT",
-                                    "call_id": getattr(event, "call_id", ""),
-                                    "result": getattr(event, "result", ""),
-                                },
-                            )
+                            if journal_enabled:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={
+                                        "type": "TOOL_RESULT",
+                                        "call_id": getattr(event, "call_id", ""),
+                                        "result": getattr(event, "result", ""),
+                                    },
+                                )
                         if kind == "done":
                             await close_stream_after_done(stream)
                             yield event
@@ -387,16 +394,17 @@ class AgentStage:
                     # state.
                     self._history.append({"role": "user", "content": input_text})
                     self._history.append({"role": "assistant", "content": final_text})
-                state_after = self.snapshot_state()
-                journal_append_event(
-                    ctx,
-                    stage=self.name,
-                    name="stage_complete",
-                    turn_id=turn.id,
-                    state_before=state_before,
-                    state_after=state_after,
-                    data_extra={"response": final_text, "elapsed_ms": elapsed_ms},
-                )
+                if journal_enabled:
+                    state_after = self.snapshot_state()
+                    journal_append_event(
+                        ctx,
+                        stage=self.name,
+                        name="stage_complete",
+                        turn_id=turn.id,
+                        state_before=state_before,
+                        state_after=state_after,
+                        data_extra={"response": final_text, "elapsed_ms": elapsed_ms},
+                    )
 
     # ── Post-turn framework-state mutations ─────────────────────
     #
