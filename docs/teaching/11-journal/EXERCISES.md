@@ -29,27 +29,54 @@ write down **three** things that *could* go wrong on a flaky day,
 and for each one, name the record you'd query first.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. "Agent stalled" → compare `stt.final.data.t_ms` with
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+"Agent stalled" → compare `stt.final.data.t_ms` with
    `agent.first_token.data.t_ms`. Anything > 1 s is suspicious; the
    later first-token → audio interval belongs to downstream sentence
    accumulation and TTS.
-2. "STT misheard" → look for short or empty `stt.final` text
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+"STT misheard" → look for short or empty `stt.final` text
    followed by a confused next turn. Pair with `stt.partial`
    sequence to see if the model wavered.
-3. "Network blip during streaming" → look for `ws.reconnect.*`
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+"Network blip during streaming" → look for `ws.reconnect.*`
    records (chapter 11's fixture-only events; production emits
    real ones). A filtered sequence gap is expected, and an unfiltered
    gap can reflect bounded retention or incomplete export; verify
    coverage before treating it as an in-flight failure.
-4. "Smart-turn fired wrong" → look for `smart_turn.classify`
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+"Smart-turn fired wrong" → look for `smart_turn.classify`
    records where `confirmed=True` but the next event sequence
    shows the user continued speaking immediately after.
-5. "Memory pressure" → look for gaps in `t_ms` that don't line up
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+"Memory pressure" → look for gaps in `t_ms` that don't line up
    with anything in the audio. GC pauses or thread-pool stalls
    show up as record-to-record gaps with no work between.
 
@@ -72,19 +99,34 @@ Dump the bundle. Then: can a classmate (or your future self
 tomorrow morning) find the bug by reading only the bundle?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The best planted bugs are the ones where the *output looks
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The best planted bugs are the ones where the *output looks
    wrong but the journal looks "fine"*. That's the hardest debug
    shape and the one the journal is built for.
-2. After the planted bug, also write a one-paragraph
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+After the planted bug, also write a one-paragraph
    "investigation guide" that points at the records you'd query
    first. Compare with your classmate's actual investigation
    path.
-3. Production bugs in voice pipelines almost always look like
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Production bugs in voice pipelines almost always look like
    this: the audio sounds off, the logs are silent, only the
    journal tells you what actually happened.
 
@@ -108,18 +150,33 @@ for r in session.journal.filter_by_turn(turn_id):
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `filter_by_stage` is convenient for "show me everything in one
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+`filter_by_stage` is convenient for "show me everything in one
    stage". `filter_by_turn` groups records causally — important
    on multi-turn bundles.
-2. `lookup_by_sequence(N)` is the bounded random-access primitive
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+`lookup_by_sequence(N)` is the bounded random-access primitive
    on a live journal backend — useful when one record references
    another by sequence number.
-3. `filter_by_stage` and `filter_by_turn` return materialized lists.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`filter_by_stage` and `filter_by_turn` return materialized lists.
    Stage filtering scans the journal because `stage` lives inside
    record data; do not mistake the read-only surface for a lazy one.
 
@@ -140,20 +197,41 @@ uv run python docs/teaching/11-journal/investigate.py \
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. A zero marginal count means that one filter is invalid for the
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+A zero marginal count means that one filter is invalid for the
    bundle. Non-zero marginals plus zero combined matches mean the
    intersection—not the individual values—is empty.
-2. Leave off `--require-match` when absence itself is a legitimate
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Leave off `--require-match` when absence itself is a legitimate
    interactive finding. Add it in automation so a typo cannot pass.
-3. `--limit` changes presentation, not match coverage. The CLI reports
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+`--limit` changes presentation, not match coverage. The CLI reports
    the full match count and only prints a truncation line when hidden
    matches really exist.
-4. Do not infer dropped journal records from a filtered sequence gap;
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Do not infer dropped journal records from a filtered sequence gap;
    inspect the unfiltered source and its retention/export contract.
 
 </details>
@@ -169,20 +247,41 @@ uv run python docs/teaching/11-journal/payload_schema_probe.py
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `JournalRecord` declares stable envelope fields, including integer
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`JournalRecord` declares stable envelope fields, including integer
    `sequence`, string `session_id` / `name`, `JournalRecordKind`, and
    `data: dict[str, Any]`.
-2. `dict[str, Any]` does not promise that `data["t_ms"]` is numeric. The
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`dict[str, Any]` does not promise that `data["t_ms"]` is numeric. The
    journal preserves the malformed string exactly as it was appended.
-3. Record emitters own payload schemas. A consumer that drives automation
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Record emitters own payload schemas. A consumer that drives automation
    must validate the fields and domain constraints it depends on—for this
    metric, reject strings, booleans, infinity, and NaN.
-4. JSON avoids regex parsing, but serialization alone is not schema
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+JSON avoids regex parsing, but serialization alone is not schema
    validation. Use one stable schema per record name and version intentional
    changes when downstream consumers share that contract.
 
@@ -206,21 +305,48 @@ Explain why sequence 1 belongs in the diagnostic context but not in the
 strict turn reconstruction.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `filter_by_turn` returns sequences 8–13 for turn 2. Sequence 1 has
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`filter_by_turn` returns sequences 8–13 for turn 2. Sequence 1 has
    `turn_id=None`, so strict isolation correctly excludes it.
-2. `audio.config.data["aec"] == "off"` is session configuration that
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`audio.config.data["aec"] == "off"` is session configuration that
    explains false barge-in events across both turns.
-3. The context join uses session IDs discovered from the target turn.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+The context join uses session IDs discovered from the target turn.
    “Unscoped” does not mean “global”: records from another session must
    stay excluded.
-4. `--include-session-context` requires `--turn`; otherwise there is no
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+`--include-session-context` requires `--turn`; otherwise there is no
    target session to join safely.
-5. Use strict turn scope to reconstruct causality. Add same-session
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+Use strict turn scope to reconstruct causality. Add same-session
    context only when investigating configuration or lifecycle causes.
 
 </details>

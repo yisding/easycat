@@ -28,21 +28,42 @@ re-record, and play back. Is speech still intelligible? What about
 music? (Try humming a song while the recording window is open.)
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. For an ideally band-limited signal, an 8 kHz sample rate can represent
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+For an ideally band-limited signal, an 8 kHz sample rate can represent
    frequencies below the 4 kHz Nyquist boundary. A real anti-alias filter
    must attenuate frequencies before that boundary; it is not a brick wall.
-2. Narrowband G.711 telephony intentionally filters speech to roughly
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Narrowband G.711 telephony intentionally filters speech to roughly
    300–3400 Hz before sampling at 8 kHz. Speech can remain intelligible
    while losing high-frequency detail and cues; “intelligible” does not
    mean “unchanged” or “optimal for every STT model.”
-3. Listen for lost brightness, “air,” consonant detail, and sibilance.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Listen for lost brightness, “air,” consonant detail, and sibilance.
    Content the front end removes cannot be recovered by later upsampling.
-4. The byte math also changed: `3 s × 8000 × 2 × 1 = 48_000 B`.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+The byte math also changed: `3 s × 8000 × 2 × 1 = 48_000 B`.
    You cut the raw PCM byte rate in half; only listening and downstream
    measurements can tell you whether the quality tradeoff is acceptable.
 
@@ -77,25 +98,52 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `LocalTransport` defaults its capture/playback pipeline to 24 kHz, while
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`LocalTransport` defaults its capture/playback pipeline to 24 kHz, while
    this chapter's separate raw-`sounddevice` demo explicitly records at 16 kHz.
    Deepgram's streaming STT target also defaults to 16 kHz, and the provider
    adapter resamples at that input boundary when its upstream format differs.
-2. WebRTC receives and sends 48 kHz media frames, but its default pipeline
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+WebRTC receives and sends 48 kHz media frames, but its default pipeline
    target is 16 kHz. Those are two boundaries of one transport, not a
    contradiction.
-3. OpenAI returns provider-native 24 kHz PCM. A default WebRTC session first
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+OpenAI returns provider-native 24 kHz PCM. A default WebRTC session first
    normalizes that to its resolved 16 kHz TTS output, then resamples to 48 kHz
    media; a Local session already has a matching 24 kHz target.
-4. Twilio's wire is 8 kHz μ-law while EasyCat's default internal pipeline
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Twilio's wire is 8 kHz μ-law while EasyCat's default internal pipeline
    target is 16 kHz PCM. Decoding and upsampling make the representation
    compatible but do not restore telephone-band frequencies.
-5. Change `DeepgramSTTConfig(sample_rate=...)` in a scratch copy of the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+Change `DeepgramSTTConfig(sample_rate=...)` in a scratch copy of the
    probe. You changed one provider-input boundary, not the capture, TTS, or
    transport wire formats.
 
@@ -113,24 +161,57 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. A provider config default describes the object before `EasyConfig`
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 6</summary>
+
+A provider config default describes the object before `EasyConfig`
    resolves the whole session. It is not the final transport boundary.
-2. With alignment enabled, untouched defaults follow the transport:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 6</summary>
+
+With alignment enabled, untouched defaults follow the transport:
    Local 24 kHz, WebSocket/WebRTC 16 kHz, and Twilio 8 kHz output.
-3. ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 6</summary>
+
+ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
    requests 16 kHz from the provider and exposes 8 kHz transport output
    after the adapter's final resample.
-4. OpenAI returns fixed 24 kHz PCM even when EasyCat's resolved output target
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 6</summary>
+
+OpenAI returns fixed 24 kHz PCM even when EasyCat's resolved output target
    is 8 or 16 kHz. `TTSBase` performs that post-provider normalization.
-5. The `twilio_explicit_16k_preserved` control proves explicit caller intent
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 6</summary>
+
+The `twilio_explicit_16k_preserved` control proves explicit caller intent
    wins over automatic default alignment. Twilio still converts that PCM to
    its 8 kHz μ-law wire format later.
-6. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 6 of 6</summary>
+
+The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
    Disable alignment only when you deliberately own the downstream format
    conversion or need a provider-specific output.
 

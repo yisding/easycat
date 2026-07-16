@@ -145,21 +145,32 @@ sync with the chapter's source code and ladder order:
   Together these blocks make the narrative → practice → recall → next-chapter
   loop explicit while deriving all chapter links from ladder order.
 
-* Hand-authored exercise hints concealed until the learner attempts the task::
+* Hand-authored exercise hints revealed progressively between attempts::
 
       <!-- BEGIN auto:exercise-hints -->
-      <details>
-      <summary>Reveal hints after your first attempt</summary>
-
       **Hints**
 
-      1. The hand-authored hint content stays here.
+      After your first attempt, open Hint 1 only. Try again before opening
+      the next hint.
+
+      <details markdown="1">
+      <summary>Hint 1 of 2</summary>
+
+      The hand-authored hint content stays here.
+
+      </details>
+
+      <details markdown="1">
+      <summary>Hint 2 of 2</summary>
+
+      Each numbered hint gets its own disclosure.
 
       </details>
       <!-- END auto:exercise-hints -->
 
-  The renderer preserves the hint content while adding or refreshing the
-  disclosure wrapper, so answer cues do not appear before the first attempt.
+  The renderer preserves each numbered hint while adding or refreshing one
+  disclosure per clue. Learners make a fresh attempt between hints instead of
+  exposing the whole sequence after the first try.
 
 * A closed-book retrieval gate under every self-check heading::
 
@@ -287,15 +298,28 @@ EXERCISE_COMPLETION_RE = re.compile(
     re.DOTALL,
 )
 EXERCISE_HINTS_RE = re.compile(
-    r"(?P<begin><!-- BEGIN auto:exercise-hints -->)\n"
-    r"<details(?: markdown=\"1\")?>\n"
-    r"<summary>[^\n]*</summary>\n\n"
-    r"\*\*Hints\*\*\n\n"
-    r"(?P<body>.*?)\n"
-    r"</details>\n"
+    r"(?P<begin><!-- BEGIN auto:exercise-hints -->)"
+    r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:exercise-hints -->)",
     re.DOTALL,
 )
+LEGACY_EXERCISE_HINTS_RE = re.compile(
+    r"<details(?: markdown=\"1\")?>\n"
+    r"<summary>[^\n]*</summary>\n\n"
+    r"\*\*Hints\*\*\n\n"
+    r"(?P<body>.*?)\n\n?"
+    r"</details>",
+    re.DOTALL,
+)
+HINT_DISCLOSURE_RE = re.compile(
+    r"<details markdown=\"1\">\n"
+    r"<summary>Hint (?P<number>\d+) of (?P<total>\d+)</summary>\n\n"
+    r"(?P<body>.*?)\n"
+    r"</details>",
+    re.DOTALL,
+)
+NUMBERED_HINT_RE = re.compile(r"^(?P<number>\d+)\. ", re.MULTILINE)
+MARKDOWN_FENCE_RE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>[^\n]*)$")
 BARE_EXERCISE_HINTS_RE = re.compile(
     r"^\*\*Hints\*\*\n\n(?P<body>.*?)(?=^## )",
     re.DOTALL | re.MULTILINE,
@@ -583,16 +607,82 @@ def render_exercise_completion(chapter: Chapter) -> str:
 
 
 def render_exercise_hints(body: str) -> str:
+    hints = _split_numbered_hints(body)
+    total = len(hints)
+    sections = [
+        "<!-- BEGIN auto:exercise-hints -->",
+        "**Hints**",
+        "",
+        "After your first attempt, open Hint 1 only. Close it and try again before opening",
+        "the next hint; keep each attempt in your evidence record.",
+    ]
+    for number, hint in enumerate(hints, start=1):
+        hint_content = NUMBERED_HINT_RE.sub("", hint, count=1)
+        sections.extend(
+            [
+                "",
+                '<details markdown="1">',
+                f"<summary>Hint {number} of {total}</summary>",
+                "",
+                hint_content,
+                "",
+                "</details>",
+            ]
+        )
+    sections.append("<!-- END auto:exercise-hints -->")
+    return "\n".join(sections)
+
+
+def _split_numbered_hints(body: str) -> list[str]:
     body = body.strip()
-    return (
-        "<!-- BEGIN auto:exercise-hints -->\n"
-        '<details markdown="1">\n'
-        "<summary>Reveal hints after your first attempt</summary>\n\n"
-        "**Hints**\n\n"
-        f"{body}\n\n"
-        "</details>\n"
-        "<!-- END auto:exercise-hints -->"
-    )
+    starts: list[tuple[int, int]] = []
+    active_fence: tuple[str, int] | None = None
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        if fence := MARKDOWN_FENCE_RE.match(content):
+            marker = fence.group("marker")
+            fence_key = (marker[0], len(marker))
+            if active_fence is None:
+                active_fence = fence_key
+            elif (
+                fence_key[0] == active_fence[0]
+                and fence_key[1] >= active_fence[1]
+                and not fence.group("rest").strip()
+            ):
+                active_fence = None
+        elif active_fence is None and (numbered := NUMBERED_HINT_RE.match(content)):
+            starts.append((offset, int(numbered.group("number"))))
+        offset += len(line)
+
+    if not starts or starts[0][0] != 0:
+        raise ValueError("exercise hints must start with a numbered `1. ` item")
+    numbers = [number for _, number in starts]
+    expected = list(range(1, len(starts) + 1))
+    if numbers != expected:
+        raise ValueError(f"exercise hints must be sequential; found {numbers}")
+    return [
+        body[start : starts[index + 1][0]].strip()
+        if index + 1 < len(starts)
+        else body[start:].strip()
+        for index, (start, _) in enumerate(starts)
+    ]
+
+
+def _exercise_hint_source(rendered_body: str) -> str:
+    rendered_body = rendered_body.strip()
+    if legacy := LEGACY_EXERCISE_HINTS_RE.fullmatch(rendered_body):
+        return legacy.group("body").strip()
+    disclosures = list(HINT_DISCLOSURE_RE.finditer(rendered_body))
+    if disclosures:
+        hints = []
+        for disclosure in disclosures:
+            content = disclosure.group("body").strip()
+            if NUMBERED_HINT_RE.match(content) is None:
+                content = f"{disclosure.group('number')}. {content}"
+            hints.append(content)
+        return "\n\n".join(hints)
+    return rendered_body
 
 
 def render_self_check_protocol() -> str:
@@ -930,7 +1020,8 @@ def _ensure_exercise_hints(text: str) -> str:
 
     def _stash_existing(match: re.Match[str]) -> str:
         placeholder = f"EASYCAT_STASHED_EXERCISE_HINT_{len(stashed)}"
-        stashed[placeholder] = render_exercise_hints(match.group("body"))
+        source = _exercise_hint_source(match.group("body"))
+        stashed[placeholder] = render_exercise_hints(source)
         return placeholder
 
     protected = EXERCISE_HINTS_RE.sub(_stash_existing, text)

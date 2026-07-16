@@ -37,17 +37,32 @@ For each value × sentence pair, write down: **false fire?**
 after you finish).
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. There is no value at which all six combinations succeed. That's
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+There is no value at which all six combinations succeed. That's
    the chapter.
-2. The closest sweet spot for *your* voice and *your* environment
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The closest sweet spot for *your* voice and *your* environment
    is your personal compromise. Even that compromise is dominated
    by a real VAD on the same hardware.
-3. The asymmetric pain: false fires interrupt the user (very bad
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+The asymmetric pain: false fires interrupt the user (very bad
    UX); sluggish bots just feel slow (bad UX). Voice-product
    teams skew toward sluggish for that reason — the chapter 4 fix
    gets you out of the tradeoff entirely.
@@ -80,25 +95,52 @@ the former at least the latter rather than exactly equal? Compare
 latter is `consumer_backlog_ms`, and what work was the parrot loop doing then?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Every STT event resets `asyncio.wait_for`, including a final. The
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+Every STT event resets `asyncio.wait_for`, including a final. The
    trigger is therefore the latest `stt.partial` or `stt.final`, not
    necessarily the latest partial.
-2. `asyncio.wait_for(..., timeout=SILENCE_TIMEOUT_S)` resumes no
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`asyncio.wait_for(..., timeout=SILENCE_TIMEOUT_S)` resumes no
    earlier than the deadline. Event-loop scheduling adds the reported
    `scheduler_overshoot_ms`, so an exact equality is not a valid
    invariant.
-3. `stt.received` marks provider ingress; the correlated `stt.partial` marks
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+`stt.received` marks provider ingress; the correlated `stt.partial` marks
    consumer dequeue. Their shared `event_id` prevents repeated text from being
    matched by guesswork.
-4. The parrot awaits `speak()` before it consumes another queued STT event.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+The parrot awaits `speak()` before it consumes another queued STT event.
    `post_fire_consumer_gap_ms` therefore includes blocked consumer time;
    `post_fire_ingress_gap_ms` does not.
-5. The "Paris" partial is delayed, not dropped. After TTS returns, the parrot
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+The "Paris" partial is delayed, not dropped. After TTS returns, the parrot
    consumes it and may fire again on that fragment. Production interruption
    handling in chapter 9 instead cancels or ignores current bot audio and
    routes the continuing user turn deliberately.
@@ -119,14 +161,23 @@ three. Predict the counts each time. Which result proves that a speaker played
 the audio?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `recipes.speak()` preserves every `send_audio()` acceptance result instead
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 2</summary>
+
+`recipes.speak()` preserves every `send_audio()` acceptance result instead
    of treating a completed coroutine as delivery.
-2. Rejection is actionable drop evidence. Acceptance means scheduled for
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 2</summary>
+
+Rejection is actionable drop evidence. Acceptance means scheduled for
    delivery, not rendered by a device or heard by a person.
 
 </details>
@@ -145,25 +196,52 @@ microphone feeder without reporting an error, why does `failed_event_end`
 propagate, and which two cases correctly omit `stt.end`?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The transport and STT objects exist before `connect()`, so their final
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The transport and STT objects exist before `connect()`, so their final
    cleanup is registered first. A logical STT stream exists only after
    `start_stream()` returns.
-2. `TaskGroup` cancels siblings when a child raises; it does not cancel them
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`TaskGroup` cancels siblings when a child raises; it does not cancel them
    merely because one child returns normally.
-3. The parrot consumer returns only after it drains the STT listener's `None`
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+The parrot consumer returns only after it drains the STT listener's `None`
    sentinel. Its wrapper then raises `ParrotEventStreamEndedError`, causing the
    infinite feeder to be cancelled and joined.
-4. `except* ParrotEventStreamEndedError` handles that private terminal signal.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+`except* ParrotEventStreamEndedError` handles that private terminal signal.
    A provider `Error` observed before stream exhaustion makes the listener
    raise the underlying failure instead of queueing the normal sentinel. A real
    feed, listener, or parrot failure remains in the exception group and still
    propagates after cleanup.
-5. Removing the timeout would fix the intended Chapter 3 lesson. Removing
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+Removing the timeout would fix the intended Chapter 3 lesson. Removing
    `AsyncExitStack` or `TaskGroup` would instead reintroduce unrelated bugs.
 
 </details>

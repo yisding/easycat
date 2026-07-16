@@ -31,21 +31,42 @@ Compare `stt_final_to_first_token_ms`,
 `stt_final_to_first_audio_ms`, and `sentence_tts_ms`.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. A slower model primarily grows `stt_final_to_first_token_ms`:
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+A slower model primarily grows `stt_final_to_first_token_ms`:
    that is provider/model startup before the first non-empty delta.
-2. `first_token_to_first_audio_ms` begins **after** model startup. It
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`first_token_to_first_audio_ms` begins **after** model startup. It
    covers accumulating a complete speakable sentence plus synthesising
    and accepting its first audio. Response wording may move it, but the
    model's time-to-first-token is not inside this interval.
-3. The total `stt_final_to_first_audio_ms` is the actual software
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The total `stt_final_to_first_audio_ms` is the actual software
    start-of-reply metric and should equal the first two intervals when
    all three milestones exist.
-4. `sentence_tts_ms` shows downstream synthesis cost per sentence.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+`sentence_tts_ms` shows downstream synthesis cost per sentence.
    The source's concurrent producer/consumer structure creates overlap;
    these closed composite durations alone do not prove the overlap.
 
@@ -59,19 +80,34 @@ markdown reaches TTS. Ask the bot for a *bulleted list of three
 things*. Listen.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. You will hear *"asterisk asterisk bold asterisk asterisk"* or
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+You will hear *"asterisk asterisk bold asterisk asterisk"* or
    *"hyphen item one"*. This is the single most common voice-bot
    shipping bug.
-2. The agent's history (`messages`) still contains the original
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The agent's history (`messages`) still contains the original
    markdown text — only the TTS pipe gets stripped. Why does the
    chapter wire it this way? (Because the LLM next turn benefits
    from the structured prior; the user does not.)
-3. Production wires this through
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Production wires this through
    `easycat.llm_output_processing.MarkdownStripProcessor` (chapter
    14) — exact same logic, plumbed through `output_processors`.
 
@@ -86,19 +122,34 @@ plug in Bluetooth headphones. Watch the per-sentence latency drift
 over the answer.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `transport.send_audio` returns as soon as the chunk is
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+`transport.send_audio` returns as soon as the chunk is
    *queued*, not when it plays. Sentence N+1 finishes synth long
    before sentence N finishes playing.
-2. Memory usage of the speaker queue rises linearly during the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Memory usage of the speaker queue rises linearly during the
    answer. Production uses `BoundedAudioQueue` with `DROP_OLDEST`
    to keep this in check during long sessions; the teaching
    version doesn't.
-3. This is exactly the failure mode chapter 9c's interruption
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+This is exactly the failure mode chapter 9c's interruption
    estimator runs into: "what's in the queue" ≠ "what the user
    heard" because the queue holds future audio.
 
@@ -117,17 +168,32 @@ Before looking at the JSON, predict the event order for a normal turn,
 a cancellation after `stt.start`, and a failure in `tts.close`.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The per-turn STT must record `stt.end` before `stt.close` in both
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The per-turn STT must record `stt.end` before `stt.close` in both
    the normal and cancelled paths. Ending a protocol stream is not the
    same operation as releasing its provider.
-2. The process-wide resources unwind in reverse registration order:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The process-wide resources unwind in reverse registration order:
    TTS, client, VAD, then transport.
-3. `cleanup_failure.events` should still include all four process-wide
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`cleanup_failure.events` should still include all four process-wide
    callbacks. Replace `AsyncExitStack` in the probe with four plain
    sequential `await` calls and observe which events disappear when
    `tts.close` raises.
@@ -147,17 +213,32 @@ Then change the mixed case from `[False, True]` to `[True, False]` and
 predict which fields change before re-running it.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Both mixed cases keep the same reply-wide accepted and rejected
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Both mixed cases keep the same reply-wide accepted and rejected
    totals, but the per-sentence counts move.
-2. With `[False, True]`, the first accepted chunk may arrive in a later
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+With `[False, True]`, the first accepted chunk may arrive in a later
    sentence. The turn gap must still end at that acceptance, not at the
    first rejected offer.
-3. Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
    first-audio gap, but only one proves that TTS produced audio.
 
 </details>

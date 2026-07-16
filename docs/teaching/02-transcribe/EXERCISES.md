@@ -25,21 +25,42 @@
 where the wrong guess stuck. Compare it to the final.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The bundle is `runs/*.bundle`. Open it with
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The bundle is `runs/*.bundle`. Open it with
    `easycat.debug.testing.load_bundle`.
-2. Filter records by `name == "stt.partial"` and
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Filter records by `name == "stt.partial"` and
    `name == "stt.final"`. You should see the sequence of guesses
    converging.
-3. The interesting case is when the *final* commits to a wrong
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The interesting case is when the *final* commits to a wrong
    guess — meaning the provider had a better partial at some
    earlier point and threw it away. That's a recall failure (the
    right hypothesis was on the table; the LM-prior overruled it).
-4. The opposite case is also interesting: the final is *right* but
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+The opposite case is also interesting: the final is *right* but
    the user saw wrong-looking partials flap by. That's why chapter 6
    reinforces "never commit spoken output from a partial."
 
@@ -89,18 +110,33 @@ for r in structured:
 When does each shape pay off?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Linear iteration is good for "I want to see what happened in
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Linear iteration is good for "I want to see what happened in
    order." Structured query is good for "I want all records of
    one kind, ordered correctly."
-2. Chapter 11 leans entirely on the structured query shape because
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Chapter 11 leans entirely on the structured query shape because
    real debugging is "all the TTS spans in this turn" not "every
    record from t=0."
-3. `load_bundle()` returns a `RunBundle`; its query helpers return
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`load_bundle()` returns a `RunBundle`; its query helpers return
    dictionaries just like `records()`. A live session journal exposes
    a `JournalView` whose query helpers return typed `JournalRecord`
    objects. Chapter 11 compares those two representations explicitly.
@@ -121,15 +157,30 @@ Change the second partial to "cancel my timer" while leaving the final as
 consumers may observe the cancellation hypothesis, and which must wait?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. A caption can replace text freely; no external state was committed.
-2. Speculation is safe only when it is keyed, cancellable, or discardable when
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+A caption can replace text freely; no external state was committed.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Speculation is safe only when it is keyed, cancellable, or discardable when
    the hypothesis changes.
-3. Tool calls, database writes, agent-history commits, and spoken audio cross
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Tool calls, database writes, agent-history commits, and spoken audio cross
    the irreversible boundary. Dispatch those from `FINAL`, not `PARTIAL`.
 
 </details>
@@ -148,15 +199,30 @@ helper's final `close_if_supported(owned_stt)` call temporarily and rerun. Which
 contract breaks, and why would a persistent provider make that visible?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The logical stream ends in both cases because this helper owns the one-file
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The logical stream ends in both cases because this helper owns the one-file
    transcription operation.
-2. The helper-created STT's final cleanup also belongs to the helper.
-3. A caller-supplied STT may be reused for another operation, so closing it
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The helper-created STT's final cleanup also belongs to the helper.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+A caller-supplied STT may be reused for another operation, so closing it
    would violate the caller's ownership.
 
 </details>
@@ -169,20 +235,47 @@ contract breaks, and why would a persistent provider make that visible?
 and which does not?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `recording.complete.data` contains the filename, duration, and
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`recording.complete.data` contains the filename, duration, and
    `retention="temporary"`; it does not persist the absolute system-temp path.
-2. `recording.cleaned.data.deleted` is `true` because bundle export happens
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`recording.cleaned.data.deleted` is `true` because bundle export happens
    after the `TemporaryDirectory` exits. The raw WAV is not a bundle artifact.
-3. `stt.final.data.text` does survive. A transcript is PII-bearing even when
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+`stt.final.data.text` does survive. A transcript is PII-bearing even when
    raw audio is gone, so protect and expire the bundle accordingly.
-4. Temporarily make `transcribe_file()` raise in a scratch copy. The context
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Temporarily make `transcribe_file()` raise in a scratch copy. The context
    still removes the WAV, although no success bundle is exported.
-5. If you intentionally retain audio, use an explicit project path or
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+If you intentionally retain audio, use an explicit project path or
    artifact store with consent and a deletion policy. An untracked temp file
    is not a retention strategy.
 
@@ -204,26 +297,59 @@ an audio-feed failure. Then replace the `TaskGroup` in a scratch copy of
 disappears?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The transport and provider objects exist before `connect()` returns, so
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 6</summary>
+
+The transport and provider objects exist before `connect()` returns, so
    their final cleanup is registered before that fallible await.
-2. In `partial_connect_failure`, the input stream starts before output startup
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 6</summary>
+
+In `partial_connect_failure`, the input stream starts before output startup
    fails. `transport.input.stop` proves the partially acquired device is still
    released.
-3. `end_stream()` is registered only after `start_stream()` succeeds. A start
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 6</summary>
+
+`end_stream()` is registered only after `start_stream()` succeeds. A start
    failure must close the provider and disconnect the transport, but it did
    not open a logical stream that needs ending.
-4. In the feed failure, `TaskGroup` cancels and joins the blocked event
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 6</summary>
+
+In the feed failure, `TaskGroup` cancels and joins the blocked event
    consumer first. `stt.events.cancelled` must therefore precede every
    resource-cleanup event.
-5. The propagated feed error is an `ExceptionGroup` because `TaskGroup`
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 6</summary>
+
+The propagated feed error is an `ExceptionGroup` because `TaskGroup`
    preserves concurrent failures. The probe unwraps its first root message for
    compact JSON; production code may handle groups with `except*`.
-6. `AsyncExitStack` and `TaskGroup` solve different problems: resource
+
+</details>
+
+<details markdown="1">
+<summary>Hint 6 of 6</summary>
+
+`AsyncExitStack` and `TaskGroup` solve different problems: resource
    ownership versus task ownership. A correct streaming scope needs both.
 
 </details>

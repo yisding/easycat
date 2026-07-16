@@ -25,19 +25,34 @@ filler ends and before the answer arrives. Add a "still working on
 it" filler at the 2.5-second mark.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The cleanest place to add this is inside the tool-call branch
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The cleanest place to add this is inside the tool-call branch
    of `run_agent_streaming`, after enqueueing the first filler. A
    `asyncio.create_task` that sleeps then enqueues a second
    filler works; cancel it once the tool returns.
-2. The journal already records `tool.call.started` and
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The journal already records `tool.call.started` and
    `tool.call.result`. Use the gap between them as the timing
    reference.
-3. Voice-UX research treats a single filler as enough up to ~2 s.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Voice-UX research treats a single filler as enough up to ~2 s.
    Past that, periodic updates ("still checking", "almost there")
    are the right pattern. Avoid the temptation to *narrate* —
    don't say "I'm still calling the weather API."
@@ -61,24 +76,51 @@ this a deferred session action rather than a tool whose result must
 shape the current response?*
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The test is whether the current response **depends on the result**.
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The test is whether the current response **depends on the result**.
    If yes, use an inline tool so the result informs the next token. If
    the operation is a deferred session/transport/compliance side effect,
    enqueue an action after the turn and observe its lifecycle separately.
-2. `EndCallAction` — there is nothing after the call ends. The
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`EndCallAction` — there is nothing after the call ends. The
    LLM doesn't need to know "I successfully hung up."
-3. `TransferCallAction`, `SendDTMFAction`, and `SendSMSAction` are
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+`TransferCallAction`, `SendDTMFAction`, and `SendSMSAction` are
    transport side effects performed after the spoken turn. Their success
    or failure is journaled; it does not shape the already-produced reply.
-4. `AddToDNCAction` / `RemoveFromDNCAction` mutate the compliance
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+`AddToDNCAction` / `RemoveFromDNCAction` mutate the compliance
    store through `CoreSessionActionExecutor`. The user-facing
    acknowledgement comes first; the auditable store write follows.
-5. `CustomAction` is an escape hatch, not an automatic classification.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+`CustomAction` is an escape hatch, not an automatic classification.
    The discipline is: if you'd be tempted to feed the result back to
    the LLM, make it a tool instead.
 
@@ -91,20 +133,35 @@ shape the current response?*
 forecast). Verify none of it reaches TTS.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The chapter's `run_agent_streaming` already routes tool deltas
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The chapter's `run_agent_streaming` already routes tool deltas
    away from `sentence_queue` — `delta.tool_calls` accumulates
    into a separate buffer (`tool_calls`), `delta.content` goes to
    the sentence splitter. Confirm this in the code.
-2. If a leak happened in your own code, the symptom would be TTS
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+If a leak happened in your own code, the symptom would be TTS
    reading `{ "temperature": 17 }` aloud — curly braces and all.
    Walk the stream until you find a branch that's accumulating
    tool deltas into the same buffer as content.
-3. The structural defense is `MarkdownStripProcessor` (and friends
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+The structural defense is `MarkdownStripProcessor` (and friends
    in chapter 14's output-processor stack) — but the *real*
    defense is keeping the streams separate at parse time. By the
    time it's reached TTS it's already too late.
@@ -125,19 +182,40 @@ to `[True, False]`. Predict the first-audio kind and the two TTS
 records before re-running it.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `filler_enqueued` stays true in both runs. It records the queueing
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`filler_enqueued` stays true in both runs. It records the queueing
    policy, not transport acceptance.
-2. With `[False, True]`, the filler record proves one rejected chunk;
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+With `[False, True]`, the filler record proves one rejected chunk;
    the first accepted reply chunk owns `tts.first_audio`.
-3. With `[True, False]`, the filler is scheduled for delivery and owns
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+With `[True, False]`, the filler is scheduled for delivery and owns
    `tts.first_audio`, while the final reply is rejected. Neither case
    proves what the speaker rendered or the user heard.
-4. Follow `tool_call_id` from `tool.call.started` to
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Follow `tool_call_id` from `tool.call.started` to
    `tool.call.result` and the filler-kind `stage.tts.execute` record.
    Reply-kind TTS records intentionally have no tool-call ID.
 

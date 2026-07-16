@@ -48,29 +48,56 @@ for which in ("preroll", "nopreroll"):
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The deterministic guarantee is frame routing: without pre-roll,
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The deterministic guarantee is frame routing: without pre-roll,
    audio received before `VADStartSpeaking` is absent from the STT
    stream; with pre-roll, up to the configured 300 ms is replayed in
    order before the trigger frame. How much leading speech VAD misses
    varies by utterance, backend, and audio conditions—it is not a fixed
    ~100 ms.
-2. Transcript and confidence changes are observations, not invariants.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+Transcript and confidence changes are observations, not invariants.
    The no-pre-roll run may mis-hear a leading word ("Hello" → "Elo"),
    while another run may transcribe both versions identically.
-3. Pre-roll fixes turn **start** clipping; it does not change endpointing.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Pre-roll fixes turn **start** clipping; it does not change endpointing.
    The "uh… Paris" breaker stays in one turn only if VAD remains active
    through the pause. If VAD emits `VADStopSpeaking`, the detector still
    splits it.
-4. The comma list ("apples, bananas, pears") is still fragile —
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+The comma list ("apples, bananas, pears") is still fragile —
    commas are often 300-500 ms of *real* silence below the speech
    threshold, so VAD drops out between items. Smart-turn (ch 8)
    is the right fix for that one.
-5. The new failure mode: VAD false-fires on coughs, door slams,
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+The new failure mode: VAD false-fires on coughs, door slams,
    keyboard typing. Chapter 10's NR is the answer.
 
 </details>
@@ -89,18 +116,33 @@ or fire correctly? Then explain in one sentence why a real VAD
 (Silero) gets the same case right.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The threshold has no learned model of speech vs noise — it just
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The threshold has no learned model of speech vs noise — it just
    measures `sqrt(mean(x**2))`. Anything energetic gets through;
    anything quiet gets dropped.
-2. Silero is a small neural net trained on speech vs not-speech. A
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Silero is a small neural net trained on speech vs not-speech. A
    fan is noisy but has a *different spectrum* from speech, so
    Silero ignores it; the threshold can't tell them apart.
-3. The journal records both backends' verdicts per chunk. If you
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+The journal records both backends' verdicts per chunk. If you
    produce both bundles and overlay them on the same input
    (recorded `.wav`), you'll see Silero's verdicts arrive 50-100
    ms later (it needs context) but be vastly more accurate.
@@ -116,18 +158,39 @@ five states (`IDLE`, `USER_SPEAKING`, `USER_PAUSED`, `PROCESSING`,
 defends against that your `MiniTurnDetector` can't handle.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `USER_PAUSED` is for the comma-list problem from exercise 1.
-2. `PROCESSING` separates "user done speaking" from "bot
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`USER_PAUSED` is for the comma-list problem from exercise 1.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`PROCESSING` separates "user done speaking" from "bot
    answering" — the gap measured in chapter 5.
-3. `BOT_SPEAKING` is the thing that makes chapter 9's barge-in
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+`BOT_SPEAKING` is the thing that makes chapter 9's barge-in
    possible — the FSM needs to *know* the bot is speaking to know
    that a new VAD-on is an interruption.
-4. The transitions matter as much as the states. The README on
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+The transitions matter as much as the states. The README on
    chapter 4's `MiniTurnDetector` only has 4 transitions. The
    production FSM has ~15.
 
@@ -147,15 +210,30 @@ the cancelled path? Restore it and explain why `end_stream()` and final
 provider cleanup are separate operations.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The normal path ends and closes exactly once after draining STT events.
-2. The cancelled path never receives `speech_ended`, so only the outer
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The normal path ends and closes exactly once after draining STT events.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The cancelled path never receives `speech_ended`, so only the outer
    `finally` can end and close its active provider.
-3. `close_if_supported()` is capability-based: providers without a cleanup
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`close_if_supported()` is capability-based: providers without a cleanup
    hook remain valid, while persistent providers release their resources.
 
 </details>
@@ -175,20 +253,47 @@ the assignment around `await speak(...)` in a scratch copy of `main.py`. Which
 postmortem question becomes unanswerable?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `turn.ended` is input-side evidence: VAD ended the turn and STT produced the
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`turn.ended` is input-side evidence: VAD ended the turn and STT produced the
    final text.
-2. `parrot.delivery` is output-side evidence: the same committed text was
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`parrot.delivery` is output-side evidence: the same committed text was
    synthesized and offered to the transport.
-3. A rejection proves a drop. Acceptance proves scheduling, not rendering or
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+A rejection proves a drop. Acceptance proves scheduling, not rendering or
    audibility.
-4. Fixing start-of-utterance clipping does not let the lesson discard the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Fixing start-of-utterance clipping does not let the lesson discard the
    delivery boundary established in chapter 3.
-5. Chapter 9 adds playback-progress evidence; until then, do not relabel
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+Chapter 9 adds playback-progress evidence; until then, do not relabel
    accepted chunks as played audio.
 
 </details>

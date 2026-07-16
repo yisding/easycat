@@ -20,6 +20,7 @@ from scripts.regen_teaching_chapters import (
     EXERCISE_COMPLETION_RE,
     EXERCISE_HINTS_RE,
     EXERCISE_PROTOCOL_RE,
+    HINT_DISCLOSURE_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
     PHASE_REVIEWS,
@@ -513,22 +514,90 @@ def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
     wrapped = _ensure_exercise_hints(source)
 
     assert render_exercise_hints("1. First clue.\n2. Second clue.") in wrapped
-    assert '<details markdown="1">' in wrapped
-    assert "<summary>Reveal hints after your first attempt</summary>" in wrapped
+    assert wrapped.count('<details markdown="1">') == 2
+    assert "<summary>Hint 1 of 2</summary>" in wrapped
+    assert "<summary>Hint 2 of 2</summary>" in wrapped
+    assert "Close it and try again before opening" in wrapped
     assert wrapped.index("<!-- END auto:exercise-hints -->") < wrapped.index("## Self-check")
     assert _ensure_exercise_hints(wrapped) == wrapped
 
 
-def test_every_exercise_hint_is_concealed_until_after_an_attempt() -> None:
+def test_exercise_hint_splitter_preserves_numbered_fence_and_nested_content() -> None:
+    source = (
+        "1. First clue.\n\n"
+        "   1. Nested numbered step.\n\n"
+        "```text\n"
+        "1. Literal fenced line.\n"
+        "```\n\n"
+        "~~~text\n"
+        "2. Another literal fenced line.\n"
+        "~~~\n\n"
+        "2. Second clue."
+    )
+
+    rendered = render_exercise_hints(source)
+    disclosures = list(HINT_DISCLOSURE_RE.finditer(rendered))
+
+    assert len(disclosures) == 2
+    assert "   1. Nested numbered step." in disclosures[0].group("body")
+    assert "1. Literal fenced line." in disclosures[0].group("body")
+    assert "2. Another literal fenced line." in disclosures[0].group("body")
+    assert disclosures[1].group("body").strip() == "Second clue."
+    assert _ensure_exercise_hints(rendered) == rendered
+
+
+def test_legacy_hint_wrapper_migrates_without_losing_clues() -> None:
+    legacy = (
+        "<!-- BEGIN auto:exercise-hints -->\n"
+        '<details markdown="1">\n'
+        "<summary>Reveal hints after your first attempt</summary>\n\n"
+        "**Hints**\n\n"
+        "1. First clue.\n"
+        "2. Second clue.\n\n"
+        "</details>\n"
+        "<!-- END auto:exercise-hints -->"
+    )
+
+    migrated = _ensure_exercise_hints(legacy)
+
+    assert "First clue." in migrated
+    assert "Second clue." in migrated
+    assert "Reveal hints after your first attempt" not in migrated
+    assert "<summary>Hint 1 of 2</summary>" in migrated
+    assert "<summary>Hint 2 of 2</summary>" in migrated
+    assert _ensure_exercise_hints(migrated) == migrated
+
+
+def test_every_exercise_hint_is_revealed_one_at_a_time_between_attempts() -> None:
+    total_blocks = 0
+    total_disclosures = 0
     for chapter in discover_chapters():
         exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
         matches = list(EXERCISE_HINTS_RE.finditer(exercises))
 
         assert matches, chapter.slug
         assert len(matches) == exercises.count("**Hints**"), chapter.slug
+        assert "Reveal hints after your first attempt" not in exercises
+        total_blocks += len(matches)
         for match in matches:
-            assert match.group("body").strip(), chapter.slug
-            assert "Reveal hints after your first attempt" in match.group(0)
+            body = match.group("body").strip()
+            disclosures = list(HINT_DISCLOSURE_RE.finditer(body))
+            assert len(disclosures) >= 2, chapter.slug
+            total_disclosures += len(disclosures)
+            assert "After your first attempt, open Hint 1 only" in body
+            assert "try again before opening" in body
+            assert [int(item.group("number")) for item in disclosures] == list(
+                range(1, len(disclosures) + 1)
+            )
+            assert {int(item.group("total")) for item in disclosures} == {len(disclosures)}
+            for disclosure in disclosures:
+                assert disclosure.group("body").strip()
+                assert re.match(r"^\d+\. ", disclosure.group("body").strip()) is None
+            outside_disclosures = HINT_DISCLOSURE_RE.sub("", body)
+            assert re.search(r"^\d+\. ", outside_disclosures, re.MULTILINE) is None
+
+    assert total_blocks == 72
+    assert total_disclosures == 281
 
 
 def test_exercise_completion_is_moved_after_the_self_check() -> None:
