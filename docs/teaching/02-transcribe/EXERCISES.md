@@ -30,9 +30,19 @@ where the wrong guess stuck. Compare it to the final.
   easier or harder? (Easier: all partials cluster at the end so
   the sequence is dense. Harder: the timing is misleading — the
   partials don't reflect when the *audio* was uttered.)
-- Try the same exercise on Deepgram (`provider="deepgram"`,
-  `DEEPGRAM_API_KEY` required). Mid-speech partials change the
-  feel completely.
+- Try the same exercise with both executable paths:
+
+  ```bash
+  uv run python docs/teaching/02-transcribe/streaming.py --provider openai
+  uv run python docs/teaching/02-transcribe/streaming.py --provider deepgram
+  ```
+
+  Deepgram requires `DEEPGRAM_API_KEY`. Mid-speech partials change the feel
+  completely; no source edit should be necessary.
+- Inspect each bundle's `stt.provider.selected` record before comparing
+  `offset_ms`. Confirm the credential *name* is present but its secret value
+  is not, and explain why `after_stream_end` is not microphone latency while
+  `during_audio` can be.
 
 ## 2. Open a bundle in two ways
 
@@ -135,4 +145,6 @@ You should be able to read any bundle from any chapter from now on without
 consulting the README that produced it, and explain why observing a partial is
 different from committing a side effect from one. You should also be able to
 distinguish ending one STT stream from closing the provider that owns it, and
-separate raw-audio retention from transcript retention.
+separate raw-audio retention from transcript retention. Finally, you should be
+able to switch the Chapter 2 STT provider without editing its consumer loop and
+tell a provider wire target from an upstream input-rate restriction.

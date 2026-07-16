@@ -231,7 +231,9 @@ def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> 
     )
     assert "A mic and speakers" in chapters["01-echo"]
     assert "OPENAI_API_KEY" in chapters["02-transcribe"]
-    assert "or any other provider" in _chapter_prerequisites(chapters["02-transcribe"])
+    chapter_02_prerequisites = _chapter_prerequisites(chapters["02-transcribe"])
+    assert "--provider deepgram" in chapter_02_prerequisites
+    assert "DEEPGRAM_API_KEY" in chapter_02_prerequisites
     for chapter in (
         "03-parrot-naive",
         "04-vad-preroll",
