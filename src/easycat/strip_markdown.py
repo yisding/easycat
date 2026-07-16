@@ -168,7 +168,7 @@ def _normalize_short_code_for_tts(code: str) -> str:
         dunder_name = dunder_match.group(1).replace("_", " ")
         return f"dunder {dunder_name}".strip()
     if _CODE_SPEECH_CHARACTERS.isdisjoint(snippet):
-        return snippet
+        return snippet if _WS_RE.search(snippet) is None else _WS_RE.sub(" ", snippet).strip()
 
     normalized = snippet
     for pattern, spoken in _MULTI_CHAR_CODE_SPEECH:
