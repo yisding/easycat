@@ -1,5 +1,7 @@
 # Chapter 8 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Separate threshold changes from classification errors
 
 **Task.** Record several ambiguous pauses once with `--backend smart`,
