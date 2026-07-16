@@ -1293,7 +1293,7 @@ requires-dist = [
     { name = "phonenumberslite", marker = "extra == 'all'", specifier = ">=9.0.33" },
     { name = "phonenumberslite", marker = "extra == 'telephony'", specifier = ">=9.0.33" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.99.0,<2.0.0" },
-    { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2'", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2'", specifier = ">=2.5.1,<3.0.0" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
