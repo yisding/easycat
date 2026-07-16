@@ -69,6 +69,48 @@ async def test_streaming_turn_gap_ends_at_first_accepted_audio(monkeypatch, caps
     assert "bot done speaking" not in output
 
 
+async def test_streaming_turn_gap_is_unavailable_without_accepted_audio(
+    monkeypatch, capsys
+) -> None:
+    chapter = _load_chapter(monkeypatch)
+    clock = {"now": 1.0}
+    rows: list[dict] = []
+
+    class FakeJournal:
+        def append(self, **row) -> None:
+            rows.append(row)
+
+    class FakeSTT:
+        async def events(self):
+            yield types.SimpleNamespace(type=chapter.STTEventType.FINAL, text="hello")
+
+    class FakeTTS:
+        async def synthesize(self, _payload):
+            clock["now"] = 3.0
+            yield types.SimpleNamespace(type=chapter.TTSEventType.AUDIO, audio="chunk")
+            clock["now"] = 4.0
+
+    class FakeTransport:
+        async def send_audio(self, _chunk) -> bool:
+            clock["now"] = 3.2
+            return False
+
+    async def fake_agent(_client, _text: str, queue, _journal) -> None:
+        await queue.put("sentence")
+        await queue.put(None)
+
+    monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(chapter, "stream_sentences_to_tts", fake_agent)
+
+    await chapter.run_turn(FakeTransport(), FakeSTT(), None, FakeTTS(), FakeJournal())
+
+    assert all(row["name"] != "tts.first_audio" for row in rows)
+    gap = next(row["data"] for row in rows if row["name"] == "turn.gap")
+    assert gap["total_gap_ms"] is None
+    assert gap["reply_enqueue_gap_ms"] == 3_000.0
+    assert "turn gap unavailable — TTS produced no accepted audio" in capsys.readouterr().out
+
+
 def test_streaming_chapter_copies_keep_first_audio_turn_gap_contract() -> None:
     stale = []
     for path in TURN_GAP_SCRIPTS:

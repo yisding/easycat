@@ -7,7 +7,7 @@ import importlib.util
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace, TracebackType
 
 import pytest
 
@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
 
 
-def _load_main_module(monkeypatch: pytest.MonkeyPatch):
+def _load_main_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     path = CHAPTER / "main.py"
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=object))
     spec = importlib.util.spec_from_file_location("teaching_ch14_interruption", path)
@@ -42,15 +42,41 @@ async def test_deep_workflow_rewrites_private_history_to_delivered_text(
 ) -> None:
     chapter = _load_main_module(monkeypatch)
 
-    async def response_stream():
-        for text in ("Hello ", "from text the caller never heard"):
-            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=text))])
+    class ResponseStream:
+        def __init__(self) -> None:
+            self.closed = False
+            self._texts = iter(("Hello ", "from text the caller never heard"))
+
+        def __aiter__(self) -> ResponseStream:
+            return self
+
+        async def __anext__(self) -> SimpleNamespace:
+            try:
+                text = next(self._texts)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+            return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=text))])
+
+        async def __aenter__(self) -> ResponseStream:
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            self.closed = True
 
     class Completions:
-        async def create(self, **_kwargs):
-            return response_stream()
+        def __init__(self) -> None:
+            self.stream = ResponseStream()
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+        async def create(self, **_kwargs: object) -> ResponseStream:
+            return self.stream
+
+    completions = Completions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     workflow = chapter.MyWorkflow(client, chapter.SessionActions())
     bridge = GenericWorkflowBridge(workflow)
     token = CancelToken()
@@ -65,6 +91,7 @@ async def test_deep_workflow_rewrites_private_history_to_delivered_text(
     assert first.kind == "text_delta"
     assert first.text == "Hello "
     await stream.aclose()
+    assert completions.stream.closed
     assert workflow._history[-1] == {"role": "assistant", "content": "Hello "}
 
     bridge.apply_interruption("Hello", CancellationMode.IMMEDIATE_STOP)
@@ -93,7 +120,7 @@ async def test_shallow_bridge_stops_forwarding_after_cancellation() -> None:
         def __init__(self) -> None:
             self.produced: list[str] = []
 
-        async def on_user_turn(self, _text: str):
+        async def on_user_turn(self, _text: str) -> AsyncIterator[str]:
             for chunk in ("first", "not forwarded"):
                 self.produced.append(chunk)
                 yield chunk

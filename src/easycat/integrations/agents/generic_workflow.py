@@ -51,17 +51,18 @@ class GenericWorkflowBridge(BridgeTemplate):
 
     Interruption / barge-in behaviour
     ----------------------------------
-    **Deep mode** supports mid-turn barge-in out of the box.  The session's
-    streaming path calls :meth:`apply_interruption` at the end of the turn
-    and the bridge runs the four-step atomic write ordering (plan -> commit
-    -> mutate -> paired record) used by journaled interruption handling.
+    **Deep mode** exposes the session's cancellation token so the workflow
+    can stop upstream work cooperatively.  The session's streaming path then
+    calls :meth:`apply_interruption`, and the bridge runs the four-step atomic
+    write ordering (plan -> commit -> mutate -> paired record) used by
+    journaled interruption handling.
 
-    **Shallow mode** does **not** support mid-turn interruption by default
-    because the bridge has no visibility into the workflow's internal
-    state.  ``apply_interruption`` raises :class:`ShallowModeInterruptionError`
-    on a barge-in attempt; callers should treat the error as "interruption
-    is an end-of-turn event" and let the current turn finish before the
-    next user turn starts.
+    In **shallow mode**, the bridge still observes cancellation and stops
+    forwarding streamed chunks, while the session cancels queued output.
+    The workflow cannot see that token or safely reconcile opaque internal
+    state by default, though.  ``apply_interruption`` therefore raises
+    :class:`ShallowModeInterruptionError` unless the workflow explicitly
+    implements its own reconciliation hook.
 
     To opt in to mid-turn interruption in shallow mode, implement
     ``apply_interruption(delivered_text, mode)`` directly on the workflow
@@ -267,7 +268,7 @@ class GenericWorkflowBridge(BridgeTemplate):
             return
 
         result = self._workflow.on_user_turn(turn_input.text)
-        if inspect.isasyncgen(result):
+        if isinstance(result, AsyncIterator):
             # See streaming note above: leave ``_last_output`` unset for
             # streamed chunks (parity with deep mode, no partial-on-cancel).
             try:
@@ -303,7 +304,7 @@ class GenericWorkflowBridge(BridgeTemplate):
             kwargs["cancel_token"] = cancel_token
         result = self._workflow.on_user_turn(turn_input.text, **kwargs)
         # Deep mode may return str, AsyncIterator[str], or a coroutine.
-        if inspect.isasyncgen(result):
+        if isinstance(result, AsyncIterator):
             try:
                 async for chunk in result:
                     if cancel_token and cancel_token.is_cancelled:
