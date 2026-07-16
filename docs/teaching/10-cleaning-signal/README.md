@@ -456,7 +456,7 @@ uv run python docs/teaching/10-cleaning-signal/wrong_order.py --mode aec-no-refe
 ```
 
 Both modes are technically running NR / AEC, and both produce a
-bundle. The journal shows the failure: each `vad.processed_raw`
+bundle. The journal shows the failure: each `vad.processed_before_nr`
 record precedes the matching `nr.applied_after_vad` frame index in
 `nr-after-vad`, and AEC's `feed_reference()` counter stays at zero
 in `aec-no-reference`. **Wrong-version-
