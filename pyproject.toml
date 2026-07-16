@@ -266,14 +266,11 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/_observability.py" = ["C901"]
 "src/easycat/cli/debug/diff.py" = ["B904"]
 "src/easycat/cli/diagnose/explain.py" = ["PLR0912"]
-"src/easycat/cli/scaffold/_schema.py" = ["C901"]
 "src/easycat/cli/scaffold/init.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/config/_factory.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/config/easy.py" = ["C901", "PLR0912"]
 # Landed in a concurrent wave-4 item, grandfathered at integration time.
 "src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915", "B007"]
-"src/easycat/debug/bundle.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/debug/export.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debug/bundle.py" = ["C901"]
 "src/easycat/debugger/_audio.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_records.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_sources.py" = ["C901"]
@@ -286,7 +283,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/integrations/agents/openai_agents.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/pydantic_ai.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/responses_api.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/push_to_talk.py" = ["C901", "PLR0915"]
 "src/easycat/session/_audio_router.py" = ["C901"]
 "src/easycat/session/_session.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/session/_stt_committer.py" = ["C901", "PLR0912"]
@@ -432,9 +428,11 @@ module = [
     "easycat.session.*",
     "easycat.integrations.*",
     "easycat.validation._lane_harness.*",
+    "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",
+    "easycat.debugger._core_routes.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
@@ -575,4 +573,54 @@ type = "layers"
 layers = [
     "easycat.session_manager",
     "easycat.transports",
+]
+
+[[tool.importlinter.contracts]]
+name = "Bundle archive loader does not import the bundle facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debug._bundle_loader",
+]
+forbidden_modules = [
+    "easycat.debug.bundle",
+]
+
+# `validation.latency` is the documented outward-facing facade. Internal
+# validation code imports focused domain leaves directly so the facade cannot
+# regress into a god module or create cycles between policy and orchestration.
+[[tool.importlinter.contracts]]
+name = "Validation internals do not depend on the public latency facade"
+type = "forbidden"
+source_modules = [
+    "easycat.validation._environment",
+    "easycat.validation._failure_classification",
+    "easycat.validation._lane_harness",
+    "easycat.validation._latency_artifacts",
+    "easycat.validation._latency_baseline",
+    "easycat.validation._latency_budgets",
+    "easycat.validation._latency_models",
+    "easycat.validation._latency_runner",
+    "easycat.validation._latency_selectors",
+    "easycat.validation._live_runner",
+    "easycat.validation._release_runner",
+    "easycat.validation._reliability_policy",
+    "easycat.validation._runner_support",
+    "easycat.validation._slice_runner",
+    "easycat.validation.reliability",
+]
+forbidden_modules = [
+    "easycat.validation.latency",
+]
+
+# The app composer owns optional-dependency loading and route assembly. Route
+# leaves depend on source/domain helpers directly and must not reach back into
+# the server facade, which would recreate the monolithic dependency direction.
+[[tool.importlinter.contracts]]
+name = "Debugger route leaves do not import the server facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debugger._core_routes",
+]
+forbidden_modules = [
+    "easycat.debugger.server",
 ]

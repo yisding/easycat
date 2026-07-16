@@ -123,13 +123,10 @@ def _filter_and_paginate(
 ) -> tuple[list[dict[str, Any]], int]:
     """Return ``(page, total)`` so the UI can render "X of N".
 
-    The previous endpoint returned ``page_size`` as ``total``, which
-    made it impossible to render a real pager and confused tooling.
+    ``limit`` and ``offset`` are validated by the HTTP boundary before this
+    helper runs. The previous endpoint returned ``page_size`` as ``total``,
+    which made it impossible to render a real pager and confused tooling.
     """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be > 0")
     full = _filter_records(
         records,
         stage=stage,
