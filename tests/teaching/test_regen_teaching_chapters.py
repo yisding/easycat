@@ -24,6 +24,7 @@ from scripts.regen_teaching_chapters import (
     discover_chapters,
     regen_readme,
     render_diff,
+    render_navigation,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -76,6 +77,49 @@ def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
         "Teaching README auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_readmes)
     )
+
+
+def test_teaching_readmes_have_one_generated_navigation_block() -> None:
+    missing_or_duplicated: list[str] = []
+
+    for chapter in discover_chapters():
+        readme = chapter.path / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        if text.count("<!-- BEGIN auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+        if text.count("<!-- END auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+
+    assert not missing_or_duplicated, (
+        "Teaching chapter navigation markers are missing or duplicated: "
+        + ", ".join(sorted(set(missing_or_duplicated)))
+    )
+
+
+def test_render_navigation_tracks_the_first_middle_and_last_chapters() -> None:
+    chapters = discover_chapters()
+    chapter_count = len(chapters)
+    middle_position = chapter_count // 2
+
+    first = render_navigation(chapters[0])
+    middle = render_navigation(chapters[middle_position])
+    last = render_navigation(chapters[-1])
+
+    assert f"**Progress: 1 of {chapter_count}**" in first
+    assert "[Ladder index](../)" in first
+    assert "[Exercises](./EXERCISES.md)" in first
+    assert "Chapter -1" not in first
+    assert f"[Chapter 1 →](../{chapters[1].slug}/)" in first
+
+    assert f"**Progress: {middle_position + 1} of {chapter_count}**" in middle
+    assert "[Exercises](./EXERCISES.md)" in middle
+    assert f"[← Chapter {middle_position - 1}](../{chapters[middle_position - 1].slug}/)" in middle
+    assert f"[Chapter {middle_position + 1} →](../{chapters[middle_position + 1].slug}/)" in middle
+
+    assert f"**Progress: {chapter_count} of {chapter_count}**" in last
+    assert "[Exercises](./EXERCISES.md)" in last
+    assert f"[← Chapter {chapter_count - 2}](../{chapters[-2].slug}/)" in last
+    assert f"Chapter {chapter_count}" not in last
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -67,10 +68,10 @@ def _display_path(path: Path) -> Path:
 
 def measurement_commands(path: Path) -> tuple[str, str]:
     """Commands that read this production-shaped bundle directly."""
-    display_path = _display_path(path)
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
     return (
-        f"uv run easycat latency {display_path}",
-        f"uv run easycat latency {display_path} --json",
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
     )
 
 
@@ -105,6 +106,25 @@ def transport_config(name: str):
     raise SystemExit(f"Unknown transport: {name}")
 
 
+def telephony_config(name: str):
+    """Wire Twilio-backed session actions for the phone transport."""
+    if name != "twilio":
+        return None
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not account_sid or not auth_token:
+        raise SystemExit("Twilio actions need TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN.")
+
+    from easycat import TelephonyConfig, TwilioSessionActionConfig
+
+    return TelephonyConfig(
+        twilio_actions=TwilioSessionActionConfig(
+            account_sid=account_sid,
+            auth_token=auth_token,
+        )
+    )
+
+
 def provider_mix(name: str) -> dict:
     """Return the STT/TTS strings for the named mix.
 
@@ -136,6 +156,7 @@ async def main() -> None:
     config = EasyConfig(
         agent=build_agent(),
         transport=transport_config(args.transport),
+        telephony=telephony_config(args.transport),
         debug="light",  # journal must be on so export_debug_bundle works
         **mix,
     )

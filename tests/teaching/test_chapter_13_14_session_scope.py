@@ -84,9 +84,7 @@ async def test_chapter_14_scopes_session_and_custom_client(
         events.append(("export", exported_session, path, overwrite))
 
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setitem(
-        sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=lambda: client)
-    )
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=lambda: client))
     monkeypatch.setattr(chapter, "EasyConfig", lambda **kwargs: kwargs)
     monkeypatch.setattr(chapter, "LocalTransportConfig", lambda: object())
     monkeypatch.setattr(chapter, "create_session", lambda _config: session)
