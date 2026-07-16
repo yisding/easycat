@@ -23,11 +23,20 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
+from easycat.debug.bundle import RunBundle
 from easycat.debug.testing import load_bundle
 
 
-def _record_matches(record, *, stage=None, turn=None, sequence=None, name=None) -> bool:
+def _record_matches(
+    record: dict[str, Any],
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> bool:
     data = record.get("data") or {}
     return (
         (stage is None or data.get("stage") == stage or data.get("observed_stage") == stage)
@@ -37,7 +46,14 @@ def _record_matches(record, *, stage=None, turn=None, sequence=None, name=None) 
     )
 
 
-def query_records(bundle, *, stage=None, turn=None, sequence=None, name=None):
+def query_records(
+    bundle: RunBundle,
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> list[dict[str, Any]]:
     """Query a ``RunBundle`` through its public read-only helpers.
 
     Start with the most selective public operation, then apply any
@@ -68,7 +84,14 @@ def query_records(bundle, *, stage=None, turn=None, sequence=None, name=None):
     ]
 
 
-def query_diagnostics(records, *, stage=None, turn=None, sequence=None, name=None) -> dict:
+def query_diagnostics(
+    records: list[dict[str, Any]],
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
     """Describe filter coverage without changing the query result."""
     filters = {
         key: value
@@ -119,7 +142,9 @@ def positive_int(value: str) -> int:
     return parsed
 
 
-def print_query_result(records, diagnostics: dict, *, limit: int) -> None:
+def print_query_result(
+    records: list[dict[str, Any]], diagnostics: dict[str, Any], *, limit: int
+) -> None:
     """Render matches plus enough coverage to interpret an empty result."""
     active = diagnostics["filters"]
     filter_text = ", ".join(f"{key}={value!r}" for key, value in active.items()) or "none"

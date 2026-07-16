@@ -12,6 +12,7 @@ from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
+    BotStoppedSpeaking,
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, AgentTurnInput
@@ -107,10 +108,12 @@ async def test_streaming_strip_markdown_tts_receives_clean_text():
     session = Session(config)
 
     finals: list[AgentFinal] = []
+    turn_finished = asyncio.Event()
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _e: turn_finished.set())
 
     await session.start()
-    await asyncio.sleep(0.3)
+    await asyncio.wait_for(turn_finished.wait(), timeout=1.0)
     await session.stop()
 
     # TTS should have received text with no markdown artefacts
