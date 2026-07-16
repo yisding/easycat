@@ -8,15 +8,15 @@
 > matters as much as the detection itself.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `delivery acceptance` without a microphone,
+> **Hardware-free checkpoint:** prove `VAD pre-roll frame order` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/04-vad-preroll/delivery_probe.py
+> uv run python docs/teaching/04-vad-preroll/preroll_probe.py
 > ```
 >
-> **Evidence to find:** `parrot.delivery` preserves two accepted and one rejected chunks after
-> STT closes.
+> **Evidence to find:** pre-roll restores both cached frames before trigger/live; disabling it
+> starts at trigger.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->

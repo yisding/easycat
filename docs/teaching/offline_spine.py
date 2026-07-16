@@ -82,9 +82,9 @@ CHECKPOINTS = (
     Checkpoint(
         2,
         "02-transcribe",
-        "stream_lifecycle_probe.py",
-        "stream lifetime cleanup",
-        "every path closes STT before transport disconnect; feed failure cancels its sibling task",
+        "partial_policy_probe.py",
+        "partial vs final commitment",
+        "revised partials cancel speculation; only the final `fifty` commits the safe action",
     ),
     Checkpoint(
         3,
@@ -96,9 +96,9 @@ CHECKPOINTS = (
     Checkpoint(
         4,
         "04-vad-preroll",
-        "delivery_probe.py",
-        "delivery acceptance",
-        "`parrot.delivery` preserves two accepted and one rejected chunks after STT closes",
+        "preroll_probe.py",
+        "VAD pre-roll frame order",
+        "pre-roll restores both cached frames before trigger/live; disabling it starts at trigger",
     ),
     Checkpoint(
         5,
@@ -117,9 +117,10 @@ CHECKPOINTS = (
     Checkpoint(
         7,
         "07-tools",
-        "action_catalog.py",
-        "session-action catalog",
-        "seven action types separate core-supported from executor-dependent actions",
+        "filler_delivery_probe.py",
+        "tool filler delivery",
+        "fast tools skip filler; rejected filler has zero accepted chunks and reply audio "
+        "comes first",
     ),
     Checkpoint(
         8,
@@ -173,9 +174,9 @@ CHECKPOINTS = (
     Checkpoint(
         15,
         "15-operate-in-production",
-        "postmortem_probe.py",
-        "postmortem journal preservation",
-        "one read-only view preserves 15 records and exports a matching bundle after stop",
+        "manager_probe.py",
+        "multi-session manager rollback",
+        "failed and cancelled starts release slots; stop-all still attempts both sessions",
     ),
 )
 

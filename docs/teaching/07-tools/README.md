@@ -9,15 +9,15 @@
 > chapter.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `session-action catalog` without a microphone,
+> **Hardware-free checkpoint:** prove `tool filler delivery` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/07-tools/action_catalog.py
+> uv run python docs/teaching/07-tools/filler_delivery_probe.py
 > ```
 >
-> **Evidence to find:** seven action types separate core-supported from executor-dependent
-> actions.
+> **Evidence to find:** fast tools skip filler; rejected filler has zero accepted chunks and
+> reply audio comes first.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
