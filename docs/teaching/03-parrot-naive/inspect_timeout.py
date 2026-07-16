@@ -13,8 +13,8 @@ from easycat.debug.testing import load_bundle
 STT_RECORD_NAMES = frozenset({"stt.partial", "stt.final"})
 
 
-def _offset_ms(record: dict[str, Any]) -> float | None:
-    value = (record.get("data") or {}).get("offset_ms")
+def _offset_ms(record: dict[str, Any] | None) -> float | None:
+    value = ((record or {}).get("data") or {}).get("offset_ms")
     return float(value) if isinstance(value, (int, float)) else None
 
 

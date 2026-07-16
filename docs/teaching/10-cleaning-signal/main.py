@@ -18,8 +18,8 @@ read the journal to see which backend is actually running.
 
 NR is single-input — it only sees the mic. AEC is dual-input —
 it needs both the mic *and* the far-end reference (the TTS audio
-we sent to the speaker). We feed the reference every time we
-emit a TTS chunk.
+we sent to the speaker). We feed the reference every time the
+transport accepts a complete TTS chunk.
 
 Dependencies:
     uv sync --extra quickstart --extra deepgram --group dev
@@ -171,7 +171,7 @@ async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
 
 
 async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_id, journal):
-    """Emit TTS audio to the speaker AND feed it to AEC as the far-end reference."""
+    """Emit TTS audio and feed accepted chunks to AEC as the far-end reference."""
     while True:
         sentence = await sentence_queue.get()
         if sentence is None or cancel.is_cancelled:
@@ -181,11 +181,11 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
                 await tts.cancel()
                 break
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                await transport.send_audio(event.audio)
-                # The crucial dual-input line: AEC needs to know what we
-                # asked the speaker to play, so it can subtract that
-                # pattern from the mic.
-                aec.feed_reference(event.audio)
+                if await transport.send_audio(event.audio):
+                    # The crucial dual-input line: AEC needs to know what
+                    # the speaker accepted, so it can subtract that pattern
+                    # from the mic. Rejected or partial writes return False.
+                    aec.feed_reference(event.audio)
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",

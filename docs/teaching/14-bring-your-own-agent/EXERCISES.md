@@ -1,7 +1,7 @@
 # Chapter 14 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
 <!-- END auto:navigation -->
 
 ## 1. Demote yourself to shallow mode
