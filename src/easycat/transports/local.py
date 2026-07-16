@@ -72,6 +72,7 @@ class LocalTransport(AudioQueueMixin):
     ``asyncio.Queue`` that feeds the output stream callback.
     """
 
+    send_audio_is_nonblocking = True
     transport_kind = "local"
     default_echo_cancellation_enabled = True
     reports_audio_delivery = True

@@ -51,10 +51,10 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
     def __init__(self, output_format: AudioFormat = PCM16_MONO_24K) -> None:
         super().__init__(output_format=output_format)
         self._ws: ReconnectingWebSocket | None = None
-        # Opt-in persistent multi-context socket manager. Stays ``None`` (and
-        # the one-shot-per-synthesize path runs byte-for-byte) unless the
-        # provider's config sets ``persistent_ws=True`` and the provider builds
-        # it lazily. Deepgram and custom providers never create one.
+        # Persistent multi-context socket manager. Stays ``None`` (and the
+        # one-shot-per-synthesize path runs byte-for-byte) unless the provider's
+        # config enables ``persistent_ws`` and the provider builds it lazily.
+        # Deepgram and custom providers never create one.
         self._mgr: MultiContextWSManager | None = None
         self._init_emit_tasks()
 
@@ -62,8 +62,9 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         """Whether the opt-in persistent multi-context socket is enabled.
 
         Reads ``persistent_ws`` off the provider config by name so providers
-        whose config lacks the field (Deepgram, custom out-of-tree providers)
-        are unaffected and always run the default one-shot path.
+        whose config lacks the field (including custom out-of-tree providers)
+        are unaffected and always run the default one-shot path. Deepgram owns
+        its serialized persistent socket directly and does not call this helper.
         """
         return bool(getattr(self._config, "persistent_ws", False))
 
