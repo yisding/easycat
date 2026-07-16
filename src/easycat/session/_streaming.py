@@ -496,6 +496,10 @@ class _AgentStreamConsumer:
         if stream_succeeded:
             queued = await self._buffer.flush()
             self._resolve_first_tts_payload_gate(queued)
+        else:
+            gate = self._first_tts_payload_ready
+            if gate is not None and not gate.done():
+                gate.set_result(False)
         # Sentinel to stop the TTS task.
         #
         # On a clean completion the consumer is still actively draining the
