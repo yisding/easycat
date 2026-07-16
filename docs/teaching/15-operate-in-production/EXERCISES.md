@@ -1,87 +1,296 @@
 # Chapter 15 — Exercises
 
-## 1. Two sessions fighting for one mic
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md)
+<!-- END auto:navigation -->
 
-**Task.** Add a second session to the manager before the first one
-stops. Two local-transport sessions on the same mic will fight for
-input — what does the journal show for each?
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
 
+## 1. Probe `SessionManager` without two microphones
+
+**Task.** Run the provider-free manager probe:
+
+```bash
+uv run python docs/teaching/15-operate-in-production/manager_probe.py
+```
+
+It keeps two fake connection sessions active together, attempts a
+duplicate key, injects ordinary failure and task cancellation while two
+other sessions start, and then proves that each released key is reusable.
+It finishes with a two-session `stop_all()` sweep where one `stop()`
+raises. Which guarantees belong to the manager, and which cleanup remains
+the session's responsibility?
+
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. `LocalTransport` claims the PortAudio device exclusively (on
-   most platforms). The second `connect()` either fails (good —
-   you see the error in the journal) or succeeds and the OS
-   round-robins audio between the two sessions (bad — both
-   journals show partial audio).
-2. The right shape for a multi-session demo is a *server*
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`SessionManager` has no journal and synthesizes no transport events.
+   It owns a registry plus `start()` / `stop()` orchestration. Do not
+   expect `transport.connected`, `transport.failed`, or `audio.error`
+   records from the manager; those are not runtime record names.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`add(key, session)` reserves a unique key before awaiting
+   `session.start()`. A duplicate raises `ValueError` without starting
+   the duplicate. If start raises or the add task is cancelled, the
+   manager removes its reservation before re-raising, so a later
+   connection can reuse it. If `remove()` or `stop_all()` already released
+   that reservation and a replacement claimed the key, rollback preserves
+   the replacement. `asyncio.CancelledError` inherits from `BaseException`,
+   not `Exception`, which is why cancellation needs explicit rollback
+   coverage. The session's own `start()` implementation must roll back
+   resources it opened before failing or being cancelled; the manager does
+   not call `stop()` on that partially started object.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Each `connection(...)` context calls `remove()` in `finally`, which
+   removes the slot and awaits graceful `session.stop()`. Do not race
+   `remove()` or `stop_all()` against code still running inside an
+   overlapping connection block—cancel/finish those handler tasks first,
+   then use `stop_all()` as the final sweep.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+`stop_all()` clears the registry before awaiting every captured
+   session's `stop()` concurrently. The probe captures one expected failure
+   under `stop_all.expected_error`; it does not leak an alarming log line to
+   stderr. That failure does not prevent the other stop or escape from
+   `stop_all()`. This isolates shutdown failures; it does not make a failed
+   session's own cleanup successful.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+The right shape for a real multi-session demo is a *server*
    transport: `WebSocketTransport`, `WebRTCTransport`, or
    `TwilioConnectionTransport`. Each connection gets its own
    transport instance backed by its own socket. That's why
    `SessionManager` is a multi-connection abstraction, not a
    multi-microphone one.
-3. The journal events to watch for: `transport.connected` /
-   `transport.failed` on each session, and any
-   `audio.error` records during the fight.
+   PortAudio device sharing varies by host API and OS, so opening two
+   `LocalTransport` instances is not a portable manager test.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Run `uv run easycat doctor` twice
 
-**Task.** Run `uv run easycat doctor` once with `OPENAI_API_KEY` unset,
-then again with it set. Which health checks change?
+**Task.** Compare two scoped, server-oriented JSON reports:
 
+```bash
+env -u OPENAI_API_KEY uv run easycat doctor \
+  --provider openai --environment production --json
+
+OPENAI_API_KEY=not-a-real-key uv run easycat doctor \
+  --provider openai --environment production --json
+```
+
+Which rows appear or change? Why does the second command test network
+liveness but not credential validity?
+
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The doctor checks five things: Python version, required
-   extras (`sounddevice`, `onnxruntime`), optional extras (NR,
-   AEC), API-key *presence* (env var set or not), and provider
-   reachability — an **unauthenticated `HEAD`** probe to each
-   provider's base URL (`src/easycat/cli/diagnose/doctor.py`).
-   Any HTTP response (even 4xx) counts as reachable; only
-   timeouts and connect errors fail.
-2. With `OPENAI_API_KEY` unset: the key-presence check shows ❌
-   and the reachability probe is **skipped** for OpenAI (the
-   doctor only probes providers whose key is present). Other
-   checks unchanged.
-3. With `OPENAI_API_KEY` set but *invalid*: key presence shows ✓
-   and reachability **also** shows ✓ — because the HEAD probe
-   doesn't send the key. The doctor can tell you "key missing"
-   but **cannot** tell you "key wrong"; you only learn that by
-   making a real authenticated call (i.e. running an example).
-4. `uv run easycat doctor` is the first command to run from a
-   repo checkout on a new machine or in a CI container. It's
-   faster than debugging by running the actual app, but it's a
-   *liveness* check, not an *auth* check.
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
 
-## 3. Translate a ch-13 bundle into a ch-12 eval input
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
 
-**Task.** Run `translate.py` against a ch-13 bundle; pipe the
-output into `evals.py` via a small adapter. Do the P50/P95 numbers
-look right?
+Doctor's eight check families are Python version, EasyCat version
+   (including an informational list of importable integration extras),
+   provider environment variables, provider reachability,
+   `onnxruntime`, microphone, journal writability, and disk space.
+   `--environment production` omits the local-microphone row. Doctor
+   does not probe the noise-reduction or echo-cancellation extras.
 
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`--provider openai` makes the credential requirement explicit. With
+   the key unset, `env_openai` is `fail` with `EASYCAT_E203`, the command
+   exits 1, and there is no `reach_openai` row because no probe runs.
+   In an unscoped report, missing per-provider rows are `skip` and the
+   aggregate `env_any` row fails only when no provider key is configured.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+With the fake key set, `env_openai` is `ok` and doctor makes an
+   **unauthenticated `HEAD`** request to OpenAI's base URL. Any HTTP
+   response, including 4xx, produces an `ok` `reach_openai` row; a
+   timeout, DNS failure, or connection error produces `EASYCAT_E204`.
+   The probe never sends the key, so it cannot distinguish a valid key
+   from `not-a-real-key`.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Use `--json` for CI and inspect the top-level `status`, process exit
+   code, and each check's `name` / `status` / `detail` rather than
+   scraping terminal glyphs. Use `--env-file .env` when the real keys
+   live in a project dotenv file; doctor loads only recognized provider
+   credentials and restores the process environment afterwards.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 3. Gate a production bundle directly
+
+**Task.** Record at least five voice turns in chapter 13 or 15, replace
+`PATH` with the emitted bundle path, and run:
+
+```bash
+uv run easycat latency PATH --json \
+  | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
+      --metric 'vad->tts' --percentile p95 --max-ms 2000 --min-samples 5
+```
+
+Then lower `--max-ms` until the gate fails. Finally raise
+`--min-samples` above the bundle's count. Why are those two failures
+different?
+
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. `translate.py` reads a ch-13 production-shape bundle (`stage_start`
-   / `stage_complete` pairs) and emits NDJSON of teaching-shape
-   composite records (`stage.X.execute` with `elapsed_ms`).
-2. `evals.py` consumes `.bundle` files, not NDJSON. You'll need a
-   small wrapper: build a fresh `InMemoryRingBuffer`, append each
-   NDJSON record, then `export_debug_bundle` to a temp file, then
-   point `evals.py` at the directory.
-3. The numbers won't match chapter 12's hand-tuned fixtures
-   exactly (your ch-13 turns are real, not synthetic), but the
-   shape will: `agent` dominates, `tts_synth` is sub-second,
-   `total_gap` is in the 800-2000 ms range.
-4. This pipeline (production-shape bundle → translator →
-   teaching-shape evals) is also how you'd build a CI gate:
-   record N production turns nightly, translate, run evals,
-   alert if P95 regresses.
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
 
-## Self-check
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
 
-You should be able to: (a) explain when to use `async with
-session:`, `await session.stop()`, `await session.stop(force=True)`,
-(b) explain why `session.journal.read()` still works after `stop()`,
-and (c) sketch the `SessionManager` usage pattern for a WebSocket
-server in 10 lines without looking at the file.
+`easycat latency` reads production `stage_start` /
+   `stage_complete` spans and milestone records directly. Its JSON
+   envelope contains one `turns` entry per turn plus `count`, `p50`,
+   `p90`, `p95`, and `p99` for five critical-path metrics. Do not
+   translate production records into chapter 12's synthetic fixture
+   shape before measuring them.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`latency_gate.py` consumes that maintained JSON envelope. It exits 0
+   only when the selected percentile is at or below your budget *and*
+   the selected metric has at least `--min-samples` observations. A
+   one-turn "P95" is just that one turn, not useful tail evidence.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+`--max-ms 2000` is an example policy, not an EasyCat guarantee.
+   Choose a threshold from your product SLO and a representative
+   baseline. The output distinguishes `over_budget` from
+   `insufficient_samples`, so CI tells you whether latency regressed or
+   the run simply failed to collect enough evidence.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+For a live multi-condition provider sweep and stored-baseline drift
+   detection, use
+   `uv run easycat validate latency --sweep --baseline PATH`. The
+   captured-bundle gate here is for replayable call samples you already
+   recorded; the validation command owns live canaries.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 4. Prove the stable postmortem view
+
+**Task.** Run the provider-free full-SQLite probe:
+
+```bash
+uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
+```
+
+Explain why `same_object_after_stop` and `records_preserved` are true,
+why `append_exposed_before_stop` was already false, and why the backend
+type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`session.journal` exposes `JournalView`, not the writable runtime
+   backend. It supports read, slice, lookup, filtering, and follow; it does
+   not expose `append()` at any lifecycle phase.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+The runtime owns the writable backend while the session is live. Clean
+   stop finalizes and closes that backend, then retargets the existing view
+   to a preserved read-only backend. Cached view references remain valid.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The probe uses `debug="full"` and SQLite so the backend transition is
+   visible. A `debug="light"` session follows the same public invariant but
+   transitions from `InMemoryRingBuffer` to `FrozenJournalSnapshot`.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+`session.export_debug_bundle(...)` reads the preserved backend after
+   stop. Reloading the emitted bundle and matching its record names proves
+   the export is not merely an empty ZIP created after teardown.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## The teaching ladder, complete
 
@@ -91,3 +300,42 @@ is either a new provider in the existing factories, a new
 transport in the existing config, a new bridge in the existing
 shim, or a new telephony deep-cut in the existing executors. The
 pattern doesn't change.
+
+## Self-check
+
+<!-- BEGIN auto:self-check-protocol -->
+> **Closed-book retrieval gate**
+>
+> 1. Close the chapter narrative and every hint disclosure.
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
+>    from your attempt record.
+> 4. Mark each answer **pass** or **retry** in your progress record.
+>
+> If an answer needs notes, reopen only the section that owns the weak concept,
+> correct your explanation, close it, and retry. Continue only when every answer
+> passes without looking.
+<!-- END auto:self-check-protocol -->
+
+1. When should code use `async with session:`, `await session.stop()`, or
+   `await session.stop(force=True)`, and which shutdown evidence distinguishes
+   their behavior?
+2. Why does `session.journal.read()` still work after `stop()`, and which probe
+   fields prove that the cached view keeps its identity?
+3. Can you sketch a `SessionManager` WebSocket-server pattern in ten lines and
+   explain which failure paths release the registry slot?
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete? Prepare the cumulative spine, then replay it through this chapter:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence
+```
+
+- [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
+- [Complete the Ship phase review and finish the ladder](../PROGRESS.md#ship-phase-review-and-finish-the-ladder)
+- [Return to the teaching ladder](../)
+<!-- END auto:exercise-completion -->

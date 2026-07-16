@@ -27,7 +27,7 @@ from easycat.tts.factory import TTSProviderConfig, create_tts_provider
 from easycat.tts.input import TTSInput
 
 if TYPE_CHECKING:
-    from easycat.providers import Transport, TTSProvider
+    from easycat.providers import STTProvider, Transport, TTSProvider
 
 __all__ = ["speak", "transcribe_file"]
 
@@ -56,6 +56,7 @@ def _resolve_api_key(provider: str, api_key: str | None, *, catalog: ProviderCat
 async def transcribe_file(
     path: str | Path,
     *,
+    stt: STTProvider | None = None,
     provider: str = "openai",
     api_key: str | None = None,
 ) -> str:
@@ -65,35 +66,46 @@ async def transcribe_file(
     every ``FINAL`` event's text with spaces. Raises ``ValueError`` if
     the file is not 16-bit PCM, and ``RuntimeError`` if no API key can
     be resolved.
+
+    A helper-created provider is closed before return. Pass ``stt=`` to reuse
+    a caller-owned provider; the helper still starts and ends its logical
+    stream but leaves final provider cleanup to the caller.
     """
-    resolved_key = _resolve_api_key(provider, api_key, catalog=_STT_CATALOG)
-    stt = create_stt_provider(STTProviderConfig(provider=provider, api_key=resolved_key))
+    owned_stt: STTProvider | None = None
+    if stt is None:
+        resolved_key = _resolve_api_key(provider, api_key, catalog=_STT_CATALOG)
+        stt = create_stt_provider(STTProviderConfig(provider=provider, api_key=resolved_key))
+        owned_stt = stt
 
-    with wave.open(str(Path(path)), "rb") as wf:
-        if wf.getsampwidth() != 2:
-            raise ValueError("transcribe_file expects a 16-bit PCM WAV file")
-        audio_format = AudioFormat(
-            sample_rate=wf.getframerate(),
-            channels=wf.getnchannels(),
-            sample_width=2,
-        )
-        pcm_bytes = wf.readframes(wf.getnframes())
-
-    await stt.start_stream()
     try:
-        chunk_size = max(audio_format.bytes_per_second // 10, audio_format.frame_size)
-        for i in range(0, len(pcm_bytes), chunk_size):
-            await stt.send_audio(
-                AudioChunk(data=pcm_bytes[i : i + chunk_size], format=audio_format)
+        with wave.open(str(Path(path)), "rb") as wf:
+            if wf.getsampwidth() != 2:
+                raise ValueError("transcribe_file expects a 16-bit PCM WAV file")
+            audio_format = AudioFormat(
+                sample_rate=wf.getframerate(),
+                channels=wf.getnchannels(),
+                sample_width=2,
             )
-    finally:
-        await stt.end_stream()
+            pcm_bytes = wf.readframes(wf.getnframes())
 
-    parts: list[str] = []
-    async for event in stt.events():
-        if event.type == STTEventType.FINAL:
-            parts.append(event.text)
-    return " ".join(p for p in parts if p).strip()
+        await stt.start_stream()
+        try:
+            chunk_size = max(audio_format.bytes_per_second // 10, audio_format.frame_size)
+            for i in range(0, len(pcm_bytes), chunk_size):
+                await stt.send_audio(
+                    AudioChunk(data=pcm_bytes[i : i + chunk_size], format=audio_format)
+                )
+        finally:
+            await stt.end_stream()
+
+        parts: list[str] = []
+        async for event in stt.events():
+            if event.type == STTEventType.FINAL:
+                parts.append(event.text)
+        return " ".join(p for p in parts if p).strip()
+    finally:
+        if owned_stt is not None:
+            await close_if_supported(owned_stt)
 
 
 async def speak(
@@ -103,7 +115,7 @@ async def speak(
     tts: TTSProvider | None = None,
     provider: str = "openai",
     api_key: str | None = None,
-) -> None:
+) -> tuple[int, int]:
     """Synthesize *text* via TTS and stream audio chunks to *transport*.
 
     If *tts* is ``None``, constructs an OpenAI TTS provider (or the
@@ -115,6 +127,10 @@ async def speak(
     that resource, so it closes it in a ``finally`` to avoid leaking the
     connection pool. A caller-supplied *tts* is never closed here; its
     lifecycle belongs to the caller.
+
+    Returns ``(accepted_chunks, rejected_chunks)`` from the transport's
+    ``send_audio`` results. Acceptance means scheduled for delivery, not
+    confirmed speaker playback.
     """
     owned_tts: TTSProvider | None = None
     if tts is None:
@@ -122,10 +138,16 @@ async def speak(
         tts = create_tts_provider(TTSProviderConfig(provider=provider, api_key=resolved_key))
         owned_tts = tts
 
+    accepted_chunks = rejected_chunks = 0
     try:
         async for event in tts.synthesize(TTSInput(text=text)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                await transport.send_audio(event.audio)
+                delivered = await transport.send_audio(event.audio)
+                if delivered is None or bool(delivered):
+                    accepted_chunks += 1
+                else:
+                    rejected_chunks += 1
+        return accepted_chunks, rejected_chunks
     finally:
         if owned_tts is not None:
             await close_if_supported(owned_tts)

@@ -1,7 +1,56 @@
 # Chapter 6 — Streaming Agent + Sentence TTS
 
+<!-- BEGIN auto:navigation -->
+**Progress: 7 of 16** · [← Chapter 5 — The Blocking Agent](../05-blocking-agent/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+<!-- END auto:navigation -->
+
 > Start speaking before the LLM is done thinking. First real
 > pipeline overlap.
+
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 4 — VAD + Pre-roll**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which frames disappear when pre-roll is disabled, and does the trigger frame itself remain?
+>
+> After recording your answer, explain one way `VAD pre-roll frame order` changes how you
+> reason about `sentence-level TTS handoff`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/04-vad-preroll/preroll_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `sentence-level TTS handoff` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** Do per-sentence acceptance counts stay independent, and do they add up to
+> the turn totals?
+>
+> ```bash
+> uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+> ```
+>
+> **Evidence to find:** sentence delivery rows preserve acceptance separately and roll up to one
+> matching turn.
+>
+> **Explain the result:** Trace one sentence row into the turn totals and explain what a rejected
+> chunk changes.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 ## Prerequisites
 
@@ -9,6 +58,11 @@
   diff against them.
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -26,9 +80,9 @@
 - **Modified:** `blocking_agent` becomes `stream_sentences_to_tts`
   — the LLM stream and TTS synth now overlap.
 - **Sidebar adds:** SSML / pronunciation, backpressure, and a
-  reprise of "partials can flap; act on FINAL only."
+  reprise of "partials can flap; commit spoken output on FINAL only."
 
-<!-- BEGIN auto:diff prev=05-blocking-agent src=main.py -->
+<!-- BEGIN auto:diff prev=05-blocking-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>05-blocking-agent/main.py</code> (auto-generated)</summary>
 
@@ -50,10 +104,10 @@
 +sentence N is still playing.
 +
 +First-audio latency drops by ~3× versus chapter 5.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-@@ -32,24 +34,28 @@
+@@ -33,25 +35,29 @@
  from easycat.events import (
      EventBus,
      STTEventType,
@@ -63,6 +117,7 @@
  )
 -from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
 +from easycat.session import split_at_sentence_boundaries
 +from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -71,24 +126,39 @@
 +from easycat.tts.input import TTSInput
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
- 
+
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch05-blocking-{int(time.time())}"
 +SESSION_ID = f"ch06-streaming-{int(time.time())}"
- 
- 
+
+
  class MiniTurnDetector:
 -    """Same as chapter 4."""
 +    """Same as chapters 4 & 5."""
- 
+
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -73,35 +79,109 @@
+@@ -76,50 +82,120 @@
                  self._preroll.append(chunk)
- 
- 
+
+
+-class FirstAudioProbe:
+-    """Forward audio while recording when the first chunk is accepted."""
+-
+-    def __init__(self, transport) -> None:
+-        self._transport = transport
+-        self.first_audio_at: float | None = None
+-
+-    async def send_audio(self, chunk: AudioChunk) -> bool:
+-        accepted = await self._transport.send_audio(chunk)
+-        normalized = accepted is None or bool(accepted)
+-        if normalized and self.first_audio_at is None:
+-            self.first_audio_at = time.monotonic()
+-        return normalized
+-
+-
 -def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
 -    """Record a closed span with start→end wall time in ms."""
 -    elapsed_ms = (time.monotonic() - t0) * 1000
@@ -121,7 +191,8 @@
              {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
              {"role": "user", "content": user_text},
          ],
--    )
++        stream=True,
+     )
 -    return resp.choices[0].message.content or ""
 -
 -
@@ -130,8 +201,6 @@
 -
 -    The STT stream has been receiving chunks from the parent caller's
 -    VAD loop already — we just close it here and drain the FINAL.
-+        stream=True,
-+    )
 +
 +    buffer = ""
 +    first_token_t: float | None = None
@@ -176,7 +245,7 @@
 +
 +async def drain_sentences_to_speaker(
 +    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-+) -> None:
++) -> tuple[float | None, int, int]:
 +    """Take one sentence at a time, synthesise, stream audio to speaker.
 +
 +    Because ``transport.send_audio`` returns as soon as the chunk is
@@ -184,23 +253,31 @@
 +    the current sentence is still audible. That is the pipeline overlap.
      """
 +    first_audio_t: float | None = None
++    accepted_chunks = rejected_chunks = 0
 +    while True:
 +        sentence = await sentence_queue.get()
 +        if sentence is None:
 +            break
 +
 +        synth_start = time.monotonic()
++        sentence_accepted = sentence_rejected = 0
 +        async for event in tts.synthesize(TTSInput(text=sentence)):
 +            if event.type == TTSEventType.AUDIO and event.audio is not None:
-+                if first_audio_t is None:
-+                    first_audio_t = time.monotonic()
-+                    journal.append(
-+                        kind=JournalRecordKind.EVENT,
-+                        name="tts.first_audio",
-+                        session_id=SESSION_ID,
-+                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-+                    )
-+                await transport.send_audio(event.audio)
++                accepted = await transport.send_audio(event.audio)
++                if accepted:
++                    accepted_chunks += 1
++                    sentence_accepted += 1
++                    if first_audio_t is None:
++                        first_audio_t = time.monotonic()
++                        journal.append(
++                            kind=JournalRecordKind.EVENT,
++                            name="tts.first_audio",
++                            session_id=SESSION_ID,
++                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
++                        )
++                else:
++                    rejected_chunks += 1
++                    sentence_rejected += 1
 +        journal.append(
 +            kind=JournalRecordKind.EVENT,
 +            name="stage.tts.execute",
@@ -208,9 +285,12 @@
 +            data={
 +                "stage": "tts",
 +                "elapsed_ms": (time.monotonic() - synth_start) * 1000,
++                "accepted_chunks": sentence_accepted,
++                "rejected_chunks": sentence_rejected,
 +                "text": sentence,
 +            },
 +        )
++    return first_audio_t, accepted_chunks, rejected_chunks
 +
 +
 +async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -218,10 +298,10 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -112,55 +192,26 @@
+@@ -130,53 +206,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
 +    journal.append(
 +        kind=JournalRecordKind.EVENT,
 +        name="stt.final",
@@ -238,7 +318,11 @@
 -        "stage.stt_to_agent",
 -        stt_final_t,
 -        at_ms=(agent_dispatch - stt_final_t) * 1000,
--    )
++    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
++    _, delivery = await asyncio.gather(
++        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
++        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
+     )
 -
 -    # Sub-gap 2: the LLM call itself. The biggest sub-gap — usually
 -    # 1-3 seconds of silence on a small model, more on a large one.
@@ -253,72 +337,90 @@
 -        reply=reply,
 -    )
 -
--    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
--    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
--    # until the whole file is enqueued on the transport. For teaching
--    # purposes we report the full synth-and-enqueue duration.
+-    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+-    # accepts. ``speak`` returns after every produced chunk has been offered,
+-    # so a forwarding probe captures the earlier first-accepted milestone.
 -    tts_start = time.monotonic()
 -    print(f"  bot:  {reply!r}")
--    await speak(transport, reply)
--    span(journal, "stage.tts.execute", tts_start, text=reply)
+-    audio_probe = FirstAudioProbe(transport)
+-    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
+-    tts_end = time.monotonic()
+-    first_audio_t = audio_probe.first_audio_at
+-    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
+-    tts_enqueue_ms = (tts_end - tts_start) * 1000
+-    span(
+-        journal,
+-        "stage.tts.execute",
+-        tts_start,
+-        text=reply,
+-        first_audio_ms=tts_first_audio_ms,
+-        enqueue_ms=tts_enqueue_ms,
+-        accepted_chunks=accepted_chunks,
+-        rejected_chunks=rejected_chunks,
+-    )
 -
-+    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    await asyncio.gather(
-+        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
-+        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
-+    )
-     total_gap = (time.monotonic() - stt_final_t) * 1000
-+    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
++    first_audio_t, accepted_chunks, rejected_chunks = delivery
++    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-         name="turn.gap",
-         session_id=SESSION_ID,
--        data={
--            "stage": "turn",
--            "total_gap_ms": total_gap,
+@@ -185,13 +228,10 @@
+         data={
+             "stage": "turn",
+             "total_gap_ms": total_gap,
 -            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
 -            "agent_ms": (agent_end - agent_start) * 1000,
--            "tts_ms": (time.monotonic() - tts_start) * 1000,
+-            "tts_ms": tts_first_audio_ms,
+-            "tts_enqueue_ms": tts_enqueue_ms,
++            "reply_enqueue_gap_ms": reply_enqueue_gap,
+             "tts_accepted_chunks": accepted_chunks,
+             "tts_rejected_chunks": rejected_chunks,
 -            "text": reply,
--        },
--    )
--    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
-+        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
-+    )
- 
- 
- async def main() -> None:
-@@ -172,6 +223,9 @@
-     vad = create_vad(VADConfig())
-     detector = MiniTurnDetector(vad)
-     client = AsyncOpenAI()
-+    tts = create_tts_provider(
-+        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-+    )
- 
-     def stt_factory():
-         return create_stt_provider(
-@@ -183,10 +237,9 @@
-         )
- 
-     await transport.connect()
--    print("Talk. Each turn will feel slow. That is the lesson.\n")
-+    print("Streaming agent. Ctrl-C to stop.\n")
- 
-     async def collect_turns():
--        """Same shape as chapter 4: stream live into STT per turn."""
-         stt = None
-         async for tag, chunk in detector.frames(transport.receive_audio()):
-             if tag == "speech_started":
-@@ -198,7 +251,7 @@
++            "text": final_text,
+         },
+     )
+     if total_gap is None:
+@@ -207,7 +247,7 @@
+         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
+
+
+-async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
++async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
+     """Stream turns and close every per-turn STT, including on cancellation."""
+     stt = None
+     try:
+@@ -220,11 +260,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
-                 await stt.end_stream()
--                await run_turn(transport, stt, client, journal)
-+                await run_turn(transport, stt, client, tts, journal)
-                 stt = None
- 
-     try:
+                 active_stt = stt
++                stt = None
+                 try:
+                     await active_stt.end_stream()
+-                    await run_turn(transport, active_stt, client, journal)
++                    await run_turn(transport, active_stt, client, tts, journal)
+                 finally:
+-                    stt = None
+                     await close_if_supported(active_stt)
+     finally:
+         if stt is not None:
+@@ -260,10 +300,15 @@
+
+         client = AsyncOpenAI()
+         resources.push_async_callback(close_if_supported, client)
+-
+-        print("Talk. Each turn will feel slow. That is the lesson.\n")
++        tts = create_tts_provider(
++            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
++        )
++        resources.push_async_callback(close_if_supported, tts)
++
++        print("Streaming agent. Ctrl-C to stop.\n")
++
+         try:
+-            await collect_turns(transport, detector, stt_factory, client, journal)
++            await collect_turns(transport, detector, stt_factory, client, tts, journal)
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
 ```
 
 </details>
@@ -445,7 +547,7 @@ async def stream_sentences_to_tts(
 ```python
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-) -> None:
+) -> tuple[float | None, int, int]:
     """Take one sentence at a time, synthesise, stream audio to speaker.
 
     Because ``transport.send_audio`` returns as soon as the chunk is
@@ -453,23 +555,31 @@ async def drain_sentences_to_speaker(
     the current sentence is still audible. That is the pipeline overlap.
     """
     first_audio_t: float | None = None
+    accepted_chunks = rejected_chunks = 0
     while True:
         sentence = await sentence_queue.get()
         if sentence is None:
             break
 
         synth_start = time.monotonic()
+        sentence_accepted = sentence_rejected = 0
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                if first_audio_t is None:
-                    first_audio_t = time.monotonic()
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="tts.first_audio",
-                        session_id=SESSION_ID,
-                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-                    )
-                await transport.send_audio(event.audio)
+                accepted = await transport.send_audio(event.audio)
+                if accepted:
+                    accepted_chunks += 1
+                    sentence_accepted += 1
+                    if first_audio_t is None:
+                        first_audio_t = time.monotonic()
+                        journal.append(
+                            kind=JournalRecordKind.EVENT,
+                            name="tts.first_audio",
+                            session_id=SESSION_ID,
+                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                        )
+                else:
+                    rejected_chunks += 1
+                    sentence_rejected += 1
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -477,11 +587,76 @@ async def drain_sentences_to_speaker(
             data={
                 "stage": "tts",
                 "elapsed_ms": (time.monotonic() - synth_start) * 1000,
+                "accepted_chunks": sentence_accepted,
+                "rejected_chunks": sentence_rejected,
                 "text": sentence,
             },
         )
+    return first_audio_t, accepted_chunks, rejected_chunks
 ```
 <!-- END auto:snippet -->
+
+### Delivery evidence survives the sentence queue
+
+Streaming creates a second aggregation problem. Each
+`stage.tts.execute` record belongs to one sentence, but the
+`turn.gap` record belongs to the whole reply. The drain therefore
+keeps accepted and rejected chunk counts at both scopes. Per-sentence
+records explain where delivery changed; the turn totals explain why a
+first-audio gap is or is not available.
+
+Run the provider-free probe:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+```
+
+It exercises rejection in both queued sentences, mixed delivery where
+the first accepted chunk may arrive in a later sentence, and an empty
+TTS stream. The outcomes stay distinct:
+
+| Outcome | Evidence |
+|---|---|
+| `first_audio_accepted` | At least one chunk was accepted and `tts.first_audio` exists. |
+| `all_chunks_rejected` | TTS produced chunks, but the transport accepted none. |
+| `no_chunks_produced` | No audio chunks reached the transport. |
+
+The first-accepted timestamp still marks audio scheduled for delivery,
+not rendered or heard. The counts add diagnosis; they do not change
+that boundary.
+
+## Two ownership scopes
+
+This is the first chapter where the manual example owns a complete
+voice stack. The resources have two different lifetimes:
+
+- A **per-turn STT** begins at `speech_started`. On a normal turn, the
+  script ends its logical stream, drains the final event, and then
+  closes the provider. If cancellation arrives before `speech_ended`,
+  the detector loop's `finally` arm still ends and closes it.
+- The **process-wide stack**—TTS, the OpenAI client, VAD, and the
+  transport—lives until the outer loop exits. `AsyncExitStack`
+  registers each cleanup when ownership begins and runs callbacks in
+  LIFO order: TTS → client → VAD → transport.
+
+That stack is more than compact syntax. If one callback raises,
+`AsyncExitStack` still attempts every registered cleanup before it
+propagates the error. A hand-written sequence of `await close(...)`
+calls would stop at the first failure unless it repeated nested
+`try/finally` blocks.
+
+Run the provider-free probe to see the normal, cancelled, and failing
+cleanup paths:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/voice_stack_cleanup_probe.py
+```
+
+All three paths end with the same resource order. The failure case
+still reaches `client.close`, `vad.close`, and `transport.disconnect`
+after `tts.close` raises. `AsyncExitStack` owns final cleanup; it does
+not replace the separate `end_stream()` step that finishes the active
+STT protocol.
 
 ## The toy vs. the production version
 
@@ -521,6 +696,13 @@ def first_audio_gap_ms(bundle_path):
 for b in Path("docs/teaching/06-streaming-agent/runs/").glob("*.bundle"):
     print(b.name, f"first-audio gap = {first_audio_gap_ms(b):.0f} ms")
 ```
+
+The bundle's `turn.gap.data["total_gap_ms"]` stores that same
+STT-final → first-accepted-audio interval. The drain continues after
+that milestone; `reply_enqueue_gap_ms` preserves the later time when
+the complete reply has been synthesized and handed to the transport.
+Neither value is acoustic playback time — measuring that needs a
+loopback, as chapter 5 explains.
 
 On a typical 3-sentence reply with `gpt-4o-mini`, expect
 first-audio to drop from ~3000 ms (blocking) to ~800-1200 ms
@@ -571,22 +753,40 @@ Production uses `easycat._bounded_queue.BoundedAudioQueue` with a
 
 ## Sidebar — partials can flap (reprise)
 
-Chapter 2 named the rule: agents fire on `STTFinal`, never on
-`STTPartial`. This is the chapter where it bites: we are finally
-wiring the agent in. `run_turn` only drains `STTEventType.FINAL`
-from the STT event stream. A naïve implementation that kicked
-off `stream_sentences_to_tts` on a partial would commit — in
-audio, audibly — to a guess the provider may have revised away
-by the time the final arrived.
+Chapter 2 named the boundary: reversible consumers such as live
+captions or cancellable speculation may react to `STTPartial`, but
+irreversible agent commits and spoken output wait for `STTFinal`.
+This is the chapter where that boundary bites: we are finally wiring
+the agent to TTS. `run_turn` only drains `STTEventType.FINAL` from the
+STT event stream because a naïve implementation that kicked off
+`stream_sentences_to_tts` on a partial would commit — in audio,
+audibly — to a guess the provider may have revised away by the time
+the final arrived.
 
 ## Try breaking it
 
-Add `MODEL = "gpt-4o"` (bigger, slower). Re-run. The per-sentence
-synth stays overlapping, but the *first* sentence now takes
-longer to complete because the first token arrives later. The
-`agent.first_token → tts.first_audio` span in the journal grows;
-everything downstream stays overlapping. This isolates which
-knob buys you what.
+Add `MODEL = "gpt-4o"` (bigger, slower). Re-run, then decompose each
+bundle:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/measure_start.py PATH
+```
+
+The model's startup belongs to `stt_final_to_first_token_ms`, before
+the first non-empty delta exists. `first_token_to_first_audio_ms`
+starts after that milestone and covers sentence accumulation plus the
+first TTS audio. Their sum is `stt_final_to_first_audio_ms`, the
+software milestone closest to when the bot starts replying. Compare
+`sentence_tts_ms` separately; response wording may change those values
+even when the TTS provider does not.
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

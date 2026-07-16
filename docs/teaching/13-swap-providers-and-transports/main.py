@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -56,6 +57,22 @@ from easycat import (
 )
 
 RUNS_DIR = Path(__file__).parent / "runs"
+
+
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def measurement_commands(path: Path) -> tuple[str, str]:
+    """Commands that read this production-shaped bundle directly."""
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
+    return (
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
+    )
 
 
 def build_agent() -> object:
@@ -89,6 +106,25 @@ def transport_config(name: str):
     raise SystemExit(f"Unknown transport: {name}")
 
 
+def telephony_config(name: str):
+    """Wire Twilio-backed session actions for the phone transport."""
+    if name != "twilio":
+        return None
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not account_sid or not auth_token:
+        raise SystemExit("Twilio actions need TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN.")
+
+    from easycat import TelephonyConfig, TwilioSessionActionConfig
+
+    return TelephonyConfig(
+        twilio_actions=TwilioSessionActionConfig(
+            account_sid=account_sid,
+            auth_token=auth_token,
+        )
+    )
+
+
 def provider_mix(name: str) -> dict:
     """Return the STT/TTS strings for the named mix.
 
@@ -120,22 +156,31 @@ async def main() -> None:
     config = EasyConfig(
         agent=build_agent(),
         transport=transport_config(args.transport),
+        telephony=telephony_config(args.transport),
         debug="light",  # journal must be on so export_debug_bundle works
         **mix,
     )
     session = create_session(config)
     attach_runtime_feedback(session)
 
-    await session.start()
-    print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
     try:
-        await wait_for_shutdown_signal(session)
+        async with session:
+            print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+            await wait_for_shutdown_signal(session)
     finally:
+        # Context exit force-stops cancellation paths. The normal signal helper
+        # already stopped gracefully, so that second stop is an idempotent no-op.
+        # Export from the preserved read-only postmortem view even when shutdown
+        # reached this scope through cancellation.
         RUNS_DIR.mkdir(exist_ok=True)
         path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
         try:
             export_debug_bundle(session, path, overwrite=True)
-            print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
+            print(f"Wrote bundle → {_display_path(path)}")
+            human_command, json_command = measurement_commands(path)
+            print("Measure this production-shaped bundle directly:")
+            print(f"  {human_command}")
+            print(f"  {json_command}")
         except Exception as exc:  # noqa: BLE001 — teaching script
             print(f"(no bundle written: {exc})")
 

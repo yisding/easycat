@@ -151,8 +151,10 @@ def test_first_feature_chapter_names_the_registered_realtime_stt() -> None:
 
     assert 'stt="openai-realtime"' in exercises
     assert 'stt="openai/realtime"' not in exercises
-    config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
-    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
+    default_config = EasyConfig(openai_api_key="test-key")
+    explicit_config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
+    assert isinstance(default_config.stt, OpenAIRealtimeSTTConfig)
+    assert explicit_config.stt == default_config.stt
 
 
 def test_runtime_modes_chapter_covers_every_voice_app_mode_and_boundary() -> None:

@@ -256,6 +256,7 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
             out_dir = Path(command[-1])
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+            (out_dir / "easycat-0.1.0.tar.gz").write_text("sdist")
         for arg in command:
             if arg.startswith("--junitxml="):
                 Path(arg.removeprefix("--junitxml=")).write_text("<testsuite />")
@@ -308,7 +309,8 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
     assert payload["artifacts"]["quick_report"]["kind"] == "validation_report"
     assert payload["artifacts"]["latency_sweep_report"]["kind"] == "validation_report"
     assert (tmp_path / "latest.json").read_text() == result.report_path.read_text()
-    assert any(command[:2] == ["uv", "build"] for command in commands)
+    build_command = next(command for command in commands if command[:2] == ["uv", "build"])
+    assert "--no-sources" in build_command
     assert any(
         command[:4]
         == [
@@ -336,7 +338,11 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
         for command in commands
     )
     assert any(env.get("PYTHONPATH") == "" for env in command_envs)
-    assert any(cwd is not None and not cwd.is_relative_to(Path.cwd()) for cwd in command_cwds)
+    external_cwds = [
+        cwd for cwd in command_cwds if cwd is not None and not cwd.is_relative_to(Path.cwd())
+    ]
+    assert external_cwds
+    assert all(not cwd.exists() for cwd in external_cwds)
 
 
 def test_release_validation_fails_when_child_slice_fails(
@@ -355,6 +361,7 @@ def test_release_validation_fails_when_child_slice_fails(
             out_dir = Path(command[-1])
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+            (out_dir / "easycat-0.1.0.tar.gz").write_text("sdist")
         for arg in command:
             if arg.startswith("--junitxml="):
                 Path(arg.removeprefix("--junitxml=")).write_text("<testsuite />")
@@ -393,6 +400,105 @@ def test_release_validation_fails_when_child_slice_fails(
     assert payload["status"] == "fail"
     assert payload["tool_exit_codes"]["release.quick"] == 1
     assert payload["failures"][-1]["name"] == "release.quick"
+
+
+def test_release_validation_stops_after_wheel_install_failure(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        commands.append(command)
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+            (out_dir / "easycat-0.1.0.tar.gz").write_text("sdist")
+        if command[:3] == ["uv", "pip", "install"] and any(
+            arg.startswith("easycat[") for arg in command
+        ):
+            return CommandResult(exit_code=1, stderr="wheel install failed")
+        return CommandResult(exit_code=0)
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert payload["tool_exit_codes"]["release.install"] == 1
+    assert "release.install-test-tools" not in payload["tool_exit_codes"]
+    assert not any("pytest" in command for command in commands)
+    assert not any(command[-1:] == ["--help"] for command in commands)
+
+
+def test_release_validation_stops_after_metadata_failure(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        commands.append(command)
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+            (out_dir / "easycat-0.1.0.tar.gz").write_text("sdist")
+        if command[:3] == ["uvx", "twine", "check"]:
+            return CommandResult(exit_code=1, stderr="invalid package metadata")
+        return CommandResult(exit_code=0)
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert payload["tool_exit_codes"]["release.metadata"] == 1
+    assert "release.venv" not in payload["tool_exit_codes"]
+    assert not any(command[:2] == ["uv", "venv"] for command in commands)
+
+
+def test_release_validation_requires_wheel_and_sdist(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        commands.append(command)
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+        return CommandResult(exit_code=0)
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert any(failure["name"] == "release.sdist" for failure in payload["failures"])
+    assert "release.venv" not in payload["tool_exit_codes"]
+    assert not any(command[:2] == ["uv", "venv"] for command in commands)
 
 
 def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:

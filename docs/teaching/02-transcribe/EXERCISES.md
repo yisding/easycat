@@ -1,5 +1,22 @@
 # Chapter 2 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:navigation -->
+
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
+
 ## 1. Find the moment STT committed to the wrong guess
 
 **Task.** Say a word the STT consistently mishears ("bass" vs
@@ -7,20 +24,45 @@
 `streaming.py`, then read the bundle and find the exact partial
 where the wrong guess stuck. Compare it to the final.
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The bundle is `runs/*.bundle`. Open it with
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The bundle is `runs/*.bundle`. Open it with
    `easycat.debug.testing.load_bundle`.
-2. Filter records by `name == "stt.partial"` and
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Filter records by `name == "stt.partial"` and
    `name == "stt.final"`. You should see the sequence of guesses
    converging.
-3. The interesting case is when the *final* commits to a wrong
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The interesting case is when the *final* commits to a wrong
    guess — meaning the provider had a better partial at some
    earlier point and threw it away. That's a recall failure (the
    right hypothesis was on the table; the LM-prior overruled it).
-4. The opposite case is also interesting: the final is *right* but
-   the user heard wrong-looking partials flap by. That's why
-   chapter 6 reinforces "never act on partials."
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+The opposite case is also interesting: the final is *right* but
+   the user saw wrong-looking partials flap by. That's why chapter 6
+   reinforces "never commit spoken output from a partial."
 
 **Wider points to check yourself on**
 
@@ -28,38 +70,331 @@ where the wrong guess stuck. Compare it to the final.
   easier or harder? (Easier: all partials cluster at the end so
   the sequence is dense. Harder: the timing is misleading — the
   partials don't reflect when the *audio* was uttered.)
-- Try the same exercise on Deepgram (`provider="deepgram"`,
-  `DEEPGRAM_API_KEY` required). Mid-speech partials change the
-  feel completely.
+- Try the same exercise with both executable paths:
+
+  ```bash
+  uv run python docs/teaching/02-transcribe/streaming.py --provider openai
+  uv run python docs/teaching/02-transcribe/streaming.py --provider deepgram
+  ```
+
+  Deepgram requires `DEEPGRAM_API_KEY`. Mid-speech partials change the feel
+  completely; no source edit should be necessary.
+- Inspect each bundle's `stt.provider.selected` record before comparing
+  `offset_ms`. Confirm the credential *name* is present but its secret value
+  is not, and explain why `after_stream_end` is not microphone latency while
+  `during_audio` can be.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Open a bundle in two ways
 
 **Task.** Read the same bundle two ways:
 
 ```python
-# Way 1: linear iteration
-for r in b.records():
-    if r["name"] == "stt.partial":
-        print(r["data"]["text"])
+from easycat.debug.testing import load_bundle
 
-# Way 2: structured query
-view = b.view  # JournalView
-for r in view.filter_by_stage("stt"):
-    print(r["sequence"], r["data"].get("text"))
+b = load_bundle("docs/teaching/02-transcribe/runs/<file>.bundle")
+
+# Way 1: linear iteration
+linear = [r for r in b.records() if r["name"] == "stt.partial"]
+
+# Way 2: RunBundle's structured stage filter
+structured = [r for r in b.filter_by_stage("stt") if r["name"] == "stt.partial"]
+
+assert [r["sequence"] for r in linear] == [r["sequence"] for r in structured]
+for r in structured:
+    print(r["sequence"], r["data"]["text"])
 ```
 
 When does each shape pay off?
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. Linear iteration is good for "I want to see what happened in
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Linear iteration is good for "I want to see what happened in
    order." Structured query is good for "I want all records of
    one kind, ordered correctly."
-2. Chapter 11 leans entirely on the structured query shape because
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Chapter 11 leans entirely on the structured query shape because
    real debugging is "all the TTS spans in this turn" not "every
    record from t=0."
 
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`load_bundle()` returns a `RunBundle`; its query helpers return
+   dictionaries just like `records()`. A live session journal exposes
+   a `JournalView` whose query helpers return typed `JournalRecord`
+   objects. Chapter 11 compares those two representations explicitly.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 3. Draw the partial-commit boundary
+
+**Task.** Run the deterministic policy probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/partial_policy_probe.py
+```
+
+Change the second partial to "cancel my timer" while leaving the final as
+"set a timer for fifty minutes." Predict every list before rerunning it. Which
+consumers may observe the cancellation hypothesis, and which must wait?
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+A caption can replace text freely; no external state was committed.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Speculation is safe only when it is keyed, cancellable, or discardable when
+   the hypothesis changes.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Tool calls, database writes, agent-history commits, and spoken audio cross
+   the irreversible boundary. Dispatch those from `FINAL`, not `PARTIAL`.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 4. Separate stream end from provider close
+
+**Task.** Run the provider-free ownership probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/transcribe_ownership_probe.py
+```
+
+Predict the four lifecycle booleans before reading the output. Then remove the
+helper's final `close_if_supported(owned_stt)` call temporarily and rerun. Which
+contract breaks, and why would a persistent provider make that visible?
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+The logical stream ends in both cases because this helper owns the one-file
+   transcription operation.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The helper-created STT's final cleanup also belongs to the helper.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+A caller-supplied STT may be reused for another operation, so closing it
+   would violate the caller's ownership.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 5. Audit recording retention
+
+**Task.** Run `batch.py`, open its newest bundle, and inspect
+`recording.complete` plus `recording.cleaned`. Which sensitive data survives,
+and which does not?
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`recording.complete.data` contains the filename, duration, and
+   `retention="temporary"`; it does not persist the absolute system-temp path.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`recording.cleaned.data.deleted` is `true` because bundle export happens
+   after the `TemporaryDirectory` exits. The raw WAV is not a bundle artifact.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+`stt.final.data.text` does survive. A transcript is PII-bearing even when
+   raw audio is gone, so protect and expire the bundle accordingly.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Temporarily make `transcribe_file()` raise in a scratch copy. The context
+   still removes the WAV, although no success bundle is exported.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+If you intentionally retain audio, use an explicit project path or
+   artifact store with consent and a deletion policy. An untracked temp file
+   is not a retention strategy.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 6. Fail one streaming sibling
+
+**Task.** Run the provider-free lifetime probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
+```
+
+Before reading the JSON, predict which cleanup events appear after a transport
+connect failure, a failure after microphone startup, an STT start failure, and
+an audio-feed failure. Then replace the `TaskGroup` in a scratch copy of
+`streaming.py` with its old `gather()` call. Which ordering guarantee
+disappears?
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 6</summary>
+
+The transport and provider objects exist before `connect()` returns, so
+   their final cleanup is registered before that fallible await.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 6</summary>
+
+In `partial_connect_failure`, the input stream starts before output startup
+   fails. `transport.input.stop` proves the partially acquired device is still
+   released.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 6</summary>
+
+`end_stream()` is registered only after `start_stream()` succeeds. A start
+   failure must close the provider and disconnect the transport, but it did
+   not open a logical stream that needs ending.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 6</summary>
+
+In the feed failure, `TaskGroup` cancels and joins the blocked event
+   consumer first. `stt.events.cancelled` must therefore precede every
+   resource-cleanup event.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 6</summary>
+
+The propagated feed error is an `ExceptionGroup` because `TaskGroup`
+   preserves concurrent failures. The probe unwraps its first root message for
+   compact JSON; production code may handle groups with `except*`.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 6 of 6</summary>
+
+`AsyncExitStack` and `TaskGroup` solve different problems: resource
+   ownership versus task ownership. A correct streaming scope needs both.
+
+</details>
+<!-- END auto:exercise-hints -->
+
 ## Self-check
 
-You should be able to read any bundle from any chapter from now on
-without consulting the README of the chapter that produced it.
+<!-- BEGIN auto:self-check-protocol -->
+> **Closed-book retrieval gate**
+>
+> 1. Close the chapter narrative and every hint disclosure.
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
+>    from your attempt record.
+> 4. Mark each answer **pass** or **retry** in your progress record.
+>
+> If an answer needs notes, reopen only the section that owns the weak concept,
+> correct your explanation, close it, and retry. Continue only when every answer
+> passes without looking.
+<!-- END auto:self-check-protocol -->
+
+1. Which envelope fields let you orient an unfamiliar bundle without its
+   chapter README?
+2. Why may a partial transcript drive reversible speculation but not commit an
+   irreversible side effect, and which event sequence proves the distinction?
+3. Who ends one logical STT stream, who closes the provider resource, and which
+   records prove both actions occurred in order?
+4. Which independent settings control raw-audio retention and transcript
+   retention, and how would you verify each in a bundle?
+5. How can Chapter 2 switch STT providers without editing its consumer loop,
+   and how does a provider wire target differ from an upstream input-rate
+   restriction?
+6. Which task and teardown records prove that every concurrent task has stopped
+   before shared STT and transport resources begin teardown?
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete? Prepare the cumulative spine, then replay it through this chapter:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4 --show-evidence
+```
+
+- [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
+- [Continue to Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:exercise-completion -->
