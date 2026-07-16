@@ -26,6 +26,7 @@ from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
     PlaybackMarkAck,
+    STTFinal,
     TransportAudioDelivered,
     TurnEnded,
     TurnStarted,
@@ -279,6 +280,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         journal_enabled=journal is not None,
     )
     event_bus.subscribe(TurnStarted, turn_runner.on_turn_started)
+    event_bus.subscribe(STTFinal, turn_runner.on_stt_final)
     event_bus.subscribe(TurnEnded, turn_runner.schedule_turn_ended)
 
     # Plug the TurnStage into the TurnManager's endpoint-detector call so

@@ -29,6 +29,7 @@ import collections
 import os
 import time
 import types
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,6 +62,7 @@ SESSION_ID = f"ch09c-estimate-{int(time.time())}"
 
 # OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
 TTS_BYTES_PER_SECOND = 24_000 * 2
+LOCAL_OUTPUT_FRAME_MS = 20
 
 
 @dataclass
@@ -99,6 +101,19 @@ def _expected_bytes(text: str) -> int:
     chars_per_sec = 15
     seconds = len(text) / chars_per_sec
     return int(seconds * TTS_BYTES_PER_SECOND)
+
+
+def _local_output_frames(chunk: AudioChunk) -> Iterator[AudioChunk]:
+    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
+    frame_bytes = (
+        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
+    )
+    for offset in range(0, len(chunk.data), frame_bytes):
+        yield AudioChunk(
+            data=chunk.data[offset : offset + frame_bytes],
+            format=chunk.format,
+            timestamp=chunk.timestamp,
+        )
 
 
 class MiniTurnDetector:
@@ -165,9 +180,17 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 await tts.cancel()
                 break
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                accepted = await transport.send_audio(event.audio)
-                if accepted:
-                    ledger.bytes_accepted += len(event.audio.data)
+                # LocalTransport reports False for a partial fit. Sending one
+                # callback-sized frame at a time makes acceptance atomic, so
+                # the ledger can still credit an accepted head accurately.
+                for frame in _local_output_frames(event.audio):
+                    if cancel.is_cancelled:
+                        await tts.cancel()
+                        break
+                    if await transport.send_audio(frame):
+                        ledger.bytes_accepted += len(frame.data)
+                if cancel.is_cancelled:
+                    break
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -179,6 +202,22 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 "cancelled": cancel.is_cancelled,
             },
         )
+
+
+async def _reap_completed_bot_task(bot_task, active_cancel, active_ledger, journal):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel, active_ledger
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=SESSION_ID,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None, None
 
 
 async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
@@ -200,51 +239,58 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     while True:
         tag, chunk = await mic_queue.get()
 
+        # Clean completions update history inside ``_bot``. Reap both
+        # successful and failed tasks before handling this microphone event.
+        bot_task, active_cancel, active_ledger = await _reap_completed_bot_task(
+            bot_task, active_cancel, active_ledger, journal
+        )
+
         # Barge-in during bot speech → cancel AND rewrite history.
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
+            if tag != "speech_started" or active_cancel is None or active_ledger is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=SESSION_ID,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            await transport.clear_audio()
+
+            # Let the bot task unwind so the ledger is final. A
+            # transient agent/TTS error here shouldn't take the
+            # whole session down mid-barge-in; log it and move on.
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=SESSION_ID,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                await transport.clear_audio()
 
-                # Let the bot task unwind so the ledger is final. A
-                # transient agent/TTS error here shouldn't take the
-                # whole session down mid-barge-in; log it and move on.
-                try:
-                    await bot_task
-                except Exception as exc:
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="bot_task.error",
-                        session_id=SESSION_ID,
-                        data={"stage": "coordinator", "error": repr(exc)},
-                    )
-
-                heard = active_ledger.heard_text()
-                full = " ".join(active_ledger.sentences_sent)
-                journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="interruption.estimate",
-                    session_id=SESSION_ID,
-                    data={
-                        "stage": "interruption",
-                        "full_text": full,
-                        "heard_text": heard,
-                        "bytes_accepted": active_ledger.bytes_accepted,
-                    },
-                )
-                # Rewrite history to the best prefix this toy can estimate.
-                history.append({"role": "assistant", "content": heard})
-                print(f"  bot (cut): {heard!r}")
-                active_cancel = None
-                active_ledger = None
-                bot_task = None
-            continue
+            heard = active_ledger.heard_text()
+            full = " ".join(active_ledger.sentences_sent)
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.estimate",
+                session_id=SESSION_ID,
+                data={
+                    "stage": "interruption",
+                    "full_text": full,
+                    "heard_text": heard,
+                    "bytes_accepted": active_ledger.bytes_accepted,
+                },
+            )
+            # Rewrite history to the best prefix this toy can estimate.
+            history.append({"role": "assistant", "content": heard})
+            print(f"  bot (cut): {heard!r}")
+            active_cancel = None
+            active_ledger = None
+            bot_task = None
+            # Fall through so this start marker opens the barge-in STT stream.
 
         if tag == "speech_started":
             if stt is None:
@@ -289,7 +335,12 @@ async def main() -> None:
         raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
 
     journal = InMemoryRingBuffer(capacity=10_000)
-    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+    transport = LocalTransport(
+        LocalTransportConfig(
+            audio_format=PCM16_MONO_24K,
+            frame_duration_ms=LOCAL_OUTPUT_FRAME_MS,
+        )
+    )
     vad = create_vad(VADConfig())
     detector = MiniTurnDetector(vad)
     client = AsyncOpenAI()
