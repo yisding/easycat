@@ -101,12 +101,14 @@ def test_printed_latency_command_accepts_production_journal_shape(tmp_path: Path
     assert payload["percentiles"]["vad->tts"]["p50"] == pytest.approx(300.0)
 
 
-def test_live_single_session_chapters_stop_before_export() -> None:
+def test_live_single_session_chapters_exit_scope_before_export() -> None:
     for slug in ("13-swap-providers-and-transports", "14-bring-your-own-agent"):
         source = (REPO_ROOT / "docs" / "teaching" / slug / "main.py").read_text(encoding="utf-8")
-        stop = source.index("await session.stop(force=True)")
+        scope = source.index("async with session:")
         export = source.index("export_debug_bundle(session, path, overwrite=True)")
-        assert stop < export, slug
+        assert scope < export, slug
+        assert "await session.start()" not in source, slug
+        assert "await session.stop(force=True)" not in source, slug
 
 
 @pytest.mark.asyncio
@@ -117,11 +119,12 @@ async def test_run_stops_before_export_and_prints_measurement_commands(
     events: list[object] = []
 
     class FakeSession:
-        async def start(self) -> None:
+        async def __aenter__(self):
             events.append("start")
+            return self
 
-        async def stop(self, *, force: bool = False) -> None:
-            events.append(("stop", force))
+        async def __aexit__(self, _exc_type, _exc, _tb) -> None:
+            events.append(("stop", True))
 
     session = FakeSession()
 

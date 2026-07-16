@@ -163,15 +163,15 @@ async def main() -> None:
     session = create_session(config)
     attach_runtime_feedback(session)
 
-    await session.start()
-    print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
     try:
-        await wait_for_shutdown_signal(session)
+        async with session:
+            print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+            await wait_for_shutdown_signal(session)
     finally:
-        # The helper stops gracefully on its normal signal path. This
-        # idempotent force-stop also covers cancellation by an outer loop,
-        # so the exported bundle always observes a clean postmortem session.
-        await session.stop(force=True)
+        # Context exit force-stops cancellation paths. The normal signal helper
+        # already stopped gracefully, so that second stop is an idempotent no-op.
+        # Export from the preserved read-only postmortem view even when shutdown
+        # reached this scope through cancellation.
         RUNS_DIR.mkdir(exist_ok=True)
         path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
         try:
