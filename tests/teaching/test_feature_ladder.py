@@ -502,3 +502,8 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert (
         "uv run python docs/using-easycat/05-agent-bridges/main.py matrix" in bridges["commands"]
     )
+    session_control = entries["docs/using-easycat/06-session-control/"]
+    assert (
+        "uv run python docs/using-easycat/06-session-control/main.py text"
+        in session_control["commands"]
+    )
