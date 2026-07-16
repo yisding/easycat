@@ -50,7 +50,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 | You have | Start with | Why |
 |---|---|---|
-| No mic or API keys | [`11-journal`](./11-journal/) or [`12-evals-and-latency`](./12-evals-and-latency/) | They use checked-in bundles; chapter 12's `llm_judge.py` is the only optional live-key script. |
+| No mic or API keys | [`10-cleaning-signal`](./10-cleaning-signal/) offline replay, [`11-journal`](./11-journal/), or [`12-evals-and-latency`](./12-evals-and-latency/) | Chapter 10 uses checked-in WAV pairs; chapters 11-12 use checked-in bundles. Chapter 12's `llm_judge.py` is the only optional live-key script. |
 | A mic and speakers, but no API keys | [`00-hello-audio`](./00-hello-audio/) or [`01-echo`](./01-echo/) | They teach PCM and the `Transport` protocol without provider calls. |
 | `OPENAI_API_KEY` | [`02-transcribe`](./02-transcribe/) | It adds STT and writes the first `RunBundle`. |
 | `OPENAI_API_KEY` and `DEEPGRAM_API_KEY` | [`03-parrot-naive`](./03-parrot-naive/) through [`10-cleaning-signal`](./10-cleaning-signal/) | These chapters use streaming STT, VAD, TTS, agents, tools, smart-turn, interruption, and signal cleanup. |
@@ -111,12 +111,18 @@ uv run easycat validate report .easycat/validation/latest.json --json
   deepgram --extra elevenlabs`; its WebRTC and Twilio transport
   variants need `--extra webrtc` and `--extra telephony`,
   respectively.
-- A mic and speakers for the build chapters. Chapters 11 and 12
-  ship checked-in bundles you can read without hardware.
+- A mic and speakers for the live build chapters. Chapter 10's offline
+  replay ships checked-in WAV pairs; chapters 11 and 12 ship checked-in
+  bundles. Those paths need no audio hardware.
 - API keys, set as environment variables:
   - `OPENAI_API_KEY` — default STT / TTS / agent provider.
   - `DEEPGRAM_API_KEY` — used in chapters 3-10 for streaming STT.
   - `ELEVENLABS_API_KEY` — used in chapter 13's provider-swap mix.
+- Provider-backed chapters make live API calls that may incur charges.
+  Review provider billing and usage limits before running them.
+- Provider-backed scripts may send audio, transcripts, prompts, or eval
+  content to configured services. Use non-sensitive test content and review
+  provider data-handling policies first.
 - After setting the keys for a chapter, run `uv run easycat doctor`
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug
