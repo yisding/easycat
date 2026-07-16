@@ -133,7 +133,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -80,101 +128,160 @@
+@@ -80,83 +128,150 @@
                  self._preroll.append(chunk)
  
  
@@ -325,14 +325,14 @@
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
 +    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
- ) -> None:
+ ) -> float | None:
 -    """Take one sentence at a time, synthesise, stream audio to speaker.
 -
 -    Because ``transport.send_audio`` returns as soon as the chunk is
 -    enqueued for playback, the next ``tts.synthesize`` can start while
 -    the current sentence is still audible. That is the pipeline overlap.
 -    """
--    first_audio_t: float | None = None
+     first_audio_t: float | None = None
      while True:
 -        sentence = await sentence_queue.get()
 -        if sentence is None:
@@ -344,19 +344,20 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
--                accepted = await transport.send_audio(event.audio)
--                if accepted and first_audio_t is None:
--                    first_audio_t = time.monotonic()
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="tts.first_audio",
--                        session_id=SESSION_ID,
+@@ -167,7 +282,11 @@
+                         kind=JournalRecordKind.EVENT,
+                         name="tts.first_audio",
+                         session_id=SESSION_ID,
 -                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
--                    )
-+                await transport.send_audio(event.audio)
++                        data={
++                            "stage": "tts",
++                            "kind": kind,
++                            "t_ms": first_audio_t * 1000,
++                        },
+                     )
          journal.append(
              kind=JournalRecordKind.EVENT,
-             name="stage.tts.execute",
+@@ -175,6 +294,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -364,7 +365,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -182,7 +289,6 @@
+@@ -183,7 +303,6 @@
  
  
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -372,7 +373,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -193,26 +299,20 @@
+@@ -194,16 +313,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -385,24 +386,13 @@
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
 +    sentence_queue: asyncio.Queue = asyncio.Queue()
-     await asyncio.gather(
+     _, first_audio_t = await asyncio.gather(
 -        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        run_agent_streaming(client, final_text, sentence_queue, journal),
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
-     total_gap = (time.monotonic() - stt_final_t) * 1000
--    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
-     journal.append(
-         kind=JournalRecordKind.EVENT,
-         name="turn.gap",
-         session_id=SESSION_ID,
-         data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
-     )
-+    print(f"  (turn gap: {total_gap:.0f} ms)")
- 
- 
- async def main() -> None:
-@@ -238,7 +338,7 @@
+     reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+@@ -248,7 +361,7 @@
          )
  
      await transport.connect()

@@ -105,7 +105,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -55,222 +57,160 @@
+@@ -55,223 +57,163 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -444,10 +444,11 @@
      await sentence_queue.put(None)
  
  
--async def drain_sentences_to_speaker(
+ async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
--) -> None:
-+async def drain_sentences_to_speaker(tts, transport, sentence_queue, journal, session_id):
++    tts, transport, sentence_queue, journal, session_id
+ ) -> float | None:
+     first_audio_t: float | None = None
      while True:
 -        item = await sentence_queue.get()
 -        if item is None:
@@ -458,7 +459,19 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -278,51 +218,75 @@
+@@ -281,20 +223,15 @@
+                     journal.append(
+                         kind=JournalRecordKind.EVENT,
+                         name="tts.first_audio",
+-                        session_id=SESSION_ID,
+-                        data={
+-                            "stage": "tts",
+-                            "kind": kind,
+-                            "t_ms": first_audio_t * 1000,
+-                        },
++                        session_id=session_id,
++                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                     )
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -470,7 +483,8 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-         )
+@@ -302,29 +239,28 @@
+     return first_audio_t
  
  
 -async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -488,21 +502,23 @@
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue = asyncio.Queue()
 +    q: asyncio.Queue = asyncio.Queue()
-     await asyncio.gather(
+     _, first_audio_t = await asyncio.gather(
 -        run_agent_streaming(client, final_text, sentence_queue, journal),
 -        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
 +        run_agent_streaming(client, final_text, q),
 +        drain_sentences_to_speaker(tts, transport, q, journal, session_id),
      )
-     total_gap = (time.monotonic() - stt_final_t) * 1000
+     reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
          name="turn.gap",
 -        session_id=SESSION_ID,
 +        session_id=session_id,
-         data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
-     )
-     print(f"  (turn gap: {total_gap:.0f} ms)")
+         data={
+             "stage": "turn",
+             "total_gap_ms": total_gap,
+@@ -339,13 +275,39 @@
  
  
  async def main() -> None:
@@ -544,7 +560,7 @@
      client = AsyncOpenAI()
      tts = create_tts_provider(
          TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -338,7 +302,7 @@
+@@ -361,7 +323,7 @@
          )
  
      await transport.connect()
@@ -553,7 +569,7 @@
  
      async def collect_turns():
          stt = None
-@@ -351,7 +315,7 @@
+@@ -374,7 +336,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
@@ -562,7 +578,7 @@
                  stt = None
  
      try:
-@@ -362,7 +326,7 @@
+@@ -385,7 +347,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

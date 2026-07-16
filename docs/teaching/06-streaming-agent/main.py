@@ -144,7 +144,7 @@ async def stream_sentences_to_tts(
 
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-) -> None:
+) -> float | None:
     """Take one sentence at a time, synthesise, stream audio to speaker.
 
     Because ``transport.send_audio`` returns as soon as the chunk is
@@ -179,6 +179,7 @@ async def drain_sentences_to_speaker(
                 "text": sentence,
             },
         )
+    return first_audio_t
 
 
 async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -201,18 +202,27 @@ async def run_turn(transport, stt, client, tts, journal) -> None:
     )
     print(f"  user: {final_text!r}")
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-    await asyncio.gather(
+    _, first_audio_t = await asyncio.gather(
         stream_sentences_to_tts(client, final_text, sentence_queue, journal),
         drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
     )
-    total_gap = (time.monotonic() - stt_final_t) * 1000
-    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="turn.gap",
         session_id=SESSION_ID,
-        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
+        data={
+            "stage": "turn",
+            "total_gap_ms": total_gap,
+            "reply_enqueue_gap_ms": reply_enqueue_gap,
+            "text": final_text,
+        },
     )
+    if total_gap is None:
+        print("  (turn gap unavailable — TTS produced no accepted audio)")
+    else:
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
 
 
 async def main() -> None:
