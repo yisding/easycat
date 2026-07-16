@@ -528,13 +528,13 @@ visible.
 
 1. Change `get_weather` to sleep 5 s. Listen — one filler is no
    longer enough. Add a "still working on it" at the 2.5 s mark.
-2. Open `src/easycat/session/actions.py` and read the five
-   action dataclasses. For each one, answer in one sentence:
-   *why is this a session action and not a tool?* (The test is
-   whether the LLM has anything useful to do with the return
-   value.) The chapter ships no concrete action wiring because
-   the executors live at the Session layer, which we don't have
-   yet — but the reasoning is the payload.
+2. Run [`action_catalog.py`](action_catalog.py) and read the seven
+   action dataclasses it discovers. For each one, answer in one
+   sentence: *why is this a session action and not an inline tool?*
+   Then compare `core_supported`: every session registers
+   `CoreSessionActionExecutor` for `EndCallAction`, `AddToDNCAction`,
+   and `RemoveFromDNCAction`; transfer, DTMF, SMS, and custom actions
+   need a configured provider or application executor.
 3. Make a tool that returns a 5 KB JSON blob. Verify none of it
    reaches TTS. If it does, find the leak.
 
