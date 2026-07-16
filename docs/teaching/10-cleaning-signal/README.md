@@ -303,15 +303,12 @@ hearing.
 -                "bytes_accepted_so_far": ledger.bytes_accepted,
 -                "cancelled": cancel.is_cancelled,
 -            },
--        )
--
--
--async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
 +            session_id=session_id,
 +            data={"stage": "tts", "text": sentence},
-+        )
-+
-+
+         )
+ 
+ 
+-async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
 +async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
      """Retrieve a background result so failures never become orphan warnings."""
      (result,) = await asyncio.gather(bot_task, return_exceptions=True)
@@ -333,7 +330,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -250,76 +238,42 @@
+@@ -250,35 +238,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -360,16 +357,32 @@ hearing.
 +    if tag != "speech_started" or active_cancel is None:
 +        return bot_task, active_cancel, True
  
+     started_at = time.monotonic()
      journal.append(
          kind=JournalRecordKind.EVENT,
          name="interruption.start",
 -        session_id=SESSION_ID,
 +        session_id=session_id,
-         data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+         data={"stage": "vad", "t_ms": started_at * 1000},
      )
      active_cancel.cancel()
      await transport.clear_audio()
+     clear_returned_at = time.monotonic()
 -    await observe_bot_task(bot_task, journal)
++    await observe_bot_task(bot_task, journal, session_id)
+     bot_returned_at = time.monotonic()
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="interruption.cancel_complete",
+-        session_id=SESSION_ID,
++        session_id=session_id,
+         data={
+             "stage": "interruption",
+             "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
+@@ -286,54 +274,20 @@
+             "t_ms": bot_returned_at * 1000,
+         },
+     )
 -
 -    heard = active_ledger.heard_text()
 -    full = " ".join(active_ledger.sentences_sent)
@@ -400,7 +413,6 @@ hearing.
 -            ),
 -        }
 -    ]
-+    await observe_bot_task(bot_task, journal, session_id)
 +    return None, None, False
 +
 +
@@ -428,7 +440,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -337,41 +291,34 @@
+@@ -351,41 +305,34 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -482,7 +494,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -386,6 +333,32 @@
+@@ -400,6 +347,32 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -515,7 +527,7 @@ hearing.
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
          detector = MiniTurnDetector(vad)
-@@ -397,19 +370,22 @@
+@@ -411,19 +384,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  

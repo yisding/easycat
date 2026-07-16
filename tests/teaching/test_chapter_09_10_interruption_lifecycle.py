@@ -266,7 +266,7 @@ def test_barge_in_probe_uses_real_router() -> None:
             "stt.end",
             "stt.close",
         ],
-        "journal": ["interruption.start"],
+        "journal": ["interruption.start", "interruption.cancel_complete"],
     }
 
 

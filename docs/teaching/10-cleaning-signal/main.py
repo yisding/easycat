@@ -251,15 +251,29 @@ async def route_barge_in(tag, bot_task, active_cancel, transport, journal, sessi
     if tag != "speech_started" or active_cancel is None:
         return bot_task, active_cancel, True
 
+    started_at = time.monotonic()
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="interruption.start",
         session_id=session_id,
-        data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+        data={"stage": "vad", "t_ms": started_at * 1000},
     )
     active_cancel.cancel()
     await transport.clear_audio()
+    clear_returned_at = time.monotonic()
     await observe_bot_task(bot_task, journal, session_id)
+    bot_returned_at = time.monotonic()
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="interruption.cancel_complete",
+        session_id=session_id,
+        data={
+            "stage": "interruption",
+            "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
+            "cancel_to_bot_task_return_ms": (bot_returned_at - started_at) * 1000,
+            "t_ms": bot_returned_at * 1000,
+        },
+    )
     return None, None, False
 
 
