@@ -385,12 +385,16 @@ class TurnRunner:
         turn = self._turn.current
         turn_token = bind_turn(event.turn_id)
         try:
-            new_task = self._runtime_scope.create_journaled_task(
-                self.on_turn_ended(event, gen, turn=turn),
-                name="on_turn_ended",
-                journal_sink=self._journal_sink,
-                turn_id=event.turn_id,
-            )
+            turn_ended = self.on_turn_ended(event, gen, turn=turn)
+            if self._journal_enabled:
+                new_task = self._runtime_scope.create_journaled_task(
+                    turn_ended,
+                    name="on_turn_ended",
+                    journal_sink=self._journal_sink,
+                    turn_id=event.turn_id,
+                )
+            else:
+                new_task = self._runtime_scope.create_task("on_turn_ended", turn_ended)
         finally:
             reset_turn(turn_token)
         self._tts.current_task = new_task
@@ -438,28 +442,77 @@ class TurnRunner:
                 self._preemptive_finalized_generation, turn.generation
             )
 
-        transcript = await self._finalize_turn_transcript(turn)
+        transcript, stt_close_task = self._take_committed_transcript(turn)
+        if not transcript:
+            transcript = await self._finalize_turn_transcript(turn)
 
         if not transcript or (token and token.is_cancelled):
             await self.cancel_preemptive_generation()
             if self._turn.current is turn:
                 self._reset_turn_state()
+            if stt_close_task is not None:
+                await asyncio.shield(stt_close_task)
             return
 
-        await self._emit(AgentRequestStarted())
-        prepared_response = await self._take_preemptive_response(transcript, turn)
-        # The await above spans the remaining model latency. Speech may resume
-        # during it, cancelling/replacing this turn. Never fall through to the
-        # confirmed invocation for an abandoned transcript: even a cancelled
-        # AgentRunner records its user message before it observes the token.
-        if not self._is_active_voice_turn(turn, token, turn_generation):
-            return
-        await self.run_streaming_agent(
-            transcript,
-            token,
-            turn=turn,
-            prepared_response=prepared_response,
+        try:
+            await self._emit(
+                AgentRequestStarted(
+                    session_id=self._session_id,
+                    turn_id=turn.id if turn is not None else None,
+                )
+            )
+            prepared_response = await self._take_preemptive_response(transcript, turn)
+            # The await above spans the remaining model latency. Speech may resume
+            # during it, cancelling/replacing this turn. Never fall through to the
+            # confirmed invocation for an abandoned transcript: even a cancelled
+            # AgentRunner records its user message before it observes the token.
+            if not self._is_active_voice_turn(turn, token, turn_generation):
+                return
+            await self.run_streaming_agent(
+                transcript,
+                token,
+                turn=turn,
+                prepared_response=prepared_response,
+            )
+        finally:
+            if stt_close_task is not None:
+                await asyncio.shield(stt_close_task)
+
+    def _take_committed_transcript(
+        self,
+        turn: TurnContext | None,
+    ) -> tuple[str, asyncio.Task[None] | None]:
+        """Start closing STT without delaying an already-final transcript.
+
+        A final STT event clears ``stt_has_uncommitted_audio`` only after the
+        provider has accounted for every submitted frame. With no pending
+        commit future, that transcript is ready for the agent; the provider's
+        stream can close concurrently with the much slower agent request.
+
+        Keep journaled sessions on the sequential path so their task timeline
+        and replay ordering remain unchanged.
+        """
+        self._stt.cancel_scheduled()
+        if (
+            self._journal_enabled
+            or turn is None
+            or turn.stt_has_uncommitted_audio
+            or turn.pending_stt_segment_futures
+        ):
+            return "", None
+        transcript = turn.transcript_text
+        if not transcript:
+            return "", None
+
+        stt_needs_close = self._stt.is_active
+        self._stt.mark_inactive()
+        if not stt_needs_close:
+            return transcript, None
+        close_task = self._runtime_scope.create_task(
+            self._stt.FINAL_CLOSE_TASK_NAME,
+            self._stt.end_stream(turn),
         )
+        return transcript, close_task
 
     def _is_active_voice_turn(
         self,
