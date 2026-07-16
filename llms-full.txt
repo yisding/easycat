@@ -336,6 +336,24 @@ uv run python docs/using-easycat/06-session-control/main.py voice
 uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice
 ```
 
+## Feature observability
+
+- Path: docs/using-easycat/07-observability/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/07-observability
+- Audience: learners
+- Record, inspect, replay, and compare journals and debug bundles.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv sync --extra debugger --group dev
+uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07
+uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json
+uv run easycat replay .easycat/tutorial/ch07/baseline.bundle --fidelity artifact --tool-policy deny --json
+uv run easycat diff .easycat/tutorial/ch07/baseline.bundle .easycat/tutorial/ch07/candidate.bundle --json
+```
+
 ## Examples
 
 - Path: examples/README.md

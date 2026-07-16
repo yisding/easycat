@@ -605,3 +605,8 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/06-session-control/main.py text"
         in session_control["commands"]
     )
+    observability = entries["docs/using-easycat/07-observability/"]
+    assert (
+        "uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07"
+        in observability["commands"]
+    )

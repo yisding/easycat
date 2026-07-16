@@ -440,6 +440,33 @@ def test_feature_session_control_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_observability_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "07-observability" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/07-observability/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv sync --extra debugger --group dev",
+        "uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07",
+        "uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json",
+        (
+            "uv run easycat replay .easycat/tutorial/ch07/baseline.bundle "
+            "--fidelity artifact --tool-policy deny --json"
+        ),
+        (
+            "uv run easycat diff .easycat/tutorial/ch07/baseline.bundle "
+            ".easycat/tutorial/ch07/candidate.bundle --json"
+        ),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
