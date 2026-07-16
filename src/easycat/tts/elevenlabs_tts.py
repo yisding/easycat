@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import enum
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -88,11 +90,15 @@ class ElevenLabsTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
-    # Persistent multi-context socket (WEBSOCKET mode only). ``None`` selects
-    # the low-latency default for WebSocket mode and disables persistence for
-    # HTTP mode. Set ``False`` to retain the legacy one-shot ``/stream-input``
-    # path. When enabled, one ``/multi-stream-input`` socket is reused
-    # across turns, each utterance scoped by a fresh context_id, with
+    # Keep best-effort session startup bounded even when synthesis itself uses
+    # unlimited reconnects or a longer HTTP client timeout. A timed-out attempt
+    # is discarded and first use retries with the normal transport policy.
+    warmup_timeout_s: float = 5.0
+    # Persistent multi-context socket policy (WEBSOCKET mode only). ``None``
+    # selects the latency-oriented mode default: enabled for WebSocket and
+    # disabled for HTTP. When enabled one ``/multi-stream-input`` socket is
+    # warmed at session startup and reused across turns, each utterance scoped
+    # by a fresh context_id, with
     # context-scoped barge-in (``close_context``). Socket warmth between turns
     # relies on WebSocket-level ping/pong; after a very long idle gap exceeding
     # the per-context ``inactivity_timeout`` the socket may be closed
@@ -108,6 +114,13 @@ class ElevenLabsTTSConfig:
     def __post_init__(self) -> None:
         if self.persistent_ws is None:
             self.persistent_ws = self.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        if (
+            isinstance(self.warmup_timeout_s, bool)
+            or not isinstance(self.warmup_timeout_s, int | float)
+            or not math.isfinite(self.warmup_timeout_s)
+            or self.warmup_timeout_s <= 0
+        ):
+            raise ValueError("ElevenLabs warmup_timeout_s must be a finite number > 0")
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
             supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
             raise ValueError(
@@ -186,6 +199,33 @@ class ElevenLabsTTS(_WSTTSBase):
             )
         return self._client
 
+    async def warmup(self) -> None:
+        """Prime the selected transport without requesting synthesized audio."""
+        try:
+            if self._config.stream_mode == ElevenLabsStreamMode.HTTP:
+                await asyncio.wait_for(
+                    self._warmup_http(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+            elif self._persistent_enabled():
+                await asyncio.wait_for(
+                    self._warmup_persistent_ws(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+        except Exception as exc:
+            # Warmup moves connection setup off the reply path but must never
+            # become a session availability gate. First synthesis retries.
+            logger.debug("ElevenLabs TTS warmup skipped: %s", exc)
+
+    async def _warmup_http(self) -> None:
+        """Best-effort warm DNS/TLS/keep-alive against the configured voice."""
+        response = await self._get_http_client().get(f"/voices/{self._config.voice_id}")
+        await response.aclose()
+
+    async def _warmup_persistent_ws(self) -> None:
+        """Best-effort connect the shared multi-stream socket before traffic."""
+        await self._get_mgr().connect()
+
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using the configured streaming mode.
 
@@ -260,7 +300,7 @@ class ElevenLabsTTS(_WSTTSBase):
                 yield event
 
     async def _synthesize_ws_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
-        """Default one-shot WebSocket path: fresh socket per synthesize call."""
+        """Explicit one-shot WebSocket path: fresh socket per synthesize call."""
         self._start_synthesis()
 
         try:
@@ -421,15 +461,6 @@ class ElevenLabsTTS(_WSTTSBase):
             self._mgr = MultiContextWSManager(adapter)
         return self._mgr
 
-    async def warmup(self) -> None:
-        """Best-effort preconnect so the first WebSocket utterance is warm."""
-        if not self._persistent_enabled():
-            return
-        try:
-            await self._get_mgr().connect()
-        except Exception as exc:
-            logger.debug("ElevenLabs TTS warmup skipped: %s", exc)
-
     @staticmethod
     def _route_key(parsed: Any) -> str | None:
         # ElevenLabs responses carry the context id under camelCase ``contextId``
@@ -461,9 +492,10 @@ class ElevenLabsTTS(_WSTTSBase):
                 events.append(self._make_audio_event(audio_bytes, self._source_format))
         if data.get("alignment"):
             events.append(self._make_markers_event([data["alignment"]]))
-        # The one-shot endpoint uses camelCase ``isFinal`` while the
-        # multi-context endpoint documents snake_case ``is_final``. Decode
-        # both here because this helper is intentionally shared by both paths.
+        # The one-shot /stream-input path signals completion with ``isFinal``;
+        # the persistent /multi-stream-input path uses ``is_final``. Normalize
+        # both so the shared decoder recognizes either terminal frame and the
+        # persistent turn completes instead of hanging until the socket closes.
         return events, bool(data.get("isFinal") or data.get("is_final"))
 
     async def _synthesize_ws_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
@@ -553,13 +585,9 @@ class ElevenLabsTTS(_WSTTSBase):
     async def stop(self) -> None:
         """Gracefully stop synthesis.
 
-        Closes the synthesis WebSocket (the default ``stream_mode``) in
-        addition to the HTTP-path ``_response``, so a graceful stop between
-        turns does not leave the socket lingering until the next
-        ``cancel()``/``close()`` — matching Cartesia/Deepgram ``stop()``.
-
-        In persistent mode the shared socket stays open; only the in-flight
-        context is cancelled.
+        In persistent WebSocket mode the shared socket stays open and only the
+        in-flight context is cancelled. Explicit one-shot mode closes its
+        socket; HTTP mode closes any active response.
         """
         await super().stop()
         if self._persistent_enabled():

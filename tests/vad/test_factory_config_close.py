@@ -110,6 +110,23 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
     _assert_extra_hint(message, "silero-vad")
     _assert_extra_hint(message, "ten-vad")
     _assert_extra_hint(message, "funasr-vad")
+    assert exc_info.value.__notes__ == [
+        "Silero: RuntimeError: silero missing",
+        "FunASR: RuntimeError: funasr missing",
+        "TEN: RuntimeError: ten missing",
+        "Krisp: RuntimeError: krisp missing",
+    ]
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "krisp missing"
+
+
+def test_vad_auto_backend_policy_order_is_explicit():
+    assert tuple(backend.name for backend in vad_factory_module._AUTO_BACKENDS) == (
+        "silero",
+        "funasr",
+        "ten",
+        "krisp",
+    )
 
 
 def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):

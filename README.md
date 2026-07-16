@@ -471,9 +471,8 @@ voice-only surfaces.
 ## Session lifecycle
 
 - `async with session:` is the preferred public teardown idiom — entering starts the session, exiting calls `stop(force=True)`.
-- `await session.stop()` is the preferred public teardown verb: the default (`force=False`) drains in-flight work gracefully; `force=True` aggressively cancels the pipeline first.
+- `await session.stop()` is the single public teardown verb: the default (`force=False`) drains in-flight work gracefully; `force=True` aggressively cancels the pipeline first.
 - `await session.wait_closed()` blocks until the session has stopped — the idiomatic pair for `async with session: await session.wait_closed()`.
-- Legacy compatibility aliases for close/destroy still exist for old low-level callers after a session has stopped; new code should call `stop()` or use `async with session:`.
 - After a clean `stop()`, postmortem inspection is still supported: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work.
 
 

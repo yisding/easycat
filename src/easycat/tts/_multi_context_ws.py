@@ -157,6 +157,11 @@ class MultiContextWSManager:
         # Serializes every ws.send across the reconnect-replay hook and the
         # synthesize() caller.
         self._send_lock = asyncio.Lock()
+        # Makes initial connection establishment single-flight. ``self._ws``
+        # is published before ``connect()`` so the reconnect hook can refer to
+        # the manager, but cold callers must not treat that wrapper as usable
+        # until the first caller has finished connecting it.
+        self._connect_lock = asyncio.Lock()
         self._closed = False
         # Set during deliberate teardown (aclose / cancel-fallback socket close)
         # so the reader's exit does NOT surface a spurious error on contexts —
@@ -166,10 +171,23 @@ class MultiContextWSManager:
     # ── public surface ────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """Establish the shared socket without opening an utterance context."""
+        """Establish the shared socket without opening an utterance context.
+
+        This is safe to call concurrently and lets provider warmup move DNS,
+        TLS, and WebSocket-upgrade latency out of the first spoken reply.
+        """
         if self._closed:
             raise RuntimeError("MultiContextWSManager is closed")
         await self._ensure_socket()
+
+    async def warmup(self) -> None:
+        """Open the shared socket without creating a synthesis context.
+
+        Session startup calls this before user traffic, moving DNS, TLS, and
+        WebSocket-upgrade latency out of the first spoken reply. The next
+        :meth:`open_context` reuses the connected socket.
+        """
+        await self.connect()
 
     async def open_context(self) -> _Context:
         """Register a fresh context, lazily connecting the socket on first use."""
@@ -292,22 +310,23 @@ class MultiContextWSManager:
     # ── internals ─────────────────────────────────────────────────
 
     async def _ensure_socket(self) -> None:
-        if self._ws is not None:
-            return
-        ws = self._adapter.connect_factory(self._on_reconnect)
-        self._ws = ws
-        try:
-            await ws.connect()
-        except BaseException:
-            # The initial connect failed (retries exhausted). Leave no failed
-            # wrapper behind, or the next open_context() would early-return and
-            # send() would run against a socket that never connected; clear it
-            # so the next open reconnects a fresh one.
-            self._ws = None
-            with contextlib.suppress(Exception):
-                await ws.close()
-            raise
-        self._reader_task = asyncio.create_task(self._reader_loop())
+        async with self._connect_lock:
+            if self._ws is not None:
+                return
+            ws = self._adapter.connect_factory(self._on_reconnect)
+            self._ws = ws
+            try:
+                await ws.connect()
+            except BaseException:
+                # The initial connect failed (retries exhausted). Leave no
+                # failed wrapper behind, or the next open_context() would
+                # early-return and send() would run against a socket that never
+                # connected; clear it so the next open reconnects a fresh one.
+                self._ws = None
+                with contextlib.suppress(Exception):
+                    await ws.close()
+                raise
+            self._reader_task = asyncio.create_task(self._reader_loop())
 
     async def _send_frames(self, frames: list[str]) -> None:
         async with self._send_lock:

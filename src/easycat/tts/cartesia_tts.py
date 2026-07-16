@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -70,18 +72,21 @@ class CartesiaTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
-    # Persistent multi-context socket. Cartesia recommends one preconnected
-    # WebSocket per voice session to avoid TCP/TLS setup on every turn, so the
-    # low-latency path is the default. Set ``False`` to retain the legacy
-    # one-shot-per-synthesize behavior. When ``True`` one WebSocket is reused
-    # across turns, each utterance scoped by a fresh context_id, and barge-in
-    # cancels just the context (falling back to a full socket close) rather than
-    # tearing the socket down. Accepted tradeoff: a mid-stream reconnect
-    # replays the context from the top (audible repetition). Socket warmth
-    # between turns relies on WebSocket-level ping/pong; after a very long idle
-    # gap the socket may be closed server-side and is transparently reconnected
-    # on the next utterance.
+    # Persistent multi-context socket. Default ``True`` keeps one WebSocket
+    # warm across turns and removes connection setup from reply latency. Each
+    # utterance is scoped by a fresh context_id, and barge-in cancels just the
+    # context (falling back to a full socket close) rather than tearing the
+    # socket down. Set ``False`` to restore the one-shot-per-synthesize path.
+    # Accepted tradeoff: a mid-stream reconnect replays the context from the
+    # top (audible repetition). Socket warmth between turns
+    # relies on WebSocket-level ping/pong; after a very long idle gap the socket
+    # may be closed server-side and is transparently reconnected on the next
+    # utterance.
     persistent_ws: bool = True
+    # Keep best-effort session startup bounded even when synthesis itself uses
+    # unlimited reconnects. A timed-out attempt is discarded and first use
+    # retries with the normal synthesis policy.
+    warmup_timeout_s: float = 5.0
     # Bounded per-context queue for the persistent demux reader.
     context_queue_maxsize: int = 256
 
@@ -98,14 +103,22 @@ class CartesiaTTSConfig:
             raise ValueError(f"Cartesia speed must be in [0.6, 1.5], got {self.speed}")
         if self.volume is not None and not 0.5 <= self.volume <= 2.0:
             raise ValueError(f"Cartesia volume must be in [0.5, 2.0], got {self.volume}")
+        if (
+            isinstance(self.warmup_timeout_s, bool)
+            or not isinstance(self.warmup_timeout_s, int | float)
+            or not math.isfinite(self.warmup_timeout_s)
+            or self.warmup_timeout_s <= 0
+        ):
+            raise ValueError("Cartesia warmup_timeout_s must be a finite number > 0")
 
 
 class CartesiaTTS(_WSTTSBase):
     """TTS provider using Cartesia's Sonic WebSocket API.
 
-    By default one multi-context WebSocket is reused across turns. Set
-    :attr:`CartesiaTTSConfig.persistent_ws` to ``False`` for the legacy
-    one-socket-per-utterance path.
+    By default one multi-context WebSocket is warmed at session startup and
+    reused across turns. Set ``persistent_ws=False`` to open one connection
+    per :meth:`synthesize` call. Synthesis requests are sent as JSON frames and
+    audio arrives in base64-encoded ``chunk`` messages.
     """
 
     _provider_error_name = "cartesia"
@@ -170,12 +183,17 @@ class CartesiaTTS(_WSTTSBase):
         return self._mgr
 
     async def warmup(self) -> None:
-        """Best-effort preconnect so the first utterance avoids socket setup."""
+        """Best-effort connect the persistent socket before the first reply."""
         if not self._persistent_enabled():
             return
         try:
-            await self._get_mgr().connect()
+            await asyncio.wait_for(
+                self._get_mgr().warmup(),
+                timeout=self._config.warmup_timeout_s,
+            )
         except Exception as exc:
+            # Startup warmup is an optimization, not a new availability gate.
+            # The manager clears a failed socket so synthesize() can retry.
             logger.debug("Cartesia TTS warmup skipped: %s", exc)
 
     @staticmethod

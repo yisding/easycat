@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
+from easycat.events import AgentDelta
 from easycat.integrations.agents.base import AgentBridgeEvent
 from easycat.tts.input import TTSInput
 
@@ -87,6 +88,86 @@ async def test_consume_agent_stream_applies_backpressure_on_bounded_queue():
     result = await consumer_task
     assert result.error is None
     assert len(drained) >= 1
+
+
+async def test_first_payload_gate_tracks_clause_completing_delta_dispatch():
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Hello world")
+        yield AgentBridgeEvent(kind="text_delta", text=".")
+        yield AgentBridgeEvent(kind="done", text="Hello world.")
+
+    second_handler_started = asyncio.Event()
+    release_second_handler = asyncio.Event()
+    delta_count = 0
+
+    async def _emit(event: object) -> None:
+        nonlocal delta_count
+        if not isinstance(event, AgentDelta):
+            return
+        delta_count += 1
+        if delta_count == 2:
+            second_handler_started.set()
+            await release_second_handler.wait()
+
+    turn = TurnContext(turn_id="t-first-payload", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    gate: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+    task = asyncio.create_task(
+        consume_agent_stream(
+            _stream,
+            cancel_token=turn.cancel_token,
+            tts_queue=tts_queue,
+            emit=_emit,
+            prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+            strip_md=False,
+            turn=turn,
+            first_tts_payload_ready=gate,
+        )
+    )
+
+    await asyncio.wait_for(second_handler_started.wait(), timeout=0.5)
+    assert tts_queue.qsize() == 1
+    assert not gate.done()
+
+    release_second_handler.set()
+    result = await asyncio.wait_for(task, timeout=0.5)
+
+    assert result.error is None
+    assert gate.result() is True
+
+
+async def test_first_payload_gate_rejects_prepare_failure():
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Hello world.")
+
+    def _fail_prepare(text: str, **_: object) -> TTSInput:
+        raise RuntimeError(f"cannot prepare {text!r}")
+
+    turn = TurnContext(turn_id="t-prepare-failure", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    gate: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    result = await asyncio.wait_for(
+        consume_agent_stream(
+            _stream,
+            cancel_token=turn.cancel_token,
+            tts_queue=tts_queue,
+            emit=AsyncMock(),
+            prepare_tts_payload=_fail_prepare,
+            strip_md=False,
+            turn=turn,
+            first_tts_payload_ready=gate,
+        ),
+        timeout=0.5,
+    )
+
+    assert isinstance(result.error, RuntimeError)
+    assert gate.result() is False
+    assert tts_queue.get_nowait() is None
 
 
 async def test_consume_agent_stream_strip_markdown_defers_work_until_flush(monkeypatch):
@@ -350,6 +431,34 @@ async def test_first_payload_holds_trailing_decimal_period_for_lookahead():
     assert streaming, "expected at least one mid-stream payload"
     assert streaming[0] == "The estimate is 3.5 seconds, "
     assert "The estimate is 3." not in streaming
+
+
+async def test_first_payload_bounds_punctuation_free_opener():
+    """A run-on opener reaches TTS without waiting for final stream flush."""
+    built = await _run_streaming_payloads(
+        [
+            "This response keeps streaming words without ",
+            "reaching punctuation for quite a while",
+        ],
+        strip_md=False,
+    )
+
+    assert built[0] == ("This response keeps streaming words without ", False)
+    assert built[1] == ("reaching punctuation for quite a while", True)
+
+
+async def test_markdown_first_payload_bounds_punctuation_free_opener():
+    """The same bound applies after safely stripping closed markdown."""
+    built = await _run_streaming_payloads(
+        [
+            "**This response keeps streaming** words without ",
+            "reaching punctuation for quite a while",
+        ],
+        strip_md=True,
+    )
+
+    assert built[0] == ("This response keeps streaming words without ", False)
+    assert "**" not in "".join(text for text, _ in built)
 
 
 async def test_first_payload_does_not_ship_clipped_short_opener():
