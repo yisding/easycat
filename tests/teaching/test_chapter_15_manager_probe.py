@@ -24,6 +24,14 @@ def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
     assert json.loads(result.stdout) == {
         "active_together": True,
         "all_context_slots_released": True,
+        "cancelled_start": {
+            "cancelled_stop_calls": 0,
+            "error": "CancelledError",
+            "replacement_start_calls": 1,
+            "replacement_stop_calls": 1,
+            "replacement_used_released_slot": True,
+            "slot_released": True,
+        },
         "duplicate_key_error": "Session key already exists: alpha",
         "duplicate_start_calls": 0,
         "failed_slot_released": True,

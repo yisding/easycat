@@ -1044,26 +1044,52 @@ class Session:
                 "pipeline_heartbeat",
                 self._emit_heartbeats(),
             )
-        except Exception:
+        except BaseException:
+            # Startup cancellation must roll back the same resources as an
+            # ordinary failure. Callers such as SessionManager may release
+            # their last registry reference as soon as start() raises.
             self._is_running = False
             self._mark_observability_inactive()
-
-            await self._audio_router.stop_ingress()
-            await self._audio_router.stop_outbound()
-            await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
-            self._heartbeat_task = None
-
-            for checker in self._health_checkers:
-                await checker.stop()
-            self._health_checkers = []
-
-            self._stop_helpers()
-            self._reset_turn_state()
-
-            if transport_connected:
-                await self.transport.disconnect()
-            self._reset_session_log_context()
+            try:
+                await self._finish_interrupted_start(transport_connected=transport_connected)
+            finally:
+                # The binding token belongs to this task's Context, so it
+                # cannot be reset from the protected cleanup task below.
+                self._reset_session_log_context()
             raise
+
+    async def _finish_interrupted_start(self, *, transport_connected: bool) -> None:
+        """Complete partial-start cleanup despite repeated caller cancellation."""
+        cleanup_task = asyncio.create_task(
+            self._rollback_interrupted_start(transport_connected=transport_connected),
+            name=f"easycat-start-rollback-{self.session_id}",
+        )
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                # A second cancel request must not strand resources opened by
+                # start(). Preserve it by re-raising the original cancellation
+                # only after the independent cleanup task has completed.
+                continue
+        cleanup_task.result()
+
+    async def _rollback_interrupted_start(self, *, transport_connected: bool) -> None:
+        """Release resources opened by a failed or cancelled start attempt."""
+        await self._audio_router.stop_ingress()
+        await self._audio_router.stop_outbound()
+        await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
+        self._heartbeat_task = None
+
+        for checker in self._health_checkers:
+            await checker.stop()
+        self._health_checkers = []
+
+        self._stop_helpers()
+        self._reset_turn_state()
+
+        if transport_connected:
+            await self.transport.disconnect()
 
     async def stop(self, *, force: bool = False) -> None:
         """Stop the session and release live backend resources.
