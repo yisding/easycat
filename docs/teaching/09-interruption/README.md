@@ -252,9 +252,10 @@ Expect:
 
 ## Try breaking it
 
-1. Run `estimate.py`. Interrupt exactly after one word. Open the
-   bundle — does `heard_text` end at that word, or does it over- or
-   under-shoot?
+1. Run `estimate.py`. Interrupt as close as you can after hearing one
+   word, and repeat several times because human reaction time is not an
+   exact clock. In each bundle, does `heard_text` end at that word, or
+   does it over- or under-shoot?
 2. Have the agent reply with markdown-heavy output (ask it for a
    table). The stripped text fed to TTS is shorter than the
    original. How does this affect `heard_text` vs reality?
