@@ -467,6 +467,26 @@ def test_feature_observability_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_testing_evals_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "08-testing-evals" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/08-testing-evals/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/08-testing-evals/main.py",
+        "uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json",
+        "uv run easycat doctor --json",
+        "uv run easycat validate latency --smoke --json",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
