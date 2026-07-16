@@ -1,7 +1,7 @@
 # Chapter 12 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -187,10 +187,11 @@ hand-type the reference transcripts into a CSV, and run
 
 **Hints**
 
-1. Real numbers feel different. Twenty turns are better than six, but
-   no fixed sample count guarantees precision. Report the number of
-   turns and reference words, then estimate uncertainty—for example by
-   bootstrapping turns—before claiming a small regression.
+1. Real numbers feel different. P95 over 6 bundles is too unstable to
+   generalize; twenty turns are better than six, but no fixed sample count
+   guarantees precision. Report the number of turns and reference words,
+   then estimate uncertainty—for example by bootstrapping turns—before
+   claiming a small regression.
 2. Use a mix of clean and adversarial inputs (whisper, fast
    speech, accented speech, background TV) to stress different
    stages.

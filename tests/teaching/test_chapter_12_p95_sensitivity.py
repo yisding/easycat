@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +79,30 @@ def test_evals_cli_prints_leave_one_out_range(capsys, monkeypatch) -> None:
     assert "turn_02_slow_agent.bundle (-1260 ms)" in output
 
 
+def test_evals_cli_keeps_reporting_for_one_bundle(tmp_path, capsys, monkeypatch) -> None:
+    evals = load_evals()
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    shutil.copyfile(
+        CHAPTER / "bundles" / "turn_01_fast.bundle",
+        bundles / "turn_01_fast.bundle",
+    )
+    ground_truth = tmp_path / "ground_truth.csv"
+    ground_truth.write_text(
+        "bundle,reference_transcript,had_real_barge_in\nturn_01_fast.bundle,what time is it,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["evals.py", str(bundles), str(ground_truth)])
+
+    evals.main()
+
+    output = capsys.readouterr().out
+    assert "P95 leave-one-out range" in output
+    assert "n/a (requires at least two bundles)" in output
+    assert "=== WER ===" in output
+    assert "=== Barge-in F1 ===" in output
+
+
 def test_lesson_calls_sensitivity_an_influence_check_not_uncertainty() -> None:
     readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
     exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
@@ -86,5 +111,6 @@ def test_lesson_calls_sensitivity_an_influence_check_not_uncertainty() -> None:
     assert "p95_sensitivity_probe.py" in lesson
     assert "One turn controls this P95" in lesson
     assert "influence diagnostic, not a confidence interval" in lesson
+    assert "leave-one-out rows print `n/a` instead of aborting" in lesson
     assert "five turn bundles" not in lesson
     assert "N standard deviations" not in lesson

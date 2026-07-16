@@ -1,7 +1,7 @@
 # Chapter 8 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -32,7 +32,8 @@ Replace `PATH` with the emitted bundle. The report identifies
 `smart_turn.classify` sequence to `true` when you were actually done at
 that pause and `false` when you intended to continue, then rerun with
 `--labels labels.json`. How do the baseline and candidate confusion
-counts differ?
+counts differ? The file must label every classification sequence exactly;
+the sweep rejects missing and unknown keys instead of emitting partial metrics.
 
 <!-- BEGIN auto:exercise-hints -->
 <details markdown="1">
