@@ -132,6 +132,44 @@ records are typed objects (`r.name`). Both stage and turn filters
 return materialized lists; stage filtering scans the records, while
 an exact sequence lookup is bounded on a live journal backend.
 
+## Validate an empty query
+
+`(no records matched)` is not self-interpreting evidence. It can mean
+the stage never ran, but it can also mean a mistyped turn ID or an
+impossible intersection such as “sequence 9 *and* stage agent” when
+sequence 9 is an STT record.
+
+`investigate.py` prints the active filters, composed match count, and
+each filter's marginal count. On an empty query it also prints known
+turns/stages/names or the available sequence range. Compare:
+
+```bash
+# Typo: the turn filter itself has zero marginal matches.
+uv run python docs/teaching/11-journal/investigate.py \
+  docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle \
+  --turn typo
+
+# Impossible intersection: each filter matches alone, but not together.
+uv run python docs/teaching/11-journal/investigate.py \
+  docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle \
+  --sequence 9 --stage agent
+```
+
+For a human investigation, an empty result remains successful because
+absence may be the finding. For a script or CI check, add
+`--require-match` to exit non-zero when the composed query is empty.
+
+Run the provider-free query probe:
+
+```bash
+uv run python docs/teaching/11-journal/query_coverage_probe.py
+```
+
+A filtered sequence gap is expected—the filter deliberately hides
+records. Even an unfiltered gap can come from bounded retention or an
+incomplete export. Verify source coverage and retention before calling
+a gap an in-flight failure.
+
 ## Investigation 1 — guided
 
 Open `bug_01_empty_final.bundle`. Work the evidence:

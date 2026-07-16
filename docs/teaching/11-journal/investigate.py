@@ -29,6 +29,23 @@ from easycat.debug.bundle import RunBundle
 from easycat.debug.testing import load_bundle
 
 
+def _record_matches(
+    record: dict[str, Any],
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> bool:
+    data = record.get("data") or {}
+    return (
+        (stage is None or data.get("stage") == stage or data.get("observed_stage") == stage)
+        and (turn is None or record.get("turn_id") == turn)
+        and (sequence is None or record.get("sequence") == sequence)
+        and (name is None or record.get("name") == name)
+    )
+
+
 def query_records(
     bundle: RunBundle,
     *,
@@ -57,14 +74,106 @@ def query_records(
     return [
         record
         for record in records
-        if (
-            stage is None
-            or (record.get("data") or {}).get("stage") == stage
-            or (record.get("data") or {}).get("observed_stage") == stage
+        if _record_matches(
+            record,
+            stage=stage,
+            turn=turn,
+            sequence=sequence,
+            name=name,
         )
-        and (turn is None or record.get("turn_id") == turn)
-        and (name is None or record.get("name") == name)
     ]
+
+
+def query_diagnostics(
+    records: list[dict[str, Any]],
+    *,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Describe filter coverage without changing the query result."""
+    filters = {
+        key: value
+        for key, value in {
+            "stage": stage,
+            "turn": turn,
+            "sequence": sequence,
+            "name": name,
+        }.items()
+        if value is not None
+    }
+    marginal_matches = {
+        key: sum(_record_matches(record, **{key: value}) for record in records)
+        for key, value in filters.items()
+    }
+    stages = sorted(
+        {
+            stage_name
+            for record in records
+            for stage_name in (
+                (record.get("data") or {}).get("stage"),
+                (record.get("data") or {}).get("observed_stage"),
+            )
+            if stage_name
+        }
+    )
+    sequences = [record.get("sequence") for record in records]
+    numeric_sequences = [value for value in sequences if isinstance(value, int)]
+    return {
+        "filters": filters,
+        "marginal_matches": marginal_matches,
+        "known_turns": sorted(
+            {record.get("turn_id") for record in records if record.get("turn_id")}
+        ),
+        "known_stages": stages,
+        "known_names": sorted({record.get("name") for record in records if record.get("name")}),
+        "sequence_range": (
+            [min(numeric_sequences), max(numeric_sequences)] if numeric_sequences else None
+        ),
+        "total_records": len(records),
+    }
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def print_query_result(
+    records: list[dict[str, Any]], diagnostics: dict[str, Any], *, limit: int
+) -> None:
+    """Render matches plus enough coverage to interpret an empty result."""
+    active = diagnostics["filters"]
+    filter_text = ", ".join(f"{key}={value!r}" for key, value in active.items()) or "none"
+    print(f"  filters: {filter_text}")
+    print(f"  matched: {len(records)} of {diagnostics['total_records']} records")
+
+    for record in records[:limit]:
+        data = record.get("data") or {}
+        seq = record.get("sequence")
+        name = record.get("name")
+        turn = record.get("turn_id") or "-"
+        print(f"  #{seq:>3}  turn={turn:22}  {name:30}  {data}")
+    if len(records) > limit:
+        print(f"  ... (showing {limit} of {len(records)} matches)")
+    if records:
+        return
+
+    print("  (no records matched)")
+    for key, count in diagnostics["marginal_matches"].items():
+        print(f"  marginal {key}: {count} matches")
+    for key, inventory_key in (
+        ("turn", "known_turns"),
+        ("stage", "known_stages"),
+        ("name", "known_names"),
+    ):
+        if key in active:
+            print(f"  known {key}s: {diagnostics[inventory_key]}")
+    if "sequence" in active:
+        print(f"  sequence range: {diagnostics['sequence_range']}")
 
 
 def main() -> None:
@@ -74,7 +183,12 @@ def main() -> None:
     ap.add_argument("--turn", help="Filter to records with turn_id == TURN.")
     ap.add_argument("--sequence", type=int, help="Look up one exact journal sequence.")
     ap.add_argument("--name", help="Filter to records with name == NAME.")
-    ap.add_argument("--limit", type=int, default=80)
+    ap.add_argument("--limit", type=positive_int, default=80)
+    ap.add_argument(
+        "--require-match",
+        action="store_true",
+        help="Exit non-zero when the composed query matches no records.",
+    )
     args = ap.parse_args()
 
     if not args.bundle.exists():
@@ -84,6 +198,7 @@ def main() -> None:
 
     bundle = load_bundle(args.bundle)
     print(f"=== {args.bundle.name} ===")
+    all_records = list(bundle.records())
 
     # ``RunBundle`` ships ``filter_by_stage``, ``filter_by_turn``, and
     # ``lookup_by_sequence``
@@ -97,20 +212,16 @@ def main() -> None:
         sequence=args.sequence,
         name=args.name,
     )
-
-    count = 0
-    for r in records:
-        data = r.get("data") or {}
-        seq = r.get("sequence")
-        name = r.get("name")
-        turn = r.get("turn_id") or "-"
-        print(f"  #{seq:>3}  turn={turn:22}  {name:30}  {data}")
-        count += 1
-        if count >= args.limit:
-            print(f"  ... (stopped at --limit {args.limit})")
-            break
-    if count == 0:
-        print("  (no records matched)")
+    diagnostics = query_diagnostics(
+        all_records,
+        stage=args.stage,
+        turn=args.turn,
+        sequence=args.sequence,
+        name=args.name,
+    )
+    print_query_result(records, diagnostics, limit=args.limit)
+    if not records and args.require_match:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
