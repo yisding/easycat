@@ -99,10 +99,40 @@ decision (so NR's output never affected what VAD saw).
    right components, wrong wiring, indistinguishable from "no
    feature" except in the journal.
 
+## 5. Make replay evidence fail closed
+
+**Task.** Run the provider-free replay metrics probe:
+
+```bash
+uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+```
+
+Explain why both rejected cases must fail before constructing the AEC
+backend. Then change one scripted scale filter from `0.5` to `1.0` and
+predict the per-frame and aggregate RMS values.
+
+**Hints**
+
+1. `--aec on` without `--ref` is not a weaker AEC experiment; it is a
+   dead reference path and belongs in the explicit wrong version.
+2. A short reference silently stops feeding partway through the mic
+   stream unless frame counts are checked up front. The corrected replay
+   rejects that alignment error.
+3. Two `0.5` scale stages turn RMS 1000 into 250, a change of about
+   -12.041 dB. Replacing one with `1.0` should leave RMS 500 and about
+   -6.021 dB.
+4. Verify the per-frame `replay.frame` records and aggregate
+   `reference_frames_fed`; a loaded backend name alone does not prove
+   correct dataflow.
+5. RMS is not a quality score. A filter that deletes the user can show a
+   dramatic energy reduction while making the voice path unusable.
+
 ## Self-check
 
 You should be able to draw the NR → AEC → VAD → STT pipeline from
 memory, explain why each stage sits where it does, and predict
 which `--nr/--aec` combination is best for each of (a) quiet
 office with bluetooth headset, (b) noisy retail kiosk with
-speakerphone, (c) phone call (Twilio).
+speakerphone, (c) phone call (Twilio). You should also be able to
+distinguish backend availability, reference alignment, signal-energy
+change, and actual speech quality.
