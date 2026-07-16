@@ -4,6 +4,7 @@ import asyncio
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -79,6 +80,7 @@ def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
 
     monkeypatch.setattr("easycat.smart_turn.require_module", fake_require_module)
     monkeypatch.setattr("easycat.smart_turn._WhisperFeatureExtractorNP", fake_feature_extractor)
+    monkeypatch.setattr("easycat.smart_turn._intra_op_thread_count", lambda: 3)
 
     provider = SmartTurnONNX(model_path=str(tmp_path / "smart-turn.onnx"))
     provider._ensure_loaded()
@@ -87,6 +89,204 @@ def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
     assert created_feature_extractors == [(fake_np, 8)]
     assert provider._feature_extractor == "fake-feature-extractor"
     assert provider._session[0] == "fake-session"
+    assert provider._session[2].inter_op_num_threads == 1
+    assert provider._session[2].intra_op_num_threads == 3
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [(1, 1), (2, 2), (4, 4), (8, 4)],
+)
+def test_intra_op_thread_count_respects_affinity_and_cap(
+    available: int,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.smart_turn as smart_turn
+
+    monkeypatch.setattr(
+        smart_turn.os,
+        "sched_getaffinity",
+        lambda _pid: set(range(available)),
+        raising=False,
+    )
+    monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: None)
+
+    assert smart_turn._intra_op_thread_count() == expected
+
+
+@pytest.mark.parametrize(
+    ("quota", "expected"),
+    [(1, 1), (2, 2), (8, 4), (None, 4)],
+)
+def test_intra_op_thread_count_respects_cgroup_quota(
+    quota: int | None,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.smart_turn as smart_turn
+
+    monkeypatch.setattr(
+        smart_turn.os,
+        "sched_getaffinity",
+        lambda _pid: set(range(16)),
+        raising=False,
+    )
+    monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: quota)
+
+    assert smart_turn._intra_op_thread_count() == expected
+
+
+def test_cgroup_cpu_count_reads_v2_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    (tmp_path / "cpu.max").write_text("150000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path) == 2
+
+
+def test_cgroup_cpu_count_reads_nested_v2_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("0::/system.slice/easycat.service\n")
+    (tmp_path / "cpu.max").write_text("max 100000\n")
+    service_root = tmp_path / "system.slice" / "easycat.service"
+    service_root.mkdir(parents=True)
+    (service_root / "cpu.max").write_text("50000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 1
+
+
+def test_cgroup_cpu_count_reads_v1_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cpu_root = tmp_path / "cpu"
+    cpu_root.mkdir()
+    (cpu_root / "cpu.cfs_quota_us").write_text("250000\n")
+    (cpu_root / "cpu.cfs_period_us").write_text("100000\n")
+
+    assert _cgroup_cpu_count(tmp_path) == 3
+
+
+def test_cgroup_cpu_count_reads_nested_v1_cpu_controller_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("7:cpu,cpuacct:/system.slice/easycat.service\n")
+    service_root = tmp_path / "cpu,cpuacct" / "system.slice" / "easycat.service"
+    service_root.mkdir(parents=True)
+    (service_root / "cpu.cfs_quota_us").write_text("150000\n")
+    (service_root / "cpu.cfs_period_us").write_text("100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 2
+
+
+def test_cgroup_cpu_count_uses_tightest_ancestor_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("0::/parent/child\n")
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    (parent / "cpu.max").write_text("100000 100000\n")
+    (child / "cpu.max").write_text("400000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 1
+
+
+@pytest.mark.parametrize("quota", ["max 100000\n", "-1 100000\n", "invalid\n"])
+def test_cgroup_cpu_count_ignores_unbounded_or_invalid_v2_quota(
+    quota: str,
+    tmp_path: Path,
+) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    (tmp_path / "cpu.max").write_text(quota)
+
+    assert _cgroup_cpu_count(tmp_path) is None
+
+
+def test_single_thread_mel_contraction_matches_dot() -> None:
+    np = pytest.importorskip("numpy")
+
+    from easycat.smart_turn import _spectrogram
+
+    class DotReference:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(np, name)
+
+        def einsum(
+            self,
+            subscripts: str,
+            left: Any,
+            right: Any,
+            *,
+            optimize: bool,
+        ) -> Any:
+            assert subscripts == "ij,jk->ik"
+            assert optimize is False
+            return np.dot(left, right)
+
+    rng = np.random.default_rng(7)
+    waveform = rng.normal(size=1600).astype(np.float32)
+    window = np.hanning(400).astype(np.float64)
+    mel_filters = np.abs(rng.normal(size=(201, 80))).astype(np.float64)
+
+    actual = _spectrogram(
+        waveform,
+        np=np,
+        window=window,
+        frame_length=400,
+        hop_length=160,
+        mel_filters=mel_filters,
+    )
+    expected = _spectrogram(
+        waveform,
+        np=DotReference(),
+        window=window,
+        frame_length=400,
+        hop_length=160,
+        mel_filters=mel_filters,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_batched_spectrogram_matches_per_frame_reference() -> None:
+    np = pytest.importorskip("numpy")
+
+    from easycat.smart_turn import _spectrogram
+
+    rng = np.random.default_rng(11)
+    waveform = rng.normal(size=1600).astype(np.float32)
+    window = np.hanning(400).astype(np.float64)
+    mel_filters = np.abs(rng.normal(size=(201, 80))).astype(np.float64)
+
+    actual = _spectrogram(
+        waveform,
+        np=np,
+        window=window,
+        frame_length=400,
+        hop_length=160,
+        mel_filters=mel_filters,
+    )
+
+    padded = np.pad(waveform, (200, 200), mode="reflect").astype(np.float64)
+    num_frames = int(1 + np.floor((padded.size - 400) / 160))
+    reference_fft = np.empty((num_frames, 201), dtype=np.complex64)
+    for frame_index in range(num_frames):
+        start = frame_index * 160
+        reference_fft[frame_index] = np.fft.rfft(padded[start : start + 400] * window)
+    power = (np.abs(reference_fft, dtype=np.float64) ** 2.0).T
+    expected = np.maximum(
+        1e-10,
+        np.einsum("ij,jk->ik", mel_filters.T, power, optimize=False),
+    )
+    expected = np.log10(expected).astype(np.float32)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def _make_provider_with_probability(probability: float, threshold: float) -> SmartTurnONNX:
