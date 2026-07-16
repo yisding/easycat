@@ -10,17 +10,20 @@ via Cartesia's WebSocket API). What's the minimum diff from
 
 **Hints**
 
-1. The diff is *only* the three configuration lines from the
-   chapter README — `stt`, `tts`, and the credentials. The
-   `Agent`, `Session`, event bus, journal, smart-turn — none of
-   that moves. That's the Protocol payoff.
-2. Check `src/easycat/stt/factory.py` and `src/easycat/tts/factory.py`
-   for the registry entries. If Cartesia isn't already wired,
-   adding it is one entry in `_PROVIDER_TO_CONFIG` per side.
-3. The bundle shape will be the same as the other ch 13 bundles
-   — production shape (`stage_start`/`stage_complete` pairs). The
-   `evals.py` translator from chapter 15 will work on it
-   unchanged.
+1. Add `cartesia` to the `--provider-mix` choices and return
+   `{"stt": "cartesia", "tts": "cartesia"}` from
+   `provider_mix()`. Require `CARTESIA_API_KEY`, and install the
+   provider extra with `uv sync --extra cartesia --group dev`.
+2. Check `src/easycat/stt/factory.py` and `src/easycat/tts/factory.py`:
+   Cartesia is already registered on both sides. The exercise
+   changes only this teaching script; the `Agent`, `Session`,
+   event bus, journal, and smart-turn configuration stay put.
+3. First verify the preset without making a provider request:
+   import `main.py`, set a placeholder `CARTESIA_API_KEY`, and
+   assert that `provider_mix("cartesia")` returns those two string
+   shortcuts. A credentialed run writes the same production-shaped
+   bundle as the other chapter 13 cells, so inspect it directly with
+   `uv run easycat latency PATH --json`; no translator is needed.
 
 ## 2. Tightest P95/P50 ratio
 
@@ -55,18 +58,23 @@ on the Twilio preset? What does a user on the phone hear?
 
 1. `SendDTMFAction(digits="1")` is dispatched to
    `TwilioSessionActionExecutor`, which calls Twilio's REST API
-   to inject DTMF tones into the active call. The journal records
-   `session_action.dispatched` with the action class.
-2. The user on the phone hears a brief "beep" — Twilio plays the
-   tone into the call leg before yielding back to the bot's
-   audio.
-3. On the `local` transport, the same action would be a no-op:
-   `CoreSessionActionExecutor` doesn't claim DTMF. The journal
-   would record `session_action.unhandled`. This is by design —
-   the same agent code works across transports, but each
-   transport claims what it can execute.
-4. Don't test this on a production phone number. Use Twilio's
-   test credentials.
+   to update the active call with `<Play digits="1">`. A successful
+   journal path is `session_action_requested`,
+   `session_action_started`, then `session_action_completed`; the
+   started record names `TwilioSessionActionExecutor`. The Twilio
+   preset wires it through `TelephonyConfig.twilio_actions` using
+   `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`.
+2. The user on the phone hears the DTMF tone before the call yields
+   back to the bot's audio.
+3. On the `local` transport, `CoreSessionActionExecutor` does not
+   claim DTMF. The journal records `session_action_requested`
+   followed by `session_action_failed` with `No session action
+   executor for send_dtmf`; there is no started or completed record.
+   The failure is observable rather than a silent no-op.
+4. Exercise the executor with a fake Twilio client first, as
+   `tests/telephony/test_session_actions.py` does. If you try the
+   end-to-end path, use an isolated development account and number,
+   not production traffic.
 
 ## Self-check
 

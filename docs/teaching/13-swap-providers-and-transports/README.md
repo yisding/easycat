@@ -189,8 +189,10 @@ promotes it to a measured column.
 1. Add a `--provider-mix cartesia` preset (both STT and TTS via
    Cartesia's WebSocket API). What's the minimum diff from
    `deepgram-eleven`?
-2. Run all six cells on the same short prompt. Which cell has the
-   tightest P95/P50 ratio in chapter 12's eval output? Why?
+2. Run the expanded nine-cell matrix on the same short prompt.
+   Which cell has the tightest server-side P95/P50 ratio in
+   `easycat latency`? What client or provider evidence would you
+   need to rank transports?
 3. Wire `SendDTMFAction` from chapter 7 into the agent (the user
    asks for "press 1 to continue"). What does the journal show
    on the Twilio preset? What does a user on the phone hear?
