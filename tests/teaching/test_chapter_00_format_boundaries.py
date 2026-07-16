@@ -56,3 +56,6 @@ def test_lesson_names_boundaries_instead_of_brand_wide_rates() -> None:
     assert "Most STT providers (Deepgram, OpenAI Realtime, ElevenLabs)" not in lesson
     assert "WebRTC receives and sends 48 kHz media frames" in lesson
     assert "default pipeline target is 16 kHz" in lesson
+    assert "`LocalTransport` capture/playback pipeline" in readme
+    assert "raw-`sounddevice` demo is a separate path" in readme
+    assert "Local capture + playback" not in readme

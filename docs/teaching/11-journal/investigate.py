@@ -26,17 +26,19 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
+from easycat.debug.bundle import RunBundle
 from easycat.debug.testing import load_bundle
 
 
 def _record_matches(
-    record,
+    record: dict[str, Any],
     *,
-    stage=None,
-    turn=None,
-    sequence=None,
-    name=None,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
     session_context_ids: frozenset[str] = frozenset(),
 ) -> bool:
     data = record.get("data") or {}
@@ -53,15 +55,24 @@ def _record_matches(
     )
 
 
+def _session_ids(records: list[dict[str, Any]]) -> frozenset[str]:
+    """Return only concrete session IDs that are safe to use as join keys."""
+    return frozenset(
+        session_id
+        for record in records
+        if isinstance((session_id := record.get("session_id")), str) and session_id
+    )
+
+
 def query_records(
-    bundle,
+    bundle: RunBundle,
     *,
-    stage=None,
-    turn=None,
-    sequence=None,
-    name=None,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
     include_session_context: bool = False,
-):
+) -> list[dict[str, Any]]:
     """Query a ``RunBundle`` through its public read-only helpers.
 
     Start with the most selective public operation, then apply any
@@ -71,11 +82,7 @@ def query_records(
     the same three helper names but returns typed ``JournalRecord`` objects.
     """
     turn_records = bundle.filter_by_turn(turn) if turn is not None else []
-    session_context_ids = (
-        frozenset(record.get("session_id") for record in turn_records)
-        if include_session_context
-        else frozenset()
-    )
+    session_context_ids = _session_ids(turn_records) if include_session_context else frozenset()
     if sequence is not None:
         record = bundle.lookup_by_sequence(sequence)
         records = [] if record is None else [record]
@@ -113,24 +120,19 @@ def query_records(
 
 
 def query_diagnostics(
-    records,
+    records: list[dict[str, Any]],
     *,
-    stage=None,
-    turn=None,
-    sequence=None,
-    name=None,
+    stage: str | None = None,
+    turn: str | None = None,
+    sequence: int | None = None,
+    name: str | None = None,
     include_session_context: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Describe filter coverage without changing the query result."""
-    session_context_ids = (
-        frozenset(
-            record.get("session_id")
-            for record in records
-            if turn is not None and record.get("turn_id") == turn
-        )
-        if include_session_context
-        else frozenset()
+    turn_records = (
+        [record for record in records if record.get("turn_id") == turn] if turn is not None else []
     )
+    session_context_ids = _session_ids(turn_records) if include_session_context else frozenset()
     filters = {
         key: value
         for key, value in {
@@ -192,7 +194,9 @@ def positive_int(value: str) -> int:
     return parsed
 
 
-def print_query_result(records, diagnostics: dict, *, limit: int) -> None:
+def print_query_result(
+    records: list[dict[str, Any]], diagnostics: dict[str, Any], *, limit: int
+) -> None:
     """Render matches plus enough coverage to interpret an empty result."""
     active = diagnostics["filters"]
     filter_text = ", ".join(f"{key}={value!r}" for key, value in active.items()) or "none"

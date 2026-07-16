@@ -51,10 +51,14 @@ class SessionManager(Generic[TKey]):
         try:
             await session.start()
         except BaseException:
-            # Cancellation is a BaseException. It must release the reservation
-            # just like an ordinary start failure so the key remains reusable.
+            # Session.start() owns partial-start teardown, including on
+            # cancellation. Once it has unwound, release the manager's key
+            # reservation so a replacement can reuse it. remove()/stop_all()
+            # may already have released the slot while start() was in flight;
+            # never erase a replacement that subsequently claimed the key.
             async with self._lock:
-                self._sessions.pop(key, None)
+                if self._sessions.get(key) is session:
+                    self._sessions.pop(key)
             raise
         return session
 
