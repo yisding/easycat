@@ -402,6 +402,25 @@ uv run easycat doctor --env-file .env --json
 uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
 ```
 
+## Feature production operations
+
+- Path: docs/using-easycat/11-production-ops/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/11-production-ops
+- Audience: learners
+- Validate, deploy, observe, preserve, and drain production services.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/11-production-ops/main.py
+uv run python docs/using-easycat/11-production-ops/main.py --data-dir .easycat/tutorial/ch11
+uv run easycat inspect .easycat/tutorial/ch11/journals/chapter-11-ops-checkpoint.sqlite --json
+uv run easycat validate quick --json
+uv run easycat validate report .easycat/validation/latest.json --json
+uv run easycat validate release --json
+```
+
 ## Examples
 
 - Path: examples/README.md

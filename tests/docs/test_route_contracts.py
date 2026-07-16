@@ -524,6 +524,34 @@ def test_feature_telephony_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_production_ops_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "11-production-ops" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/11-production-ops/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/11-production-ops/main.py",
+        (
+            "uv run python docs/using-easycat/11-production-ops/main.py "
+            "--data-dir .easycat/tutorial/ch11"
+        ),
+        (
+            "uv run easycat inspect .easycat/tutorial/ch11/journals/"
+            "chapter-11-ops-checkpoint.sqlite --json"
+        ),
+        "uv run easycat validate quick --json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+        "uv run easycat validate release --json",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
