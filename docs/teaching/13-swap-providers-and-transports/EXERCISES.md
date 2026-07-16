@@ -241,8 +241,8 @@ Move `session.export_postmortem()` inside the session block in the
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -250,11 +250,14 @@ Move `session.export_postmortem()` inside the session block in the
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) name two axes the matrix attacks, (b)
-draw the "one code change per axis" diagram from memory, and (c)
-explain the structural `event_bus` opt-in and distinguish reconnect
-telemetry from HTTP provider-error telemetry, and (d) place session
-scope exit before postmortem bundle export.
+1. Which two independent axes does the provider × transport matrix vary, and
+   which values remain fixed along each axis?
+2. Can you draw the one-code-change-per-axis diagram and cite the six-cell
+   matrix evidence that validates it?
+3. How does structural `event_bus` opt-in work, and which records distinguish
+   reconnect telemetry from HTTP provider-error telemetry?
+4. Why must session scope exit precede postmortem bundle export, and which
+   lifecycle evidence proves the preserved view remains readable?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

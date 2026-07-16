@@ -250,8 +250,8 @@ Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -259,13 +259,16 @@ Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) draw the architecture diagram from
-memory, (b) explain why sentences (not tokens, not paragraphs) are
-the right unit, (c) distinguish per-turn STT ownership from the
-process-wide voice stack, (d) distinguish an empty streamed TTS
-response from transport rejection, and (e) point at the production
-`consume_agent_stream` and name one parameter without re-reading
-the README.
+1. Can you draw the streaming architecture from memory and label the evidence
+   boundary between each stage?
+2. Why are sentences—not tokens or whole paragraphs—the TTS handoff unit, and
+   which latency or prosody observation supports that choice?
+3. Which resources belong to one STT turn and which belong to the process-wide
+   voice stack, and in what order do they close?
+4. Which outcome fields distinguish an empty streamed TTS response from
+   transport rejection?
+5. Which production parameter would you pass to `consume_agent_stream`, and
+   what behavior does your attempt evidence show it controls?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

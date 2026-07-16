@@ -293,6 +293,8 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "make a fresh attempt before opening the next clue" in normalized_index
     assert "A task is complete when the learner has kept an initial plan" in normalized_index
     assert "Closing self-checks are closed-book retrieval gates" in normalized_index
+    assert "answer every numbered question" in normalized_index
+    assert "support each answer with attempt evidence" in normalized_index
     assert "one primary question" in normalized_index
     assert not any(contract in index for contract in stale_contracts)
 
@@ -708,8 +710,15 @@ def test_teaching_exercise_pages_include_one_mastery_self_check() -> None:
         if len(self_check_sections) != 1:
             stale.append(f"{chapter_dir.name}: expected one Self-check heading")
             continue
-        if "You should" not in self_check_sections[0]:
-            stale.append(f"{chapter_dir.name}: missing learner outcome")
+        question_numbers = [
+            int(number)
+            for number in re.findall(r"^(\d+)\. ", self_check_sections[0], re.MULTILINE)
+        ]
+        if (
+            question_numbers != list(range(1, len(question_numbers) + 1))
+            or len(question_numbers) < 3
+        ):
+            stale.append(f"{chapter_dir.name}: missing sequential learner questions")
 
     assert not stale, "Teaching exercise mastery checks are incomplete: " + ", ".join(stale)
 

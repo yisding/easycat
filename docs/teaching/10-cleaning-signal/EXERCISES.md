@@ -294,8 +294,8 @@ RMS is not a quality score. A filter that deletes the user can show a
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -303,13 +303,14 @@ RMS is not a quality score. A filter that deletes the user can show a
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to draw the NR → AEC → VAD → STT pipeline from
-memory, explain why each stage sits where it does, and predict
-which `--nr/--aec` combination is best for each of (a) quiet
-office with bluetooth headset, (b) noisy retail kiosk with
-speakerphone, (c) phone call (Twilio). You should also be able to
-distinguish backend availability, reference alignment, signal-energy
-change, and actual speech quality.
+1. Can you draw NR → AEC → VAD → STT from memory and justify each boundary with
+   one observed failure that a different order would cause?
+2. Which `--nr/--aec` combination would you test first for a quiet Bluetooth
+   headset, a noisy speakerphone kiosk, and a Twilio call, and why?
+3. Which evidence separately establishes backend availability, AEC reference
+   alignment, and signal-energy change?
+4. What additional measurement is required before claiming that speech quality
+   improved?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

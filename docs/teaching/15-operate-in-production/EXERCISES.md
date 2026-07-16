@@ -307,8 +307,8 @@ pattern doesn't change.
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -316,12 +316,13 @@ pattern doesn't change.
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) explain when to use `async with
-session:`, `await session.stop()`, `await session.stop(force=True)`,
-(b) explain why `session.journal.read()` still works after `stop()`,
-including why the cached view keeps its identity, and (c) sketch the
-`SessionManager` usage pattern for a WebSocket server in 10 lines
-without looking at the file.
+1. When should code use `async with session:`, `await session.stop()`, or
+   `await session.stop(force=True)`, and which shutdown evidence distinguishes
+   their behavior?
+2. Why does `session.journal.read()` still work after `stop()`, and which probe
+   fields prove that the cached view keeps its identity?
+3. Can you sketch a `SessionManager` WebSocket-server pattern in ten lines and
+   explain which failure paths release the registry slot?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

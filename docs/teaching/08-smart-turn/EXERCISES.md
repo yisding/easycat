@@ -250,8 +250,8 @@ In a live run, compare the recorded components. Do not infer the
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -259,13 +259,16 @@ In a live run, compare the recorded components. Do not infer the
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) describe what input smart-turn takes
-and what it outputs, (b) explain why the fallback silence
-threshold still has to be there even with smart-turn on, and (c)
-name two utterance patterns that can challenge the classifier, and
-(d) explain why STT-final → first-audio cannot measure an endpoint
-detector's latency win, and (e) decompose a smart fallback's endpoint
-wait into early silence, inference, and pending time.
+1. What input does smart-turn take, what does it output, and which record shows
+   the decision?
+2. Why must a fallback silence threshold remain when smart-turn is enabled,
+   and which fallback result demonstrates the need?
+3. Which two utterance patterns challenge the classifier, and what outcome
+   would reveal each failure?
+4. Why can STT-final-to-first-audio not measure an endpoint detector's latency
+   win, and which earlier timestamp is required?
+5. How do early silence, inference, and pending time add up to smart fallback
+   wait in your probe evidence?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

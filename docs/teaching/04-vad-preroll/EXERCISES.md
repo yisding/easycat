@@ -305,8 +305,8 @@ Chapter 9 adds playback-progress evidence; until then, do not relabel
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -314,11 +314,12 @@ Chapter 9 adds playback-progress evidence; until then, do not relabel
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to look at a VAD-based pipeline and predict
-which utterances will break it (lists, soft talkers, leading
-quiet syllables) without running them, and explain who ends and closes each
-per-turn STT provider. You should also preserve transport rejection evidence
-without confusing accepted audio with played audio.
+1. Which list, soft-talker, or leading-quiet-syllable utterances are most likely
+   to break this VAD gate, and which frame-order evidence explains why?
+2. Who ends each per-turn STT stream, who closes its provider, and which
+   lifecycle records establish that order?
+3. How do you preserve transport rejection evidence while avoiding the claim
+   that accepted audio was necessarily played?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

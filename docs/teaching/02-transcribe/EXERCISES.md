@@ -361,8 +361,8 @@ The propagated feed error is an `ExceptionGroup` because `TaskGroup`
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -370,15 +370,19 @@ The propagated feed error is an `ExceptionGroup` because `TaskGroup`
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to read any bundle from any chapter from now on without
-consulting the README that produced it, and explain why observing a partial is
-different from committing a side effect from one. You should also be able to
-distinguish ending one STT stream from closing the provider that owns it, and
-separate raw-audio retention from transcript retention. Finally, you should be
-able to switch the Chapter 2 STT provider without editing its consumer loop and
-tell a provider wire target from an upstream input-rate restriction. You should
-also be able to prove that every concurrent task has stopped before its shared
-STT and transport resources begin teardown.
+1. Which envelope fields let you orient an unfamiliar bundle without its
+   chapter README?
+2. Why may a partial transcript drive reversible speculation but not commit an
+   irreversible side effect, and which event sequence proves the distinction?
+3. Who ends one logical STT stream, who closes the provider resource, and which
+   records prove both actions occurred in order?
+4. Which independent settings control raw-audio retention and transcript
+   retention, and how would you verify each in a bundle?
+5. How can Chapter 2 switch STT providers without editing its consumer loop,
+   and how does a provider wire target differ from an upstream input-rate
+   restriction?
+6. Which task and teardown records prove that every concurrent task has stopped
+   before shared STT and transport resources begin teardown?
 
 <!-- BEGIN auto:exercise-completion -->
 ---
