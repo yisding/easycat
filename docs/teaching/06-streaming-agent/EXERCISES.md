@@ -5,19 +5,30 @@
 ## 1. Isolate which knob buys you what
 
 **Task.** Change `MODEL = "gpt-4o-mini"` to `"gpt-4o"`. Re-run.
-Compare `agent.first_token → tts.first_audio` (the time to *start*
-speaking) and the per-sentence TTS spans.
+For each bundle, run:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/measure_start.py PATH
+```
+
+Compare `stt_final_to_first_token_ms`,
+`first_token_to_first_audio_ms`, the total
+`stt_final_to_first_audio_ms`, and `sentence_tts_ms`.
 
 **Hints**
 
-1. The per-sentence TTS spans stay overlapping with subsequent
-   agent tokens — that overlap is the chapter's whole win, and
-   it survives a slower agent.
-2. The *first* sentence now takes longer to complete because the
-   first token arrives later from the slower model. The pipeline
-   still overlaps; it just starts overlapping later.
-3. The point: streaming is a multiplier on whatever model you
-   choose. Faster model = faster start; either way you overlap.
+1. A slower model primarily grows `stt_final_to_first_token_ms`:
+   that is provider/model startup before the first non-empty delta.
+2. `first_token_to_first_audio_ms` begins **after** model startup. It
+   covers accumulating a complete speakable sentence plus synthesising
+   and accepting its first audio. Response wording may move it, but the
+   model's time-to-first-token is not inside this interval.
+3. The total `stt_final_to_first_audio_ms` is the actual software
+   start-of-reply metric and should equal the first two intervals when
+   all three milestones exist.
+4. `sentence_tts_ms` shows downstream synthesis cost per sentence.
+   The source's concurrent producer/consumer structure creates overlap;
+   these closed composite durations alone do not prove the overlap.
 
 ## 2. Break markdown stripping deliberately
 
