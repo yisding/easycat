@@ -222,31 +222,125 @@ PROGRESS_WORKSHEET = TEACHING / "PROGRESS.md"
 
 CHAPTER_RE = re.compile(r"^\d{2}-")
 
+
+@dataclass(frozen=True)
+class PhaseReview:
+    title: str
+    prompt: str
+    criteria: tuple[tuple[str, str], ...]
+
+
+PHASE_REVIEW_CRITERION_LABELS = ("Coverage", "Causality", "Evidence", "Limits")
+
+
 PHASE_REVIEWS = {
-    9: (
-        "Build phase review",
-        "without notes, draw one turn from raw input format through STT partial/final, "
-        "endpointing, agent/TTS, transport acceptance, and barge-in cancellation; mark which "
-        "observations may revise and which actions commit",
-        "cite attempt evidence for format, partial/final policy, first audio, and interruption "
-        "ordering; state one caller-heard claim that transport acceptance still cannot prove",
+    9: PhaseReview(
+        title="Build phase review",
+        prompt=(
+            "Without notes, draw one turn from raw input format through STT partial/final, "
+            "endpointing, agent/TTS, transport acceptance, and barge-in cancellation"
+        ),
+        criteria=(
+            (
+                "Coverage",
+                "the drawing includes every stage from input format through interruption",
+            ),
+            (
+                "Causality",
+                "it marks which observations may revise, which actions commit, and why "
+                "cancellation ordering preserves the next utterance",
+            ),
+            (
+                "Evidence",
+                "it cites attempt evidence for format, partial/final policy, first audio, and "
+                "interruption ordering",
+            ),
+            (
+                "Limits",
+                "it states one caller-heard claim that transport acceptance still cannot prove",
+            ),
+        ),
     ),
-    12: (
-        "Operate phase review",
-        "given an unfamiliar bad call, write the diagnostic order for NR/AEC, journal queries, "
-        "and latency/eval coverage before proposing a fix",
-        "cite one bundle or probe result to name the bottleneck, strongest supported cause, "
-        "missing evidence, and metric that would catch a regression",
+    12: PhaseReview(
+        title="Operate phase review",
+        prompt=("Given an unfamiliar bad call, write the diagnostic order before proposing a fix"),
+        criteria=(
+            (
+                "Coverage",
+                "the order covers NR/AEC, journal queries, and latency/eval coverage",
+            ),
+            (
+                "Causality",
+                "it explains why each check precedes the proposed fix and names the strongest "
+                "supported cause",
+            ),
+            (
+                "Evidence",
+                "it cites one bundle or probe result that identifies the bottleneck",
+            ),
+            (
+                "Limits",
+                "it names missing evidence and the metric that would catch a regression",
+            ),
+        ),
     ),
-    14: (
-        "Generalise phase review",
-        "design one provider × transport × agent comparison that changes one axis at a time "
-        "while preserving the session and bridge contracts",
-        "name the config or bridge boundary for each axis, one invariant event/state shape, "
-        "and the measurement that decides the tradeoff",
+    14: PhaseReview(
+        title="Generalise phase review",
+        prompt=(
+            "Design one provider × transport × agent comparison that changes one axis at a time "
+            "while preserving the session and bridge contracts"
+        ),
+        criteria=(
+            (
+                "Coverage",
+                "the design names the config or bridge boundary for every axis",
+            ),
+            (
+                "Causality",
+                "it explains what changes on the selected axis and how the other axes stay "
+                "controlled",
+            ),
+            (
+                "Evidence",
+                "it names one invariant event/state shape and the measurement that decides the "
+                "tradeoff",
+            ),
+            (
+                "Limits",
+                "it states one comparison claim that the selected measurement cannot support",
+            ),
+        ),
     ),
 }
-SHIP_PHASE_REVIEW_TITLE = "Ship phase review and finish the ladder"
+SHIP_PHASE_REVIEW = PhaseReview(
+    title="Ship phase review and finish the ladder",
+    prompt=(
+        "Run `uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence`. "
+        "Then, without notes, explain the path from raw PCM through a multi-session production "
+        "service, including ownership, start rollback, shutdown, and postmortem evidence"
+    ),
+    criteria=(
+        (
+            "Coverage",
+            "the explanation connects raw audio, turn processing, and multi-session operation",
+        ),
+        (
+            "Causality",
+            "it explains how ownership, start rollback, and shutdown protect peer sessions",
+        ),
+        (
+            "Evidence",
+            "all 16 offline checkpoints pass and it cites the result that changed the learner's "
+            "model most",
+        ),
+        (
+            "Limits",
+            "it states one production claim the postmortem evidence cannot prove and the next "
+            "measurement needed",
+        ),
+    ),
+)
+SHIP_PHASE_REVIEW_TITLE = SHIP_PHASE_REVIEW.title
 
 SNIPPET_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:snippet (?P<attrs>[^>]*?) -->)"
@@ -589,7 +683,7 @@ def render_exercise_completion(chapter: Chapter) -> str:
     ]
     phase_review_title = None
     if phase_review := PHASE_REVIEWS.get(checkpoint["chapter"]):
-        phase_review_title = phase_review[0]
+        phase_review_title = phase_review.title
     elif index + 1 == len(chapters):
         phase_review_title = SHIP_PHASE_REVIEW_TITLE
     if phase_review_title:
@@ -726,6 +820,24 @@ def _progress_command_item(
     return f"- [ ] **{label}:** {prefix}`{command}`{suffix}"
 
 
+def _render_phase_review(review: PhaseReview) -> list[str]:
+    labels = tuple(label for label, _ in review.criteria)
+    if labels != PHASE_REVIEW_CRITERION_LABELS:
+        raise ValueError(
+            f"{review.title} criteria must be {PHASE_REVIEW_CRITERION_LABELS}; found {labels}"
+        )
+    return [
+        f"## {review.title}",
+        "",
+        textwrap.fill(f"{review.prompt}.", width=99),
+        "",
+        "Score the result against all four criteria below. Mark each criterion **pass** or",
+        "**retry** in your progress record; advance only at 4/4 and redo only missed criteria.",
+        "",
+        *[_progress_item(label, f"{criterion}.") for label, criterion in review.criteria],
+    ]
+
+
 @functools.cache
 def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
     spine_path = TEACHING / "offline_spine.py"
@@ -802,8 +914,8 @@ def render_progress_worksheet() -> str:
         "A chapter is complete only when every box on its card is checked and its self-check",
         "score reaches N/N. Retry only missed answers; preserve wrong predictions because they",
         "are evidence to explain, not history to rewrite. Chapters 2-15 begin with a",
-        "two-chapter-lag recall. Complete both integration checks at each phase boundary before",
-        "starting the next chapter card.",
+        "two-chapter-lag recall. At each phase boundary, pass all four integration criteria at",
+        "4/4 before starting the next chapter card.",
     ]
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
@@ -871,37 +983,8 @@ def render_progress_worksheet() -> str:
             ]
         )
         if phase_review := PHASE_REVIEWS.get(chapter_number):
-            title, integrate, ground = phase_review
-            sections.extend(
-                [
-                    "",
-                    f"## {title}",
-                    "",
-                    "Complete this closed-book integration gate before entering the next phase.",
-                    "",
-                    _progress_item("Integrate", f"{integrate}."),
-                    _progress_item("Ground it", f"{ground}."),
-                ]
-            )
-    sections.extend(
-        [
-            "",
-            f"## {SHIP_PHASE_REVIEW_TITLE}",
-            "",
-            _progress_command_item(
-                "Replay everything",
-                "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
-                prefix="run ",
-            ),
-            _progress_item(
-                "Teach it back",
-                "without notes, explain the path from raw PCM through a multi-session production "
-                "service, including ownership, start rollback, shutdown, and postmortem evidence; "
-                "cite the result that changed your model most.",
-            ),
-            "",
-        ]
-    )
+            sections.extend(["", *_render_phase_review(phase_review)])
+    sections.extend(["", *_render_phase_review(SHIP_PHASE_REVIEW), ""])
     return "\n".join(sections)
 
 
