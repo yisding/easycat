@@ -361,7 +361,9 @@ a microphone, or a provider SDK:
 uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 ```
 
-In `feed_failure.events`, `stt.events.cancelled` appears before `stt.end`,
+In `partial_connect_failure.events`, `transport.input.stop` proves that a
+speaker-startup failure releases the microphone that started first. In
+`feed_failure.events`, `stt.events.cancelled` appears before `stt.end`,
 `stt.close`, and `transport.disconnect`. In `start_failure`, the provider and
 transport still close, but `stt.end` is correctly absent because
 `start_stream()` never succeeded. The main script exports a success bundle
