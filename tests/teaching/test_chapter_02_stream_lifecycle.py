@@ -57,6 +57,16 @@ def test_stream_lifecycle_probe_covers_acquisition_and_sibling_failures() -> Non
                 "transport.disconnect",
             ],
         },
+        "partial_connect_failure": {
+            "error": "transport output start failed",
+            "events": [
+                "transport.connect",
+                "transport.input.start",
+                "stt.close",
+                "transport.input.stop",
+                "transport.disconnect",
+            ],
+        },
         "start_failure": {
             "error": "stt start failed",
             "events": [

@@ -8,10 +8,16 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
+import sys
+import types
 from types import SimpleNamespace
 
-import main as chapter
+# Exercise the chapter's real streaming/tool helpers without requiring the
+# optional SDK that its live ``main()`` uses only to construct a client.
+sys.modules.setdefault("openai", types.SimpleNamespace(AsyncOpenAI=object))
+chapter = importlib.import_module("main")
 
 
 class ProbeJournal:

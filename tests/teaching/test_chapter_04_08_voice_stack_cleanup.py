@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,8 @@ TURN_SCRIPTS = [
 ]
 
 
-def load_script(path: Path):
+def load_script(path: Path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=object))
     module_name = f"teaching_{path.parent.name}_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
@@ -135,7 +137,7 @@ def test_chapters_6_through_8_preserve_per_turn_stt_cleanup() -> None:
 @pytest.mark.parametrize("path", TURN_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
 @pytest.mark.asyncio
 async def test_turn_collectors_close_stt_after_normal_turn(path: Path, monkeypatch) -> None:
-    module = load_script(path)
+    module = load_script(path, monkeypatch)
     stt = FakeSTT()
 
     async def fake_run_turn(*_args, **_kwargs) -> None:
@@ -152,8 +154,8 @@ async def test_turn_collectors_close_stt_after_normal_turn(path: Path, monkeypat
 
 @pytest.mark.parametrize("path", TURN_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
 @pytest.mark.asyncio
-async def test_turn_collectors_close_stt_when_cancelled(path: Path) -> None:
-    module = load_script(path)
+async def test_turn_collectors_close_stt_when_cancelled(path: Path, monkeypatch) -> None:
+    module = load_script(path, monkeypatch)
     stt = FakeSTT()
     args = [FakeTransport(), FakeDetector(pause_after_start=True), lambda: stt, None, None, None]
     if path.parent.name == "08-smart-turn":
