@@ -39,6 +39,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.session import split_at_sentence_boundaries
 from easycat.strip_markdown import strip_markdown
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -225,6 +226,33 @@ async def run_turn(transport, stt, client, tts, journal) -> None:
         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
+async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
+    """Stream turns and close every per-turn STT, including on cancellation."""
+    stt = None
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                try:
+                    await active_stt.end_stream()
+                    await run_turn(transport, active_stt, client, tts, journal)
+                finally:
+                    stt = None
+                    await close_if_supported(active_stt)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
+
+
 async def main() -> None:
     if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
         raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
@@ -250,22 +278,8 @@ async def main() -> None:
     await transport.connect()
     print("Streaming agent. Ctrl-C to stop.\n")
 
-    async def collect_turns():
-        stt = None
-        async for tag, chunk in detector.frames(transport.receive_audio()):
-            if tag == "speech_started":
-                if stt is None:
-                    stt = stt_factory()
-                    await stt.start_stream()
-            elif tag == "frame" and stt is not None:
-                await stt.send_audio(chunk)
-            elif tag == "speech_ended" and stt is not None:
-                await stt.end_stream()
-                await run_turn(transport, stt, client, tts, journal)
-                stt = None
-
     try:
-        await collect_turns()
+        await collect_turns(transport, detector, stt_factory, client, tts, journal)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:

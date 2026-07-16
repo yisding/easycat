@@ -39,23 +39,23 @@
 - **Removed:** the speaker output (no echo in this chapter; this is
   one-way mic → STT).
 
-<!-- BEGIN auto:diff prev=01-echo prev_src=main.py src=streaming.py -->
+<!-- BEGIN auto:diff prev=01-echo prev_src=main.py src=streaming.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>01-echo/main.py</code> (auto-generated)</summary>
 
 ```diff
 --- docs/teaching/01-echo/main.py
 +++ docs/teaching/02-transcribe/streaming.py
-@@ -1,57 +1,104 @@
+@@ -1,57 +1,120 @@
 -"""Chapter 1 — Echo.
 +"""Chapter 2 — streaming transcription.
- 
+
 -Mic → speaker, continuously, through EasyCat's ``Transport`` protocol.
 -Runs until Ctrl-C.
 +Open a mic transport, stream audio into an STT provider, and print
 +partial + final transcripts with timestamps as they arrive. Writes a
 +debug bundle to ``runs/``.
- 
+
 -Dependency:
 -    uv sync --extra local --group dev
 +Dependencies:
@@ -66,27 +66,31 @@
 +    uv run easycat doctor --env-file .env --json  # for parseable checks
 +    Add `--env-file .env` after `uv run` on script commands if keys live in `.env`.
  """
- 
+
  from __future__ import annotations
- 
+
  import asyncio
 +import os
 +import time
 +import types
 +from pathlib import Path
- 
+
  from easycat import LocalTransportConfig
 +from easycat.audio_format import PCM16_MONO_24K
 +from easycat.debug.export import export_debug_bundle
 +from easycat.events import STTEventType
 +from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
++from easycat.runtime.capabilities import close_if_supported
 +from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
- 
--
+
++DURATION_S = 5
++RUNS_DIR = Path(__file__).parent / "runs"
++SESSION_ID = f"ch02-streaming-{int(time.time())}"
+
 -async def echo(transport) -> tuple[int, int]:
 -    """Pipe every inbound audio chunk straight to the outbound side.
--
+
 -    ``transport`` is deliberately untyped. Any object that matches
 -    the inbound/outbound audio shape of ``easycat.providers.Transport``
 -    will work — that is the whole point of duck-typed protocols.
@@ -106,11 +110,18 @@
 -        else:
 -            rejected += 1
 -    return accepted, rejected
-+DURATION_S = 5
-+RUNS_DIR = Path(__file__).parent / "runs"
-+SESSION_ID = f"ch02-streaming-{int(time.time())}"
- 
- 
++async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
++    """End an active stream once, then close its provider and transport."""
++    try:
++        if needs_stream_end:
++            await stt.end_stream()
++    finally:
++        try:
++            await close_if_supported(stt)
++        finally:
++            await transport.disconnect()
+
+
  async def main() -> None:
 -    transport = LocalTransport(LocalTransportConfig())
 +    api_key = os.getenv("OPENAI_API_KEY")
@@ -130,11 +141,13 @@
      await transport.connect()
 -    print("Echoing mic to speakers. Ctrl-C to stop.")
 +    await stt.start_stream()
++    stream_end_started = False
 +    start = time.monotonic()
 +    print(f"Speak for {DURATION_S} seconds...")
 +
 +    async def feed_audio() -> None:
 +        """Push mic chunks into STT until DURATION_S seconds elapse."""
++        nonlocal stream_end_started
 +        async for chunk in transport.receive_audio():
 +            await stt.send_audio(chunk)
 +            if time.monotonic() - start >= DURATION_S:
@@ -143,6 +156,7 @@
 +        # OpenAI's batch provider) or the final commit (for Deepgram).
 +        # For OpenAI this call blocks for the full round-trip: the
 +        # partials you see start arriving *after* we get here.
++        stream_end_started = True
 +        await stt.end_stream()
 +
 +    async def consume_events() -> None:
@@ -172,15 +186,16 @@
 -        print(f"Echo stream ended: accepted={accepted}, rejected={rejected}")
 +        await asyncio.gather(feed_audio(), consume_events())
      finally:
-         await transport.disconnect()
- 
+-        await transport.disconnect()
++        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
++
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
 +    session_stub = types.SimpleNamespace(journal=journal)
 +    export_debug_bundle(session_stub, bundle_path, overwrite=True)
 +    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
-+
- 
+
+
  if __name__ == "__main__":
 -    try:
 -        asyncio.run(main())
@@ -251,7 +266,9 @@ The helper-created provider reports `owned_provider_closed: true`; the
 caller-supplied provider reports `caller_provider_closed: false`. The logical
 stream ends in both cases. This distinction matters for persistent providers
 such as OpenAI Realtime: ending a turn intentionally keeps its warmed socket
-available, while final provider cleanup closes it.
+available, while final provider cleanup closes it. The manual `streaming.py`
+path follows the same rule in its `finally`: end the logical stream, close the
+provider it created, then disconnect the transport.
 
 ## A note on which provider you run
 

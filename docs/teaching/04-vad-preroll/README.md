@@ -47,16 +47,18 @@
 +++ docs/teaching/04-vad-preroll/main.py
 @@ -1,15 +1,16 @@
 -"""Chapter 3 — Parrot, the naive way.
-+"""Chapter 4 — VAD + pre-roll.
-
+-
 -A bot that parrots whatever it thinks you just said. Turn detection
 -is a fixed silence timeout on STT partials. Deliberately broken.
+-
+-Run it and break it — "The capital of France is... uh... Paris" is
+-the canonical killer. Chapter 4 replaces this with a real VAD.
++"""Chapter 4 — VAD + pre-roll.
++
 +Replace chapter 3's fixed silence timeout with a real voice-activity
 +detector plus a pre-roll ring buffer. The same parrot loop, now gated
 +on VAD turn boundaries instead of "500 ms since the last STT event."
-
--Run it and break it — "The capital of France is... uh... Paris" is
--the canonical killer. Chapter 4 replaces this with a real VAD.
++
 +Run with ``--no-preroll`` to compare a stream that omits cached audio
 +received before VAD-on.
 
@@ -68,7 +70,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -18,165 +19,173 @@
+@@ -18,176 +19,185 @@
 
  from __future__ import annotations
 
@@ -88,43 +90,22 @@
 +from easycat.events import EventBus, STTEventType, VADStartSpeaking, VADStopSpeaking
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
+-
+-SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
 +from easycat.vad import VADConfig
 +from easycat.vad.factory import create_vad
-
--SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
++
 +PREROLL_FRAMES = 15  # 15 × 20 ms = 300 ms of audio *before* VAD fires
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch03-parrot-{int(time.time())}"
-
-
+-
+-
 -def record_delivery(
--    journal: InMemoryRingBuffer,
--    *,
--    text: str,
--    accepted_chunks: int,
--    rejected_chunks: int,
--    offset_ms: float,
--) -> None:
--    """Record transport acceptance without claiming speaker playback."""
--    journal.append(
--        kind=JournalRecordKind.EVENT,
--        name="parrot.delivery",
--        session_id=SESSION_ID,
--        data={
--            "stage": "parrot",
--            "committed_text": text,
--            "accepted_chunks": accepted_chunks,
--            "rejected_chunks": rejected_chunks,
--            "offset_ms": offset_ms,
--        },
--    )
--    if rejected_chunks:
--        print(
--            "  transport rejected "
--            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
--        )
++
++
 +class MiniTurnDetector:
 +    """Tiny turn detector: VAD + pre-roll buffer.
 +
@@ -170,17 +151,106 @@
 +                yield "frame", chunk
 +            else:
 +                self._preroll.append(chunk)
-
-
--async def speak_and_record(
--    transport, journal: InMemoryRingBuffer, text: str, start: float
++
++
 +async def parrot(
 +    transport,
 +    stt_factory,
 +    detector: MiniTurnDetector,
-+    journal: InMemoryRingBuffer,
+     journal: InMemoryRingBuffer,
+-    *,
+-    text: str,
+-    accepted_chunks: int,
+-    rejected_chunks: int,
+-    offset_ms: float,
 +    session_id: str,
  ) -> None:
+-    """Record transport acceptance without claiming speaker playback."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="parrot.delivery",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "parrot",
+-            "committed_text": text,
+-            "accepted_chunks": accepted_chunks,
+-            "rejected_chunks": rejected_chunks,
+-            "offset_ms": offset_ms,
+-        },
++    """On each VAD turn, stream audio into STT, wait for final, speak it."""
++    stt = None
++    collected_final = ""
++
++    try:
++        async for tag, chunk in detector.frames(transport.receive_audio()):
++            if tag == "speech_started":
++                if stt is None:
++                    stt = stt_factory()
++                    await stt.start_stream()
++                    collected_final = ""
++                    journal.append(
++                        kind=JournalRecordKind.EVENT,
++                        name="turn.started",
++                        session_id=session_id,
++                        data={"stage": "turn", "t_ms": time.monotonic() * 1000},
++                    )
++
++            elif tag == "frame" and stt is not None:
++                await stt.send_audio(chunk)
++
++            elif tag == "speech_ended" and stt is not None:
++                # Drain the event queue until the sentinel from end_stream().
++                # A VADStop before STT saw any speech is harmless — we just
++                # close an empty stream and get no FINAL back.
++                active_stt = stt
++                try:
++                    await active_stt.end_stream()
++                    async for event in active_stt.events():
++                        if event.type == STTEventType.FINAL:
++                            collected_final = event.text
++                finally:
++                    stt = None
++                    await close_if_supported(active_stt)
++
++                journal.append(
++                    kind=JournalRecordKind.EVENT,
++                    name="turn.ended",
++                    session_id=session_id,
++                    data={
++                        "stage": "turn",
++                        "t_ms": time.monotonic() * 1000,
++                        "text": collected_final,
++                    },
++                )
++
++                if collected_final.strip():
++                    print(f"  → parrot: {collected_final!r}")
++                    await speak(transport, collected_final)
++    finally:
++        if stt is not None:
++            try:
++                await stt.end_stream()
++            finally:
++                await close_if_supported(stt)
++
++
++async def main() -> None:
++    parser = argparse.ArgumentParser()
++    parser.add_argument(
++        "--no-preroll",
++        action="store_true",
++        help="Disable pre-roll; omit cached frames received before VAD-on.",
+     )
+-    if rejected_chunks:
+-        print(
+-            "  transport rejected "
+-            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+-        )
+-
+-
+-async def speak_and_record(
+-    transport, journal: InMemoryRingBuffer, text: str, start: float
+-) -> None:
 -    """Speak once, then preserve every transport acceptance result."""
 -    accepted_chunks, rejected_chunks = await speak(transport, text)
 -    record_delivery(
@@ -190,59 +260,20 @@
 -        rejected_chunks=rejected_chunks,
 -        offset_ms=(time.monotonic() - start) * 1000,
 -    )
-+    """On each VAD turn, stream audio into STT, wait for final, speak it."""
-+    stt = None
-+    collected_final = ""
-+
-+    async for tag, chunk in detector.frames(transport.receive_audio()):
-+        if tag == "speech_started":
-+            if stt is None:
-+                stt = stt_factory()
-+                await stt.start_stream()
-+                collected_final = ""
-+                journal.append(
-+                    kind=JournalRecordKind.EVENT,
-+                    name="turn.started",
-+                    session_id=session_id,
-+                    data={"stage": "turn", "t_ms": time.monotonic() * 1000},
-+                )
-+
-+        elif tag == "frame" and stt is not None:
-+            await stt.send_audio(chunk)
-+
-+        elif tag == "speech_ended" and stt is not None:
-+            # Drain the event queue until the sentinel from end_stream().
-+            # A VADStop before STT saw any speech is harmless — we just
-+            # close an empty stream and get no FINAL back.
-+            await stt.end_stream()
-+            async for event in stt.events():
-+                if event.type == STTEventType.FINAL:
-+                    collected_final = event.text
-+            stt = None
-+
-+            journal.append(
-+                kind=JournalRecordKind.EVENT,
-+                name="turn.ended",
-+                session_id=session_id,
-+                data={
-+                    "stage": "turn",
-+                    "t_ms": time.monotonic() * 1000,
-+                    "text": collected_final,
-+                },
-+            )
-+
-+            if collected_final.strip():
-+                print(f"  → parrot: {collected_final!r}")
-+                await speak(transport, collected_final)
-
-
- async def main() -> None:
-+    parser = argparse.ArgumentParser()
-+    parser.add_argument(
-+        "--no-preroll",
-+        action="store_true",
-+        help="Disable pre-roll; omit cached frames received before VAD-on.",
-+    )
+-
+-
+-async def shutdown(stt, transport) -> None:
+-    """End the logical STT stream, close its provider, then disconnect."""
+-    try:
+-        await stt.end_stream()
+-    finally:
+-        try:
+-            await close_if_supported(stt)
+-        finally:
+-            await transport.disconnect()
+-
+-
+-async def main() -> None:
 +    args = parser.parse_args()
 +
      oai_key = os.getenv("OPENAI_API_KEY")
@@ -257,9 +288,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-+    vad = create_vad(VADConfig())
-+    detector = MiniTurnDetector(vad, preroll_frames=preroll)
-
+-
 -    # Deepgram emits partials mid-speech, which is what this chapter needs
 -    # to feel break. Its STT factory config takes provider-specific args via
 -    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -271,6 +300,9 @@
 -            provider="deepgram",
 -            api_key=dg_key,
 -            params={"sample_rate": 24000, "event_bus": EventBus()},
++    vad = create_vad(VADConfig())
++    detector = MiniTurnDetector(vad, preroll_frames=preroll)
++
 +    def stt_factory():
 +        return create_stt_provider(
 +            STTProviderConfig(
@@ -352,8 +384,8 @@
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
      finally:
--        await stt.end_stream()
-         await transport.disconnect()
+-        await shutdown(stt, transport)
++        await transport.disconnect()
 
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
@@ -503,6 +535,24 @@ class MiniTurnDetector:
                 self._preroll.append(chunk)
 ```
 <!-- END auto:snippet -->
+
+## A VAD turn does not own the provider process
+
+Each `speech_started` creates an STT provider in this deliberately explicit
+pipeline. `speech_ended` ends that provider's logical stream, drains its final
+events, and then calls `close_if_supported()` because this script also owns the
+provider object. Cancellation needs the same final cleanup even when no
+`speech_ended` tag arrives.
+
+Run both normal and cancelled paths without credentials:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/stt_cleanup_probe.py
+```
+
+Both paths report one start, one logical end, and one provider close. The
+`try/finally` around the detector loop is what makes cancellation obey the
+same ownership contract instead of leaking the active per-turn provider.
 
 ## Try breaking it
 

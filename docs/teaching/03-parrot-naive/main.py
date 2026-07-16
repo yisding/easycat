@@ -30,6 +30,7 @@ from easycat.debug.export import export_debug_bundle
 from easycat.events import EventBus, STTEventType
 from easycat.recipes import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
 from easycat.transports.local import LocalTransport
 
@@ -78,6 +79,17 @@ async def speak_and_record(
         rejected_chunks=rejected_chunks,
         offset_ms=(time.monotonic() - start) * 1000,
     )
+
+
+async def shutdown(stt, transport) -> None:
+    """End the logical STT stream, close its provider, then disconnect."""
+    try:
+        await stt.end_stream()
+    finally:
+        try:
+            await close_if_supported(stt)
+        finally:
+            await transport.disconnect()
 
 
 async def main() -> None:
@@ -172,8 +184,7 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        await stt.end_stream()
-        await transport.disconnect()
+        await shutdown(stt, transport)
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
