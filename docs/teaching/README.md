@@ -56,10 +56,11 @@ uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 ```
 
 The runner strips all `*_API_KEY` variables from each child process and
-captures successful output. Rerun any printed chapter command directly to
-study its full evidence. These checkpoints are a hardware-free conceptual
-spine, not replacements for the chapters' microphone/provider-backed main
-paths.
+disables bytecode writes. Its curated probes keep generated artifacts in
+temporary directories, so the full run leaves the checkout unchanged. The
+runner captures successful output; rerun any printed chapter command directly
+to study its full evidence. These checkpoints are a hardware-free conceptual
+spine, not replacements for the chapters' microphone/provider-backed main paths.
 
 After editing a chapter, changing its copied code, or using one as a starting
 point, run the repository validation lane from the root:

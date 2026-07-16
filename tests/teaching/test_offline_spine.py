@@ -67,6 +67,13 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
         "openai",
         reason="running the full spine requires the documented quickstart extras",
     )
+    root_entries_before = {
+        path.name: path.read_bytes() if path.is_file() else None for path in ROOT.iterdir()
+    }
+    before = {
+        path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
+        for path in TEACHING.rglob("*")
+    }
     completed = subprocess.run(
         [sys.executable, str(SPINE), "--run", "--jobs", "4", "--json"],
         cwd=ROOT,
@@ -83,3 +90,20 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     assert payload["failed"] == 0
     assert {row["status"] for row in payload["checkpoints"]} == {"pass"}
     assert {row["returncode"] for row in payload["checkpoints"]} == {0}
+    after = {
+        path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
+        for path in TEACHING.rglob("*")
+    }
+    assert after == before
+    assert {
+        path.name: path.read_bytes() if path.is_file() else None for path in ROOT.iterdir()
+    } == root_entries_before
+
+
+def test_offline_spine_documents_workspace_hygiene() -> None:
+    source = SPINE.read_text(encoding="utf-8")
+    readme = (TEACHING / "README.md").read_text(encoding="utf-8")
+
+    assert 'environment["PYTHONDONTWRITEBYTECODE"] = "1"' in source
+    assert "leave files in the checkout" in source
+    assert "full run leaves the checkout unchanged" in readme
