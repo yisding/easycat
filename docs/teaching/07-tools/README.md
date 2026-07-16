@@ -133,7 +133,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -82,83 +130,150 @@
+@@ -82,84 +130,151 @@
                  self._preroll.append(chunk)
 
 
@@ -325,7 +325,7 @@
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
 +    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
- ) -> float | None:
+ ) -> tuple[float | None, int, int]:
 -    """Take one sentence at a time, synthesise, stream audio to speaker.
 -
 -    Because ``transport.send_audio`` returns as soon as the chunk is
@@ -333,6 +333,7 @@
 -    the current sentence is still audible. That is the pipeline overlap.
 -    """
      first_audio_t: float | None = None
+     accepted_chunks = rejected_chunks = 0
      while True:
 -        sentence = await sentence_queue.get()
 -        if sentence is None:
@@ -342,30 +343,30 @@
 -
 +        kind, sentence = item
          synth_start = time.monotonic()
+         sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-             if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -169,7 +284,11 @@
-                         kind=JournalRecordKind.EVENT,
-                         name="tts.first_audio",
-                         session_id=SESSION_ID,
--                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-+                        data={
-+                            "stage": "tts",
-+                            "kind": kind,
-+                            "t_ms": first_audio_t * 1000,
-+                        },
-                     )
-         journal.append(
-             kind=JournalRecordKind.EVENT,
-@@ -177,6 +296,7 @@
+@@ -174,7 +289,11 @@
+                             kind=JournalRecordKind.EVENT,
+                             name="tts.first_audio",
+                             session_id=SESSION_ID,
+-                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
++                            data={
++                                "stage": "tts",
++                                "kind": kind,
++                                "t_ms": first_audio_t * 1000,
++                            },
+                         )
+                 else:
+                     rejected_chunks += 1
+@@ -185,6 +304,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
 +                "kind": kind,
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
-                 "text": sentence,
-             },
-@@ -185,7 +305,6 @@
+                 "accepted_chunks": sentence_accepted,
+                 "rejected_chunks": sentence_rejected,
+@@ -195,7 +315,6 @@
 
 
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -373,7 +374,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -196,16 +315,10 @@
+@@ -206,16 +325,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -386,13 +387,13 @@
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
 +    sentence_queue: asyncio.Queue = asyncio.Queue()
-     _, first_audio_t = await asyncio.gather(
+     _, delivery = await asyncio.gather(
 -        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        run_agent_streaming(client, final_text, sentence_queue, journal),
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
-     reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
-@@ -285,7 +398,7 @@
+     first_audio_t, accepted_chunks, rejected_chunks = delivery
+@@ -305,7 +418,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 

@@ -251,24 +251,32 @@ async def run_agent_streaming(client, user_text, sentence_queue):
 
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue, journal, session_id
-) -> float | None:
+) -> tuple[float | None, int, int]:
     first_audio_t: float | None = None
+    accepted_chunks = rejected_chunks = 0
     while True:
         sentence = await sentence_queue.get()
         if sentence is None:
             break
         synth_start = time.monotonic()
+        sentence_accepted = sentence_rejected = 0
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
                 accepted = await transport.send_audio(event.audio)
-                if accepted and first_audio_t is None:
-                    first_audio_t = time.monotonic()
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="tts.first_audio",
-                        session_id=session_id,
-                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-                    )
+                if accepted:
+                    accepted_chunks += 1
+                    sentence_accepted += 1
+                    if first_audio_t is None:
+                        first_audio_t = time.monotonic()
+                        journal.append(
+                            kind=JournalRecordKind.EVENT,
+                            name="tts.first_audio",
+                            session_id=session_id,
+                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                        )
+                else:
+                    rejected_chunks += 1
+                    sentence_rejected += 1
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -276,10 +284,12 @@ async def drain_sentences_to_speaker(
             data={
                 "stage": "tts",
                 "elapsed_ms": (time.monotonic() - synth_start) * 1000,
+                "accepted_chunks": sentence_accepted,
+                "rejected_chunks": sentence_rejected,
                 "text": sentence,
             },
         )
-    return first_audio_t
+    return first_audio_t, accepted_chunks, rejected_chunks
 
 
 async def run_turn(transport, stt, client, tts, journal, session_id, estimated_speech_end_t=None):
@@ -294,10 +304,11 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
 
     print(f"  user: {final_text!r}")
     q: asyncio.Queue = asyncio.Queue()
-    _, first_audio_t = await asyncio.gather(
+    _, delivery = await asyncio.gather(
         run_agent_streaming(client, final_text, q),
         drain_sentences_to_speaker(tts, transport, q, journal, session_id),
     )
+    first_audio_t, accepted_chunks, rejected_chunks = delivery
     reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
     speech_end_to_first_audio = (
@@ -318,11 +329,20 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
             "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
             "estimated_speech_end_to_stt_final_ms": speech_end_to_stt_final,
             "reply_enqueue_gap_ms": reply_enqueue_gap,
+            "tts_accepted_chunks": accepted_chunks,
+            "tts_rejected_chunks": rejected_chunks,
             "text": final_text,
         },
     )
     if total_gap is None:
-        print("  (turn gap unavailable — TTS produced no accepted audio)")
+        if accepted_chunks:
+            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
+        elif rejected_chunks:
+            print(
+                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
+            )
+        else:
+            print("  (turn gap unavailable — TTS produced no audio)")
     else:
         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
         if speech_end_to_first_audio is not None:

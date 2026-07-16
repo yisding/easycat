@@ -108,7 +108,9 @@ async def test_streaming_turn_gap_is_unavailable_without_accepted_audio(
     gap = next(row["data"] for row in rows if row["name"] == "turn.gap")
     assert gap["total_gap_ms"] is None
     assert gap["reply_enqueue_gap_ms"] == 3_000.0
-    assert "turn gap unavailable — TTS produced no accepted audio" in capsys.readouterr().out
+    assert gap["tts_accepted_chunks"] == 0
+    assert gap["tts_rejected_chunks"] == 1
+    assert "turn gap unavailable — transport rejected all 1 TTS chunks" in capsys.readouterr().out
 
 
 def test_streaming_chapter_copies_keep_first_audio_turn_gap_contract() -> None:
