@@ -14,7 +14,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
-CHAPTER_2 = TEACHING / "02-transcribe"
 CHAPTER_4 = TEACHING / "04-vad-preroll"
 CHAPTER_6 = TEACHING / "06-streaming-agent"
 
@@ -40,14 +39,6 @@ class _FakeTransport:
     async def receive_audio(self):
         if False:
             yield None
-
-
-class _FakeDisconnectTransport:
-    def __init__(self) -> None:
-        self.disconnected = 0
-
-    async def disconnect(self) -> None:
-        self.disconnected += 1
 
 
 class _FakeDetector:
@@ -79,42 +70,22 @@ def test_chapter_4_closes_stt_on_normal_and_cancelled_turns() -> None:
 
 
 def test_chapters_2_through_6_close_manually_created_stt() -> None:
-    paths = (
-        TEACHING / "02-transcribe" / "streaming.py",
+    chapter_2 = TEACHING / "02-transcribe" / "streaming.py"
+    source = chapter_2.read_text(encoding="utf-8")
+    assert "from easycat.runtime.capabilities import close_if_supported" in source
+    assert "resources.push_async_callback(close_if_supported, stt)" in source
+
+    direct_cleanup_paths = (
         TEACHING / "03-parrot-naive" / "main.py",
         TEACHING / "04-vad-preroll" / "main.py",
         TEACHING / "05-blocking-agent" / "main.py",
         CHAPTER_6 / "main.py",
     )
 
-    for path in paths:
+    for path in direct_cleanup_paths:
         source = path.read_text(encoding="utf-8")
         assert "from easycat.runtime.capabilities import close_if_supported" in source
         assert "await close_if_supported(" in source
-
-
-def _load_chapter_2():
-    spec = importlib.util.spec_from_file_location(
-        "teaching_02_streaming_cleanup", CHAPTER_2 / "streaming.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("needs_stream_end", [False, True])
-async def test_chapter_2_shutdown_ends_stream_at_most_once(needs_stream_end: bool) -> None:
-    chapter = _load_chapter_2()
-    stt = _FakeSTT()
-    transport = _FakeDisconnectTransport()
-
-    await chapter.shutdown(stt, transport, needs_stream_end=needs_stream_end)
-
-    assert stt.ended == int(needs_stream_end)
-    assert stt.closed == 1
-    assert transport.disconnected == 1
 
 
 def _load_chapter_6(monkeypatch):

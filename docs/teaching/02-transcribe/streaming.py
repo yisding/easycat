@@ -22,6 +22,7 @@ import asyncio
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from easycat import LocalTransportConfig
@@ -77,16 +78,69 @@ def build_stt_config(provider: str) -> STTProviderConfig:
     return STTProviderConfig(provider=provider, api_key=api_key, params=params)
 
 
-async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
-    """End an active stream once, then close its provider and transport."""
-    try:
-        if needs_stream_end:
+async def run_streaming(
+    stt,
+    transport,
+    journal: InMemoryRingBuffer,
+    session_id: str,
+    *,
+    duration_s: float = DURATION_S,
+) -> None:
+    """Run one stream with acquisition rollback and joined sibling tasks."""
+    # Register each cleanup as soon as ownership begins. If connect() or
+    # start_stream() raises after partial acquisition, the earlier callbacks
+    # still run. Successful acquisition unwinds as end → close → disconnect.
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        resources.push_async_callback(close_if_supported, stt)
+        await transport.connect()
+
+        await stt.start_stream()
+        resources.push_async_callback(stt.end_stream)
+
+        start = time.monotonic()
+        print(f"Speak for {duration_s:g} seconds...")
+
+        async def feed_audio() -> None:
+            """Push mic chunks into STT until the capture window elapses."""
+            async for chunk in transport.receive_audio():
+                await stt.send_audio(chunk)
+                if time.monotonic() - start >= duration_s:
+                    break
+            # Closing the STT stream is what triggers the upload (for
+            # OpenAI's batch provider) or the final commit (for Deepgram).
+            # For OpenAI this call blocks for the full round-trip: the
+            # partials you see start arriving *after* we get here.
             await stt.end_stream()
-    finally:
-        try:
-            await close_if_supported(stt)
-        finally:
-            await transport.disconnect()
+
+        async def consume_events() -> None:
+            """Print every partial / final as soon as it arrives."""
+            async for event in stt.events():
+                offset_ms = (time.monotonic() - start) * 1000
+                kind = "FINAL" if event.type == STTEventType.FINAL else "part "
+                print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
+                journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name=f"stt.{event.type.value}",
+                    session_id=session_id,
+                    data={
+                        "stage": "stt",
+                        "event_type": event.type.value,
+                        "text": event.text,
+                        "offset_ms": offset_ms,
+                        # t_ms mirrors the later chapters' field so downstream
+                        # scripts (ch 12's evals.py, etc.) can read this bundle
+                        # without a translator.
+                        "t_ms": time.monotonic() * 1000,
+                    },
+                )
+
+        # TaskGroup cancels and joins one sibling before it lets the failure
+        # escape. Resource cleanup therefore never races a live feeder or
+        # event consumer.
+        async with asyncio.TaskGroup() as streams:
+            streams.create_task(feed_audio())
+            streams.create_task(consume_events())
 
 
 async def main(provider: str = "openai") -> None:
@@ -116,52 +170,7 @@ async def main(provider: str = "openai") -> None:
         },
     )
 
-    await transport.connect()
-    await stt.start_stream()
-    stream_end_started = False
-    start = time.monotonic()
-    print(f"Speak for {DURATION_S} seconds...")
-
-    async def feed_audio() -> None:
-        """Push mic chunks into STT until DURATION_S seconds elapse."""
-        nonlocal stream_end_started
-        async for chunk in transport.receive_audio():
-            await stt.send_audio(chunk)
-            if time.monotonic() - start >= DURATION_S:
-                break
-        # Closing the STT stream is what triggers the upload (for
-        # OpenAI's batch provider) or the final commit (for Deepgram).
-        # For OpenAI this call blocks for the full round-trip: the
-        # partials you see start arriving *after* we get here.
-        stream_end_started = True
-        await stt.end_stream()
-
-    async def consume_events() -> None:
-        """Print every partial / final as soon as it arrives."""
-        async for event in stt.events():
-            offset_ms = (time.monotonic() - start) * 1000
-            kind = "FINAL" if event.type == STTEventType.FINAL else "part "
-            print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
-            journal.append(
-                kind=JournalRecordKind.EVENT,
-                name=f"stt.{event.type.value}",
-                session_id=session_id,
-                data={
-                    "stage": "stt",
-                    "event_type": event.type.value,
-                    "text": event.text,
-                    "offset_ms": offset_ms,
-                    # t_ms mirrors the later chapters' field so downstream
-                    # scripts (ch 12's evals.py, etc.) can read this bundle
-                    # without a translator.
-                    "t_ms": time.monotonic() * 1000,
-                },
-            )
-
-    try:
-        await asyncio.gather(feed_audio(), consume_events())
-    finally:
-        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
+    await run_streaming(stt, transport, journal, session_id)
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{session_id}.bundle"

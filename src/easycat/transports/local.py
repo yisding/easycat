@@ -143,8 +143,6 @@ class LocalTransport(AudioQueueMixin):
         # it on its first reference drain when AEC is wired.
         self._aec_reference_enabled = False
         self._primed = False
-        self._loop = asyncio.get_running_loop()
-
         sd = require_module(
             "sounddevice",
             extra="local",
@@ -157,6 +155,7 @@ class LocalTransport(AudioQueueMixin):
         )
 
         loop = asyncio.get_running_loop()
+        self._loop = loop
         frame_size = self._frame_samples
 
         # --- Input stream (mic) ---
@@ -186,26 +185,34 @@ class LocalTransport(AudioQueueMixin):
             except RuntimeError:
                 pass
 
-        self._input_stream = sd.InputStream(
-            samplerate=self._audio_format.sample_rate,
-            channels=self._audio_format.channels,
-            dtype="float32",
-            blocksize=frame_size,
-            device=self._config.input_device,
-            callback=_input_callback,
-        )
-        self._input_stream.start()
+        try:
+            self._input_stream = sd.InputStream(
+                samplerate=self._audio_format.sample_rate,
+                channels=self._audio_format.channels,
+                dtype="float32",
+                blocksize=frame_size,
+                device=self._config.input_device,
+                callback=_input_callback,
+            )
+            self._input_stream.start()
 
-        # --- Output stream (speaker) ---
-        self._output_stream = sd.OutputStream(
-            samplerate=self._audio_format.sample_rate,
-            channels=self._audio_format.channels,
-            dtype="float32",
-            blocksize=frame_size,
-            device=self._config.output_device,
-            callback=partial(self._output_callback, np),
-        )
-        self._output_stream.start()
+            # --- Output stream (speaker) ---
+            self._output_stream = sd.OutputStream(
+                samplerate=self._audio_format.sample_rate,
+                channels=self._audio_format.channels,
+                dtype="float32",
+                blocksize=frame_size,
+                device=self._config.output_device,
+                callback=partial(self._output_callback, np),
+            )
+            self._output_stream.start()
+        except BaseException:
+            # ``_connected`` becomes true only after both devices start, so a
+            # failure here must unwind the handles directly rather than rely on
+            # the steady-state flag. This also makes callers that do not wrap
+            # ``connect()`` in an exit stack safe from partial acquisition.
+            await self.disconnect()
+            raise
         self._connected = True
 
     def _push_aec_reference(self, frame: bytes) -> None:
@@ -311,13 +318,21 @@ class LocalTransport(AudioQueueMixin):
 
     async def disconnect(self) -> None:
         """Close audio devices and release resources."""
-        if not self._connected:
+        if (
+            not self._connected
+            and self._input_stream is None
+            and self._output_stream is None
+            and self._loop is None
+        ):
             return
 
         for stream in (self._input_stream, self._output_stream):
             if stream is not None:
                 try:
                     stream.stop()
+                except Exception:
+                    logger.debug("Error stopping audio stream", exc_info=True)
+                try:
                     stream.close()
                 except Exception:
                     logger.debug("Error closing audio stream", exc_info=True)
