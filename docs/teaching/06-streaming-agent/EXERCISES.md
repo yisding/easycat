@@ -1,5 +1,7 @@
 # Chapter 6 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Isolate which knob buys you what
 
 **Task.** Change `MODEL = "gpt-4o-mini"` to `"gpt-4o"`. Re-run.
