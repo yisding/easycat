@@ -64,10 +64,16 @@ class TurnMode(enum.Enum):
 class TurnManagerConfig:
     """Configuration for TurnManager."""
 
-    # End-of-turn silence timeout in milliseconds
+    # Grace period after VAD reports speech stopped before the turn ends.
+    # Keep this comfortably above ``VADConfig.min_speech_duration_ms``: on the
+    # plain-VAD path (no smart-turn) the only event that can cancel a pending
+    # endpoint is a *confirmed* VADStartSpeaking, which the default VAD emits
+    # only after 250 ms of continuous resumed speech plus frame quantization.
+    # This is also the fallback grace a smart-turn "incomplete" verdict
+    # grants, so a semantically mid-sentence user keeps the full window.
     end_of_turn_silence_ms: int = 500
     # Shorter silence timeout used when STT finalizes text with terminal
-    # punctuation during the pause.  None disables punctuation-aware
+    # punctuation during the pause. None disables punctuation-aware
     # endpointing. Smart-turn incomplete/error decisions still receive the
     # full end_of_turn_silence_ms grace period.
     punctuated_end_of_turn_silence_ms: int | None = 200

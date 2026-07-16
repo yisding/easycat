@@ -1,5 +1,7 @@
 # Chapter 0 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 One exercise from the chapter README, plus hints if you get stuck.
 No worked solutions checked in — the point is that you take a swing
 and form your own answer before peeking.

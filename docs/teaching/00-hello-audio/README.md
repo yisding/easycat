@@ -1,5 +1,9 @@
 # Chapter 0 — Hello, Audio
 
+<!-- BEGIN auto:navigation -->
+**Progress: 1 of 16** · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 1 →](../01-echo/)
+<!-- END auto:navigation -->
+
 > Record, play, and *understand* raw PCM. No framework. Just bytes
 > and sample rates.
 
@@ -25,7 +29,8 @@ The script:
    explains it.
 3. Plays the recording back.
 4. Replays it three more times — at 10ms, 50ms, and 200ms chunk
-   sizes — so your ears can feel the chunking-latency tradeoff.
+   sizes — while simulating the wait to collect the first live
+   chunk, so your ears can feel the chunking-latency tradeoff.
 
 ## What is in the buffer
 
@@ -66,11 +71,11 @@ A few common sample rates you will meet later in the ladder:
 
 ## The chunk-size demo
 
-Every stage of a voice pipeline processes audio in *chunks*. The
-smaller the chunk, the lower the latency. The larger the chunk,
-the less scheduling overhead. Change the chunk size in `main.py`
-and you are making exactly the same tradeoff every voice framework
-makes every day.
+Every stage of a voice pipeline processes audio in *chunks*. A live
+source has to collect a full chunk before it can send that chunk
+downstream: 10ms chunks become available every 10ms; 200ms chunks
+become available every 200ms. Smaller chunks reduce that batching
+delay, while larger chunks reduce scheduling overhead.
 
 Because this recording is already in memory, the script deliberately
 waits one chunk duration before opening playback. That models a live
