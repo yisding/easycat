@@ -1,5 +1,9 @@
 # Chapter 12 — Evals + the Latency Budget
 
+<!-- BEGIN auto:navigation -->
+**Progress: 13 of 16** · [← Chapter 11](../11-journal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 13 →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
 > The difference between *building* a voice bot and *operating* one
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.
@@ -12,6 +16,10 @@
   wants `OPENAI_API_KEY`; before running it, run
   `uv run easycat doctor` from the repo root. If the key lives in `.env`, run
   `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- The optional LLM judge makes a live provider call that may incur charges.
+  Review your provider billing and usage limits before running it.
+- The optional LLM judge sends eval content to the configured provider. Use
+  non-sensitive test data and review provider data-handling policies first.
 - If the key lives in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
 
@@ -32,11 +40,18 @@
 - **Removed:** still no live pipeline. This chapter is pure
   measurement.
 
-## The five pre-recorded bundles
+## The six pre-recorded bundles
 
 ```bash
-uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
+uv run python docs/teaching/12-evals-and-latency/generate_bundles.py \
+    --output-root .easycat/teaching/12-evals-and-latency
 ```
+
+The fixtures used below are already checked in. The command above is a
+safe way to experiment: it writes a chapter-shaped copy under the
+gitignored `.easycat/` directory instead of rewriting tracked bundles.
+Maintainers intentionally refreshing the checked-in fixtures omit
+`--output-root` and review the resulting bundle and CSV diffs.
 
 - `turn_01_fast.bundle` — clean, fast turn.
 - `turn_02_slow_agent.bundle` — agent is slow; P95 spike.
@@ -59,7 +74,7 @@ and whether the interruption (if any) was real.
 
 ## The golden WER fixtures (`bundles/golden/`)
 
-The five fixtures above are useful for **latency** and **barge-in
+The six fixtures above are useful for **latency** and **barge-in
 F1** but they all happen to have STT hypotheses identical to their
 reference transcripts — so the WER pipeline reports 0.0% across
 the board. That tells you the pipeline runs without errors; it
@@ -180,10 +195,11 @@ the number you report.** Voice users remember the bad turns, not
 the good ones; a single stumble poisons an otherwise-fast bot's
 reputation. Track P50 so you know the median, but *target* P95.
 
-> With only five bundles, P95 is approximated by the fourth-
-> slowest — noisy. Real eval sets need dozens of turns for P95 to
-> be stable; re-run this against a directory full of your own
-> chapter-6 or chapter-10 runs for a number you can trend.
+> With only six bundles, nearest-rank P95 is the slowest turn —
+> deliberately noisy, but it does not hide the planted 2900 ms tail.
+> Real eval sets need dozens of turns for P95 to be stable; re-run
+> this against a directory full of your own chapter-6 or chapter-10
+> runs for a number you can trend.
 
 ### WER — word error rate for STT
 
@@ -194,7 +210,7 @@ not per-bundle, to even out small-sample noise.
 
 > The bundled fixtures are synthetic — the STT "hypothesis" is
 > identical to the ground-truth transcript, so WER is trivially
-> 0% on all five. The script is wired and ready; point it at a
+> 0% on all six. The script is wired and ready; point it at a
 > bundle you recorded through a real STT in chapter 6 (plus a
 > hand-typed reference) and it will produce real edits.
 

@@ -1,5 +1,7 @@
 # Chapter 15 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Two sessions fighting for one mic
 
 **Task.** Add a second session to the manager before the first one

@@ -163,11 +163,9 @@ class MiniTurnDetector:
                 self._turn_audio = []
                 yield "speech_ended", speech_end_t
 
-            if self._state == "speaking":
+            if self._state in ("speaking", "pending"):
                 self._turn_audio.append(chunk)
                 yield "frame", chunk
-            elif self._state == "pending":
-                self._turn_audio.append(chunk)
             else:
                 self._preroll.append(chunk)
 

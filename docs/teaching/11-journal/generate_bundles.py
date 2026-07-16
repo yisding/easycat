@@ -1,21 +1,26 @@
 """Build the three planted-bug bundles for chapter 11.
 
-Run this once; the resulting ``.bundle`` files are checked into
-``bundles/``. You should not need to rerun it unless you want to
-regenerate the fixtures.
+The resulting ``.bundle`` files are checked into ``bundles/``. Use an
+ignored output root when experimenting so you do not rewrite those tracked
+fixtures:
 
-    uv run python docs/teaching/11-journal/generate_bundles.py
+    uv run python docs/teaching/11-journal/generate_bundles.py \
+        --output-root .easycat/teaching/11-journal
+
+Maintainers intentionally refreshing the checked-in fixtures can omit
+``--output-root``.
 """
 
 from __future__ import annotations
 
+import argparse
 import types
 from pathlib import Path
 
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
-BUNDLES = Path(__file__).parent / "bundles"
+HERE = Path(__file__).parent
 
 
 def _emit(journal, name, session_id, data):
@@ -27,15 +32,16 @@ def _emit(journal, name, session_id, data):
     )
 
 
-def _write(journal, session_id: str, filename: str) -> None:
-    BUNDLES.mkdir(exist_ok=True)
-    path = BUNDLES / filename
+def _write(journal, session_id: str, filename: str, output_root: Path) -> None:
+    bundles = output_root / "bundles"
+    bundles.mkdir(parents=True, exist_ok=True)
+    path = bundles / filename
     shim = types.SimpleNamespace(journal=journal)
     export_debug_bundle(shim, path, overwrite=True)
-    print(f"  wrote {path.relative_to(Path.cwd())}")
+    print(f"  wrote {path}")
 
 
-def build_bug_01_empty_final() -> None:
+def build_bug_01_empty_final(output_root: Path = HERE) -> None:
     """Turn entered PROCESSING but STT committed an empty final.
 
     Root cause (in solutions.md): pre-roll off-by-one; the very first
@@ -52,10 +58,10 @@ def build_bug_01_empty_final() -> None:
     _emit(j, "turn.state_changed", sid, {"stage": "turn", "from": "SPEAKING", "to": "PROCESSING"})
     # Conspicuously absent: stage.agent.execute, stage.tts.execute.
     _emit(j, "turn.state_changed", sid, {"stage": "turn", "from": "PROCESSING", "to": "IDLE"})
-    _write(j, sid, "bug_01_empty_final.bundle")
+    _write(j, sid, "bug_01_empty_final.bundle", output_root)
 
 
-def build_bug_02_tts_stutter() -> None:
+def build_bug_02_tts_stutter(output_root: Path = HERE) -> None:
     """TTS output stutters. Sentence N plays; N+1 delays; N+2 fine.
 
     Root cause: intermittent WebSocket reconnects in the TTS provider
@@ -129,10 +135,10 @@ def build_bug_02_tts_stutter() -> None:
         sid,
         {"stage": "turn", "total_gap_ms": 3500.0, "text": "..."},
     )
-    _write(j, sid, "bug_02_tts_stutter.bundle")
+    _write(j, sid, "bug_02_tts_stutter.bundle", output_root)
 
 
-def build_bug_03_ghost_interruption() -> None:
+def build_bug_03_ghost_interruption(output_root: Path = HERE) -> None:
     """Bot cancels itself mid-sentence. User never spoke.
 
     Root cause: speakerphone self-trigger. The bot's own TTS bleeds
@@ -190,14 +196,23 @@ def build_bug_03_ghost_interruption() -> None:
         sid,
         {"stage": "turn", "from": "BOT_SPEAKING", "to": "IDLE"},
     )
-    _write(j, sid, "bug_03_ghost_interruption.bundle")
+    _write(j, sid, "bug_03_ghost_interruption.bundle", output_root)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=HERE,
+        help="Chapter-shaped output root containing bundles/ (default: this chapter).",
+    )
+    args = parser.parse_args(argv)
+
     print("Building planted-bug bundles...")
-    build_bug_01_empty_final()
-    build_bug_02_tts_stutter()
-    build_bug_03_ghost_interruption()
+    build_bug_01_empty_final(args.output_root)
+    build_bug_02_tts_stutter(args.output_root)
+    build_bug_03_ghost_interruption(args.output_root)
 
 
 if __name__ == "__main__":

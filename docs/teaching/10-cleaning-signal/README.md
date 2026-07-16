@@ -1,5 +1,9 @@
 # Chapter 10 — Cleaning the Signal
 
+<!-- BEGIN auto:navigation -->
+**Progress: 11 of 16** · [← Chapter 9](../09-interruption/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 11 →](../11-journal/)
+<!-- END auto:navigation -->
+
 > Two problems often confused as one. **Noise reduction** removes
 > uncorrelated background sound (fan, keyboard, baby).
 > **Echo cancellation** removes the bot's own voice coming back
@@ -9,10 +13,17 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- `uv sync --extra quickstart --extra deepgram --group dev`
+- For the live pipeline: `uv sync --extra quickstart --extra deepgram --group dev`.
+- For offline replay only: `uv sync --extra quickstart --group dev`. The
+  checked-in WAV pairs need no microphone or API keys.
 - RNNoise is included in `quickstart`; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -234,7 +245,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -155,95 +168,48 @@
+@@ -155,119 +168,81 @@
      await sentence_queue.put(None)
  
  
@@ -267,11 +278,33 @@ hearing.
 -                "bytes_sent_so_far": ledger.bytes_sent,
 -                "cancelled": cancel.is_cancelled,
 -            },
+-        )
+-
+-
+-async def _reap_completed_bot_task(bot_task, active_cancel, active_ledger, journal):
 +            session_id=session_id,
 +            data={"stage": "tts", "text": sentence},
++        )
++
++
++async def _reap_completed_bot_task(bot_task, active_cancel, journal, session_id):
+     """Observe a finished bot task and clear its per-turn state."""
+     if bot_task is None or not bot_task.done():
+-        return bot_task, active_cancel, active_ledger
++        return bot_task, active_cancel
+     try:
+         await bot_task
+     except Exception as exc:
+         journal.append(
+             kind=JournalRecordKind.EVENT,
+             name="bot_task.error",
+-            session_id=SESSION_ID,
++            session_id=session_id,
+             data={"stage": "coordinator", "error": repr(exc)},
          )
- 
- 
+-    return None, None, None
+-
+-
 -async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 -    """Maintain a multi-turn history and rewrite it on cancel."""
 -    history: list[dict] = [
@@ -283,6 +316,9 @@ hearing.
 -            ),
 -        }
 -    ]
++    return None, None
++
++
 +async def coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal):
      stt = None
      bot_task: asyncio.Task | None = None
@@ -292,56 +328,71 @@ hearing.
      while True:
          tag, chunk = await mic_queue.get()
  
+-        # Clean completions update history inside ``_bot``. Reap both
+-        # successful and failed tasks before handling this microphone event.
+-        bot_task, active_cancel, active_ledger = await _reap_completed_bot_task(
+-            bot_task, active_cancel, active_ledger, journal
+-        )
+-
 -        # Barge-in during bot speech → cancel AND rewrite history.
++        bot_task, active_cancel = await _reap_completed_bot_task(
++            bot_task, active_cancel, journal, session_id
++        )
++
          if bot_task is not None and not bot_task.done():
--            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
-+            if tag == "speech_started" and active_cancel is not None:
+-            if tag != "speech_started" or active_cancel is None or active_ledger is None:
++            if tag != "speech_started" or active_cancel is None:
+                 continue
+             journal.append(
+                 kind=JournalRecordKind.EVENT,
+                 name="interruption.start",
+-                session_id=SESSION_ID,
++                session_id=session_id,
+                 data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+             )
+             active_cancel.cancel()
+             await transport.clear_audio()
+-
+-            # Let the bot task unwind so the ledger is final. A
+-            # transient agent/TTS error here shouldn't take the
+-            # whole session down mid-barge-in; log it and move on.
+             try:
+                 await bot_task
+             except Exception as exc:
                  journal.append(
                      kind=JournalRecordKind.EVENT,
-                     name="interruption.start",
+                     name="bot_task.error",
 -                    session_id=SESSION_ID,
 +                    session_id=session_id,
-                     data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                     data={"stage": "coordinator", "error": repr(exc)},
                  )
-                 active_cancel.cancel()
-                 await transport.clear_audio()
 -
--                # Let the bot task unwind so the ledger is final. A
--                # transient agent/TTS error here shouldn't take the
--                # whole session down mid-barge-in; log it and move on.
--                try:
--                    await bot_task
--                except Exception as exc:
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="bot_task.error",
--                        session_id=SESSION_ID,
--                        data={"stage": "coordinator", "error": repr(exc)},
--                    )
--
--                heard = active_ledger.heard_text()
--                full = " ".join(active_ledger.sentences_sent)
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="interruption.estimate",
--                    session_id=SESSION_ID,
--                    data={
--                        "stage": "interruption",
--                        "full_text": full,
--                        "heard_text": heard,
--                        "bytes_heard": active_ledger.bytes_sent,
--                    },
--                )
--                # Rewrite history: the bot said *only* what the user heard.
--                history.append({"role": "assistant", "content": heard})
--                print(f"  bot (cut): {heard!r}")
--                active_cancel = None
--                active_ledger = None
--                bot_task = None
-             continue
+-            heard = active_ledger.heard_text()
+-            full = " ".join(active_ledger.sentences_sent)
+-            journal.append(
+-                kind=JournalRecordKind.EVENT,
+-                name="interruption.estimate",
+-                session_id=SESSION_ID,
+-                data={
+-                    "stage": "interruption",
+-                    "full_text": full,
+-                    "heard_text": heard,
+-                    "bytes_heard": active_ledger.bytes_sent,
+-                },
+-            )
+-            # Rewrite history: the bot said *only* what the user heard.
+-            history.append({"role": "assistant", "content": heard})
+-            print(f"  bot (cut): {heard!r}")
++            bot_task = None
+             active_cancel = None
+-            active_ledger = None
+-            bot_task = None
+-            # Fall through so this start marker opens the barge-in STT stream.
++            # Keep handling this start marker so the barge-in opens STT.
  
          if tag == "speech_started":
-@@ -262,33 +228,56 @@
+             if stt is None:
+@@ -285,33 +260,56 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -410,7 +461,7 @@ hearing.
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -307,13 +296,14 @@
+@@ -330,13 +328,14 @@
          )
  
      await transport.connect()
@@ -428,7 +479,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -321,7 +311,7 @@
+@@ -344,7 +343,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
@@ -485,16 +536,19 @@ this chapter's AEC demo, take them off.
 
 ### B — offline replay (deterministic fixtures)
 
-Generate a synthetic fixture set once, then replay any condition
-through `replay.py`:
+The synthetic fixture set is checked in, so you can replay a condition
+directly from the repository root without a microphone or API keys:
 
 ```bash
-uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py
 uv run python docs/teaching/10-cleaning-signal/replay.py \
-    --mic recordings/speakerphone_loop.mic.wav \
-    --ref recordings/speakerphone_loop.ref.wav \
+    --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \
+    --ref docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav \
     --nr on --aec on
 ```
+
+Maintainers intentionally rebuilding the tracked WAV fixtures run
+`uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py`
+and review the resulting audio diff.
 
 The fixtures are toy signals (sine-wave "voice," deterministic
 white noise, a 30 ms echo at -18 dB) — enough to exercise the

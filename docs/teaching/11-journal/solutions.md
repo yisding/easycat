@@ -1,5 +1,7 @@
 # Chapter 11 — Solutions
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 **Do not read this until you have tried the investigations.**
 
 . . .
