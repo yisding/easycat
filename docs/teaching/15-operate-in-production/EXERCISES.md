@@ -1,7 +1,7 @@
 # Chapter 15 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../)
+[← Back to chapter](./README.md) · [Ladder index](../)
 <!-- END auto:navigation -->
 
 ## 1. Probe `SessionManager` without two microphones
@@ -28,12 +28,14 @@ the session's responsibility?
 2. `add(key, session)` reserves a unique key before awaiting
    `session.start()`. A duplicate raises `ValueError` without starting
    the duplicate. If start raises or the add task is cancelled, the
-   manager removes the reserved key before re-raising, so a later
-   connection can reuse it. `asyncio.CancelledError` inherits from
-   `BaseException`, not `Exception`, which is why cancellation needs
-   explicit rollback coverage. The session's own `start()` implementation
-   must roll back resources it opened before failing or being cancelled;
-   the manager does not call `stop()` on that partially started object.
+   manager removes its reservation before re-raising, so a later
+   connection can reuse it. If `remove()` or `stop_all()` already released
+   that reservation and a replacement claimed the key, rollback preserves
+   the replacement. `asyncio.CancelledError` inherits from `BaseException`,
+   not `Exception`, which is why cancellation needs explicit rollback
+   coverage. The session's own `start()` implementation must roll back
+   resources it opened before failing or being cancelled; the manager does
+   not call `stop()` on that partially started object.
 3. Each `connection(...)` context calls `remove()` in `finally`, which
    removes the slot and awaits graceful `session.stop()`. Do not race
    `remove()` or `stop_all()` against code still running inside an
@@ -101,7 +103,7 @@ liveness but not credential validity?
 ```bash
 uv run easycat latency PATH --json \
   | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
-      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
+      --metric 'vad->tts' --percentile p95 --max-ms 2000 --min-samples 5
 ```
 
 Then lower `--max-ms` until the gate fails. Finally raise

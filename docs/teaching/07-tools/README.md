@@ -1,7 +1,7 @@
 # Chapter 7 — Tools, Mid-stream
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 6 — Streaming Agent + Sentence TTS](../06-streaming-agent/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+**Progress: 8 of 16** · [← Chapter 6 — Streaming Agent + Sentence TTS](../06-streaming-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:navigation -->
 
 > The agent pauses to fetch something. The user hears silence — or
@@ -13,6 +13,11 @@
 - [Chapter 6](../06-streaming-agent/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -31,7 +36,7 @@
 - **Modified:** the agent loop now handles `delta.tool_calls` and
   runs a second LLM iteration once tool results return.
 
-<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py -->
+<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>06-streaming-agent/main.py</code> (auto-generated)</summary>
 
@@ -57,11 +62,11 @@
 +The slow one triggers a filler utterance so the user doesn't hear
 +a void. The fast one doesn't — fillers only help when the gap
 +would otherwise feel broken.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
 @@ -21,7 +23,9 @@
- 
+
  import asyncio
  import collections
 +import json
@@ -121,18 +126,18 @@
 +
 +TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
 +SentenceItem = tuple[str, str, str | None]
- 
- 
+
+
  class MiniTurnDetector:
 -    """Same as chapters 4 & 5."""
 +    """Same as chapters 4-6."""
- 
+
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
 @@ -82,84 +131,162 @@
                  self._preroll.append(chunk)
- 
- 
+
+
 -async def stream_sentences_to_tts(
 +# ── Filler utterance heuristic ────────────────────────────────────
 +
@@ -324,8 +329,8 @@
 +            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(result)})
 +
      await sentence_queue.put(None)
- 
- 
+
+
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
 +    tts,
@@ -376,8 +381,8 @@
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
 @@ -195,7 +329,6 @@
- 
- 
+
+
  async def run_turn(transport, stt, client, tts, journal) -> None:
 -    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
      final_text = ""
@@ -386,7 +391,7 @@
 @@ -206,16 +339,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
 -    journal.append(
 -        kind=JournalRecordKind.EVENT,
 -        name="stt.final",
@@ -405,10 +410,10 @@
 @@ -305,7 +432,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
- 
+
 -        print("Streaming agent. Ctrl-C to stop.\n")
 +        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
- 
+
          try:
              await collect_turns(transport, detector, stt_factory, client, tts, journal)
 ```
@@ -579,13 +584,13 @@ visible.
 
 1. Change `get_weather` to sleep 5 s. Listen — one filler is no
    longer enough. Add a "still working on it" at the 2.5 s mark.
-2. Open `src/easycat/session/actions.py` and read the seven
-   action dataclasses. For each one, answer in one sentence:
-   *why is this a session action and not a tool?* (The test is
-   whether the LLM has anything useful to do with the return
-   value.) The chapter ships no concrete action wiring because
-   the executors live at the Session layer, which we don't have
-   yet — but the reasoning is the payload.
+2. Run [`action_catalog.py`](action_catalog.py) and read the seven
+   action dataclasses it discovers. For each one, answer in one
+   sentence: *why is this a session action and not an inline tool?*
+   Then compare `core_supported`: every session registers
+   `CoreSessionActionExecutor` for `EndCallAction`, `AddToDNCAction`,
+   and `RemoveFromDNCAction`; transfer, DTMF, SMS, and custom actions
+   need a configured provider or application executor.
 3. Make a tool that returns a 5 KB JSON blob. Verify none of it
    reaches TTS. If it does, find the leak.
 

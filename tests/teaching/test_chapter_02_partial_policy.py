@@ -61,3 +61,6 @@ def test_chapter_teaches_reversibility_instead_of_ignoring_partials() -> None:
     assert "dispatch those from `final`, not `partial`" in text
     assert "irreversible output waits for\n`sttfinal`" in text
     assert "commit spoken output on final only" in text
+
+    assert "reversible consumers such as live\ncaptions or cancellable speculation" in chapter_6
+    assert "irreversible agent commits and spoken output wait for `STTFinal`" in chapter_6
