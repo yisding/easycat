@@ -504,6 +504,26 @@ def test_feature_multi_caller_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_telephony_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "10-telephony" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/10-telephony/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/10-telephony/main.py",
+        "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+        "uv run easycat doctor --env-file .env --json",
+        ("uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0"),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")

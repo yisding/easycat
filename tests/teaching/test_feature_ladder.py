@@ -698,6 +698,59 @@ async def test_multi_caller_stop_failure_releases_capacity(failure_type) -> None
     assert replacement is not None
 
 
+def test_telephony_chapter_uses_public_twilio_trust_callback_and_action_surfaces() -> None:
+    chapter = FEATURE_LADDER / "10-telephony"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "compute_twilio_webhook_signature",
+        "validate_twilio_webhook_signature",
+        "TwilioStreamTokenStore",
+        "twiml_connect_stream",
+        "parse_gather_webhook",
+        "parse_call_status_callback",
+        "match_screening_platform",
+        "classify_ivr_prompt",
+        "TwilioSessionActionExecutor",
+        "SendDTMFAction",
+        "TransferCallAction",
+        "EndCallAction",
+    ):
+        assert surface in script
+    for concept in (
+        "A Twilio call crosses two planes",
+        "Validate the public URL Twilio signed",
+        "Preserve call identity across callbacks and media",
+        "Inbound media is one session per call",
+        "Status callbacks drive call lifecycle",
+        "DTMF has input and output paths",
+        "Screening, voicemail, and IVR are different states",
+        "Call control stays provider-neutral at the session boundary",
+        "Outbound calling is a policy boundary",
+        "Interruptions must clear provider playback",
+    ):
+        assert concept in readme
+
+
+def test_telephony_checkpoint_runs_without_credentials_or_twilio_sdk() -> None:
+    script = FEATURE_LADDER / "10-telephony" / "main.py"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+
+    assert "PASS handoff: signed webhook minted one-use media authorization" in result.stdout
+    assert "PASS callbacks: DTMF, status, screening, and IVR inputs classified" in result.stdout
+    assert "PASS actions: DTMF, transfer, and hangup mapped to Twilio updates" in result.stdout
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -783,3 +836,5 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert "uv run python docs/using-easycat/08-testing-evals/main.py" in testing_evals["commands"]
     multi_caller = entries["docs/using-easycat/09-multi-caller/"]
     assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]
+    telephony = entries["docs/using-easycat/10-telephony/"]
+    assert "uv run python docs/using-easycat/10-telephony/main.py" in telephony["commands"]

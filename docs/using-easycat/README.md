@@ -56,7 +56,7 @@ pretending unfinished lessons are runnable.
 | 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger | Available |
 | 8 | [`08-testing-evals`](./08-testing-evals/) | Offline turns, assertions, evals, and latency budgets | Available |
 | 9 | [`09-multi-caller`](./09-multi-caller/) | Per-connection factories, authentication, limits, and supervision | Available |
-| 10 | Answer the phone | Twilio streams, outbound calls, screening, IVR, and call control | Planned |
+| 10 | [`10-telephony`](./10-telephony/) | Twilio streams, outbound calls, screening, IVR, and call control | Available |
 | 11 | Ship and operate | Validation, deployment, durability, metrics, and production teardown | Planned |
 
 ## Prerequisites
