@@ -456,7 +456,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env --json",
             "uv run python docs/using-easycat/04-tools-actions/main.py preview",
             "uv run python docs/using-easycat/04-tools-actions/main.py run",
-            ("uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run"),
+            "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
         ),
     },
     {
