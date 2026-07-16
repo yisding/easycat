@@ -53,17 +53,13 @@ def test_checked_in_eval_fixtures_end_turn_gap_at_first_audio() -> None:
     assert tool_names.index("tts.first_audio") < tool_names.index("tool.call.started")
 
 
-def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys) -> None:
+def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys, monkeypatch) -> None:
     evals = _load_chapter_module("evals.py")
     bundles = CHAPTER / "bundles"
     ground_truth = CHAPTER / "ground_truth.csv"
 
-    original_argv = sys.argv
-    try:
-        sys.argv = ["evals.py", str(bundles), str(ground_truth)]
-        evals.main()
-    finally:
-        sys.argv = original_argv
+    monkeypatch.setattr(sys, "argv", ["evals.py", str(bundles), str(ground_truth)])
+    evals.main()
 
     output = capsys.readouterr().out
     assert "P50                                        810 ms" in output
