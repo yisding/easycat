@@ -1,5 +1,7 @@
 # Chapter 9 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Probe the over-/under-shoot of `heard_text`
 
 **Task.** Run `estimate.py`. Interrupt the bot **exactly after one

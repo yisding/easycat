@@ -1,5 +1,9 @@
 # Chapter 11 — The Journal as Mental Model
 
+<!-- BEGIN auto:navigation -->
+**Progress: 12 of 16** · [← Chapter 10](../10-cleaning-signal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 12 →](../12-evals-and-latency/)
+<!-- END auto:navigation -->
+
 > You will not write pipeline code. You will read three bundles
 > with planted bugs and find them.
 
@@ -81,7 +85,16 @@ Your job is to find the failure using only the journal.
 
 ## Your tool
 
-One tiny script:
+Start with the chapter's canonical entry point. With no arguments it
+opens the first planted-bug fixture, so this command works immediately
+after setup:
+
+```bash
+uv run python docs/teaching/11-journal/main.py
+```
+
+`main.py` delegates to `investigate.py`. Call that script directly when
+you want to choose a fixture or add filters:
 
 ```bash
 uv run python docs/teaching/11-journal/investigate.py \
@@ -126,7 +139,8 @@ Now look for the agent:
 Nothing. The agent stage never ran.
 
 Write down your hypothesis — *why did STT commit an empty final?*
-— in a single sentence before opening `solutions.md`.
+— in a single sentence before opening
+[`solutions.md`](./solutions.md).
 
 ## Investigation 2 — semi-guided
 
@@ -159,7 +173,7 @@ for:
 - What setting in the journal explains why the bot self-triggered?
 
 Write your hypothesis in one sentence before peeking at
-`solutions.md`.
+[`solutions.md`](./solutions.md).
 
 ## Why the journal has to be structured
 
