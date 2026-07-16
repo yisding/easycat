@@ -166,8 +166,11 @@ Each chapter's README lists its own prerequisites up front.
   starting point rather than editing in place. A little
   duplication is the intended cost; each folder stays readable on
   its own.
-- **Each README gets one diagram and one exercise.** If a chapter
-  is longer than one page, it's too long.
+- **Narrative, exercises, self-check.** Each chapter keeps its concept
+  narrative in `README.md`, one or more applied tasks in the dedicated
+  `EXERCISES.md`, and a closing self-check. Generated source diffs can make
+  a README long; keep the hand-authored explanation skimmable and use focused
+  probes to isolate boundary claims.
 - **Journals are the single source of truth.** From chapter 2
   onward each runnable chapter dumps a `RunBundle` to
   `runs/*.bundle` in its own folder. The `runs/` directory is
@@ -185,13 +188,14 @@ Each chapter's README lists its own prerequisites up front.
 
 ## Pedagogical principles
 
-1. **Small enough to hold in your head.** Each chapter introduces
-   ~≤200 lines of new reader-facing code.
+1. **Small enough to hold in your head.** Each chapter introduces one
+   primary question and keeps new runnable units focused. Generated source
+   diffs show cumulative code without expanding that conceptual scope.
 2. **Runnable at every checkpoint.** No "it'll work once we add
    three more files."
 3. **Wrong version first.** Chapters 3, 5, 9 deliberately ship
    broken implementations to motivate the fix.
 4. **Observable internal state.** Starting at chapter 2, every
    chapter either dumps a `RunBundle` or reads one.
-5. **One axis of complexity per step.** If a chapter is about
-   VAD, it is not also about noise reduction.
+5. **One primary axis per step.** Companion probes may expose adjacent
+   boundary claims, but the chapter narrative keeps one question in focus.

@@ -73,8 +73,8 @@ shape.
 
 ## Self-check
 
-You should be able to: (a) trace one audio chunk from microphone
-input to speaker output, (b) explain why the loop uses async
-iteration instead of blocking callbacks, and (c) describe how the
-`Transport` protocol lets chapter 13 swap the audio boundary without
-rewriting that loop.
+You should be able to: (a) state and trace the inbound/outbound audio shape
+from microphone input to speaker output, (b) distinguish a chunk being
+produced from `send_audio(...)` accepting it and explain why the loop uses
+async iteration, and (c) explain why the same control flow works with Local,
+WebSocket, WebRTC, or Twilio transports.
