@@ -23,6 +23,7 @@ from scripts.regen_teaching_chapters import (
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
     PRACTICE_HANDOFF_RE,
+    PROGRESS_WORKSHEET,
     ROOT,
     SELF_CHECK_PROTOCOL_RE,
     TEACHING,
@@ -31,6 +32,7 @@ from scripts.regen_teaching_chapters import (
     _ensure_exercise_hints,
     _ensure_navigation,
     _ensure_practice_handoff,
+    _offline_checkpoint_for,
     _resolve_child_path,
     discover_chapters,
     regen_exercises,
@@ -43,6 +45,7 @@ from scripts.regen_teaching_chapters import (
     render_navigation,
     render_offline_checkpoint,
     render_practice_handoff,
+    render_progress_worksheet,
     render_self_check_protocol,
 )
 
@@ -96,6 +99,29 @@ def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
         "Teaching README auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_readmes)
     )
+
+
+def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
+    worksheet = PROGRESS_WORKSHEET.read_text(encoding="utf-8")
+    normalized_worksheet = re.sub(r"\s+", " ", worksheet)
+
+    assert worksheet == render_progress_worksheet()
+    assert worksheet.count("## Chapter ") == 16
+    labels = ("Predict", "Prepare", "Run", "Find", "Reflect", "Practice", "Retrieve", "Replay")
+    for label in labels:
+        assert worksheet.count(f"- [ ] **{label}:**") == 16
+    assert worksheet.count("- [ ]") == 130
+    assert "- [x]" not in worksheet.lower()
+    for chapter in discover_chapters():
+        checkpoint = _offline_checkpoint_for(chapter)
+        assert f"[Narrative](./{chapter.slug}/)" in worksheet
+        assert f"[Exercises](./{chapter.slug}/EXERCISES.md)" in worksheet
+        assert str(checkpoint["prediction"]) in normalized_worksheet
+        assert str(checkpoint["setup_command"]) in worksheet
+        assert str(checkpoint["command"]) in worksheet
+        assert str(checkpoint["evidence"]) in normalized_worksheet
+        assert str(checkpoint["reflection"]) in normalized_worksheet
+        assert f"--through {checkpoint['chapter']} --jobs 4 --show-evidence" in worksheet
 
 
 def test_render_navigation_handles_first_middle_and_last_chapters() -> None:

@@ -78,6 +78,7 @@ nav:
   - Home: README.md
   - Learn:
       - Teaching ladder: teaching/README.md
+      - Progress worksheet: teaching/PROGRESS.md
       - Build — assemble the pipeline:
           - Chapter 0 — Hello, Audio:
               - teaching/00-hello-audio/README.md
