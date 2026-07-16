@@ -29,7 +29,8 @@ The script:
    explains it.
 3. Plays the recording back.
 4. Replays it three more times — at 10ms, 50ms, and 200ms chunk
-   sizes — so your ears can feel the chunking-latency tradeoff.
+   sizes — while simulating the wait to collect the first live
+   chunk, so your ears can feel the chunking-latency tradeoff.
 
 ## What is in the buffer
 
@@ -70,27 +71,33 @@ A few common sample rates you will meet later in the ladder:
 
 ## The chunk-size demo
 
-Every stage of a voice pipeline processes audio in *chunks*. The
-smaller the chunk, the lower the latency. The larger the chunk,
-the less scheduling overhead. Change the chunk size in `main.py`
-and you are making exactly the same tradeoff every voice framework
-makes every day.
+Every stage of a voice pipeline processes audio in *chunks*. A live
+source has to collect a full chunk before it can send that chunk
+downstream: 10ms chunks become available every 10ms; 200ms chunks
+become available every 200ms. Smaller chunks reduce that batching
+delay, while larger chunks reduce scheduling overhead.
 
-The script prints two numbers per chunk size: *time-to-first-sound*
-(how long after `stream.start()` the first sample actually plays)
-and *total* wall-clock (which should match the recording length).
-The first number is the one your ears feel:
+This script replays an already-complete recording, so all of its
+chunks would normally be ready at once. To model a live source
+honestly, each replay deliberately waits for one chunk before the
+first write. Watch the line appear in the terminal, then listen:
 
-- **10ms chunks** — first sound within a few milliseconds. Feels
-  instant.
-- **200ms chunks** — a perceptible hesitation before the first
-  syllable, then smooth playback. Feels slow-start.
+- **10ms chunks** — the simulated source-buffer wait feels instant.
+- **200ms chunks** — there is a perceptible hesitation before the
+  first syllable, then smooth playback.
+
+The script reports *time-to-first-write*: time from the start of the
+simulated source wait until the first blocking `stream.write()`
+returns. That is a useful code-path milestone, but it is **not** a
+measurement of when sound reaches your ears. Measuring acoustic
+time-to-first-sound requires an audio loopback or a second microphone;
+device and operating-system buffers add latency after our code writes.
+The reported wall-clock includes the simulated wait and playback.
 
 We pass `latency='low'` and a matching `blocksize` to
-`sd.OutputStream`. The default `latency='high'` has PortAudio
-pre-buffer hundreds of milliseconds of silence before playback
-starts, which would flatten the difference we are trying to
-hear — the host buffer, not the chunk size, would dominate.
+`sd.OutputStream`. The default `latency='high'` can let host buffering
+dominate the comparison and flatten the difference we are trying to
+hear.
 
 This is the whole justification for streaming the rest of the
 ladder.
