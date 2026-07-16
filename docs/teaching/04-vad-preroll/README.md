@@ -1,7 +1,7 @@
 # Chapter 4 — VAD + Pre-roll
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+**Progress: 5 of 16** · [← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
 <!-- END auto:navigation -->
 
 > Real speech detection. And why the buffer *before* the detection
@@ -31,6 +31,11 @@
 - `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
   extra pulls in `onnxruntime`, which Silero VAD needs.
 - `OPENAI_API_KEY` (TTS) and `DEEPGRAM_API_KEY` (STT).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -74,8 +79,8 @@
 +detector plus a pre-roll ring buffer. The same parrot loop, now gated
 +on VAD turn boundaries instead of "500 ms since the last STT event."
 +
-+Run with ``--no-preroll`` to hear the start-of-utterance truncation
-+this chapter was designed to fix.
++Run with ``--no-preroll`` to compare a stream that omits cached audio
++received before VAD-on.
 
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -102,7 +107,7 @@
 -from easycat.audio_format import PCM16_MONO_24K
 +from easycat.audio_format import PCM16_MONO_24K, AudioChunk
  from easycat.debug.export import export_debug_bundle
--from easycat.events import EventBus, STTEvent, STTEventType
+-from easycat.events import Error, EventBus, STTEvent, STTEventType
 +from easycat.events import EventBus, STTEventType, VADStartSpeaking, VADStopSpeaking
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
@@ -248,7 +253,7 @@
          },
      )
      if rejected_chunks:
-@@ -124,166 +119,123 @@
+@@ -124,183 +119,123 @@
          )
 
 
@@ -282,6 +287,7 @@
 -    ev_queue: asyncio.Queue[STTQueueItem],
 -    journal: InMemoryRingBuffer,
 -    start: float,
+-    provider_errors: list[BaseException] | None = None,
 -) -> None:
 -    event_id = 0
 -    async for event in stt.events():
@@ -295,6 +301,12 @@
 -            queue_depth=ev_queue.qsize(),
 -        )
 -        await ev_queue.put((event_id, event, received_offset_ms))
+-    # Provider errors are emitted on a task immediately before the terminal
+-    # sentinel is queued. Yield once so the synchronous subscriber records an
+-    # exhausted-socket failure before we classify stream exhaustion as normal.
+-    await asyncio.sleep(0)
+-    if provider_errors:
+-        raise provider_errors[-1]
 -    await ev_queue.put(None)
 -
 -
@@ -399,7 +411,12 @@
 -    raise ParrotEventStreamEndedError
 -
 -
--async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
+-async def run_parrot(
+-    stt,
+-    transport,
+-    journal: InMemoryRingBuffer,
+-    provider_errors: list[BaseException] | None = None,
+-) -> None:
 -    """Own one parrot stream until cancellation, failure, or STT exhaustion."""
 -    async with AsyncExitStack() as resources:
 -        # These objects exist before connect(), so register final cleanup
@@ -415,11 +432,14 @@
 -        start = time.monotonic()
 -        print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
 -        ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
+-        observed_provider_errors = provider_errors if provider_errors is not None else []
 -
 -        try:
 -            async with asyncio.TaskGroup() as streams:
 -                streams.create_task(feed_audio(stt, transport))
--                streams.create_task(listen_stt(stt, ev_queue, journal, start))
+-                streams.create_task(
+-                    listen_stt(stt, ev_queue, journal, start, observed_provider_errors)
+-                )
 -                streams.create_task(stop_when_parrot_ends(transport, ev_queue, journal, start))
 -        except* ParrotEventStreamEndedError:
 -            # ``parrot_events`` consumed the listener's None sentinel. Raising
@@ -450,7 +470,7 @@
 +    parser.add_argument(
 +        "--no-preroll",
 +        action="store_true",
-+        help="Disable pre-roll; start-of-utterance will be clipped.",
++        help="Disable pre-roll; omit cached frames received before VAD-on.",
 +    )
 +    args = parser.parse_args()
 +
@@ -470,14 +490,16 @@
 -    # Deepgram emits partials mid-speech, which is what this chapter needs
 -    # to feel break. Its STT factory config takes provider-specific args via
 -    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
--    # format; ``event_bus`` is only used by Deepgram for WebSocket-reconnect
--    # telemetry — we wire a fresh bus here with no subscribers to satisfy
--    # the provider's constructor.
+-    # format. Capture terminal provider errors so an exhausted reconnect loop
+-    # cannot look like an ordinary end of the STT event stream.
+-    provider_errors: list[BaseException] = []
+-    event_bus = EventBus()
+-    event_bus.subscribe(Error, lambda event: provider_errors.append(event.exception))
 -    stt = create_stt_provider(
 -        STTProviderConfig(
 -            provider="deepgram",
 -            api_key=dg_key,
--            params={"sample_rate": 24000, "event_bus": EventBus()},
+-            params={"sample_rate": 24000, "event_bus": event_bus},
 +    def stt_factory():
 +        return create_stt_provider(
 +            STTProviderConfig(
@@ -489,7 +511,7 @@
 -    )
 -
 -    try:
--        await run_parrot(stt, transport, journal)
+-        await run_parrot(stt, transport, journal, provider_errors)
 -    except (KeyboardInterrupt, asyncio.CancelledError):
 -        pass
 +
@@ -537,10 +559,10 @@ you've heard it fail on your own voice, the rest of this chapter
 ## Run it
 
 ```bash
-# With pre-roll: the start of every word survives.
+# With pre-roll: cached leading frames are included in the STT stream.
 uv run python docs/teaching/04-vad-preroll/main.py
 
-# Without pre-roll: "Hello" becomes "ello."
+# Without pre-roll: compare the onset without those cached frames.
 uv run python docs/teaching/04-vad-preroll/main.py --no-preroll
 ```
 
@@ -559,17 +581,19 @@ model is bundled.
 
 ## The pre-roll problem
 
-A VAD is a decision made *after* it has seen enough audio. Fast
-backends fire 100-200 ms late — you said "Hello," but the VAD's
-"speech" verdict lands sometime during the "e." If you only forward
-audio chunks that arrive *after* VAD-on, your STT hears "ello"
-and confidently transcribes "Elo."
+A VAD is a decision made *after* it has seen enough audio. Its
+"speech" verdict can land after the utterance has already started.
+If you only forward chunks from VAD-on onward, the STT stream lacks
+the earlier frames and may mis-hear the leading sound (for example,
+a live run might turn "Hello" into "Elo"). The delay and transcript
+effect depend on the utterance, VAD backend, chunking, and STT provider.
 
 ## The pre-roll fix
 
 Keep a short ring buffer of recent audio (we use 300 ms, about 15
 chunks of 20 ms at 24 kHz). When VAD fires, flush the buffer into
-STT first, then forward live chunks. STT sees the full "Hello."
+STT first, then forward live chunks. STT receives the missing onset
+context as well; whether that changes a transcript is provider-dependent.
 
 ```mermaid
 flowchart LR

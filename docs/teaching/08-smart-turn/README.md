@@ -1,7 +1,7 @@
 # Chapter 8 — Smart-turn
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 7 — Tools, Mid-stream](../07-tools/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+**Progress: 9 of 16** · [← Chapter 7 — Tools, Mid-stream](../07-tools/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
 <!-- END auto:navigation -->
 
 > A tiny ML model that knows you're done talking before the silence
@@ -31,6 +31,11 @@
   extra installs `numpy` + `onnxruntime`, which smart-turn needs.
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -118,7 +123,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -57,236 +59,219 @@
+@@ -57,236 +59,217 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -289,11 +294,9 @@
 +                self._turn_audio = []
 +                yield "speech_ended", speech_end_t
 +
-+            if self._state == "speaking":
++            if self._state in ("speaking", "pending"):
 +                self._turn_audio.append(chunk)
                  yield "frame", chunk
-+            elif self._state == "pending":
-+                self._turn_audio.append(chunk)
              else:
                  self._preroll.append(chunk)
 
@@ -460,7 +463,7 @@
 +        result = await self._smart.detect(self._turn_audio)
 +        inference_ms = (time.monotonic() - t0) * 1000
 +        self._last_inference_ms = inference_ms
-+        confirmed = result.probability >= self._threshold
++        confirmed = result.probability > self._threshold
 +        if self._journal is not None:
 +            self._journal.append(
                  kind=JournalRecordKind.EVENT,
@@ -535,7 +538,7 @@
          synth_start = time.monotonic()
          sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-@@ -300,13 +285,8 @@
+@@ -300,13 +283,8 @@
                          journal.append(
                              kind=JournalRecordKind.EVENT,
                              name="tts.first_audio",
@@ -551,7 +554,7 @@
                          )
                  else:
                      rejected_chunks += 1
-@@ -314,11 +294,9 @@
+@@ -314,11 +292,9 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -564,7 +567,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -328,33 +306,42 @@
+@@ -328,33 +304,42 @@
      return first_audio_t, accepted_chunks, rejected_chunks
 
 
@@ -597,7 +600,7 @@
 +        if first_audio_t is None or estimated_speech_end_t is None
 +        else (first_audio_t - estimated_speech_end_t) * 1000
 +    )
-+    endpoint_to_stt_final = (
++    speech_end_to_stt_final = (
 +        None if estimated_speech_end_t is None else (stt_final_t - estimated_speech_end_t) * 1000
 +    )
      journal.append(
@@ -609,14 +612,14 @@
              "stage": "turn",
              "total_gap_ms": total_gap,
 +            "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
-+            "endpoint_to_stt_final_ms": endpoint_to_stt_final,
++            "estimated_speech_end_to_stt_final_ms": speech_end_to_stt_final,
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "tts_accepted_chunks": accepted_chunks,
              "tts_rejected_chunks": rejected_chunks,
-@@ -372,9 +359,15 @@
+@@ -372,9 +357,15 @@
              print("  (turn gap unavailable — TTS produced no audio)")
      else:
-         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 -
 -
 -async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
@@ -632,7 +635,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -390,7 +383,15 @@
+@@ -390,7 +381,15 @@
                  stt = None
                  try:
                      await active_stt.end_stream()
@@ -649,7 +652,7 @@
                  finally:
                      await close_if_supported(active_stt)
      finally:
-@@ -402,8 +403,25 @@
+@@ -402,8 +401,25 @@
 
 
  async def main() -> None:
@@ -675,7 +678,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -421,9 +439,21 @@
+@@ -421,9 +437,21 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
 
@@ -699,7 +702,7 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -432,15 +462,15 @@
+@@ -432,15 +460,15 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
@@ -790,7 +793,9 @@ stateDiagram-v2
 ```
 
 Every chunk during a speech or pending segment goes into
-`self._turn_audio`. On `VADStopSpeaking`, we call
+`self._turn_audio` and stays on the open STT stream as a `frame`.
+The pending state delays only the turn boundary; it does not pause
+transcription. On `VADStopSpeaking`, we call
 `smart_turn.detect(turn_audio)` — inference runs via
 `asyncio.loop.run_in_executor` inside `SmartTurnONNX.detect`, so
 ONNX doesn't block the event loop. Typical cost: 30-50 ms per
@@ -835,6 +840,10 @@ timeout alone is never evidence of the total wait.
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:.0f}ms"
+
 for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
     bundle = load_bundle(b)
     for r in bundle.records():
@@ -850,9 +859,9 @@ for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
                   f"pending={d['pending_wait_ms']:.0f}ms  reason={d['reason']}")
         if r["name"] == "turn.gap":
             d = r["data"]
-            print(f"  {b.name}  stt_final_to_audio={d['total_gap_ms']:.0f}ms  "
+            print(f"  {b.name}  stt_final_to_audio={format_ms(d['total_gap_ms'])}  "
                   f"speech_end_to_audio="
-                  f"{d['estimated_speech_end_to_first_audio_ms']:.0f}ms")
+                  f"{format_ms(d['estimated_speech_end_to_first_audio_ms'])}")
 ```
 
 ## The failure modes
@@ -888,7 +897,8 @@ cancel tokens, and the action queue.
    The newly accepted records are decision changes, not automatically
    false positives. Add `--labels labels.json`, where each record
    sequence maps to whether the user was actually done, before comparing
-   error counts.
+   error counts. The label keys must exactly cover every classification;
+   missing or unknown sequences are rejected rather than scored partially.
 2. Record *"I was thinking… we should order pizza."* Run
    `--backend smart`. Read the journal. Did smart-turn say done
    during the "…" pause? (If yes, that's a 300-500 ms latency

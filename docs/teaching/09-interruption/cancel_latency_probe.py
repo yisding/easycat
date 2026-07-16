@@ -10,15 +10,28 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+_MISSING = object()
 
 
 def load_cancel_chapter():
+    """Load the sibling lesson while keeping the probe provider-free."""
     path = Path(__file__).with_name("cancel.py")
     spec = importlib.util.spec_from_file_location("teaching_ch09_cancel_latency", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous_openai = sys.modules.get("openai", _MISSING)
+    sys.modules["openai"] = SimpleNamespace(AsyncOpenAI=object)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous_openai is _MISSING:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = previous_openai
     return module
 
 
