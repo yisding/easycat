@@ -231,12 +231,21 @@ Three reasons, all real:
 3. **Variable speech rate.** Our 15-chars/s constant is an
    average. "Hello" is slower than "uhh".
 
-Production `easycat.session.interruption` has a 200-line estimator
-that handles all three plus playback-ack marks. The toy here is a
-single-line formula: excluding rejected chunks prevents invented
-audio, while the remaining queue/rate errors are kept visible for
-the exercise. Read the production version once you understand why
-each correction exists.
+Production `easycat.session.interruption` has a more careful estimator
+that handles all three and combines the strongest progress evidence a
+transport exposes. Run the provider-free capability probe:
+
+```bash
+uv run python docs/teaching/09-interruption/playback_evidence.py
+```
+
+Local playback and WebRTC report delivered chunks through
+`TransportAudioDelivered`; Twilio supports explicit marks acknowledged
+as `PlaybackMarkAck`; transports with neither use a serial-playout
+estimate from the send log. These milestones constrain queued backlog,
+but none proves sound reached a human ear. The toy remains a single-line
+formula: excluding rejected chunks prevents invented audio, while its
+queue/rate errors stay visible for the exercise.
 
 ## Read the bundles
 
@@ -261,9 +270,10 @@ Expect:
 
 ## Try breaking it
 
-1. Run `estimate.py`. Interrupt exactly after one word. Open the
-   bundle — does `heard_text` end at that word, or does it over- or
-   under-shoot?
+1. Run `estimate.py`. Interrupt as close as you can after hearing one
+   word, and repeat several times because human reaction time is not an
+   exact clock. In each bundle, does `heard_text` end at that word, or
+   does it over- or under-shoot?
 2. Have the agent reply with markdown-heavy output (ask it for a
    table). The stripped text fed to TTS is shorter than the
    original. How does this affect `heard_text` vs reality?
