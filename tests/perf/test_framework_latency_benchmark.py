@@ -9,6 +9,8 @@ import pytest
 from perf.bench_framework_latency import (
     LOCK_EXCLUDE_NEWER,
     PINS,
+    Worker,
+    WorkerSpec,
     _lock_metadata,
     _validate_sample,
     percentile,
@@ -100,6 +102,17 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
         "livekit": ("livekit-agents==1.6.4",),
         "pipecat": ("pipecat-ai==1.4.0", "websockets==15.0.1"),
     }
+
+
+def test_worker_startup_exit_fails_without_waiting_for_response_timeout(tmp_path: Path) -> None:
+    worker = tmp_path / "exits_immediately.py"
+    worker.write_text("raise SystemExit(2)\n")
+
+    with pytest.raises(RuntimeError, match="worker exited before sending a response"):
+        Worker(
+            WorkerSpec(framework="easycat", command=(sys.executable, str(worker))),
+            timeout_s=0.5,
+        )
 
 
 def test_competitor_lock_metadata_is_content_addressed() -> None:

@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
+_WORKER_EOF = object()
 ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
 LOCK_EXCLUDE_NEWER = "2026-07-11T22:00:00Z"
 PINS = {
@@ -108,7 +109,7 @@ class Worker:
         self.framework = spec.framework
         self.timeout_s = timeout_s
         self._stderr: list[str] = []
-        self._messages: queue.Queue[str] = queue.Queue()
+        self._messages: queue.Queue[str | object] = queue.Queue()
         self._process = subprocess.Popen(  # noqa: S603 - argv is internally constructed
             spec.command,
             stdin=subprocess.PIPE,
@@ -136,6 +137,7 @@ class Worker:
         assert self._process.stdout is not None
         for line in self._process.stdout:
             self._messages.put(line)
+        self._messages.put(_WORKER_EOF)
 
     def _read_stderr(self) -> None:
         assert self._process.stderr is not None
@@ -151,6 +153,12 @@ class Worker:
             raise TimeoutError(
                 f"{self.framework} worker timed out after {self.timeout_s}s\n{detail}"
             ) from exc
+        if line is _WORKER_EOF:
+            detail = "\n".join(self._stderr[-10:])
+            raise RuntimeError(
+                f"{self.framework} worker exited before sending a response\n{detail}"
+            )
+        assert isinstance(line, str)
         payload = json.loads(line)
         if payload.get("kind") == "error":
             raise RuntimeError(
