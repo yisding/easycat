@@ -12,7 +12,9 @@ async for chunk in transport.receive_audio():
     buffer.append(chunk)
     if sum(c.duration_ms for c in buffer) >= 500:
         old = buffer.pop(0)
-        await transport.send_audio(old)
+        accepted = await transport.send_audio(old)
+        if not accepted:
+            print("delayed chunk rejected")
 ```
 
 Now you have a delay line. Why does that create the sensation of
@@ -37,6 +39,27 @@ an *echo* rather than just "a delay"?
 - Why does this matter for chapter 10? Speakerphones radiate the
   TTS audio back to the mic with a similar delay. The bot ends up
   hearing itself in just the same way you hear your delayed voice.
+
+## 2. Make rejection observable
+
+**Task.** Run the provider-free contract probe:
+
+```bash
+uv run python docs/teaching/01-echo/transport_contract_probe.py
+```
+
+Change its acceptance sequence to reject the first and third chunks. Predict
+the two counters before rerunning it. Then remove `version_info()` from
+`ScriptedTransport` and predict which structural checks change.
+
+**Hints**
+
+1. `False` means the chunk was not fully accepted for delivery. It does not
+   mean the coroutine failed or raised.
+2. `True` means accepted, not heard. A transport queue, network, jitter buffer,
+   device buffer, and speaker can still sit downstream.
+3. The four connection/audio methods satisfy `TransportLike`; the full
+   `Transport` also inherits `version_info()` for journaled provider metadata.
 
 ## Bonus — what if you bypass the protocol entirely?
 
