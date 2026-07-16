@@ -208,9 +208,7 @@ class Session:
             self.event_bus,
             config=cfg.turn_manager_config,
         )
-        self._turn_manager.bind_journal_hook(
-            self._on_turn_state_changed if cfg.journal is not None else None
-        )
+        self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
 
         # ── Reliability / observability config ───────────────────
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
@@ -1105,6 +1103,11 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
 
+            # Speculative plain-agent work is not part of the confirmed turn
+            # task yet. Drain it explicitly before either teardown path can
+            # close the wrapped agent.
+            await self._turn_runner.cancel_preemptive_generation()
+
             if force:
                 # Force path: aggressively cancel every pipeline task and
                 # signal scoped work before awaiting any handle so the
@@ -1251,6 +1254,7 @@ class Session:
                 cause="barge_in",
             )
 
+        await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
         self._outbound_queue.flush_for_new_turn()
@@ -1289,6 +1293,7 @@ class Session:
         if turn:
             turn.cancel_token.cancel()
 
+        await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
         self._outbound_queue.flush_for_new_turn()

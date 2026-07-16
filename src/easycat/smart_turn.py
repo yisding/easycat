@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
@@ -27,6 +28,142 @@ from easycat.audio_format import AudioChunk
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
 
 logger = logging.getLogger(__name__)
+
+_MAX_INTRA_OP_THREADS = 4
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+_SELF_CGROUP = Path("/proc/self/cgroup")
+
+
+def _quota_cpu_count(quota: str, period: str) -> int | None:
+    """Convert a cgroup CPU quota/period pair into schedulable CPU units."""
+    if quota.strip() in {"max", "-1"}:
+        return None
+    try:
+        quota_value = int(quota)
+        period_value = int(period)
+    except ValueError:
+        return None
+    if quota_value <= 0 or period_value <= 0:
+        return None
+    return max(1, math.ceil(quota_value / period_value))
+
+
+def _cgroup_path(value: str) -> Path | None:
+    """Return a safe path relative to a cgroup controller mount."""
+    parts = Path(value.strip()).parts
+    if any(part == ".." for part in parts):
+        return None
+    return Path(*(part for part in parts if part not in {"/", "."}))
+
+
+def _current_cgroup_paths(cgroup_file: Path) -> tuple[Path | None, tuple[str, Path] | None]:
+    """Read the process's unified and legacy CPU controller paths."""
+    unified: Path | None = None
+    legacy_cpu: tuple[str, Path] | None = None
+    try:
+        lines = cgroup_file.read_text().splitlines()
+    except OSError:
+        return unified, legacy_cpu
+
+    for line in lines:
+        try:
+            _hierarchy, controllers_value, path_value = line.split(":", 2)
+        except ValueError:
+            continue
+        path = _cgroup_path(path_value)
+        if path is None:
+            continue
+        controllers = controllers_value.split(",") if controllers_value else []
+        if not controllers:
+            unified = path
+        elif "cpu" in controllers:
+            legacy_cpu = controllers_value, path
+    return unified, legacy_cpu
+
+
+def _cgroup_ancestors(root: Path, relative: Path | None) -> list[Path]:
+    """List a process cgroup and its ancestors up to the controller root."""
+    current = root / relative if relative is not None else root
+    paths: list[Path] = []
+    while True:
+        paths.append(current)
+        if current == root:
+            return paths
+        current = current.parent
+
+
+def _quota_from_paths(paths: list[Path], quota_name: str, period_name: str) -> int | None:
+    """Return the tightest CPU quota found along a cgroup hierarchy."""
+    limits: list[int] = []
+    for path in paths:
+        try:
+            quota = (path / quota_name).read_text()
+            period = (path / period_name).read_text()
+        except OSError:
+            continue
+        count = _quota_cpu_count(quota, period)
+        if count is not None:
+            limits.append(count)
+    return min(limits, default=None)
+
+
+def _cgroup_cpu_count(
+    root: Path = _CGROUP_ROOT,
+    cgroup_file: Path = _SELF_CGROUP,
+) -> int | None:
+    """Read the process's effective cgroup v2 or v1 CPU bandwidth limit."""
+    unified, legacy_cpu = _current_cgroup_paths(cgroup_file)
+
+    v2_limits: list[int] = []
+    for path in _cgroup_ancestors(root, unified):
+        try:
+            quota, period = (path / "cpu.max").read_text().split()[:2]
+        except (OSError, ValueError):
+            continue
+        count = _quota_cpu_count(quota, period)
+        if count is not None:
+            v2_limits.append(count)
+    if v2_limits:
+        return min(v2_limits)
+
+    controller_name, legacy_path = legacy_cpu or ("cpu", None)
+    controller_roots = (root / controller_name, root / "cpu", root)
+    v1_limits = [
+        limit
+        for controller_root in dict.fromkeys(controller_roots)
+        if (
+            limit := _quota_from_paths(
+                _cgroup_ancestors(controller_root, legacy_path),
+                "cpu.cfs_quota_us",
+                "cpu.cfs_period_us",
+            )
+        )
+        is not None
+    ]
+    return min(v1_limits, default=None)
+
+
+def _intra_op_thread_count() -> int:
+    """Size ONNX's inference pool to the worker's available CPU set.
+
+    ONNX Runtime's automatic pool can oversubscribe constrained containers,
+    producing large endpointing-latency spikes.  Four threads is the measured
+    latency optimum for the bundled model; smaller workers use only the CPUs
+    available through their affinity mask (or ``os.cpu_count`` off Linux) and
+    cgroup CPU bandwidth quota.
+    """
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            available = len(get_affinity(0))
+        except OSError:
+            available = os.cpu_count() or 1
+    else:
+        available = os.cpu_count() or 1
+    quota_count = _cgroup_cpu_count()
+    if quota_count is not None:
+        available = min(available, quota_count)
+    return max(1, min(_MAX_INTRA_OP_THREADS, available))
 
 
 def _validate_probability_threshold(name: str, value: float) -> float:
@@ -152,19 +289,24 @@ def _spectrogram(
     window = window.astype(np.float64)
 
     num_frames = int(1 + np.floor((waveform.size - frame_length) / hop_length))
-    num_frequency_bins = (frame_length // 2) + 1
-    spec = np.empty((num_frames, num_frequency_bins), dtype=np.complex64)
-    buffer = np.zeros(frame_length, dtype=np.float64)
-
-    timestep = 0
-    for frame_idx in range(num_frames):
-        buffer[:] = waveform[timestep : timestep + frame_length]
-        buffer *= window
-        spec[frame_idx] = np.fft.rfft(buffer)
-        timestep += hop_length
+    frames = np.lib.stride_tricks.sliding_window_view(waveform, frame_length)[::hop_length]
+    frames = frames[:num_frames]
+    # Batch all ~800 windows into one NumPy FFT call.  Keep the explicit
+    # complex64 cast from the former per-frame output buffer so this is a
+    # scheduling optimization, not a feature-precision/model-input change.
+    spec = np.fft.rfft(frames * window, axis=1).astype(np.complex64, copy=False)
 
     spec = (np.abs(spec, dtype=np.float64) ** 2.0).T
-    spec = np.maximum(1e-10, np.dot(mel_filters.T, spec))
+    # This is a small, fixed-shape contraction (80 x 201 x ~800).  ``np.dot``
+    # delegates it to the process-wide BLAS pool, whose auto-sized worker team
+    # can contend with the ONNX pool that runs immediately afterward.  The
+    # explicit non-optimizing einsum stays single-threaded, is numerically
+    # equivalent at float32 precision, and removes the endpoint-latency spikes
+    # without mutating host-wide BLAS environment settings.
+    spec = np.maximum(
+        1e-10,
+        np.einsum("ij,jk->ik", mel_filters.T, spec, optimize=False),
+    )
     spec = np.log10(spec)
     return spec.astype(np.float32)
 
@@ -329,6 +471,7 @@ class SmartTurnONNX:
         so = ort.SessionOptions()
         so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         so.inter_op_num_threads = 1
+        so.intra_op_num_threads = _intra_op_thread_count()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self._session = ort.InferenceSession(self._model_path, sess_options=so)
 

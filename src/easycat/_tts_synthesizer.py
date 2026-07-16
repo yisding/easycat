@@ -10,12 +10,11 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from easycat._bounded_queue import BoundedAudioQueue
-from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
 from easycat.timeouts import TimeoutConfig, resolve_provider_name, with_tts_timeout
 from easycat.tts.input import TTSInput, coerce_tts_input
@@ -74,7 +73,6 @@ class TTSSynthesizer:
         timeout_config: TimeoutConfig | None = None,
         correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
         audio_gate: Callable[[], bool] | None = None,
-        direct_first_audio: Callable[[AudioChunk], Awaitable[bool]] | None = None,
     ) -> None:
         self._tts = tts
         self._event_bus = event_bus
@@ -82,7 +80,6 @@ class TTSSynthesizer:
         self._timeout_config = timeout_config
         self._audio_gate = audio_gate
         self._correlation_ids = correlation_ids
-        self._direct_first_audio = direct_first_audio
         # Optional TTSStage wrapper.  When bound, ``synthesize`` calls
         # ``stage.execute(payload, ctx, turn)`` instead of the raw
         # provider so the stage can journal start/complete/frame records
@@ -116,15 +113,6 @@ class TTSSynthesizer:
         self._stage = stage
         self._run_ctx_getter = run_ctx_getter
         self._turn_getter = turn_getter
-
-    async def _send_or_queue_audio(self, chunk: AudioChunk, *, first_audio: bool) -> None:
-        if (
-            first_audio
-            and self._direct_first_audio is not None
-            and await self._direct_first_audio(chunk)
-        ):
-            return
-        await self._outbound_queue.put(chunk)
 
     async def synthesize(
         self,
@@ -194,7 +182,6 @@ class TTSSynthesizer:
                     break
 
                 if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
-                    first_audio = not result.audio_produced
                     result.audio_bytes += len(tts_event.audio.data)
                     session_id, turn_id = (
                         self._correlation_ids() if self._correlation_ids else (None, None)
@@ -213,7 +200,7 @@ class TTSSynthesizer:
                     if not gated_at_start and (
                         bypass_gate or not (self._audio_gate and self._audio_gate())
                     ):
-                        await self._send_or_queue_audio(tts_event.audio, first_audio=first_audio)
+                        await self._outbound_queue.put(tts_event.audio)
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
                     session_id, turn_id = (
