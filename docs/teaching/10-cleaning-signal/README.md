@@ -95,8 +95,8 @@ hearing.
 +
 +NR is single-input — it only sees the mic. AEC is dual-input —
 +it needs both the mic *and* the far-end reference (the TTS audio
-+we sent to the speaker). We feed the reference every time we
-+emit a TTS chunk.
++we sent to the speaker). We feed the reference every time the
++transport accepts a complete TTS chunk.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -108,7 +108,7 @@ hearing.
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -24,19 +38,23 @@
+@@ -24,20 +38,23 @@
  
  from __future__ import annotations
  
@@ -118,6 +118,7 @@ hearing.
  import os
  import time
  import types
+-from collections.abc import Iterator
 -from dataclasses import dataclass, field
  from pathlib import Path
  
@@ -134,7 +135,7 @@ hearing.
  from easycat.events import (
      EventBus,
      STTEventType,
-@@ -44,6 +62,7 @@
+@@ -45,6 +62,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
@@ -142,7 +143,7 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
  from easycat.strip_markdown import strip_markdown
-@@ -57,62 +76,23 @@
+@@ -58,62 +76,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -198,7 +199,7 @@ hearing.
 -    return int(seconds * TTS_BYTES_PER_SECOND)
 -
 -
--def _local_output_frames(chunk: AudioChunk):
+-def _local_output_frames(chunk: AudioChunk) -> Iterator[AudioChunk]:
 -    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
 -    frame_bytes = (
 -        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
@@ -220,7 +221,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -141,13 +121,33 @@
+@@ -142,13 +121,33 @@
                  self._preroll.append(chunk)
  
  
@@ -258,13 +259,13 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -168,128 +168,81 @@
+@@ -169,128 +168,81 @@
      await sentence_queue.put(None)
  
  
 -async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journal):
 +async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_id, journal):
-+    """Emit TTS audio to the speaker AND feed it to AEC as the far-end reference."""
++    """Emit TTS audio and feed accepted chunks to AEC as the far-end reference."""
      while True:
          sentence = await sentence_queue.get()
          if sentence is None or cancel.is_cancelled:
@@ -286,11 +287,11 @@ hearing.
 -                        ledger.bytes_accepted += len(frame.data)
 -                if cancel.is_cancelled:
 -                    break
-+                await transport.send_audio(event.audio)
-+                # The crucial dual-input line: AEC needs to know what we
-+                # asked the speaker to play, so it can subtract that
-+                # pattern from the mic.
-+                aec.feed_reference(event.audio)
++                if await transport.send_audio(event.audio):
++                    # The crucial dual-input line: AEC needs to know what
++                    # the speaker accepted, so it can subtract that pattern
++                    # from the mic. Rejected or partial writes return False.
++                    aec.feed_reference(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -415,7 +416,7 @@ hearing.
  
          if tag == "speech_started":
              if stt is None:
-@@ -307,39 +260,57 @@
+@@ -308,39 +260,57 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -490,7 +491,7 @@ hearing.
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
-@@ -357,13 +328,14 @@
+@@ -358,13 +328,14 @@
          )
  
      await transport.connect()
@@ -508,7 +509,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -371,7 +343,7 @@
+@@ -372,7 +343,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

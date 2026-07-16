@@ -29,6 +29,7 @@ import collections
 import os
 import time
 import types
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -102,7 +103,7 @@ def _expected_bytes(text: str) -> int:
     return int(seconds * TTS_BYTES_PER_SECOND)
 
 
-def _local_output_frames(chunk: AudioChunk):
+def _local_output_frames(chunk: AudioChunk) -> Iterator[AudioChunk]:
     """Split TTS audio into all-or-nothing LocalTransport queue writes."""
     frame_bytes = (
         chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000

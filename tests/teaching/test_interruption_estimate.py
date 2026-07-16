@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "09-interruption"
 
 
-def _load_chapter(monkeypatch):
+def _load_chapter(monkeypatch) -> types.ModuleType:
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=object))
     module_name = "teaching_09_interruption_estimate"
     spec = importlib.util.spec_from_file_location(module_name, CHAPTER / "estimate.py")
