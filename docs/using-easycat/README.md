@@ -49,7 +49,7 @@ pretending unfinished lessons are runnable.
 | 0 | [`00-first-voice-app`](./00-first-voice-app/) | `VoiceApp`, automatic pipeline wiring, and the local runtime | Available |
 | 1 | [`01-runtime-modes`](./01-runtime-modes/) | Browser, WebSocket, local, and Twilio runtime modes | Available |
 | 2 | [`02-providers-and-voices`](./02-providers-and-voices/) | STT/TTS provider specs, voices, and environment preflight | Available |
-| 3 | Shape the conversation | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Planned |
+| 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Available |
 | 4 | Add tools and actions | Agent tools, fillers, session actions, and pronunciation rules | Planned |
 | 5 | Bring your agent | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Planned |
 | 6 | Control a session | `EasyConfig`, `Session`, events, text turns, and lifecycle | Planned |

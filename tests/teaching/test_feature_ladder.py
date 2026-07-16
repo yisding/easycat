@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -89,9 +90,12 @@ def test_feature_chapters_have_self_contained_reader_entrypoints() -> None:
         if not (chapter / "README.md").exists():
             continue
         readme = (chapter / "README.md").read_text(encoding="utf-8")
-        command = f"uv run python docs/using-easycat/{chapter.name}/main.py"
-        if command not in readme:
-            missing.append(f"{chapter.name}: documented `{command}`")
+        exercises = (chapter / "EXERCISES.md").read_text(encoding="utf-8")
+        chapter_docs = f"{readme}\n{exercises}"
+        for script in chapter.glob("*.py"):
+            command = f"uv run python docs/using-easycat/{chapter.name}/{script.name}"
+            if command not in chapter_docs:
+                missing.append(f"{chapter.name}: documented `{command}`")
 
     assert not missing, "Feature chapters missing reader entrypoints: " + ", ".join(missing)
 
@@ -102,16 +106,19 @@ def test_feature_chapter_prerequisites_cover_script_requirements() -> None:
     for chapter in _chapter_dirs():
         readme = (chapter / "README.md").read_text(encoding="utf-8")
         prerequisites = _prerequisites(readme)
-        script = chapter / "main.py"
-        source = script.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=script.as_posix())
-        docstring = ast.get_docstring(tree) or ""
-        script_keys = set(API_KEY_RE.findall(docstring))
-        script_env_vars = _required_env_vars(tree)
-        script_extras = set(UV_EXTRA_RE.findall(docstring))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                script_keys.update(API_KEY_RE.findall(node.value))
+        script_keys: set[str] = set()
+        script_env_vars: set[str] = set()
+        script_extras: set[str] = set()
+        for script in chapter.glob("*.py"):
+            source = script.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=script.as_posix())
+            docstring = ast.get_docstring(tree) or ""
+            script_keys.update(API_KEY_RE.findall(docstring))
+            script_env_vars.update(_required_env_vars(tree))
+            script_extras.update(UV_EXTRA_RE.findall(docstring))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    script_keys.update(API_KEY_RE.findall(node.value))
 
         missing_keys = sorted(script_keys - set(API_KEY_RE.findall(prerequisites)))
         missing_env_vars = sorted(
@@ -227,6 +234,69 @@ def test_provider_chapter_lists_builtin_providers_without_credentials() -> None:
     assert "elevenlabs" in completed.stdout
 
 
+def test_conversation_controls_chapter_builds_distinct_policy_profiles() -> None:
+    chapter = FEATURE_LADDER / "03-conversation-controls"
+    script = chapter / "main.py"
+    namespace = runpy.run_path(str(script))
+    profile_config = namespace["profile_config"]
+
+    balanced_audio, balanced_turns = profile_config("balanced")
+    assert balanced_audio.smart_turn is None
+    assert balanced_audio.enable_echo_cancellation is None
+    assert balanced_turns.end_of_turn_silence_ms == 500
+
+    vad_audio, vad_turns = profile_config("vad-only")
+    assert vad_audio.smart_turn is False
+    assert vad_audio.enable_echo_cancellation is True
+    assert vad_turns.end_of_turn_silence_ms == 700
+
+    fast_audio, fast_turns = profile_config("fast")
+    assert fast_audio.smart_turn is True
+    assert fast_audio.smart_turn_sensitivity == 0.7
+    assert fast_turns.end_of_turn_silence_ms == 400
+
+    clean_audio, _ = profile_config("clean")
+    assert clean_audio.enable_noise_reduction is True
+    assert clean_audio.enable_echo_cancellation is True
+
+    raw_audio, _ = profile_config("raw")
+    assert raw_audio.smart_turn is False
+    assert raw_audio.enable_noise_reduction is False
+    assert raw_audio.enable_echo_cancellation is False
+
+
+def test_conversation_controls_teaches_barge_in_and_push_to_talk_boundaries() -> None:
+    chapter = FEATURE_LADDER / "03-conversation-controls"
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+    main_script = (chapter / "main.py").read_text(encoding="utf-8")
+    ptt_script = (chapter / "push_to_talk.py").read_text(encoding="utf-8")
+
+    for profile in ("balanced", "vad-only", "fast", "clean", "raw"):
+        assert f'"{profile}"' in main_script
+        assert f"main.py {profile}" in readme
+    for surface in (
+        "AudioProcessingConfig",
+        "TurnManagerConfig",
+        "EasyConfig.mic",
+        "VoiceApp(config=config)",
+    ):
+        assert surface in main_script
+    for surface in (
+        "TurnMode.PUSH_TO_TALK",
+        "create_session",
+        "run_stdin_push_to_talk_session",
+    ):
+        assert surface in ptt_script
+    for concept in (
+        "VAD answers",
+        "Interruption is a state transition",
+        "application calls `session.start_turn()` and `session.end_turn()`",
+        "Echo cancellation (AEC)",
+        "Noise reduction (NR)",
+    ):
+        assert concept in readme
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -268,6 +338,10 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/00-first-voice-app/main.py"
         in entries["docs/using-easycat/"]["commands"]
     )
+    for chapter in _chapter_dirs():
+        route = entries[f"docs/using-easycat/{chapter.name}/"]
+        assert route["diataxis"] == "tutorial", chapter.name
+        assert route["audience"] == "learners", chapter.name
     assert entries["docs/using-easycat/00-first-voice-app/"]["diataxis"] == "tutorial"
     runtime_modes = entries["docs/using-easycat/01-runtime-modes/"]
     assert runtime_modes["diataxis"] == "tutorial"
@@ -282,4 +356,9 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert (
         "uv run python docs/using-easycat/02-providers-and-voices/main.py list"
         in providers["commands"]
+    )
+    conversation = entries["docs/using-easycat/03-conversation-controls/"]
+    assert (
+        "uv run python docs/using-easycat/03-conversation-controls/main.py balanced"
+        in conversation["commands"]
     )

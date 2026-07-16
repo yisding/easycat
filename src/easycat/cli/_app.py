@@ -419,6 +419,30 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature conversation controls",
+        "path": "docs/using-easycat/03-conversation-controls/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Tune turn taking, signal cleanup, interruption, and push-to-talk.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py balanced",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py vad-only",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py fast",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py clean",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py raw",
+            "uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py",
+            (
+                "uv run --env-file .env python "
+                "docs/using-easycat/03-conversation-controls/main.py fast"
+            ),
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",
