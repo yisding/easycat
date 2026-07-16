@@ -252,6 +252,30 @@ uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voic
 uv run --env-file .env python docs/using-easycat/02-providers-and-voices/main.py deepgram-stt
 ```
 
+## Feature conversation controls
+
+- Path: docs/using-easycat/03-conversation-controls/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/03-conversation-controls
+- Audience: learners
+- Tune turn taking, signal cleanup, interruption, and push-to-talk.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/03-conversation-controls/main.py balanced
+uv run python docs/using-easycat/03-conversation-controls/main.py vad-only
+uv run python docs/using-easycat/03-conversation-controls/main.py fast
+uv run python docs/using-easycat/03-conversation-controls/main.py clean
+uv run python docs/using-easycat/03-conversation-controls/main.py raw
+uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py
+uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast
+```
+
 ## Examples
 
 - Path: examples/README.md

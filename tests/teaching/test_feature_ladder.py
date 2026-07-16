@@ -338,6 +338,10 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/00-first-voice-app/main.py"
         in entries["docs/using-easycat/"]["commands"]
     )
+    for chapter in _chapter_dirs():
+        route = entries[f"docs/using-easycat/{chapter.name}/"]
+        assert route["diataxis"] == "tutorial", chapter.name
+        assert route["audience"] == "learners", chapter.name
     assert entries["docs/using-easycat/00-first-voice-app/"]["diataxis"] == "tutorial"
     runtime_modes = entries["docs/using-easycat/01-runtime-modes/"]
     assert runtime_modes["diataxis"] == "tutorial"
@@ -352,4 +356,9 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert (
         "uv run python docs/using-easycat/02-providers-and-voices/main.py list"
         in providers["commands"]
+    )
+    conversation = entries["docs/using-easycat/03-conversation-controls/"]
+    assert (
+        "uv run python docs/using-easycat/03-conversation-controls/main.py balanced"
+        in conversation["commands"]
     )

@@ -352,6 +352,31 @@ def test_feature_provider_voices_docs_route_matches_chapter_commands() -> None:
         assert command in route["commands"]
 
 
+def test_feature_conversation_controls_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "03-conversation-controls" / "README.md"
+    ).read_text(encoding="utf-8")
+    route = entries["docs/using-easycat/03-conversation-controls/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py balanced",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py vad-only",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py fast",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py clean",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py raw",
+        "uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py",
+        ("uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast"),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")

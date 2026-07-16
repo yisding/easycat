@@ -34,6 +34,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "using-easycat/00-first-voice-app/",
         "using-easycat/01-runtime-modes/",
         "using-easycat/02-providers-and-voices/",
+        "using-easycat/03-conversation-controls/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -133,6 +134,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Feature first lesson",
         "Feature runtime modes",
         "Feature providers and voices",
+        "Feature conversation controls",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -280,6 +282,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     )
     assert entries["docs/using-easycat/02-providers-and-voices/"]["url"].endswith(
         "/tree/main/docs/using-easycat/02-providers-and-voices"
+    )
+    assert entries["docs/using-easycat/03-conversation-controls/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/03-conversation-controls"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]
