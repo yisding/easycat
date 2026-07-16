@@ -424,12 +424,22 @@ async def handle_connection(ws):
 
 Key properties:
 
-- `add(key, session)` calls `await session.start()` atomically — if
-  start fails, the slot is released.
+- `add(key, session)` reserves a unique key, then awaits
+  `session.start()`. If start raises an ordinary `Exception`, the slot is
+  released before the exception is re-raised; the session's own start path
+  owns rollback of resources it opened before failing.
 - `stop_all()` gathers all sessions' `stop()` calls concurrently and
   logs exceptions per session without raising.
 - `connection(key, session)` is the context-manager sugar for
   `add` + `remove`.
+- Do not call `remove()` / `stop_all()` on a key while application code
+  is still active inside its `connection(...)` block. Coordinate
+  cancellation of those handler tasks first, then perform the final
+  sweep.
+
+Run the provider-free [manager probe](manager_probe.py) to see two
+active slots, duplicate-key rejection, start-failure rollback, and
+context-managed removal without opening a microphone.
 
 A real Twilio server using exactly this shape lives in
 `examples/twilio_app.py`. Crack it open after this chapter.
@@ -695,9 +705,8 @@ the same `Session` you've run since chapter 5.
 
 ## Try breaking it
 
-1. Add a second session to the manager before the first one stops.
-   Two local-transport sessions on the same mic will fight for
-   input — what does the journal show for each?
+1. Run `manager_probe.py`. Why is the failed-start slot reusable even
+   though the manager never calls `stop()` on that failed object?
 2. Compare scoped production JSON reports from
    `uv run easycat doctor --provider openai --environment production --json`
    with `OPENAI_API_KEY` unset and set. Which rows appear or change?
