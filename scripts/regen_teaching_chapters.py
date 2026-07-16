@@ -33,6 +33,10 @@ with the chapter's source code:
       </details>
       <!-- END auto:diff -->
 
+  Add ``trim_blank_context=true`` when the rendered Markdown should
+  remove unified-diff's single-space prefix from otherwise blank
+  context lines (a display-only normalization for whitespace checks).
+
 * Source-line references that should track edits to the file::
 
       <!-- auto:linerange src=main.py symbol=blocking_agent -->`L83-L92`
@@ -187,7 +191,15 @@ def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     rel_prev = prev_path.relative_to(ROOT).as_posix()
     rel_cur = cur_path.relative_to(ROOT).as_posix()
     diff = difflib.unified_diff(prev_lines, cur_lines, fromfile=rel_prev, tofile=rel_cur, n=3)
-    diff_text = "".join(diff).rstrip() + "\n"
+    diff_text = "".join(diff)
+    if attrs.get("trim_blank_context") == "true":
+        # Unified diffs prefix blank context lines with one space. That is
+        # correct patch syntax but becomes trailing whitespace inside the
+        # rendered Markdown fence, so opt affected teaching blocks into the
+        # display-only normalization when `git diff --check` would otherwise
+        # reject a regenerated README.
+        diff_text = re.sub(r"(?m)^ $", "", diff_text)
+    diff_text = diff_text.rstrip() + "\n"
     summary = f"Full unified diff vs <code>{prev_slug}/{prev_src}</code> (auto-generated)"
     return f"\n<details>\n<summary>{summary}</summary>\n\n```diff\n{diff_text}```\n\n</details>\n"
 

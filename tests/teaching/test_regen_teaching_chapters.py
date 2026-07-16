@@ -157,6 +157,21 @@ def test_render_diff_still_allows_chapter_local_prev_src() -> None:
     assert "docs/teaching/03-parrot-naive/main.py" in rendered
 
 
+def test_render_diff_can_trim_markdown_blank_context_whitespace() -> None:
+    chapter = Chapter(TEACHING / "14-bring-your-own-agent")
+
+    rendered = render_diff(
+        chapter,
+        {
+            "prev": "13-swap-providers-and-transports",
+            "src": "main.py",
+            "trim_blank_context": "true",
+        },
+    )
+
+    assert not any(line == " " for line in rendered.splitlines())
+
+
 def test_teaching_plan_source_path_mentions_resolve() -> None:
     """Keep teaching-plan code-span source pointers from drifting after refactors."""
     docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))

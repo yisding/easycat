@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -32,6 +33,22 @@ from easycat import (
 )
 
 RUNS_DIR = Path(__file__).parent / "runs"
+
+
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def measurement_commands(path: Path) -> tuple[str, str]:
+    """Commands that read this production-shaped bundle directly."""
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
+    return (
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
+    )
 
 
 def build_session():
@@ -99,7 +116,11 @@ async def main() -> None:
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
     export_debug_bundle(session, bundle_path, overwrite=True)
-    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    print(f"\nWrote bundle → {_display_path(bundle_path)}")
+    human_command, json_command = measurement_commands(bundle_path)
+    print("Measure this production-shaped bundle directly:")
+    print(f"  {human_command}")
+    print(f"  {json_command}")
 
     # ── 3. The debugger one-liner ──────────────────────────────────
     print(

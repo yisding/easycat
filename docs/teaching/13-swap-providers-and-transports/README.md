@@ -13,7 +13,7 @@ This is the first chapter on the production wiring
 (`create_session()` + `EasyConfig`). For the app-builder version of
 the same graduation — lifecycle, event subscriptions, text turns, and
 debug bundles — see the
-[from-EasyConfig-to-Session guide](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md).
+[from-EasyConfig-to-Session guide](../../from-easyconfig-to-session.md).
 
 ## Prerequisites
 
@@ -76,17 +76,28 @@ uv run python docs/teaching/13-swap-providers-and-transports/main.py \
 
 Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
+The script prints the exact follow-up commands for that path. You
+can also replace `PATH` below yourself:
+
+```bash
+uv run easycat latency PATH
+uv run easycat latency PATH --json
+```
+
 > **Bundle shape note.** Ch 13 uses `create_session()`, so its
-> bundles carry the **production** journal shape (`stage_start` +
-> `stage_complete` pairs, per chapter 11's teaching-vs-production
-> sidebar). Chapter 12's scripts key on the *teaching* shape
-> (`stage.tts.execute`, `turn.gap`, `stt.final` with a `t_ms`
-> field). To run ch 12's evals on a ch 13 bundle, you will need a
-> small translator — pair each `stage_start` with its matching
-> `stage_complete` by their span correlation id and synthesise the
-> composite records
-> ch 12 expects. Writing that translator is a productive exercise
-> and the natural first task of `peripheral-eval-and-debugger-ui.md`.
+> bundles carry the **production** journal shape (`stage_start` /
+> `stage_complete`, plus turn-scoped `stt_final`, `agent_delta`, and
+> `tts_frame` records). The `easycat latency` command reads that shape
+> directly and reports per-turn critical paths plus p50/p90/p95/p99;
+> no translator is required. Chapter 12's small `evals.py` still keys
+> on its denser *teaching* fixture shape, so use it for that chapter's
+> WER and barge-in exercise rather than as the production-bundle reader.
+
+`easycat latency` ends at the first synthesized TTS byte on the
+server. That is the right provider-pipeline comparison, but it does
+**not** include browser/PSTN delivery, jitter, device buffering, or
+speaker playback. Pair it with WebRTC client stats or telephony
+provider metrics before claiming one transport is faster end to end.
 
 ## Architecture
 
@@ -126,14 +137,16 @@ Provider choice and transport choice optimise **different axes**:
 
 | Axis you care about         | Choose this |
 |-----------------------------|-------------|
-| First-audio latency         | Provider mix — Deepgram STT cuts partial-latency by ~150 ms |
+| First-audio latency         | Provider mix — compare `easycat latency` on repeated, matched turns |
 | Jitter + packet loss        | Transport — WebRTC preserves UDP end-to-end |
 | Codec quality               | Transport — Local / WebRTC (24 kHz) vs Twilio (μ-law 8 kHz) |
 | Cost per turn               | Provider mix — usually the dominant cost driver |
 | Offline / on-device         | Provider mix — (future: Cartesia / local models) |
 | Reach a regular phone       | Transport — Twilio only |
 
-Measure with chapter 12's scripts; choose with those numbers.
+Measure the production bundles with `easycat latency`; choose with
+those numbers. Treat the transport claims as hypotheses until you
+also have client/PSTN delivery measurements.
 
 ## Why some providers need an `EventBus`
 
@@ -155,7 +168,8 @@ you saw in chapter 11's bug 2.
 
 ## A decision matrix
 
-Pick any three columns, defend with numbers:
+Pick any three columns, then replace these starting hypotheses with
+numbers from your own environment:
 
 | Use case                      | Latency | Quality | Reach | Cost | Suggested cell |
 |-------------------------------|:-------:|:-------:|:-----:|:----:|----------------|

@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -56,6 +57,22 @@ from easycat import (
 )
 
 RUNS_DIR = Path(__file__).parent / "runs"
+
+
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def measurement_commands(path: Path) -> tuple[str, str]:
+    """Commands that read this production-shaped bundle directly."""
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
+    return (
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
+    )
 
 
 def build_agent() -> object:
@@ -131,11 +148,19 @@ async def main() -> None:
     try:
         await wait_for_shutdown_signal(session)
     finally:
+        # The helper stops gracefully on its normal signal path. This
+        # idempotent force-stop also covers cancellation by an outer loop,
+        # so the exported bundle always observes a clean postmortem session.
+        await session.stop(force=True)
         RUNS_DIR.mkdir(exist_ok=True)
         path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
         try:
             export_debug_bundle(session, path, overwrite=True)
-            print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
+            print(f"Wrote bundle → {_display_path(path)}")
+            human_command, json_command = measurement_commands(path)
+            print("Measure this production-shaped bundle directly:")
+            print(f"  {human_command}")
+            print(f"  {json_command}")
         except Exception as exc:  # noqa: BLE001 — teaching script
             print(f"(no bundle written: {exc})")
 
