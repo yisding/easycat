@@ -141,7 +141,11 @@ change, and actual speech quality.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 10 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Continue to Chapter 11 — The Journal as Mental Model →](../11-journal/)

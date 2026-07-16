@@ -180,7 +180,11 @@ without looking at the file.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Return to the teaching ladder](../)

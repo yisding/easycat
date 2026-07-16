@@ -89,7 +89,11 @@ sync with the chapter's source code and ladder order:
 
       <!-- BEGIN auto:exercise-completion -->
       ---
-      Self-check complete?
+      Self-check complete? Replay the hardware-free spine through this chapter:
+
+      ```bash
+      uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+      ```
 
       - Review the chapter narrative
       - Continue to Chapter 6 →
@@ -338,13 +342,20 @@ def render_practice_handoff() -> str:
 
 def render_exercise_completion(chapter: Chapter) -> str:
     chapters, index = _chapter_position(chapter)
+    checkpoint = _offline_checkpoint_for(chapter)
     links = ["[Review the chapter narrative](./README.md)"]
     if index + 1 < len(chapters):
         following = chapters[index + 1]
         links.append(f"[Continue to {_chapter_title(following)} →](../{following.slug}/)")
     else:
         links.append("[Return to the teaching ladder](../)")
-    return "---\nSelf-check complete?\n\n" + "\n".join(f"- {link}" for link in links)
+    return (
+        "---\nSelf-check complete? Replay the hardware-free spine through this chapter:\n\n"
+        "```bash\n"
+        "uv run python docs/teaching/offline_spine.py --run "
+        f"--through {checkpoint['chapter']} --jobs 4\n"
+        "```\n\n" + "\n".join(f"- {link}" for link in links)
+    )
 
 
 @functools.cache
@@ -364,10 +375,15 @@ def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
     return checkpoints
 
 
-def render_offline_checkpoint(chapter: Chapter) -> str:
+def _offline_checkpoint_for(chapter: Chapter) -> dict[str, object]:
     checkpoint = _offline_checkpoints_by_folder().get(chapter.slug)
     if checkpoint is None:
         raise ValueError(f"no offline checkpoint for teaching chapter {chapter.slug}")
+    return checkpoint
+
+
+def render_offline_checkpoint(chapter: Chapter) -> str:
+    checkpoint = _offline_checkpoint_for(chapter)
     concept = checkpoint["concept"]
     command = checkpoint["command"]
     evidence_lines = textwrap.wrap(

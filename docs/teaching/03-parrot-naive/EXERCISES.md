@@ -139,7 +139,11 @@ normal stream exhaustion—as this chapter's deliberate defect.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 3 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Continue to Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)

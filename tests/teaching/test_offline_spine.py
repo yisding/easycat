@@ -53,6 +53,7 @@ def test_offline_spine_json_list_is_documented() -> None:
     root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert payload["mode"] == "list"
+    assert payload["through"] is None
     assert payload["count"] == 16
     assert len(payload["checkpoints"]) == 16
     assert "Hardware-free checkpoint spine" in readme
@@ -63,6 +64,56 @@ def test_offline_spine_json_list_is_documented() -> None:
     )
     assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in root_readme
     assert "concepts, evidence cues, and individual commands" in readme
+    assert "--run --through 5 --jobs 4" in readme
+
+
+def test_offline_spine_lists_only_completed_chapters() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SPINE), "--through", "5", "--json"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["mode"] == "list"
+    assert payload["through"] == 5
+    assert payload["count"] == 6
+    assert [row["chapter"] for row in payload["checkpoints"]] == list(range(6))
+
+
+def test_offline_spine_runs_only_completed_chapters() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SPINE), "--run", "--through", "1", "--jobs", "2", "--json"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["mode"] == "run"
+    assert payload["through"] == 1
+    assert payload["count"] == 2
+    assert payload["passed"] == 2
+    assert payload["failed"] == 0
+    assert [row["chapter"] for row in payload["checkpoints"]] == [0, 1]
+
+
+def test_offline_spine_rejects_out_of_range_chapter() -> None:
+    for chapter in ("-1", "16"):
+        completed = subprocess.run(
+            [sys.executable, str(SPINE), "--through", chapter],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert completed.returncode == 2
+        assert "--through must be between 0 and 15" in completed.stderr
 
 
 def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
@@ -104,6 +155,7 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     payload = json.loads(completed.stdout)
 
     assert payload["mode"] == "run"
+    assert payload["through"] is None
     assert payload["count"] == 16
     assert payload["passed"] == 16
     assert payload["failed"] == 0

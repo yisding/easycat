@@ -188,7 +188,11 @@ STT and transport resources begin teardown.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Continue to Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
