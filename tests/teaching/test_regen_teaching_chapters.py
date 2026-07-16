@@ -18,6 +18,7 @@ from easycat.events import (
 from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     NAVIGATION_RE,
+    OFFLINE_CHECKPOINT_RE,
     ROOT,
     TEACHING,
     Chapter,
@@ -29,6 +30,7 @@ from scripts.regen_teaching_chapters import (
     render_diff,
     render_exercise_navigation,
     render_navigation,
+    render_offline_checkpoint,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -144,6 +146,32 @@ def test_each_chapter_has_one_current_generated_navigation_block() -> None:
         assert matches[0].group("body").strip() == render_navigation(chapter).strip()
         assert matches[0].start() > readme.index("# ")
         assert matches[0].start() < readme.find("\n## ")
+
+
+def test_each_chapter_has_one_current_generated_offline_checkpoint() -> None:
+    for chapter in discover_chapters():
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        matches = list(OFFLINE_CHECKPOINT_RE.finditer(readme))
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body") == render_offline_checkpoint(chapter)
+        assert matches[0].start() > readme.index("<!-- END auto:navigation -->")
+        assert matches[0].end() < readme.find("\n## Prerequisites")
+
+
+def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:
+    chapter = discover_chapters()[5]
+
+    assert render_offline_checkpoint(chapter) == (
+        "\n> **Hardware-free checkpoint:** prove `first-audio outcomes` without a microphone,\n"
+        "> speakers, or provider credentials:\n"
+        ">\n"
+        "> ```bash\n"
+        "> uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py\n"
+        "> ```\n"
+        ">\n"
+        "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
+    )
 
 
 def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> None:

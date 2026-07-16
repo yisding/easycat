@@ -7,6 +7,17 @@
 > A tiny ML model that knows you're done talking before the silence
 > confirms it.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `endpoint wait decomposition` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 7](../07-tools/)

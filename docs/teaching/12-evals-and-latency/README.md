@@ -8,6 +8,17 @@
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `small-sample P95 sensitivity` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 11](../11-journal/). You need to be comfortable

@@ -7,6 +7,17 @@
 > Start speaking before the LLM is done thinking. First real
 > pipeline overlap.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `streamed TTS delivery` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 5](../05-blocking-agent/) and its bundles — we will

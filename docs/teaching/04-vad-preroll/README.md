@@ -7,6 +7,17 @@
 > Real speech detection. And why the buffer *before* the detection
 > matters as much as the detection itself.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `delivery acceptance` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/04-vad-preroll/delivery_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 3](../03-parrot-naive/) (ideally with breaker recordings

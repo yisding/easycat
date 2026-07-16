@@ -10,6 +10,17 @@
 > chapter is about the operational surface: `SessionManager`, the
 > public lifecycle, the debugger UI, and the CLI.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `postmortem journal preservation` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 14.](../14-bring-your-own-agent/)

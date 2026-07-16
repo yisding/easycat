@@ -7,6 +7,17 @@
 > You will not write pipeline code. You will read three bundles
 > with planted bugs and find them.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `journal query coverage` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/11-journal/query_coverage_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapters 0-10.](../) This is a consolidation chapter.
