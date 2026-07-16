@@ -314,6 +314,17 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Progress worksheet",
+        "path": "docs/teaching/PROGRESS.md",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Track evidence-backed completion across all 16 teaching chapters.",
+        "commands": (
+            "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
+        ),
+    },
+    {
         "label": "First lesson",
         "path": "docs/teaching/00-hello-audio/",
         "audience": "learners",

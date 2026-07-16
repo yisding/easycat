@@ -219,6 +219,8 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     teaching_readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
     route_commands = entries["docs/teaching/"].get("commands", ())
+    progress = (REPO_ROOT / "docs" / "teaching" / "PROGRESS.md").read_text(encoding="utf-8")
+    progress_commands = entries["docs/teaching/PROGRESS.md"].get("commands", ())
     first_lesson = (REPO_ROOT / "docs" / "teaching" / "00-hello-audio" / "README.md").read_text(
         encoding="utf-8"
     )
@@ -243,6 +245,13 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     ):
         assert command in teaching_readme
         assert command in route_commands
+
+    for command in (
+        "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
+    ):
+        assert command in progress
+        assert command in progress_commands
 
     for command in (
         "uv sync --extra local --group dev",

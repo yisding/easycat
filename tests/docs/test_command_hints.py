@@ -40,6 +40,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "README.md#choose-your-path": "uv run easycat validate quick",
         "README.md#install": "uv run python examples/openai_agents_voice.py",
         "docs/teaching/": "uv run python docs/teaching/00-hello-audio/main.py",
+        "docs/teaching/PROGRESS.md": (
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence"
+        ),
         "README.md#cli": "easycat init --list-templates --json",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
