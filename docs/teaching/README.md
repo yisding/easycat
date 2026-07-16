@@ -36,6 +36,31 @@ For Chapters 0 and 1, their READMEs use the smaller
 `uv sync --extra local --group dev` setup. Use the full `quickstart`
 prerequisites below when you continue into provider-backed chapters.
 
+## Hardware-free checkpoint spine
+
+Every chapter now has at least one deterministic checkpoint that needs no
+microphone, speaker, or provider credential. List the curated one-per-chapter
+spine with concepts and individual commands:
+
+```bash
+uv run python docs/teaching/offline_spine.py
+uv run python docs/teaching/offline_spine.py --json
+```
+
+After installing the full `quickstart` prerequisites below, execute all 16
+checkpoints as a compact smoke run:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --jobs 4
+uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
+```
+
+The runner strips all `*_API_KEY` variables from each child process and
+captures successful output. Rerun any printed chapter command directly to
+study its full evidence. These checkpoints are a hardware-free conceptual
+spine, not replacements for the chapters' microphone/provider-backed main
+paths.
+
 After editing a chapter, changing its copied code, or using one as a starting
 point, run the repository validation lane from the root:
 
@@ -50,7 +75,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 | You have | Start with | Why |
 |---|---|---|
-| No mic or API keys | [`10-cleaning-signal`](./10-cleaning-signal/) offline replay, [`11-journal`](./11-journal/), or [`12-evals-and-latency`](./12-evals-and-latency/) | Chapter 10 uses checked-in WAV pairs; chapters 11-12 use checked-in bundles. Chapter 12's `llm_judge.py` is the only optional live-key script. |
+| No mic or API keys | [Hardware-free checkpoint spine](./offline_spine.py), [`10-cleaning-signal`](./10-cleaning-signal/) offline replay, [`11-journal`](./11-journal/), or [`12-evals-and-latency`](./12-evals-and-latency/) | The spine reaches every chapter without credentials; chapter 10 uses checked-in WAV pairs, and chapters 11–12 use checked-in bundles. Chapter 12's `llm_judge.py` is the only optional live-key script. |
 | A mic and speakers, but no API keys | [`00-hello-audio`](./00-hello-audio/) or [`01-echo`](./01-echo/) | They teach PCM and the `Transport` protocol without provider calls. |
 | `OPENAI_API_KEY` | [`02-transcribe`](./02-transcribe/) | It adds STT and writes the first `RunBundle`. |
 | `OPENAI_API_KEY` and `DEEPGRAM_API_KEY` | [`03-parrot-naive`](./03-parrot-naive/) through [`10-cleaning-signal`](./10-cleaning-signal/) | These chapters use streaming STT, VAD, TTS, agents, tools, smart-turn, interruption, and signal cleanup. |
