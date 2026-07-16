@@ -74,16 +74,8 @@
 +import random
  import time
  import types
- from pathlib import Path
-@@ -39,7 +43,6 @@
-     VADStopSpeaking,
- )
- from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
--from easycat.runtime.capabilities import close_if_supported
- from easycat.session import split_at_sentence_boundaries
- from easycat.strip_markdown import strip_markdown
- from easycat.stt.factory import STTProviderConfig, create_stt_provider
-@@ -52,11 +55,55 @@
+ from contextlib import AsyncExitStack
+@@ -53,11 +57,55 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -141,7 +133,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -81,83 +128,150 @@
+@@ -82,83 +130,150 @@
                  self._preroll.append(chunk)
 
 
@@ -352,7 +344,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -168,7 +282,11 @@
+@@ -169,7 +284,11 @@
                          kind=JournalRecordKind.EVENT,
                          name="tts.first_audio",
                          session_id=SESSION_ID,
@@ -365,7 +357,7 @@
                      )
          journal.append(
              kind=JournalRecordKind.EVENT,
-@@ -176,6 +294,7 @@
+@@ -177,6 +296,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -373,7 +365,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -184,7 +303,6 @@
+@@ -185,7 +305,6 @@
 
 
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -381,7 +373,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -195,16 +313,10 @@
+@@ -196,16 +315,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -400,96 +392,15 @@
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
      reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
-@@ -226,10 +338,33 @@
-         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
+@@ -285,7 +398,7 @@
+         )
+         resources.push_async_callback(close_if_supported, tts)
 
+-        print("Streaming agent. Ctrl-C to stop.\n")
++        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
 
--async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
--    """Stream turns and close every per-turn STT, including on cancellation."""
--    stt = None
--    try:
-+async def main() -> None:
-+    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
-+        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
-+
-+    journal = InMemoryRingBuffer(capacity=10_000)
-+    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-+    vad = create_vad(VADConfig())
-+    detector = MiniTurnDetector(vad)
-+    client = AsyncOpenAI()
-+    tts = create_tts_provider(
-+        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-+    )
-+
-+    def stt_factory():
-+        return create_stt_provider(
-+            STTProviderConfig(
-+                provider="deepgram",
-+                api_key=os.environ["DEEPGRAM_API_KEY"],
-+                params={"sample_rate": 24000, "event_bus": EventBus()},
-+            )
-+        )
-+
-+    await transport.connect()
-+    print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
-+
-+    async def collect_turns():
-+        stt = None
-         async for tag, chunk in detector.frames(transport.receive_audio()):
-             if tag == "speech_started":
-                 if stt is None:
-@@ -238,48 +373,12 @@
-             elif tag == "frame" and stt is not None:
-                 await stt.send_audio(chunk)
-             elif tag == "speech_ended" and stt is not None:
--                active_stt = stt
--                try:
--                    await active_stt.end_stream()
--                    await run_turn(transport, active_stt, client, tts, journal)
--                finally:
--                    stt = None
--                    await close_if_supported(active_stt)
--    finally:
--        if stt is not None:
--            try:
-                 await stt.end_stream()
--            finally:
--                await close_if_supported(stt)
--
--
--async def main() -> None:
--    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
--        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
--
--    journal = InMemoryRingBuffer(capacity=10_000)
--    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--    vad = create_vad(VADConfig())
--    detector = MiniTurnDetector(vad)
--    client = AsyncOpenAI()
--    tts = create_tts_provider(
--        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
--    )
--
--    def stt_factory():
--        return create_stt_provider(
--            STTProviderConfig(
--                provider="deepgram",
--                api_key=os.environ["DEEPGRAM_API_KEY"],
--                params={"sample_rate": 24000, "event_bus": EventBus()},
--            )
--        )
--
--    await transport.connect()
--    print("Streaming agent. Ctrl-C to stop.\n")
-+                await run_turn(transport, stt, client, tts, journal)
-+                stt = None
-
-     try:
--        await collect_turns(transport, detector, stt_factory, client, tts, journal)
-+        await collect_turns()
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-     finally:
+         try:
+             await collect_turns(transport, detector, stt_factory, client, tts, journal)
 ```
 
 </details>

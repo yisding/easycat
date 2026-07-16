@@ -29,6 +29,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -44,6 +45,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.session import split_at_sentence_boundaries
 from easycat.smart_turn import create_smart_turn
 from easycat.strip_markdown import strip_markdown
@@ -329,6 +331,43 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
             )
 
 
+async def collect_turns(
+    transport, detector, stt_factory, client, tts, journal, session_id
+) -> None:
+    """Stream turns and close every per-turn STT, including on cancellation."""
+    stt = None
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                stt = None
+                try:
+                    await active_stt.end_stream()
+                    await run_turn(
+                        transport,
+                        active_stt,
+                        client,
+                        tts,
+                        journal,
+                        session_id,
+                        estimated_speech_end_t=chunk,
+                    )
+                finally:
+                    await close_if_supported(active_stt)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -352,22 +391,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig(min_silence_duration_ms=silence_ms))
-    smart_turn = None
-    if args.backend == "smart":
-        smart_turn = create_smart_turn(SmartTurnConfig(enabled=True, threshold=SMART_THRESHOLD))
-    detector = MiniTurnDetector(
-        vad,
-        smart_turn=smart_turn,
-        threshold=SMART_THRESHOLD,
-        silence_wait_ms=silence_ms,
-        journal=journal,
-        session_id=session_id,
-    )
-    client = AsyncOpenAI()
-    tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-    )
 
     def stt_factory():
         return create_stt_provider(
@@ -378,37 +401,39 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Talk. Ctrl-C to stop.\n")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    async def collect_turns():
-        stt = None
-        async for tag, chunk in detector.frames(transport.receive_audio()):
-            if tag == "speech_started":
-                if stt is None:
-                    stt = stt_factory()
-                    await stt.start_stream()
-            elif tag == "frame" and stt is not None:
-                await stt.send_audio(chunk)
-            elif tag == "speech_ended" and stt is not None:
-                await stt.end_stream()
-                await run_turn(
-                    transport,
-                    stt,
-                    client,
-                    tts,
-                    journal,
-                    session_id,
-                    estimated_speech_end_t=chunk,
-                )
-                stt = None
+        vad = create_vad(VADConfig(min_silence_duration_ms=silence_ms))
+        resources.push_async_callback(close_if_supported, vad)
+        smart_turn = None
+        if args.backend == "smart":
+            smart_turn = create_smart_turn(
+                SmartTurnConfig(enabled=True, threshold=SMART_THRESHOLD)
+            )
+        detector = MiniTurnDetector(
+            vad,
+            smart_turn=smart_turn,
+            threshold=SMART_THRESHOLD,
+            silence_wait_ms=silence_ms,
+            journal=journal,
+            session_id=session_id,
+        )
 
-    try:
-        await collect_turns()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+        tts = create_tts_provider(
+            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
+        )
+        resources.push_async_callback(close_if_supported, tts)
+
+        print("Talk. Ctrl-C to stop.\n")
+
+        try:
+            await collect_turns(transport, detector, stt_factory, client, tts, journal, session_id)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{session_id}.bundle"

@@ -39,7 +39,7 @@
 - **Removed:** tools — to isolate the endpoint-classification
   concept (one axis per chapter).
 
-<!-- BEGIN auto:diff prev=07-tools src=main.py -->
+<!-- BEGIN auto:diff prev=07-tools src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>07-tools/main.py</code> (auto-generated)</summary>
 
@@ -69,17 +69,17 @@
 +    --backend smart         # short timeout + smart-turn confirmation
 +
 +Run with each and compare the bundle timings.
- 
+
  Dependencies:
 -    uv sync --extra quickstart --extra deepgram --group dev
 +    uv sync --extra quickstart --extra deepgram --group dev     # includes smart-turn
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -21,18 +23,17 @@
- 
+@@ -21,11 +23,10 @@
+
  from __future__ import annotations
- 
+
 +import argparse
  import asyncio
  import collections
@@ -88,24 +88,25 @@
 -import random
  import time
  import types
- from pathlib import Path
- 
+ from contextlib import AsyncExitStack
+@@ -33,7 +34,7 @@
+
  from openai import AsyncOpenAI
- 
+
 -from easycat import LocalTransportConfig
 +from easycat import LocalTransportConfig, SmartTurnConfig
  from easycat.audio_format import PCM16_MONO_24K, AudioChunk
  from easycat.debug.export import export_debug_bundle
  from easycat.events import (
-@@ -44,6 +45,7 @@
- )
+@@ -46,6 +47,7 @@
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
 +from easycat.smart_turn import create_smart_turn
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -55,223 +57,204 @@
+@@ -57,223 +59,204 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -165,8 +166,8 @@
 +SMART_THRESHOLD = 0.5
 +
 +# ── MiniTurnDetector with optional smart-turn ─────────────────────
- 
- 
+
+
  class MiniTurnDetector:
 -    """Same as chapters 4-6."""
 -
@@ -213,7 +214,7 @@
 +        self._pending_since: float | None = None
 +        self._candidate_speech_end_t: float | None = None
 +        self._turn_audio: list[AudioChunk] = []
- 
+
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -277,7 +278,7 @@
                  yield "frame", chunk
              else:
                  self._preroll.append(chunk)
- 
+
 -
 -# ── Filler utterance heuristic ────────────────────────────────────
 -
@@ -483,8 +484,8 @@
 +        if spoken:
 +            await sentence_queue.put(spoken)
      await sentence_queue.put(None)
- 
- 
+
+
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
 +    tts, transport, sentence_queue, journal, session_id
@@ -500,7 +501,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -281,20 +264,15 @@
+@@ -283,20 +266,15 @@
                      journal.append(
                          kind=JournalRecordKind.EVENT,
                          name="tts.first_audio",
@@ -524,10 +525,10 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -302,32 +280,41 @@
+@@ -304,32 +282,41 @@
      return first_audio_t
- 
- 
+
+
 -async def run_turn(transport, stt, client, tts, journal) -> None:
 +async def run_turn(transport, stt, client, tts, journal, session_id, estimated_speech_end_t=None):
      final_text = ""
@@ -539,7 +540,7 @@
 -
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue = asyncio.Queue()
 +    q: asyncio.Queue = asyncio.Queue()
@@ -572,16 +573,45 @@
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "text": final_text,
          },
-@@ -336,16 +323,47 @@
+@@ -338,9 +325,15 @@
          print("  (turn gap unavailable — TTS produced no accepted audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
+-
+-
+-async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
 +        if speech_end_to_first_audio is not None:
 +            print(
 +                f"  (estimated user speech end → first audio: {speech_end_to_first_audio:.0f} ms)"
 +            )
- 
- 
++
++
++async def collect_turns(
++    transport, detector, stt_factory, client, tts, journal, session_id
++) -> None:
+     """Stream turns and close every per-turn STT, including on cancellation."""
+     stt = None
+     try:
+@@ -356,7 +349,15 @@
+                 stt = None
+                 try:
+                     await active_stt.end_stream()
+-                    await run_turn(transport, active_stt, client, tts, journal)
++                    await run_turn(
++                        transport,
++                        active_stt,
++                        client,
++                        tts,
++                        journal,
++                        session_id,
++                        estimated_speech_end_t=chunk,
++                    )
+                 finally:
+                     await close_if_supported(active_stt)
+     finally:
+@@ -368,8 +369,25 @@
+
+
  async def main() -> None:
 +    ap = argparse.ArgumentParser()
 +    ap.add_argument(
@@ -594,7 +624,7 @@
 +
      if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
          raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
- 
++
 +    session_id = f"ch08-{args.backend}-{int(time.time())}"
 +    silence_ms = SMART_EARLY_SILENCE_MS if args.backend == "smart" else VAD_BASELINE_SILENCE_MS
 +    print(
@@ -602,55 +632,46 @@
 +        f"VAD min_silence_duration={silence_ms} ms  "
 +        f"smart-turn={'on' if args.backend == 'smart' else 'off'}"
 +    )
-+
+
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--    vad = create_vad(VADConfig())
--    detector = MiniTurnDetector(vad)
-+    vad = create_vad(VADConfig(min_silence_duration_ms=silence_ms))
-+    smart_turn = None
-+    if args.backend == "smart":
-+        smart_turn = create_smart_turn(SmartTurnConfig(enabled=True, threshold=SMART_THRESHOLD))
-+    detector = MiniTurnDetector(
-+        vad,
-+        smart_turn=smart_turn,
-+        threshold=SMART_THRESHOLD,
-+        silence_wait_ms=silence_ms,
-+        journal=journal,
-+        session_id=session_id,
-+    )
-     client = AsyncOpenAI()
-     tts = create_tts_provider(
-         TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -361,7 +379,7 @@
+@@ -387,9 +405,21 @@
+         resources.push_async_callback(transport.disconnect)
+         await transport.connect()
+
+-        vad = create_vad(VADConfig())
++        vad = create_vad(VADConfig(min_silence_duration_ms=silence_ms))
+         resources.push_async_callback(close_if_supported, vad)
+-        detector = MiniTurnDetector(vad)
++        smart_turn = None
++        if args.backend == "smart":
++            smart_turn = create_smart_turn(
++                SmartTurnConfig(enabled=True, threshold=SMART_THRESHOLD)
++            )
++        detector = MiniTurnDetector(
++            vad,
++            smart_turn=smart_turn,
++            threshold=SMART_THRESHOLD,
++            silence_wait_ms=silence_ms,
++            journal=journal,
++            session_id=session_id,
++        )
+
+         client = AsyncOpenAI()
+         resources.push_async_callback(close_if_supported, client)
+@@ -398,15 +428,15 @@
          )
- 
-     await transport.connect()
--    print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
-+    print("Talk. Ctrl-C to stop.\n")
- 
-     async def collect_turns():
-         stt = None
-@@ -374,7 +392,15 @@
-                 await stt.send_audio(chunk)
-             elif tag == "speech_ended" and stt is not None:
-                 await stt.end_stream()
--                await run_turn(transport, stt, client, tts, journal)
-+                await run_turn(
-+                    transport,
-+                    stt,
-+                    client,
-+                    tts,
-+                    journal,
-+                    session_id,
-+                    estimated_speech_end_t=chunk,
-+                )
-                 stt = None
- 
-     try:
-@@ -385,7 +411,7 @@
-         await transport.disconnect()
- 
+         resources.push_async_callback(close_if_supported, tts)
+
+-        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
++        print("Talk. Ctrl-C to stop.\n")
+
+         try:
+-            await collect_turns(transport, detector, stt_factory, client, tts, journal)
++            await collect_turns(transport, detector, stt_factory, client, tts, journal, session_id)
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
+
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
 +    bundle_path = RUNS_DIR / f"{session_id}.bundle"

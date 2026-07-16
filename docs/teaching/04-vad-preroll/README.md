@@ -70,7 +70,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -18,176 +19,185 @@
+@@ -18,176 +19,188 @@
 
  from __future__ import annotations
 
@@ -80,6 +80,7 @@
  import os
  import time
  import types
++from contextlib import AsyncExitStack
  from pathlib import Path
 
  from easycat import LocalTransportConfig
@@ -288,7 +289,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--
+
 -    # Deepgram emits partials mid-speech, which is what this chapter needs
 -    # to feel break. Its STT factory config takes provider-specific args via
 -    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -300,9 +301,6 @@
 -            provider="deepgram",
 -            api_key=dg_key,
 -            params={"sample_rate": 24000, "event_bus": EventBus()},
-+    vad = create_vad(VADConfig())
-+    detector = MiniTurnDetector(vad, preroll_frames=preroll)
-+
 +    def stt_factory():
 +        return create_stt_provider(
 +            STTProviderConfig(
@@ -312,8 +310,8 @@
 +            )
          )
 -    )
-
-     await transport.connect()
+-
+-    await transport.connect()
 -    await stt.start_stream()
 -    start = time.monotonic()
 -    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
@@ -376,16 +374,27 @@
 -                    "offset_ms": offset_ms,
 -                },
 -            )
-+    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
-
-     try:
+-
+-    try:
 -        await asyncio.gather(feed_audio(), listen_stt(), parrot())
-+        await parrot(transport, stt_factory, detector, journal, session_id)
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-     finally:
+-    except (KeyboardInterrupt, asyncio.CancelledError):
+-        pass
+-    finally:
 -        await shutdown(stt, transport)
-+        await transport.disconnect()
++
++    async with AsyncExitStack() as resources:
++        resources.push_async_callback(transport.disconnect)
++        await transport.connect()
++
++        vad = create_vad(VADConfig())
++        resources.push_async_callback(close_if_supported, vad)
++        detector = MiniTurnDetector(vad, preroll_frames=preroll)
++
++        print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
++        try:
++            await parrot(transport, stt_factory, detector, journal, session_id)
++        except (KeyboardInterrupt, asyncio.CancelledError):
++            pass
 
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

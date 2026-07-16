@@ -24,6 +24,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -239,11 +240,11 @@ async def collect_turns(transport, detector, stt_factory, client, tts, journal) 
                 await stt.send_audio(chunk)
             elif tag == "speech_ended" and stt is not None:
                 active_stt = stt
+                stt = None
                 try:
                     await active_stt.end_stream()
                     await run_turn(transport, active_stt, client, tts, journal)
                 finally:
-                    stt = None
                     await close_if_supported(active_stt)
     finally:
         if stt is not None:
@@ -259,12 +260,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
-    client = AsyncOpenAI()
-    tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-    )
 
     def stt_factory():
         return create_stt_provider(
@@ -275,15 +270,27 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Streaming agent. Ctrl-C to stop.\n")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    try:
-        await collect_turns(transport, detector, stt_factory, client, tts, journal)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad)
+
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+        tts = create_tts_provider(
+            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
+        )
+        resources.push_async_callback(close_if_supported, tts)
+
+        print("Streaming agent. Ctrl-C to stop.\n")
+
+        try:
+            await collect_turns(transport, detector, stt_factory, client, tts, journal)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

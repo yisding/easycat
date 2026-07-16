@@ -76,8 +76,8 @@ build movement (chapters 6-9) exists to close this gap.
  import asyncio
  import collections
  import os
-@@ -27,10 +24,17 @@
- import types
+@@ -28,10 +25,17 @@
+ from contextlib import AsyncExitStack
  from pathlib import Path
  
 +from openai import AsyncOpenAI
@@ -95,7 +95,7 @@ build movement (chapters 6-9) exists to close this gap.
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
-@@ -39,24 +43,14 @@
+@@ -40,24 +44,14 @@
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
  
@@ -124,7 +124,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -66,86 +60,160 @@
+@@ -67,86 +61,160 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -334,7 +334,7 @@ build movement (chapters 6-9) exists to close this gap.
      finally:
          if stt is not None:
              try:
-@@ -155,49 +223,36 @@
+@@ -156,22 +224,8 @@
  
  
  async def main() -> None:
@@ -359,12 +359,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-     vad = create_vad(VADConfig())
--    detector = MiniTurnDetector(vad, preroll_frames=preroll)
-+    detector = MiniTurnDetector(vad)
-+    client = AsyncOpenAI()
- 
-     def stt_factory():
+@@ -180,7 +234,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -373,18 +368,24 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
+@@ -191,16 +245,19 @@
  
-     await transport.connect()
--    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
-+    print("Talk. Each turn will feel slow. That is the lesson.\n")
- 
-     try:
--        await parrot(transport, stt_factory, detector, journal, session_id)
-+        await collect_turns(transport, detector, stt_factory, client, journal)
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-     finally:
-         await transport.disconnect()
+         vad = create_vad(VADConfig())
+         resources.push_async_callback(close_if_supported, vad)
+-        detector = MiniTurnDetector(vad, preroll_frames=preroll)
+-
+-        print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
++        detector = MiniTurnDetector(vad)
++
++        client = AsyncOpenAI()
++        resources.push_async_callback(close_if_supported, client)
++
++        print("Talk. Each turn will feel slow. That is the lesson.\n")
+         try:
+-            await parrot(transport, stt_factory, detector, journal, session_id)
++            await collect_turns(transport, detector, stt_factory, client, journal)
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
  
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{session_id}.bundle"
@@ -416,7 +417,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L104-L113)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L105-L114)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->

@@ -28,6 +28,7 @@ import os
 import random
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -43,6 +44,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.session import split_at_sentence_boundaries
 from easycat.strip_markdown import strip_markdown
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -338,18 +340,39 @@ async def run_turn(transport, stt, client, tts, journal) -> None:
         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
+async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
+    """Stream turns and close every per-turn STT, including on cancellation."""
+    stt = None
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                stt = None
+                try:
+                    await active_stt.end_stream()
+                    await run_turn(transport, active_stt, client, tts, journal)
+                finally:
+                    await close_if_supported(active_stt)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
+
+
 async def main() -> None:
     if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
         raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
-    client = AsyncOpenAI()
-    tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-    )
 
     def stt_factory():
         return create_stt_provider(
@@ -360,29 +383,27 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    async def collect_turns():
-        stt = None
-        async for tag, chunk in detector.frames(transport.receive_audio()):
-            if tag == "speech_started":
-                if stt is None:
-                    stt = stt_factory()
-                    await stt.start_stream()
-            elif tag == "frame" and stt is not None:
-                await stt.send_audio(chunk)
-            elif tag == "speech_ended" and stt is not None:
-                await stt.end_stream()
-                await run_turn(transport, stt, client, tts, journal)
-                stt = None
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad)
 
-    try:
-        await collect_turns()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+        tts = create_tts_provider(
+            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
+        )
+        resources.push_async_callback(close_if_supported, tts)
+
+        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
+
+        try:
+            await collect_turns(transport, detector, stt_factory, client, tts, journal)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
