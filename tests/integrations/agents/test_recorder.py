@@ -8,6 +8,7 @@ from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     CancellationMode,
     ExecutionCursor,
+    NullAgentRecorder,
     RecorderContext,
     RecorderInvariantError,
     UnitKind,
@@ -103,6 +104,18 @@ class TestRecorderNoop:
         rec.record_tool_call(phase="start", name="tool")
         rec.record_framework_handoff(from_unit="A", to_unit="B")
         # No exception — all calls are no-ops.
+
+    def test_null_recorder_preserves_supplied_context(self):
+        context = RecorderContext(
+            run_id="null",
+            session_id="session-1",
+            turn_id="turn-1",
+            mcp_servers=("weather",),
+        )
+
+        recorder = NullAgentRecorder(context)
+
+        assert recorder.context is context
 
 
 class TestRecorderContext:
