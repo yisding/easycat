@@ -231,6 +231,19 @@ disappears?
 
 ## Self-check
 
+<!-- BEGIN auto:self-check-protocol -->
+> **Closed-book retrieval gate**
+>
+> 1. Close the chapter narrative and every hint disclosure.
+> 2. Answer each outcome below from memory, aloud or in writing.
+> 3. Support the answer with at least one observed field, measurement, or behavior
+>    from your attempt record.
+>
+> If an answer needs notes, reopen only the section that owns the weak concept,
+> correct your explanation, close it, and retry. Continue only when you can answer
+> without looking.
+<!-- END auto:self-check-protocol -->
+
 You should be able to read any bundle from any chapter from now on without
 consulting the README that produced it, and explain why observing a partial is
 different from committing a side effect from one. You should also be able to

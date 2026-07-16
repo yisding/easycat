@@ -143,6 +143,23 @@ sync with the chapter's source code and ladder order:
   The renderer preserves the hint content while adding or refreshing the
   disclosure wrapper, so answer cues do not appear before the first attempt.
 
+* A closed-book retrieval gate under every self-check heading::
+
+      ## Self-check
+
+      <!-- BEGIN auto:self-check-protocol -->
+      > **Closed-book retrieval gate**
+      >
+      > 1. Close the chapter narrative and every hint disclosure.
+      > 2. Answer each outcome below from memory, aloud or in writing.
+      > 3. Support the answer with evidence from your attempt record.
+      >
+      > If an answer needs notes, repair that concept and retry it closed-book.
+      <!-- END auto:self-check-protocol -->
+
+  The hand-authored chapter outcomes stay below this generated protocol; the
+  gate makes recall and targeted retry consistent across the ladder.
+
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
 ``main.py``; ``--check`` exits non-zero if any block would change,
@@ -227,6 +244,12 @@ EXERCISE_HINTS_RE = re.compile(
 BARE_EXERCISE_HINTS_RE = re.compile(
     r"^\*\*Hints\*\*\n\n(?P<body>.*?)(?=^## )",
     re.DOTALL | re.MULTILINE,
+)
+SELF_CHECK_PROTOCOL_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:self-check-protocol -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:self-check-protocol -->)",
+    re.DOTALL,
 )
 ATTR_RE = re.compile(r"(\w+)=(?:\"([^\"]*)\"|(\S+))")
 
@@ -449,6 +472,21 @@ def render_exercise_hints(body: str) -> str:
     )
 
 
+def render_self_check_protocol() -> str:
+    return (
+        "> **Closed-book retrieval gate**\n"
+        ">\n"
+        "> 1. Close the chapter narrative and every hint disclosure.\n"
+        "> 2. Answer each outcome below from memory, aloud or in writing.\n"
+        "> 3. Support the answer with at least one observed field, measurement, or behavior\n"
+        ">    from your attempt record.\n"
+        ">\n"
+        "> If an answer needs notes, reopen only the section that owns the weak concept,\n"
+        "> correct your explanation, close it, and retry. Continue only when you can answer\n"
+        "> without looking."
+    )
+
+
 @functools.cache
 def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
     spine_path = TEACHING / "offline_spine.py"
@@ -542,6 +580,14 @@ def _render_exercise_completion_block(chapter: Chapter) -> str:
     )
 
 
+def _render_self_check_protocol_block() -> str:
+    return (
+        "<!-- BEGIN auto:self-check-protocol -->\n"
+        f"{render_self_check_protocol()}\n"
+        "<!-- END auto:self-check-protocol -->"
+    )
+
+
 def _ensure_offline_checkpoint(chapter: Chapter, text: str) -> str:
     block = _render_offline_checkpoint_block(chapter)
     if OFFLINE_CHECKPOINT_RE.search(text):
@@ -620,6 +666,19 @@ def _ensure_exercise_hints(text: str) -> str:
     return updated
 
 
+def _ensure_self_check_protocol(chapter: Chapter, text: str) -> str:
+    block = _render_self_check_protocol_block()
+    if SELF_CHECK_PROTOCOL_RE.search(text):
+        return SELF_CHECK_PROTOCOL_RE.sub(lambda _match: block, text)
+
+    heading = re.search(r"^## Self-check$", text, re.MULTILINE)
+    if heading is None:
+        raise ValueError(f"{chapter.slug}/EXERCISES.md is missing its self-check")
+    prefix = text[: heading.end()].rstrip("\n")
+    remainder = text[heading.end() :].lstrip("\n")
+    return f"{prefix}\n\n{block}\n\n{remainder}"
+
+
 def regen_readme(chapter: Chapter) -> tuple[str, str]:
     readme_path = chapter.path / "README.md"
     original = readme_path.read_text()
@@ -660,6 +719,7 @@ def regen_exercises(chapter: Chapter) -> tuple[str, str]:
     )
     updated = _ensure_exercise_protocol(chapter, updated)
     updated = _ensure_exercise_hints(updated)
+    updated = _ensure_self_check_protocol(chapter, updated)
     updated = _ensure_exercise_completion(chapter, updated)
     return original, updated
 
