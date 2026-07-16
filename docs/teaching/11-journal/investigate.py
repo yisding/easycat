@@ -13,6 +13,9 @@ tiny harness; the *investigation* happens in your head.
         bundles/bug_03_ghost_interruption.bundle --turn ch11-bug03-turn-2
     uv run python docs/teaching/11-journal/investigate.py \\
         bundles/bug_03_ghost_interruption.bundle --sequence 9
+    uv run python docs/teaching/11-journal/investigate.py \\
+        bundles/bug_03_ghost_interruption.bundle --turn ch11-bug03-turn-2 \\
+        --include-session-context
 
 Dependencies:
     uv sync --group dev
@@ -36,13 +39,28 @@ def _record_matches(
     turn: str | None = None,
     sequence: int | None = None,
     name: str | None = None,
+    session_context_ids: frozenset[str] = frozenset(),
 ) -> bool:
     data = record.get("data") or {}
+    turn_matches = (
+        turn is None
+        or record.get("turn_id") == turn
+        or (record.get("turn_id") is None and record.get("session_id") in session_context_ids)
+    )
     return (
         (stage is None or data.get("stage") == stage or data.get("observed_stage") == stage)
-        and (turn is None or record.get("turn_id") == turn)
+        and turn_matches
         and (sequence is None or record.get("sequence") == sequence)
         and (name is None or record.get("name") == name)
+    )
+
+
+def _session_ids(records: list[dict[str, Any]]) -> frozenset[str]:
+    """Return only concrete session IDs that are safe to use as join keys."""
+    return frozenset(
+        session_id
+        for record in records
+        if isinstance((session_id := record.get("session_id")), str) and session_id
     )
 
 
@@ -53,19 +71,35 @@ def query_records(
     turn: str | None = None,
     sequence: int | None = None,
     name: str | None = None,
+    include_session_context: bool = False,
 ) -> list[dict[str, Any]]:
     """Query a ``RunBundle`` through its public read-only helpers.
 
     Start with the most selective public operation, then apply any
-    remaining filters. ``RunBundle`` records are dictionaries; a live
-    ``JournalView`` offers the same three helper names but returns typed
-    ``JournalRecord`` objects instead.
+    remaining filters. The opt-in session-context join scans the bundle
+    because public turn filtering intentionally excludes unscoped records.
+    ``RunBundle`` records are dictionaries; a live ``JournalView`` offers
+    the same three helper names but returns typed ``JournalRecord`` objects.
     """
+    turn_records = bundle.filter_by_turn(turn) if turn is not None else []
+    session_context_ids = _session_ids(turn_records) if include_session_context else frozenset()
     if sequence is not None:
         record = bundle.lookup_by_sequence(sequence)
         records = [] if record is None else [record]
     elif turn is not None:
-        records = bundle.filter_by_turn(turn)
+        records = (
+            [
+                record
+                for record in bundle.records()
+                if record.get("turn_id") == turn
+                or (
+                    record.get("turn_id") is None
+                    and record.get("session_id") in session_context_ids
+                )
+            ]
+            if include_session_context
+            else turn_records
+        )
     elif stage is not None:
         records = bundle.filter_by_stage(stage)
     else:
@@ -80,6 +114,7 @@ def query_records(
             turn=turn,
             sequence=sequence,
             name=name,
+            session_context_ids=session_context_ids,
         )
     ]
 
@@ -91,8 +126,13 @@ def query_diagnostics(
     turn: str | None = None,
     sequence: int | None = None,
     name: str | None = None,
+    include_session_context: bool = False,
 ) -> dict[str, Any]:
     """Describe filter coverage without changing the query result."""
+    turn_records = (
+        [record for record in records if record.get("turn_id") == turn] if turn is not None else []
+    )
+    session_context_ids = _session_ids(turn_records) if include_session_context else frozenset()
     filters = {
         key: value
         for key, value in {
@@ -104,7 +144,14 @@ def query_diagnostics(
         if value is not None
     }
     marginal_matches = {
-        key: sum(_record_matches(record, **{key: value}) for record in records)
+        key: sum(
+            _record_matches(
+                record,
+                **{key: value},
+                session_context_ids=(session_context_ids if key == "turn" else frozenset()),
+            )
+            for record in records
+        )
         for key, value in filters.items()
     }
     stages = sorted(
@@ -122,7 +169,12 @@ def query_diagnostics(
     numeric_sequences = [value for value in sequences if isinstance(value, int)]
     return {
         "filters": filters,
+        "include_session_context": include_session_context,
         "marginal_matches": marginal_matches,
+        "session_context_matches": sum(
+            record.get("turn_id") is None and record.get("session_id") in session_context_ids
+            for record in records
+        ),
         "known_turns": sorted(
             {record.get("turn_id") for record in records if record.get("turn_id")}
         ),
@@ -150,6 +202,11 @@ def print_query_result(
     filter_text = ", ".join(f"{key}={value!r}" for key, value in active.items()) or "none"
     print(f"  filters: {filter_text}")
     print(f"  matched: {len(records)} of {diagnostics['total_records']} records")
+    if diagnostics["include_session_context"]:
+        included_context = sum(record.get("turn_id") is None for record in records)
+        print(
+            f"  session context: {included_context} unscoped records included from target session"
+        )
 
     for record in records[:limit]:
         data = record.get("data") or {}
@@ -183,6 +240,11 @@ def main() -> None:
     ap.add_argument("--turn", help="Filter to records with turn_id == TURN.")
     ap.add_argument("--sequence", type=int, help="Look up one exact journal sequence.")
     ap.add_argument("--name", help="Filter to records with name == NAME.")
+    ap.add_argument(
+        "--include-session-context",
+        action="store_true",
+        help="With --turn, also include turn-less records from that turn's session.",
+    )
     ap.add_argument("--limit", type=positive_int, default=80)
     ap.add_argument(
         "--require-match",
@@ -190,6 +252,8 @@ def main() -> None:
         help="Exit non-zero when the composed query matches no records.",
     )
     args = ap.parse_args()
+    if args.include_session_context and args.turn is None:
+        ap.error("--include-session-context requires --turn")
 
     if not args.bundle.exists():
         sys.exit(
@@ -211,6 +275,7 @@ def main() -> None:
         turn=args.turn,
         sequence=args.sequence,
         name=args.name,
+        include_session_context=args.include_session_context,
     )
     diagnostics = query_diagnostics(
         all_records,
@@ -218,6 +283,7 @@ def main() -> None:
         turn=args.turn,
         sequence=args.sequence,
         name=args.name,
+        include_session_context=args.include_session_context,
     )
     print_query_result(records, diagnostics, limit=args.limit)
     if not records and args.require_match:

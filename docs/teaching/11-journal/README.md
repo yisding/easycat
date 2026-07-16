@@ -51,7 +51,8 @@ planted-bug investigations below.
   depends on your choice of words.
 - **The journal** is a strictly ordered, typed, per-turn event
   stream. You *query* it: by stage, by turn, by sequence. Every
-  record has a stable schema.
+  record has a stable envelope schema; each emitter owns the schema
+  inside `data`.
 
 Every runnable chapter from chapter 2 onward has been dumping
 bundles to `runs/`. This chapter teaches you what those bundles
@@ -131,6 +132,38 @@ bundle records are dictionaries (`r["name"]`), while live journal
 records are typed objects (`r.name`). Both stage and turn filters
 return materialized lists; stage filtering scans the records, while
 an exact sequence lookup is bounded on a live journal backend.
+
+## Turn isolation can hide session causes
+
+`filter_by_turn` is intentionally strict: it excludes records whose
+`turn_id` is `None`. That is right for reconstructing one turn, but
+session-scoped configuration can explain why the turn behaved that
+way. In the ghost-interruption fixture, sequence 1 is an unscoped
+`audio.config` record with `aec: off`; a strict turn-2 query starts at
+sequence 8 and hides the cause.
+
+Use the investigator's opt-in context join:
+
+```bash
+uv run python docs/teaching/11-journal/investigate.py \
+  docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle \
+  --turn ch11-bug03-turn-2 --stage audio --include-session-context
+```
+
+The join includes turn-less records from the target turn's same
+session only. It never pulls unscoped records from another session,
+and `--include-session-context` is rejected unless `--turn` identifies
+the target scope.
+
+Run the provider-free comparison:
+
+```bash
+uv run python docs/teaching/11-journal/session_context_probe.py
+```
+
+The strict result contains sequences 8–13. The context result adds
+sequence 1, and an `audio` stage filter isolates the `aec: off`
+configuration without mixing it into every ordinary turn query.
 
 ## Validate an empty query
 
@@ -221,6 +254,9 @@ for:
 - What is *missing* from around that record that would confirm
   the interruption was a real user?
 - What setting in the journal explains why the bot self-triggered?
+
+Start with a strict turn query, then opt into session context when you
+need the configuration that explains both turns.
 
 Write your hypothesis in one sentence before peeking at
 [`solutions.md`](./solutions.md).

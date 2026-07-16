@@ -139,6 +139,36 @@ uv run python docs/teaching/11-journal/payload_schema_probe.py
    validation. Use one stable schema per record name and version intentional
    changes when downstream consumers share that contract.
 
+## 6. Recover a session cause hidden by a turn query
+
+**Task.** Run the session-context probe, then reproduce its audio-only
+query with the CLI:
+
+```bash
+uv run python docs/teaching/11-journal/session_context_probe.py
+
+uv run python docs/teaching/11-journal/investigate.py \
+  docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle \
+  --turn ch11-bug03-turn-2 --stage audio --include-session-context
+```
+
+Explain why sequence 1 belongs in the diagnostic context but not in the
+strict turn reconstruction.
+
+**Hints**
+
+1. `filter_by_turn` returns sequences 8–13 for turn 2. Sequence 1 has
+   `turn_id=None`, so strict isolation correctly excludes it.
+2. `audio.config.data["aec"] == "off"` is session configuration that
+   explains false barge-in events across both turns.
+3. The context join uses session IDs discovered from the target turn.
+   “Unscoped” does not mean “global”: records from another session must
+   stay excluded.
+4. `--include-session-context` requires `--turn`; otherwise there is no
+   target session to join safely.
+5. Use strict turn scope to reconstruct causality. Add same-session
+   context only when investigating configuration or lifecycle causes.
+
 ## Self-check
 
 You should be able to: (a) open a bundle from any chapter and
@@ -148,4 +178,5 @@ planted bugs was about, and (c) name the `JournalView` query you'd
 reach for first on a multi-turn bundle, and (d) distinguish a real
 absence from a typo or an empty filter intersection, and (e)
 distinguish the typed journal envelope from emitter-defined payload
-schemas.
+schemas, and (f) decide when a strict turn query needs same-session
+unscoped context.
