@@ -1,4 +1,4 @@
-"""Build five eval bundles for chapter 12.
+"""Build six eval bundles for chapter 12.
 
 These fixtures mirror the event shape the chapter-6 streaming agent
 writes (``stt.final``, ``agent.first_token``, ``stage.tts.execute``,
