@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
 SPINE = TEACHING / "offline_spine.py"
@@ -167,8 +169,17 @@ def test_offline_chapter_cumulative_replay_restores_quickstart_setup() -> None:
 
 
 def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
-    root_entries_before = {path.name for path in ROOT.iterdir()}
-    before = {path.relative_to(TEACHING) for path in TEACHING.rglob("*")}
+    pytest.importorskip(
+        "openai",
+        reason="running the full spine requires the documented quickstart extras",
+    )
+    root_entries_before = {
+        path.name: path.read_bytes() if path.is_file() else None for path in ROOT.iterdir()
+    }
+    before = {
+        path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
+        for path in TEACHING.rglob("*")
+    }
     completed = subprocess.run(
         [sys.executable, str(SPINE), "--run", "--jobs", "4", "--json"],
         cwd=ROOT,
@@ -186,9 +197,14 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     assert payload["failed"] == 0
     assert {row["status"] for row in payload["checkpoints"]} == {"pass"}
     assert {row["returncode"] for row in payload["checkpoints"]} == {0}
-    after = {path.relative_to(TEACHING) for path in TEACHING.rglob("*")}
+    after = {
+        path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
+        for path in TEACHING.rglob("*")
+    }
     assert after == before
-    assert {path.name for path in ROOT.iterdir()} == root_entries_before
+    assert {
+        path.name: path.read_bytes() if path.is_file() else None for path in ROOT.iterdir()
+    } == root_entries_before
 
 
 def test_offline_spine_documents_workspace_hygiene() -> None:

@@ -1,7 +1,7 @@
 # Chapter 0 — Hello, Audio
 
 <!-- BEGIN auto:navigation -->
-[Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)
+**Progress: 1 of 16** · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)
 <!-- END auto:navigation -->
 
 > Record, play, and *understand* raw PCM. No framework. Just bytes
@@ -43,7 +43,8 @@ The script:
    explains it.
 3. Plays the recording back.
 4. Replays it three more times — at 10ms, 50ms, and 200ms chunk
-   sizes — so your ears can feel the chunking-latency tradeoff.
+   sizes — while simulating the wait to collect the first live
+   chunk, so your ears can feel the chunking-latency tradeoff.
 
 ## What is in the buffer
 
@@ -93,7 +94,7 @@ A few common sample rates you will meet later in the ladder:
 | Twilio wire | 8 kHz μ-law |
 | Deepgram / Cartesia / ElevenLabs realtime STT target | 16 kHz PCM |
 | WebSocket / WebRTC / Twilio pipeline target | 16 kHz PCM |
-| Local capture + playback | 24 kHz PCM |
+| `LocalTransport` capture/playback pipeline | 24 kHz PCM |
 | OpenAI Realtime STT input | 24 kHz PCM |
 | Raw bundled TTS config | 24 kHz PCM before transport alignment |
 | WebRTC media frames | 48 kHz before Opus encode / after decode |
@@ -105,7 +106,8 @@ resample, and a single turn can cross several rates in each direction:
 
 ```text
 WebRTC peer 48 kHz ──resample──► pipeline 16 kHz ──► Deepgram STT 16 kHz
-OpenAI TTS 24 kHz  ──resample──► WebRTC media 48 kHz ──Opus──► peer
+OpenAI provider-native 24 kHz ──resample──► resolved TTS output 16 kHz
+  ──resample──► WebRTC media 48 kHz ──Opus──► peer
 ```
 
 Run the provider-free catalog to read the maintained runtime defaults
@@ -114,6 +116,11 @@ without opening hardware or making an API request:
 ```bash
 uv run python docs/teaching/00-hello-audio/format_boundaries.py
 ```
+
+That catalog reports `LocalTransport`'s 24 kHz default. This chapter's
+smaller raw-`sounddevice` demo is a separate path and deliberately sets
+`SAMPLE_RATE = 16_000` so the byte math and speech-band discussion stay
+concrete.
 
 ### Raw TTS default vs. resolved session output
 
@@ -137,11 +144,12 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 ```
 
 The matrix separates the **provider request rate** from the final
-**transport-output rate**. They differ for ElevenLabs on Twilio:
-ElevenLabs' nearest supported PCM request is 16 kHz, then the adapter
-outputs 8 kHz PCM for the Twilio boundary. The other bundled providers
-can request 8 kHz directly. “Transport output” still names a format
-boundary, not proof that a human heard the audio.
+**transport-output rate**. They differ for ElevenLabs and OpenAI on
+Twilio: ElevenLabs' nearest supported PCM request is 16 kHz, while
+OpenAI returns fixed 24 kHz PCM; EasyCat then normalizes either stream
+to the 8 kHz transport target. Deepgram and Cartesia can request 8 kHz
+directly. “Transport output” still names a format boundary, not proof
+that a human heard the audio.
 
 Alignment only rewrites untouched defaults. An explicit non-default output
 format is preserved, and `auto_align_tts_output_to_transport=False` opts out
@@ -156,11 +164,11 @@ output—so “16 kHz” is an actionable fact rather than an ambiguous label.
 
 ## The chunk-size demo
 
-Every stage of a voice pipeline processes audio in *chunks*. The
-smaller the chunk, the lower the latency. The larger the chunk,
-the less scheduling overhead. Change the chunk size in `main.py`
-and you are making exactly the same tradeoff every voice framework
-makes every day.
+Every stage of a voice pipeline processes audio in *chunks*. A live
+source has to collect a full chunk before it can send that chunk
+downstream: 10ms chunks become available every 10ms; 200ms chunks
+become available every 200ms. Smaller chunks reduce that batching
+delay, while larger chunks reduce scheduling overhead.
 
 Because this recording is already in memory, the script deliberately
 waits one chunk duration before opening playback. That models a live
