@@ -105,6 +105,28 @@ async def test_smart_turn_endpoint_wait_includes_classifier_time(monkeypatch) ->
     assert endpoint["endpoint_wait_ms"] == pytest.approx(240.0)
 
 
+async def test_smart_turn_chapter_uses_runtime_strict_threshold(monkeypatch) -> None:
+    chapter = _load_chapter(monkeypatch)
+    journal = FakeJournal()
+
+    class FakeSmartTurn:
+        async def detect(self, _audio):
+            return types.SimpleNamespace(probability=0.5, prediction="complete")
+
+    detector = chapter.MiniTurnDetector(
+        object(),
+        smart_turn=FakeSmartTurn(),
+        threshold=0.5,
+        journal=journal,
+        session_id="boundary",
+    )
+    detector._turn_audio.append("frame")
+
+    assert await detector._classify() is False
+    classified = next(row["data"] for row in journal.rows if row["name"] == "smart_turn.classify")
+    assert classified["confirmed"] is False
+
+
 async def test_turn_gap_keeps_post_stt_and_endpoint_intervals_separate(
     monkeypatch, capsys
 ) -> None:

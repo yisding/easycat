@@ -438,7 +438,7 @@
 +        t0 = time.monotonic()
 +        result = await self._smart.detect(self._turn_audio)
 +        inference_ms = (time.monotonic() - t0) * 1000
-+        confirmed = result.probability >= self._threshold
++        confirmed = result.probability > self._threshold
 +        if self._journal is not None:
 +            self._journal.append(
 +                kind=JournalRecordKind.EVENT,
@@ -796,8 +796,19 @@ cancel tokens, and the action queue.
 
 ## Try breaking it
 
-1. Drop `SMART_THRESHOLD` to `0.3`. Re-run. How often does the
-   bot interrupt you now?
+1. Re-score one smart-turn bundle at 0.5 and 0.3 without changing its
+   audio or probabilities:
+
+   ```bash
+   uv run python docs/teaching/08-smart-turn/threshold_sweep.py PATH \
+     --baseline 0.5 --candidate 0.3
+   ```
+
+   The newly accepted records are decision changes, not automatically
+   false positives. Add `--labels labels.json`, where each record
+   sequence maps to whether the user was actually done, before comparing
+   error counts. The label keys must exactly cover every classification;
+   missing or unknown sequences are rejected rather than scored partially.
 2. Record *"I was thinking… we should order pizza."* Run
    `--backend smart`. Read the journal. Did smart-turn say done
    during the "…" pause? (If yes, that's a 300-500 ms latency
