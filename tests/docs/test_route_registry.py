@@ -28,6 +28,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "../README.md#choose-your-path",
         "../README.md#install",
         "teaching/",
+        "teaching/PROGRESS.md",
         "teaching/00-hello-audio/",
         "using-easycat/",
         "using-easycat/00-first-voice-app/",
@@ -126,6 +127,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "CLI and scaffolds",
         "Docs map",
         "Teaching ladder",
+        "Progress worksheet",
         "First lesson",
         "EasyCat feature ladder",
         "Feature first lesson",
@@ -263,6 +265,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     assert entries["README.md#install"]["url"].endswith("/blob/main/README.md#install")
     assert entries["docs/README.md"]["url"].endswith("/blob/main/docs/README.md")
     assert entries["docs/teaching/"]["url"].endswith("/tree/main/docs/teaching")
+    assert entries["docs/teaching/PROGRESS.md"]["url"].endswith(
+        "/blob/main/docs/teaching/PROGRESS.md"
+    )
     assert entries["docs/teaching/00-hello-audio/"]["url"].endswith(
         "/tree/main/docs/teaching/00-hello-audio"
     )

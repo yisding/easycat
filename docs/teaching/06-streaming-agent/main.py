@@ -24,6 +24,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -39,6 +40,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.session import split_at_sentence_boundaries
 from easycat.strip_markdown import strip_markdown
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -67,9 +69,10 @@ class MiniTurnDetector:
             vad_events = [ev async for ev in self._vad.process(chunk)]
             for ev in vad_events:
                 if isinstance(ev, VADStartSpeaking):
-                    while self._preroll:
-                        yield "speech_started", self._preroll.popleft()
                     self._speaking = True
+                    yield "speech_started", None
+                    while self._preroll:
+                        yield "frame", self._preroll.popleft()
                 elif isinstance(ev, VADStopSpeaking):
                     self._speaking = False
                     yield "speech_ended", None
@@ -143,7 +146,7 @@ async def stream_sentences_to_tts(
 
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-) -> None:
+) -> tuple[float | None, int, int]:
     """Take one sentence at a time, synthesise, stream audio to speaker.
 
     Because ``transport.send_audio`` returns as soon as the chunk is
@@ -151,23 +154,31 @@ async def drain_sentences_to_speaker(
     the current sentence is still audible. That is the pipeline overlap.
     """
     first_audio_t: float | None = None
+    accepted_chunks = rejected_chunks = 0
     while True:
         sentence = await sentence_queue.get()
         if sentence is None:
             break
 
         synth_start = time.monotonic()
+        sentence_accepted = sentence_rejected = 0
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                if first_audio_t is None:
-                    first_audio_t = time.monotonic()
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="tts.first_audio",
-                        session_id=SESSION_ID,
-                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-                    )
-                await transport.send_audio(event.audio)
+                accepted = await transport.send_audio(event.audio)
+                if accepted:
+                    accepted_chunks += 1
+                    sentence_accepted += 1
+                    if first_audio_t is None:
+                        first_audio_t = time.monotonic()
+                        journal.append(
+                            kind=JournalRecordKind.EVENT,
+                            name="tts.first_audio",
+                            session_id=SESSION_ID,
+                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                        )
+                else:
+                    rejected_chunks += 1
+                    sentence_rejected += 1
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -175,9 +186,12 @@ async def drain_sentences_to_speaker(
             data={
                 "stage": "tts",
                 "elapsed_ms": (time.monotonic() - synth_start) * 1000,
+                "accepted_chunks": sentence_accepted,
+                "rejected_chunks": sentence_rejected,
                 "text": sentence,
             },
         )
+    return first_audio_t, accepted_chunks, rejected_chunks
 
 
 async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -200,18 +214,64 @@ async def run_turn(transport, stt, client, tts, journal) -> None:
     )
     print(f"  user: {final_text!r}")
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-    await asyncio.gather(
+    _, delivery = await asyncio.gather(
         stream_sentences_to_tts(client, final_text, sentence_queue, journal),
         drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
     )
-    total_gap = (time.monotonic() - stt_final_t) * 1000
-    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+    first_audio_t, accepted_chunks, rejected_chunks = delivery
+    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="turn.gap",
         session_id=SESSION_ID,
-        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
+        data={
+            "stage": "turn",
+            "total_gap_ms": total_gap,
+            "reply_enqueue_gap_ms": reply_enqueue_gap,
+            "tts_accepted_chunks": accepted_chunks,
+            "tts_rejected_chunks": rejected_chunks,
+            "text": final_text,
+        },
     )
+    if total_gap is None:
+        if accepted_chunks:
+            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
+        elif rejected_chunks:
+            print(
+                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
+            )
+        else:
+            print("  (turn gap unavailable — TTS produced no audio)")
+    else:
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
+
+
+async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
+    """Stream turns and close every per-turn STT, including on cancellation."""
+    stt = None
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                stt = None
+                try:
+                    await active_stt.end_stream()
+                    await run_turn(transport, active_stt, client, tts, journal)
+                finally:
+                    await close_if_supported(active_stt)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
 
 
 async def main() -> None:
@@ -220,12 +280,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
-    client = AsyncOpenAI()
-    tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-    )
 
     def stt_factory():
         return create_stt_provider(
@@ -236,30 +290,27 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Streaming agent. Ctrl-C to stop.\n")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    async def collect_turns():
-        stt = None
-        async for tag, chunk in detector.frames(transport.receive_audio()):
-            if tag == "speech_started":
-                if stt is None:
-                    stt = stt_factory()
-                    await stt.start_stream()
-                await stt.send_audio(chunk)
-            elif tag == "frame" and stt is not None:
-                await stt.send_audio(chunk)
-            elif tag == "speech_ended" and stt is not None:
-                await stt.end_stream()
-                await run_turn(transport, stt, client, tts, journal)
-                stt = None
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad)
 
-    try:
-        await collect_turns()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+        tts = create_tts_provider(
+            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
+        )
+        resources.push_async_callback(close_if_supported, tts)
+
+        print("Streaming agent. Ctrl-C to stop.\n")
+
+        try:
+            await collect_turns(transport, detector, stt_factory, client, tts, journal)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

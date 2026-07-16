@@ -1,18 +1,75 @@
 # Chapter 10 — Cleaning the Signal
 
+<!-- BEGIN auto:navigation -->
+**Progress: 11 of 16** · [← Chapter 9 — Interruption / Barge-in](../09-interruption/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+<!-- END auto:navigation -->
+
 > Two problems often confused as one. **Noise reduction** removes
 > uncorrelated background sound (fan, keyboard, baby).
 > **Echo cancellation** removes the bot's own voice coming back
 > through the microphone. Same pipeline slot; fundamentally
 > different techniques.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 8 — Smart-turn**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with the 800 ms VAD
+> baseline?
+>
+> After recording your answer, explain one way `endpoint wait decomposition` changes how you
+> reason about `NR/AEC replay metrics`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `NR/AEC replay metrics` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** What changes with aligned AEC reference audio, and what should fail when
+> reference audio is missing or short?
+>
+> ```bash
+> uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+> ```
+>
+> **Evidence to find:** aligned reference audio changes RMS by -12.041 dB; missing or short
+> references fail.
+>
+> **Explain the result:** Tie each failure to the missing replay input and explain what aligned
+> reference changes.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- `uv sync --extra quickstart --extra deepgram --group dev`
+- For the live pipeline: `uv sync --extra quickstart --extra deepgram --group dev`.
+- For offline replay only: `uv sync --extra quickstart --group dev`. The
+  checked-in WAV pairs need no microphone or API keys.
 - RNNoise is included in `quickstart`; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -50,18 +107,17 @@ hearing.
 ```diff
 --- docs/teaching/09-interruption/estimate.py
 +++ docs/teaching/10-cleaning-signal/main.py
-@@ -1,20 +1,33 @@
--"""Chapter 9c — cancel + estimate what the user actually heard.
+@@ -1,19 +1,33 @@
+-"""Chapter 9c — cancel + estimate what the user could have heard.
 -
--Same as ``cancel.py`` plus: we track bytes of TTS audio that made
--it onto the speaker before the cancel fires, compute the character
--position in the bot's *text* reply that corresponds to those bytes,
--and rewrite the assistant turn in the conversation history to end
--there. Next turn, the LLM has the same picture of reality the
--user does.
+-Same as ``cancel.py`` plus: we track bytes of TTS audio accepted by
+-the transport before the cancel fires, compute the character position
+-in the bot's *text* reply that corresponds to those bytes, and rewrite
+-the assistant turn in the conversation history to end there. Next turn,
+-the LLM has a closer picture of what the user could have heard.
 -
--The byte-to-char estimate is deliberately simple: bytes heard ÷
--total bytes × total chars. The production
+-The byte-to-char estimate is deliberately simple: accepted bytes ÷
+-expected bytes × total chars. The production
 -`easycat.session.interruption` estimator is a lot more careful
 -about silence, SSML, markdown, and playback-ack fudge factors —
 -read it after you understand the toy.
@@ -85,8 +141,8 @@ hearing.
 +
 +NR is single-input — it only sees the mic. AEC is dual-input —
 +it needs both the mic *and* the far-end reference (the TTS audio
-+we sent to the speaker). We feed the reference every time we
-+emit a TTS chunk.
++we sent to the speaker). We feed the reference every time the
++transport accepts a complete TTS chunk.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -98,7 +154,7 @@ hearing.
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -25,19 +38,23 @@
+@@ -24,21 +38,24 @@
  
  from __future__ import annotations
  
@@ -108,6 +164,8 @@ hearing.
  import os
  import time
  import types
+-from collections.abc import Iterator
+ from contextlib import AsyncExitStack
 -from dataclasses import dataclass, field
  from pathlib import Path
  
@@ -124,15 +182,15 @@ hearing.
  from easycat.events import (
      EventBus,
      STTEventType,
-@@ -45,6 +62,7 @@
+@@ -46,6 +63,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
 +from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
- from easycat.strip_markdown import strip_markdown
-@@ -58,48 +76,23 @@
+@@ -60,62 +78,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -140,17 +198,18 @@ hearing.
 -
 -# OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
 -TTS_BYTES_PER_SECOND = 24_000 * 2
+-LOCAL_OUTPUT_FRAME_MS = 20
 -
 -
 -@dataclass
 -class TurnLedger:
--    """Per-turn record of what the bot tried to say vs. what played.
+-    """Per-turn record of what the bot tried to say vs. what was accepted.
 -
 -    ``sentences_sent`` accumulates the text of each sentence dispatched
--    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
--    reached ``transport.send_audio``. At cancel time we combine them
--    to estimate where, in the concatenated text, the user's ear fell
--    silent.
+-    to TTS in order. ``bytes_accepted`` tracks audio bytes for which
+-    ``transport.send_audio`` returned ``True``. At cancel time we combine
+-    them to estimate where, in the concatenated text, the user's ear
+-    fell silent.
 +
 +
 +class _Passthrough:
@@ -161,7 +220,7 @@ hearing.
      """
  
 -    sentences_sent: list[str] = field(default_factory=list)
--    bytes_sent: int = 0
+-    bytes_accepted: int = 0
 -
 -    def heard_text(self) -> str:
 -        """Estimate the text prefix the user's ear actually reached.
@@ -175,7 +234,7 @@ hearing.
 -            return ""
 -        full_text = " ".join(self.sentences_sent)
 -        expected = max(1, _expected_bytes(full_text))
--        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+-        estimated_chars = int(len(full_text) * self.bytes_accepted / expected)
 -        estimated_chars = max(0, min(estimated_chars, len(full_text)))
 -        return full_text[:estimated_chars]
 -
@@ -185,6 +244,19 @@ hearing.
 -    chars_per_sec = 15
 -    seconds = len(text) / chars_per_sec
 -    return int(seconds * TTS_BYTES_PER_SECOND)
+-
+-
+-def _local_output_frames(chunk: AudioChunk) -> Iterator[AudioChunk]:
+-    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
+-    frame_bytes = (
+-        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
+-    )
+-    for offset in range(0, len(chunk.data), frame_bytes):
+-        yield AudioChunk(
+-            data=chunk.data[offset : offset + frame_bytes],
+-            format=chunk.format,
+-            timestamp=chunk.timestamp,
+-        )
 +    async def process(self, chunk):
 +        return chunk
 +
@@ -196,7 +268,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -127,13 +120,33 @@
+@@ -144,13 +123,33 @@
                  self._preroll.append(chunk)
  
  
@@ -234,13 +306,13 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -154,95 +167,48 @@
+@@ -171,49 +170,38 @@
      await sentence_queue.put(None)
  
  
 -async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journal):
 +async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_id, journal):
-+    """Emit TTS audio to the speaker AND feed it to AEC as the far-end reference."""
++    """Emit TTS audio and feed accepted chunks to AEC as the far-end reference."""
      while True:
          sentence = await sentence_queue.get()
          if sentence is None or cancel.is_cancelled:
@@ -251,12 +323,22 @@ hearing.
                  await tts.cancel()
                  break
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-                 await transport.send_audio(event.audio)
--                ledger.bytes_sent += len(event.audio.data)
-+                # The crucial dual-input line: AEC needs to know what we
-+                # asked the speaker to play, so it can subtract that
-+                # pattern from the mic.
-+                aec.feed_reference(event.audio)
+-                # LocalTransport reports False for a partial fit. Sending one
+-                # callback-sized frame at a time makes acceptance atomic, so
+-                # the ledger can still credit an accepted head accurately.
+-                for frame in _local_output_frames(event.audio):
+-                    if cancel.is_cancelled:
+-                        await tts.cancel()
+-                        break
+-                    if await transport.send_audio(frame):
+-                        ledger.bytes_accepted += len(frame.data)
+-                if cancel.is_cancelled:
+-                    break
++                if await transport.send_audio(event.audio):
++                    # The crucial dual-input line: AEC needs to know what
++                    # the speaker accepted, so it can subtract that pattern
++                    # from the mic. Rejected or partial writes return False.
++                    aec.feed_reference(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -264,7 +346,7 @@ hearing.
 -            data={
 -                "stage": "tts",
 -                "text": sentence,
--                "bytes_sent_so_far": ledger.bytes_sent,
+-                "bytes_accepted_so_far": ledger.bytes_accepted,
 -                "cancelled": cancel.is_cancelled,
 -            },
 +            session_id=session_id,
@@ -272,6 +354,100 @@ hearing.
          )
  
  
+-async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
++async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
+     """Retrieve a background result so failures never become orphan warnings."""
+     (result,) = await asyncio.gather(bot_task, return_exceptions=True)
+     if isinstance(result, Exception):
+         journal.append(
+             kind=JournalRecordKind.EVENT,
+             name="bot_task.error",
+-            session_id=SESSION_ID,
++            session_id=session_id,
+             data={"stage": "coordinator", "error": repr(result)},
+         )
+ 
+@@ -239,7 +227,7 @@
+         await close_if_supported(stt)
+ 
+ 
+-async def shutdown_coordinator(stt, bot_task, active_cancel, journal) -> None:
++async def shutdown_coordinator(stt, bot_task, active_cancel, journal, session_id) -> None:
+     """Release both possible in-flight owners before shared providers close."""
+     try:
+         if stt is not None:
+@@ -250,35 +238,35 @@
+                 active_cancel.cancel()
+             if not bot_task.done():
+                 bot_task.cancel()
+-            await observe_bot_task(bot_task, journal)
+-
+-
+-async def route_barge_in(tag, bot_task, active_cancel, active_ledger, transport, journal, history):
+-    """Cancel output, rewrite history, and preserve speech_started for STT."""
++            await observe_bot_task(bot_task, journal, session_id)
++
++
++async def route_barge_in(tag, bot_task, active_cancel, transport, journal, session_id):
++    """Cancel active output while preserving speech_started for STT below."""
+     if bot_task is None:
+-        return bot_task, active_cancel, active_ledger, False
++        return bot_task, active_cancel, False
+     if bot_task.done():
+-        await observe_bot_task(bot_task, journal)
+-        return None, None, None, False
+-    if tag != "speech_started" or active_cancel is None or active_ledger is None:
+-        return bot_task, active_cancel, active_ledger, True
++        await observe_bot_task(bot_task, journal, session_id)
++        return None, None, False
++    if tag != "speech_started" or active_cancel is None:
++        return bot_task, active_cancel, True
+ 
+     started_at = time.monotonic()
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="interruption.start",
+-        session_id=SESSION_ID,
++        session_id=session_id,
+         data={"stage": "vad", "t_ms": started_at * 1000},
+     )
+     active_cancel.cancel()
+     await transport.clear_audio()
+     clear_returned_at = time.monotonic()
+-    await observe_bot_task(bot_task, journal)
++    await observe_bot_task(bot_task, journal, session_id)
+     bot_returned_at = time.monotonic()
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="interruption.cancel_complete",
+-        session_id=SESSION_ID,
++        session_id=session_id,
+         data={
+             "stage": "interruption",
+             "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
+@@ -286,54 +274,20 @@
+             "t_ms": bot_returned_at * 1000,
+         },
+     )
+-
+-    heard = active_ledger.heard_text()
+-    full = " ".join(active_ledger.sentences_sent)
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="interruption.estimate",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "interruption",
+-            "full_text": full,
+-            "heard_text": heard,
+-            "bytes_accepted": active_ledger.bytes_accepted,
+-        },
+-    )
+-    history.append({"role": "assistant", "content": heard})
+-    print(f"  bot (cut): {heard!r}")
+-    return None, None, None, False
+-
+-
 -async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 -    """Maintain a multi-turn history and rewrite it on cancel."""
 -    history: list[dict] = [
@@ -283,92 +459,64 @@ hearing.
 -            ),
 -        }
 -    ]
++    return None, None, False
++
++
 +async def coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal):
      stt = None
      bot_task: asyncio.Task | None = None
      active_cancel: CancelToken | None = None
 -    active_ledger: TurnLedger | None = None
  
-     while True:
-         tag, chunk = await mic_queue.get()
+     try:
+         while True:
+             tag, chunk = await mic_queue.get()
  
--        # Barge-in during bot speech → cancel AND rewrite history.
-         if bot_task is not None and not bot_task.done():
--            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
-+            if tag == "speech_started" and active_cancel is not None:
-                 journal.append(
-                     kind=JournalRecordKind.EVENT,
-                     name="interruption.start",
--                    session_id=SESSION_ID,
-+                    session_id=session_id,
-                     data={"stage": "vad", "t_ms": time.monotonic() * 1000},
-                 )
-                 active_cancel.cancel()
-                 await transport.clear_audio()
--
--                # Let the bot task unwind so the ledger is final. A
--                # transient agent/TTS error here shouldn't take the
--                # whole session down mid-barge-in; log it and move on.
--                try:
--                    await bot_task
--                except Exception as exc:
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="bot_task.error",
--                        session_id=SESSION_ID,
--                        data={"stage": "coordinator", "error": repr(exc)},
--                    )
--
--                heard = active_ledger.heard_text()
--                full = " ".join(active_ledger.sentences_sent)
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="interruption.estimate",
--                    session_id=SESSION_ID,
--                    data={
--                        "stage": "interruption",
--                        "full_text": full,
--                        "heard_text": heard,
--                        "bytes_heard": active_ledger.bytes_sent,
--                    },
--                )
--                # Rewrite history: the bot said *only* what the user heard.
--                history.append({"role": "assistant", "content": heard})
--                print(f"  bot (cut): {heard!r}")
--                active_cancel = None
--                active_ledger = None
--                bot_task = None
-             continue
- 
-         if tag == "speech_started":
-@@ -262,33 +228,56 @@
-             if not final_text.strip():
+-            # Cancel output, but fall through with speech_started intact.
+-            bot_task, active_cancel, active_ledger, consumed = await route_barge_in(
+-                tag,
+-                bot_task,
+-                active_cancel,
+-                active_ledger,
+-                transport,
+-                journal,
+-                history,
++            bot_task, active_cancel, consumed = await route_barge_in(
++                tag, bot_task, active_cancel, transport, journal, session_id
+             )
+             if consumed:
                  continue
-             print(f"  user: {final_text!r}")
--            history.append({"role": "user", "content": final_text})
+@@ -351,41 +305,34 @@
+                 if not final_text.strip():
+                     continue
+                 print(f"  user: {final_text!r}")
+-                history.append({"role": "user", "content": final_text})
  
-             cancel = CancelToken()
--            ledger = TurnLedger()
-             active_cancel = cancel
--            active_ledger = ledger
+                 cancel = CancelToken()
+-                ledger = TurnLedger()
+                 active_cancel = cancel
+-                active_ledger = ledger
 -
--            async def _bot(hist=list(history), ct=cancel, led=ledger):
+-                async def _bot(hist=list(history), ct=cancel, led=ledger):
 +
-+            async def _bot(text=final_text, ct=cancel):
-                 q: asyncio.Queue = asyncio.Queue()
-                 await asyncio.gather(
--                    run_agent(client, hist, q, ct),
--                    drain_to_speaker(tts, transport, q, ct, led, journal),
-+                    run_agent(client, text, q, ct),
-+                    drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
-                 )
--                if not ct.is_cancelled:
--                    # Clean completion: record the full reply in history.
--                    full = " ".join(led.sentences_sent)
--                    history.append({"role": "assistant", "content": full})
--                    print(f"  bot: {full!r}")
++                async def _bot(text=final_text, ct=cancel):
+                     q: asyncio.Queue = asyncio.Queue()
+                     await asyncio.gather(
+-                        run_agent(client, hist, q, ct),
+-                        drain_to_speaker(tts, transport, q, ct, led, journal),
++                        run_agent(client, text, q, ct),
++                        drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
+                     )
+-                    if not ct.is_cancelled:
+-                        # Clean completion: record the full reply in history.
+-                        full = " ".join(led.sentences_sent)
+-                        history.append({"role": "assistant", "content": full})
+-                        print(f"  bot: {full!r}")
  
-             bot_task = asyncio.create_task(_bot())
+                 bot_task = asyncio.create_task(_bot())
+     finally:
+-        await shutdown_coordinator(stt, bot_task, active_cancel, journal)
++        await shutdown_coordinator(stt, bot_task, active_cancel, journal, session_id)
  
  
  async def main() -> None:
@@ -382,54 +530,69 @@ hearing.
  
 +    session_id = f"ch10-nr{args.nr}-aec{args.aec}-{int(time.time())}"
      journal = InMemoryRingBuffer(capacity=10_000)
-+
-+    # Factory-wired stages. NR/AEC both fall back to passthrough if the
-+    # optional deps aren't installed; the journal records which one is live.
-+    if args.nr == "on":
-+        nr = create_noise_reducer(NoiseReducerConfig())
-+        nr_backend = nr.version_info().get("provider", "unknown")
-+    else:
-+        nr = _Passthrough()
-+        nr_backend = "off"
-+
-+    if args.aec == "on":
-+        aec = create_echo_canceller(EchoCancellationConfig(enabled=True))
-+        aec_backend = aec.version_info().get("provider", "unknown")
-+    else:
-+        aec = _Passthrough()
-+        aec_backend = "off"
-+
-+    print(f"NR backend: {nr_backend}    AEC backend: {aec_backend}")
-+    journal.append(
-+        kind=JournalRecordKind.EVENT,
-+        name="audio.config",
-+        session_id=session_id,
-+        data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
-+    )
-+
-     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-     vad = create_vad(VADConfig())
-     detector = MiniTurnDetector(vad)
-@@ -307,13 +296,14 @@
-         )
+-    transport = LocalTransport(
+-        LocalTransportConfig(
+-            audio_format=PCM16_MONO_24K,
+-            frame_duration_ms=LOCAL_OUTPUT_FRAME_MS,
+-        )
+-    )
++    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
  
-     await transport.connect()
--    print("Cancel + history rewrite. Interrupt freely. Ctrl-C to stop.\n")
-+    print("Talk. Ctrl-C to stop.\n")
+     def stt_factory():
+         return create_stt_provider(
+@@ -400,6 +347,32 @@
+         resources.push_async_callback(transport.disconnect)
+         await transport.connect()
  
-     mic_queue: asyncio.Queue = asyncio.Queue()
-+    cleaned = clean_audio_pipeline(transport, nr, aec)
-     try:
-         await asyncio.gather(
--            mic_producer(detector, transport, mic_queue),
--            coordinator(mic_queue, stt_factory, client, tts, transport, journal),
-+            mic_producer(detector, cleaned, mic_queue),
-+            coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal),
++        # Factory-wired stages. NR/AEC both fall back to passthrough if the
++        # optional deps aren't installed; the journal records which one is live.
++        if args.nr == "on":
++            nr = create_noise_reducer(NoiseReducerConfig())
++            nr_backend = nr.version_info().get("provider", "unknown")
++        else:
++            nr = _Passthrough()
++            nr_backend = "off"
++        resources.push_async_callback(close_if_supported, nr)
++
++        if args.aec == "on":
++            aec = create_echo_canceller(EchoCancellationConfig(enabled=True))
++            aec_backend = aec.version_info().get("provider", "unknown")
++        else:
++            aec = _Passthrough()
++            aec_backend = "off"
++        resources.push_async_callback(close_if_supported, aec)
++
++        print(f"NR backend: {nr_backend}    AEC backend: {aec_backend}")
++        journal.append(
++            kind=JournalRecordKind.EVENT,
++            name="audio.config",
++            session_id=session_id,
++            data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
++        )
++
+         vad = create_vad(VADConfig())
+         resources.push_async_callback(close_if_supported, vad)
+         detector = MiniTurnDetector(vad)
+@@ -411,19 +384,22 @@
          )
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-@@ -321,7 +311,7 @@
-         await transport.disconnect()
+         resources.push_async_callback(close_if_supported, tts)
+ 
+-        print("Cancel + history rewrite. Interrupt freely. Ctrl-C to stop.\n")
++        print("Talk. Ctrl-C to stop.\n")
+ 
+         mic_queue: asyncio.Queue = asyncio.Queue()
++        cleaned = clean_audio_pipeline(transport, nr, aec)
+         try:
+             await asyncio.gather(
+-                mic_producer(detector, transport, mic_queue),
+-                coordinator(mic_queue, stt_factory, client, tts, transport, journal),
++                mic_producer(detector, cleaned, mic_queue),
++                coordinator(
++                    mic_queue, stt_factory, client, tts, transport, aec, session_id, journal
++                ),
+             )
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
  
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
@@ -455,9 +618,10 @@ uv run python docs/teaching/10-cleaning-signal/wrong_order.py --mode aec-no-refe
 ```
 
 Both modes are technically running NR / AEC, and both produce a
-bundle. The journal shows the failure: VAD's false-fire rate
-doesn't change in `nr-after-vad`, and AEC's `feed_reference()`
-counter stays at zero in `aec-no-reference`. **Wrong-version-
+bundle. The journal shows the failure: each `vad.processed_before_nr`
+record precedes the matching `nr.applied_after_vad` frame index in
+`nr-after-vad`, and AEC's `feed_reference()` counter stays at zero
+in `aec-no-reference`. **Wrong-version-
 first** for pipeline ordering — the same components, wired
 wrong, do nothing.
 
@@ -485,16 +649,19 @@ this chapter's AEC demo, take them off.
 
 ### B — offline replay (deterministic fixtures)
 
-Generate a synthetic fixture set once, then replay any condition
-through `replay.py`:
+The synthetic fixture set is checked in, so you can replay a condition
+directly from the repository root without a microphone or API keys:
 
 ```bash
-uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py
 uv run python docs/teaching/10-cleaning-signal/replay.py \
-    --mic recordings/speakerphone_loop.mic.wav \
-    --ref recordings/speakerphone_loop.ref.wav \
+    --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \
+    --ref docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav \
     --nr on --aec on
 ```
+
+Maintainers intentionally rebuilding the tracked WAV fixtures run
+`uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py`
+and review the resulting audio diff.
 
 The fixtures are toy signals (sine-wave "voice," deterministic
 white noise, a 30 ms echo at -18 dB) — enough to exercise the
@@ -502,6 +669,39 @@ lockstep `feed_reference` path and dump bundles the journal can
 compare. They are **not** a substitute for a real speech test
 set. Replace the WAV pairs with your own recordings for a real
 eval.
+
+The replay fails closed when `--aec on` has no `--ref`, or when the
+mic and reference contain different numbers of complete 20 ms frames.
+Silently running an adaptive echo canceller with a missing or exhausted
+reference would recreate `wrong_order.py --mode aec-no-reference` while
+pretending to be the correct path.
+
+Run the provider-free metrics probe to exercise that contract and the
+successful aligned path without native NR/AEC backends:
+
+```bash
+uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+```
+
+The aligned case writes one `replay.frame` record per mic frame with
+input/cleaned RMS, reference-feed presence, and VAD starts. The replay
+sizes its in-memory journal from the mic frame count, reserving space
+for `audio.config` and the summary so long recordings cannot evict
+earlier frame evidence. Its
+`replay.summary` adds aggregate `input_rms`, `cleaned_rms`,
+`rms_change_db`, and `reference_frames_fed`.
+
+**RMS is not a quality score.** A lower cleaned RMS proves that signal
+energy changed; it does not prove noise or echo was removed correctly.
+An over-aggressive filter can achieve a large reduction by deleting the
+near-end speaker too. Pair these measurements with VAD/STT outcomes and
+representative listening or perceptual metrics.
+
+The replay path owns the same native-backed stages even though it has
+no microphone or network connection. Its `AsyncExitStack` closes VAD,
+AEC, and NR in reverse construction order after the last frame—or if
+processing raises halfway through a fixture. Offline does not mean
+resource-free.
 
 ## The pipeline
 
@@ -581,30 +781,37 @@ from easycat.debug.testing import load_bundle
 for b in Path("docs/teaching/10-cleaning-signal/runs/").glob("*.bundle"):
     bundle = load_bundle(b)
     for r in bundle.records():
-        if r["name"] == "audio.config":
+        if r["name"] in ("audio.config", "replay.summary"):
             print(b.name, r["data"])
 ```
 
-Expect entries like `{"stage": "audio", "nr": "rnnoise", "aec": "livekit"}`
+Expect config entries like `{"stage": "audio", "nr": "rnnoise", "aec": "livekit"}`
 or `{"stage": "audio", "nr": "passthrough", "aec": "off"}` if the
 extras weren't installed — *that* is where you catch the silent
-fallback.
+backend fallback. The summary separately proves how many reference
+frames were fed and how signal energy changed.
 
 ## Half-duplex vs. full-duplex
 
-A regular telephone speakerphone is half-duplex by hardware: only
-one direction transmits at a time. That's why older speakerphones
-"clip" when both people talk — the device is literally throwing
-one direction away.
+Speakerphone hardware is not inherently half-duplex. Hands-free
+terminals can have full-, partial-, or no-duplex capability; the
+[ITU-T P.340](https://www.itu.int/rec/T-REC-P.340/en) categories are
+based on what happens during double-talk. Older or weaker systems may
+switch gain or heavily attenuate one direction, producing the familiar
+clipped, walkie-talkie behavior even when the network carries both
+directions.
 
-AEC is the technique that lets a modern speakerphone *feel*
-full-duplex. The speaker's output is subtracted from the mic so
-both can be live at once. When AEC is the only thing making a
-device feel modern, disabling it in software is the same as
-downgrading to 1980s phone hardware.
+AEC is a key enabler of usable full-duplex hands-free audio. It models
+the acoustic path from speaker output to microphone input and suppresses
+that echo while preserving the near-end talker. Real systems also need
+delay alignment, double-talk handling, and often nonlinear suppression;
+“subtract the speaker” is the useful mental model, not the whole
+implementation. Disabling AEC on a speakerphone can therefore make a
+full-duplex path unusable, but it does not change the network into a
+half-duplex transport.
 
-Headsets sidestep the whole problem: no acoustic path from
-speaker to mic.
+Headsets reduce the acoustic path dramatically; they do not prove it is
+zero, which is why platforms may still expose echo-control settings.
 
 ## Double-talk: the AEC failure mode
 
@@ -626,6 +833,14 @@ barge-in, viewed from the other side. Tuning is per-deployment.
    installed. AEC runs, but the signal it sees still has fan
    noise. Does the bot sound better, worse, or identical compared
    to NR on + AEC off? Why?
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 
