@@ -1,5 +1,9 @@
 # Chapter 1 — Echo
 
+<!-- BEGIN auto:navigation -->
+**Progress: 2 of 16** · [← Chapter 0](../00-hello-audio/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 2 →](../02-transcribe/)
+<!-- END auto:navigation -->
+
 > Mic to speaker, continuously, through the `Transport` protocol.
 > First encounter with EasyCat and with async audio streams.
 
@@ -35,14 +39,14 @@
 +"""Chapter 1 — Echo.
  
 -Record 3 seconds of mic audio, play it back, show the byte math,
--then replay at different chunk sizes so the reader can *hear* the
--latency difference.
+-then replay at different chunk sizes while simulating the wait for
+-the first live chunk so the reader can *hear* the latency difference.
 +Mic → speaker, continuously, through EasyCat's ``Transport`` protocol.
 +Runs until Ctrl-C.
  
  Dependency:
      uv sync --extra local --group dev
-@@ -10,100 +9,49 @@
+@@ -10,108 +9,49 @@
  
  from __future__ import annotations
  
@@ -102,8 +106,12 @@
 -
 -
 -def play_chunked(samples: np.ndarray, chunk_ms: int) -> None:
--    """Play the buffer in fixed-size chunks so the reader can feel
--    the chunking tradeoff.
+-    """Play the buffer in fixed-size chunks with a live-source delay.
+-
+-    This recording is already complete, so every chunk would otherwise
+-    be ready immediately. A real source has to collect one full chunk
+-    before it can hand that chunk downstream. Sleeping once before the
+-    first write makes that source-buffering cost explicit in the demo.
 -
 -    ``latency='low'`` and a matching ``blocksize`` keep PortAudio
 -    from pre-buffering a full second of audio before it starts —
@@ -117,21 +125,24 @@
 -        blocksize=chunk_samples,
 -        latency="low",
 -    )
+-
+-    print(f"  {chunk_ms:>4} ms chunks — buffering one live-source chunk...", flush=True)
+-    demo_start = time.monotonic()
+-    time.sleep(chunk_ms / 1000)
 -    stream.start()
--    open_time = time.monotonic()
 -    first_chunk = samples[:chunk_samples].reshape(-1, CHANNELS)
 -    stream.write(first_chunk)
--    first_sound = time.monotonic()
+-    first_write = time.monotonic()
 -    for offset in range(chunk_samples, len(samples), chunk_samples):
 -        block = samples[offset : offset + chunk_samples].reshape(-1, CHANNELS)
 -        stream.write(block)
 -    stream.stop()
 -    stream.close()
--    total = time.monotonic() - open_time
+-    total = time.monotonic() - demo_start
 -    print(
--        f"  chunk_ms={chunk_ms:>4}  "
--        f"time-to-first-sound={1000 * (first_sound - open_time):6.1f}ms  "
--        f"total={total:.2f}s"
+-        f"       source-buffer={chunk_ms:>4}ms  "
+-        f"time-to-first-write={1000 * (first_write - demo_start):6.1f}ms  "
+-        f"wall-clock={total:.2f}s"
 -    )
 -
 -
@@ -158,9 +169,10 @@
 -    print("\nPlayback — one-shot:")
 -    play_one_shot(samples)
 -
--    # Chunk-size demo. 10ms feels instant; 200ms feels slow-start.
--    # We're not changing the audio — only how we *feed it* to the
--    # speaker. Perceived latency = chunk size + scheduling jitter.
+-    # Chunk-size demo. The full recording is already in memory, so each
+-    # replay waits one chunk before its first write to model the time a
+-    # live source spends filling that chunk. 10 ms feels instant; 200 ms
+-    # feels slow-start. Device scheduling adds latency of its own.
 -    print("\nPlayback — chunked:")
 -    for chunk_ms in (10, 50, 200):
 -        play_chunked(samples, chunk_ms)
