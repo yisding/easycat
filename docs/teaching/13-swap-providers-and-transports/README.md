@@ -45,7 +45,8 @@ debug bundles — see the
   first chapter that uses the production wiring); WebRTC and
   Twilio transport options; `--provider-mix
   {openai,deepgram-eleven}` and `--transport {local,webrtc,twilio}`
-  CLI matrix; bundle-shape note explaining the teaching → production
+  CLI matrix; `event_bus_probe.py` for the provider observability
+  contract; bundle-shape note explaining the teaching → production
   journal-shape transition.
 - **Removed:** every hand-rolled coroutine from chapters 6-10.
   `Session` orchestrates the pipeline now.
@@ -150,21 +151,33 @@ also have client/PSTN delivery measurements.
 
 ## Why some providers need an `EventBus`
 
-Inspect `src/easycat/stt/factory.py::create_stt_provider_from_config`
-(wired from `easycat.config.create_session`). The WebSocket-based
-providers (Deepgram, ElevenLabs, OpenAI Realtime, Cartesia)
-receive an `EventBus` at construction. The
-HTTP batch OpenAI provider does not. The bus isn't used for
-`STTEvent` or `TTSEvent` — those flow out of every provider's
-async iterator regardless. It's for **reconnect telemetry**: the
-WebSocket providers wrap `ReconnectingWebSocket`, which emits
-`ReconnectAttempt` / `ReconnectSuccess` / `ReconnectFailure`
-events whenever the long-lived socket drops. HTTP providers have
-no socket to drop, so no telemetry to emit.
+Inspect `create_stt_provider_from_config` and
+`create_tts_provider_from_config` in the two provider factories. They do not
+keep a hand-written list of WebSocket providers. Instead, a provider config
+opts into the session `EventBus` by declaring an `event_bus` dataclass field;
+the factory detects that field and injects the bus when it is still `None`.
 
-When your journal shows a mysterious latency spike, those three
-events are the record that usually explains it — the same pattern
-you saw in chapter 11's bug 2.
+Run the provider-free catalog probe to see that structural contract:
+
+```bash
+uv run python \
+    docs/teaching/13-swap-providers-and-transports/event_bus_probe.py
+```
+
+The interesting asymmetry is OpenAI: batch STT prints `no`, while HTTP TTS
+prints `yes`. The bus is therefore not synonymous with WebSockets. It carries
+**provider observability**:
+
+- WebSocket providers use it for provider errors and reconnect lifecycle
+  (`ReconnectAttempt`, `ReconnectSuccess`, `ReconnectFailure`).
+- HTTP OpenAI TTS uses it for provider `Error` events, but cannot emit
+  reconnect lifecycle because it has no persistent socket.
+- `STTEvent` and `TTSEvent` data still flow from provider async iterators; the
+  session bus is not the audio/transcript stream.
+
+When a journal shows a mysterious latency spike, reconnect records can explain
+it—the same pattern as chapter 11's bug 2. When an HTTP TTS request fails, its
+provider `Error` record supplies a different but equally important trail.
 
 ## A decision matrix
 
