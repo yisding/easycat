@@ -118,9 +118,36 @@ provider cleanup are separate operations.
 3. `close_if_supported()` is capability-based: providers without a cleanup
    hook remain valid, while persistent providers release their resources.
 
+## 5. Preserve output evidence after fixing input
+
+**Task.** Run the provider-free delivery probe:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/delivery_probe.py
+```
+
+Explain why `turn.ended` appears before `parrot.delivery`, what the one rejected
+chunk proves, and what the two accepted chunks do **not** prove. Then remove
+the assignment around `await speak(...)` in a scratch copy of `main.py`. Which
+postmortem question becomes unanswerable?
+
+**Hints**
+
+1. `turn.ended` is input-side evidence: VAD ended the turn and STT produced the
+   final text.
+2. `parrot.delivery` is output-side evidence: the same committed text was
+   synthesized and offered to the transport.
+3. A rejection proves a drop. Acceptance proves scheduling, not rendering or
+   audibility.
+4. Fixing start-of-utterance clipping does not let the lesson discard the
+   delivery boundary established in chapter 3.
+5. Chapter 9 adds playback-progress evidence; until then, do not relabel
+   accepted chunks as played audio.
+
 ## Self-check
 
 You should be able to look at a VAD-based pipeline and predict
 which utterances will break it (lists, soft talkers, leading
 quiet syllables) without running them, and explain who ends and closes each
-per-turn STT provider.
+per-turn STT provider. You should also preserve transport rejection evidence
+without confusing accepted audio with played audio.
