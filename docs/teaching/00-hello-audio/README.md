@@ -82,7 +82,7 @@ A few common sample rates you will meet later in the ladder:
 | WebSocket / WebRTC / Twilio pipeline target | 16 kHz PCM |
 | `LocalTransport` capture/playback pipeline | 24 kHz PCM |
 | OpenAI Realtime STT input | 24 kHz PCM |
-| Bundled TTS output | 24 kHz PCM by default |
+| Raw bundled TTS config | 24 kHz PCM before transport alignment |
 | WebRTC media frames | 48 kHz before Opus encode / after decode |
 
 These are **boundaries and defaults**, not one rate per provider or
@@ -92,7 +92,8 @@ resample, and a single turn can cross several rates in each direction:
 
 ```text
 WebRTC peer 48 kHz ──resample──► pipeline 16 kHz ──► Deepgram STT 16 kHz
-OpenAI TTS 24 kHz  ──resample──► WebRTC media 48 kHz ──Opus──► peer
+OpenAI provider-native 24 kHz ──resample──► resolved TTS output 16 kHz
+  ──resample──► WebRTC media 48 kHz ──Opus──► peer
 ```
 
 Run the provider-free catalog to read the maintained runtime defaults
@@ -106,6 +107,41 @@ That catalog reports `LocalTransport`'s 24 kHz default. This chapter's
 smaller raw-`sounddevice` demo is a separate path and deliberately sets
 `SAMPLE_RATE = 16_000` so the byte math and speech-band discussion stay
 concrete.
+
+### Raw TTS default vs. resolved session output
+
+The 24 kHz TTS rows in that catalog are **config defaults**, not a promise
+that every built session emits 24 kHz toward its transport. By default,
+`EasyConfig(auto_align_tts_output_to_transport=True)` retargets an untouched
+bundled TTS config to the transport's preferred output format:
+
+| Transport config | Resolved TTS transport-output rate |
+|---|---:|
+| `LocalTransportConfig` | 24 kHz |
+| `WebSocketTransportConfig` | 16 kHz |
+| `WebRTCTransportConfig` | 16 kHz |
+| `TwilioTransportConfig` | 8 kHz |
+
+Run the second provider-free probe to see the four bundled TTS providers
+across all four transports:
+
+```bash
+uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
+```
+
+The matrix separates the **provider request rate** from the final
+**transport-output rate**. They differ for ElevenLabs and OpenAI on
+Twilio: ElevenLabs' nearest supported PCM request is 16 kHz, while
+OpenAI returns fixed 24 kHz PCM; EasyCat then normalizes either stream
+to the 8 kHz transport target. Deepgram and Cartesia can request 8 kHz
+directly. “Transport output” still names a format boundary, not proof
+that a human heard the audio.
+
+Alignment only rewrites untouched defaults. An explicit non-default output
+format is preserved, and `auto_align_tts_output_to_transport=False` opts out
+entirely; a later transport boundary may still resample mismatched audio.
+This precedence keeps caller intent authoritative while making the common
+default path efficient.
 
 Resampling makes formats compatible; it cannot recreate spectrum that an
 earlier capture, filter, or codec already removed. Name the boundary when
