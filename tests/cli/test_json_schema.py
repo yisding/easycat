@@ -351,6 +351,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "CLI and scaffolds", "path": "README.md#cli"} in entries
     assert {"label": "Docs map", "path": "docs/README.md"} in entries
     assert {"label": "First lesson", "path": "docs/teaching/00-hello-audio/"} in entries
+    assert {"label": "Progress worksheet", "path": "docs/teaching/PROGRESS.md"} in entries
     assert {"label": "Examples", "path": "examples/README.md"} in entries
     assert {"label": "Architecture", "path": "docs/architecture.md"} in entries
     assert {"label": "Maintainer guide", "path": "CLAUDE.md"} in entries

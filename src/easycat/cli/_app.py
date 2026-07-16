@@ -214,6 +214,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run --env-file .env python examples/openai_agents_voice.py",
             "uv run easycat console",
             "uv run python examples/journal_demo.py",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4",
             "uv run easycat init --list-templates",
             "uv run easycat init my-agent",
             "uv run easycat docs --audience maintainers",
@@ -302,10 +303,25 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat docs --audience learners",
             "uv run easycat docs --audience learners --json",
             "uv run python docs/teaching/00-hello-audio/main.py",
+            "uv run python docs/teaching/offline_spine.py",
+            "uv run python docs/teaching/offline_spine.py --json",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4 --json",
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
             "uv run easycat validate report .easycat/validation/latest.json",
             "uv run easycat validate report .easycat/validation/latest.json --json",
+        ),
+    },
+    {
+        "label": "Progress worksheet",
+        "path": "docs/teaching/PROGRESS.md",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Track evidence-backed completion across all 16 teaching chapters.",
+        "commands": (
+            "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
         ),
     },
     {
@@ -351,6 +367,168 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env --json",
             "uv run python docs/using-easycat/00-first-voice-app/main.py",
             "uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py",
+        ),
+    },
+    {
+        "label": "Feature runtime modes",
+        "path": "docs/using-easycat/01-runtime-modes/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Run one VoiceApp locally, in a browser, over WebSocket, or on Twilio.",
+        "commands": (
+            "uv sync --extra quickstart --extra webrtc --extra telephony --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/01-runtime-modes/main.py local",
+            "uv run python docs/using-easycat/01-runtime-modes/main.py browser",
+            "uv run python docs/using-easycat/01-runtime-modes/main.py websocket",
+            "uv run python docs/using-easycat/01-runtime-modes/main.py twilio",
+            "uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browser",
+        ),
+    },
+    {
+        "label": "Feature providers and voices",
+        "path": "docs/using-easycat/02-providers-and-voices/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Select STT and TTS providers, models, and provider-specific voices.",
+        "commands": (
+            "uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run easycat doctor --provider deepgram",
+            "uv run easycat doctor --provider elevenlabs",
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py list",
+            (
+                "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+                "openai --voice alloy"
+            ),
+            (
+                "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+                "deepgram-stt --voice nova"
+            ),
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice",
+            (
+                "uv run --env-file .env python "
+                "docs/using-easycat/02-providers-and-voices/main.py deepgram-stt"
+            ),
+        ),
+    },
+    {
+        "label": "Feature conversation controls",
+        "path": "docs/using-easycat/03-conversation-controls/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Tune turn taking, signal cleanup, interruption, and push-to-talk.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py balanced",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py vad-only",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py fast",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py clean",
+            "uv run python docs/using-easycat/03-conversation-controls/main.py raw",
+            "uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py",
+            (
+                "uv run --env-file .env python "
+                "docs/using-easycat/03-conversation-controls/main.py fast"
+            ),
+        ),
+    },
+    {
+        "label": "Feature tools and actions",
+        "path": "docs/using-easycat/04-tools-actions/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Separate agent tools, session actions, events, and spoken-output rules.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/04-tools-actions/main.py preview",
+            "uv run python docs/using-easycat/04-tools-actions/main.py run",
+            "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
+        ),
+    },
+    {
+        "label": "Feature agent bridges",
+        "path": "docs/using-easycat/05-agent-bridges/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Choose a framework adapter or bring a custom workflow.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+            "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+        ),
+    },
+    {
+        "label": "Feature session control",
+        "path": "docs/using-easycat/06-session-control/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Own session lifecycle, events, text turns, resets, and teardown.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/06-session-control/main.py text",
+            "uv run python docs/using-easycat/06-session-control/main.py voice",
+            "uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice",
+        ),
+    },
+    {
+        "label": "Feature observability",
+        "path": "docs/using-easycat/07-observability/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Record, inspect, replay, and compare journals and debug bundles.",
+        "commands": (
+            "uv sync --group dev",
+            "uv sync --extra debugger --group dev",
+            (
+                "uv run python docs/using-easycat/07-observability/main.py pair "
+                ".easycat/tutorial/ch07"
+            ),
+            ("uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json"),
+            (
+                "uv run easycat replay .easycat/tutorial/ch07/baseline.bundle "
+                "--fidelity artifact --tool-policy deny --json"
+            ),
+            (
+                "uv run easycat diff .easycat/tutorial/ch07/baseline.bundle "
+                ".easycat/tutorial/ch07/candidate.bundle --json"
+            ),
+        ),
+    },
+    {
+        "label": "Feature testing and evals",
+        "path": "docs/using-easycat/08-testing-evals/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Test offline turns, evaluation oracles, and latency budgets.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/08-testing-evals/main.py",
+            "uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json",
+            "uv run easycat doctor --json",
+            "uv run easycat validate latency --smoke --json",
         ),
     },
     {

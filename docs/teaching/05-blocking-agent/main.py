@@ -22,6 +22,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -37,6 +38,7 @@ from easycat.events import (
 )
 from easycat.recipes import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
 from easycat.transports.local import LocalTransport
 from easycat.vad import VADConfig
@@ -61,9 +63,10 @@ class MiniTurnDetector:
             vad_events = [ev async for ev in self._vad.process(chunk)]
             for ev in vad_events:
                 if isinstance(ev, VADStartSpeaking):
-                    while self._preroll:
-                        yield "speech_started", self._preroll.popleft()
                     self._speaking = True
+                    yield "speech_started", None
+                    while self._preroll:
+                        yield "frame", self._preroll.popleft()
                 elif isinstance(ev, VADStopSpeaking):
                     self._speaking = False
                     yield "speech_ended", None
@@ -71,6 +74,21 @@ class MiniTurnDetector:
                 yield "frame", chunk
             else:
                 self._preroll.append(chunk)
+
+
+class FirstAudioProbe:
+    """Forward audio while recording when the first chunk is accepted."""
+
+    def __init__(self, transport) -> None:
+        self._transport = transport
+        self.first_audio_at: float | None = None
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        accepted = await self._transport.send_audio(chunk)
+        normalized = accepted is None or bool(accepted)
+        if normalized and self.first_audio_at is None:
+            self.first_audio_at = time.monotonic()
+        return normalized
 
 
 def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -137,16 +155,29 @@ async def run_turn(transport, stt, client, journal) -> None:
         reply=reply,
     )
 
-    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
-    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
-    # until the whole file is enqueued on the transport. For teaching
-    # purposes we report the full synth-and-enqueue duration.
+    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+    # accepts. ``speak`` returns after every produced chunk has been offered,
+    # so a forwarding probe captures the earlier first-accepted milestone.
     tts_start = time.monotonic()
     print(f"  bot:  {reply!r}")
-    await speak(transport, reply)
-    span(journal, "stage.tts.execute", tts_start, text=reply)
+    audio_probe = FirstAudioProbe(transport)
+    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
+    tts_end = time.monotonic()
+    first_audio_t = audio_probe.first_audio_at
+    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
+    tts_enqueue_ms = (tts_end - tts_start) * 1000
+    span(
+        journal,
+        "stage.tts.execute",
+        tts_start,
+        text=reply,
+        first_audio_ms=tts_first_audio_ms,
+        enqueue_ms=tts_enqueue_ms,
+        accepted_chunks=accepted_chunks,
+        rejected_chunks=rejected_chunks,
+    )
 
-    total_gap = (time.monotonic() - stt_final_t) * 1000
+    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="turn.gap",
@@ -156,11 +187,51 @@ async def run_turn(transport, stt, client, journal) -> None:
             "total_gap_ms": total_gap,
             "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
             "agent_ms": (agent_end - agent_start) * 1000,
-            "tts_ms": (time.monotonic() - tts_start) * 1000,
+            "tts_ms": tts_first_audio_ms,
+            "tts_enqueue_ms": tts_enqueue_ms,
+            "tts_accepted_chunks": accepted_chunks,
+            "tts_rejected_chunks": rejected_chunks,
             "text": reply,
         },
     )
-    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+    if total_gap is None:
+        if accepted_chunks:
+            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
+        elif rejected_chunks:
+            print(
+                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
+            )
+        else:
+            print("  (turn gap unavailable — TTS produced no audio)")
+    else:
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
+
+
+async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
+    """Stream turns and close every per-turn STT, including on cancellation."""
+    stt = None
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                try:
+                    await active_stt.end_stream()
+                    await run_turn(transport, active_stt, client, journal)
+                finally:
+                    stt = None
+                    await close_if_supported(active_stt)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
 
 
 async def main() -> None:
@@ -169,9 +240,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
-    client = AsyncOpenAI()
 
     def stt_factory():
         return create_stt_provider(
@@ -182,31 +250,22 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Talk. Each turn will feel slow. That is the lesson.\n")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    async def collect_turns():
-        """Same shape as chapter 4: stream live into STT per turn."""
-        stt = None
-        async for tag, chunk in detector.frames(transport.receive_audio()):
-            if tag == "speech_started":
-                if stt is None:
-                    stt = stt_factory()
-                    await stt.start_stream()
-                await stt.send_audio(chunk)
-            elif tag == "frame" and stt is not None:
-                await stt.send_audio(chunk)
-            elif tag == "speech_ended" and stt is not None:
-                await stt.end_stream()
-                await run_turn(transport, stt, client, journal)
-                stt = None
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad)
 
-    try:
-        await collect_turns()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+
+        print("Talk. Each turn will feel slow. That is the lesson.\n")
+        try:
+            await collect_turns(transport, detector, stt_factory, client, journal)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
