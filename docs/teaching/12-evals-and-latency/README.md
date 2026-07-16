@@ -43,8 +43,15 @@
 ## The six pre-recorded bundles
 
 ```bash
-uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
+uv run python docs/teaching/12-evals-and-latency/generate_bundles.py \
+    --output-root .easycat/teaching/12-evals-and-latency
 ```
+
+The fixtures used below are already checked in. The command above is a
+safe way to experiment: it writes a chapter-shaped copy under the
+gitignored `.easycat/` directory instead of rewriting tracked bundles.
+Maintainers intentionally refreshing the checked-in fixtures omit
+`--output-root` and review the resulting bundle and CSV diffs.
 
 - `turn_01_fast.bundle` — clean, fast turn.
 - `turn_02_slow_agent.bundle` — agent is slow; P95 spike.
