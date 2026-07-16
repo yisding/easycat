@@ -1,5 +1,9 @@
 # Chapter 5 — The Blocking Agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 6 of 16** · [← Chapter 4](../04-vad-preroll/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 6 →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 
@@ -11,6 +15,11 @@ build movement (chapters 6-9) exists to close this gap.
 - [Chapter 4](../04-vad-preroll/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -446,14 +455,18 @@ from pathlib import Path
 from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:6.1f} ms"
+
 for r in bundle.records():
     if r["name"] == "turn.gap":
         d = r["data"]
-        print(f"  STT final → agent dispatch  {d['stt_to_agent_ms']:6.1f} ms")
-        print(f"  agent (LLM call)            {d['agent_ms']:6.1f} ms")
-        print(f"  TTS → first audio           {d['tts_ms']:6.1f} ms")
-        print(f"  TOTAL → first audio         {d['total_gap_ms']:6.1f} ms")
-        print(f"  full TTS synth + enqueue    {d['tts_enqueue_ms']:6.1f} ms")
+        print(f"  STT final → agent dispatch  {format_ms(d['stt_to_agent_ms'])}")
+        print(f"  agent (LLM call)            {format_ms(d['agent_ms'])}")
+        print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
+        print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
+        print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
 ```
 
 You will see something like:

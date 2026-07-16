@@ -187,6 +187,11 @@ async def test_transport_intermittent_failure(monkeypatch: pytest.MonkeyPatch) -
         await transport.push_audio(make_chunk(), make_chunk())
         agent_final = await collector.wait_for(AgentFinal, timeout=3.0)
         assert agent_final.text == "HELLO"
+        # Agent completion does not imply queued transport playback has
+        # drained.  The inline-first-frame path makes that distinction
+        # deterministic, so wait for the router's delivery boundary before
+        # checking how many sends preceded the injected failure.
+        await session._audio_router.await_drain(timeout=2.0)
         assert session.is_running
         # First 2 sends succeeded before the failure mode kicks in
         assert len(transport.sent) == 2
