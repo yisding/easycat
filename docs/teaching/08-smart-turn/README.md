@@ -1,5 +1,9 @@
 # Chapter 8 — Smart-turn
 
+<!-- BEGIN auto:navigation -->
+**Progress: 9 of 16** · [← Chapter 7](../07-tools/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 9 →](../09-interruption/)
+<!-- END auto:navigation -->
+
 > A tiny ML model that knows you're done talking before the silence
 > confirms it.
 
@@ -10,6 +14,11 @@
   extra installs `numpy` + `onnxruntime`, which smart-turn needs.
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -96,7 +105,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -55,223 +57,165 @@
+@@ -55,223 +57,163 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -246,11 +255,9 @@
 +                self._turn_audio = []
 +                yield "speech_ended", None
 +
-+            if self._state == "speaking":
++            if self._state in ("speaking", "pending"):
 +                self._turn_audio.append(chunk)
                  yield "frame", chunk
-+            elif self._state == "pending":
-+                self._turn_audio.append(chunk)
              else:
                  self._preroll.append(chunk)
  
@@ -452,7 +459,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -281,20 +225,15 @@
+@@ -281,20 +223,15 @@
                      journal.append(
                          kind=JournalRecordKind.EVENT,
                          name="tts.first_audio",
@@ -476,7 +483,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -302,29 +241,28 @@
+@@ -302,29 +239,28 @@
      return first_audio_t
  
  
@@ -511,7 +518,7 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
-@@ -339,13 +277,39 @@
+@@ -339,13 +275,39 @@
  
  
  async def main() -> None:
@@ -553,7 +560,7 @@
      client = AsyncOpenAI()
      tts = create_tts_provider(
          TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -361,7 +325,7 @@
+@@ -361,7 +323,7 @@
          )
  
      await transport.connect()
@@ -562,7 +569,7 @@
  
      async def collect_turns():
          stt = None
-@@ -374,7 +338,7 @@
+@@ -374,7 +336,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
@@ -571,7 +578,7 @@
                  stt = None
  
      try:
-@@ -385,7 +349,7 @@
+@@ -385,7 +347,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
@@ -642,7 +649,9 @@ stateDiagram-v2
 ```
 
 Every chunk during a speech or pending segment goes into
-`self._turn_audio`. On `VADStopSpeaking`, we call
+`self._turn_audio` and stays on the open STT stream as a `frame`.
+The pending state delays only the turn boundary; it does not pause
+transcription. On `VADStopSpeaking`, we call
 `smart_turn.detect(turn_audio)` — inference runs via
 `asyncio.loop.run_in_executor` inside `SmartTurnONNX.detect`, so
 ONNX doesn't block the event loop. Typical cost: 30-50 ms per

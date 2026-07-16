@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "04-vad-preroll"
+SMART_CHAPTER = ROOT / "docs" / "teaching" / "08-smart-turn"
 TEACHING_DIR = ROOT / "docs" / "teaching"
 
 
 def _load_chapter():
     spec = importlib.util.spec_from_file_location("teaching_04_vad_preroll", CHAPTER / "main.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_smart_chapter(monkeypatch):
+    openai = types.ModuleType("openai")
+    openai.AsyncOpenAI = object
+    monkeypatch.setitem(sys.modules, "openai", openai)
+    spec = importlib.util.spec_from_file_location(
+        "teaching_08_smart_turn", SMART_CHAPTER / "main.py"
+    )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -23,6 +39,15 @@ class FakeVAD:
     async def process(self, _chunk):
         for event in next(self._events):
             yield event
+
+
+class FakeSmartTurn:
+    def __init__(self, probabilities: list[float]) -> None:
+        self._probabilities = iter(probabilities)
+
+    async def detect(self, _chunks):
+        probability = next(self._probabilities)
+        return types.SimpleNamespace(probability=probability, prediction=int(probability >= 0.5))
 
 
 async def _audio(*chunks):
@@ -68,6 +93,40 @@ async def test_preroll_frames_follow_single_start_event_in_order() -> None:
         ("speech_started", None),
         ("frame", "cached"),
         ("frame", "trigger"),
+        ("speech_ended", None),
+    ]
+
+
+async def test_smart_turn_pending_frames_stay_on_open_stt_stream(monkeypatch) -> None:
+    chapter = _load_smart_chapter(monkeypatch)
+    vad = FakeVAD(
+        [
+            [chapter.VADStartSpeaking()],
+            [chapter.VADStopSpeaking()],
+            [],
+            [chapter.VADStartSpeaking()],
+            [chapter.VADStopSpeaking()],
+        ]
+    )
+    detector = chapter.MiniTurnDetector(
+        vad,
+        smart_turn=FakeSmartTurn([0.1, 0.9]),
+        preroll_frames=0,
+    )
+
+    events = [
+        event
+        async for event in detector.frames(
+            _audio("first", "pause", "resuming", "continued", "last")
+        )
+    ]
+
+    assert events == [
+        ("speech_started", None),
+        ("frame", "first"),
+        ("frame", "pause"),
+        ("frame", "resuming"),
+        ("frame", "continued"),
         ("speech_ended", None),
     ]
 

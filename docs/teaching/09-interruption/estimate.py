@@ -181,6 +181,22 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
         )
 
 
+async def _reap_completed_bot_task(bot_task, active_cancel, active_ledger, journal):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel, active_ledger
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=SESSION_ID,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None, None
+
+
 async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     """Maintain a multi-turn history and rewrite it on cancel."""
     history: list[dict] = [
@@ -200,51 +216,58 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     while True:
         tag, chunk = await mic_queue.get()
 
+        # Clean completions update history inside ``_bot``. Reap both
+        # successful and failed tasks before handling this microphone event.
+        bot_task, active_cancel, active_ledger = await _reap_completed_bot_task(
+            bot_task, active_cancel, active_ledger, journal
+        )
+
         # Barge-in during bot speech → cancel AND rewrite history.
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
+            if tag != "speech_started" or active_cancel is None or active_ledger is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=SESSION_ID,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            await transport.clear_audio()
+
+            # Let the bot task unwind so the ledger is final. A
+            # transient agent/TTS error here shouldn't take the
+            # whole session down mid-barge-in; log it and move on.
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=SESSION_ID,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                await transport.clear_audio()
 
-                # Let the bot task unwind so the ledger is final. A
-                # transient agent/TTS error here shouldn't take the
-                # whole session down mid-barge-in; log it and move on.
-                try:
-                    await bot_task
-                except Exception as exc:
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="bot_task.error",
-                        session_id=SESSION_ID,
-                        data={"stage": "coordinator", "error": repr(exc)},
-                    )
-
-                heard = active_ledger.heard_text()
-                full = " ".join(active_ledger.sentences_sent)
-                journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="interruption.estimate",
-                    session_id=SESSION_ID,
-                    data={
-                        "stage": "interruption",
-                        "full_text": full,
-                        "heard_text": heard,
-                        "bytes_heard": active_ledger.bytes_sent,
-                    },
-                )
-                # Rewrite history: the bot said *only* what the user heard.
-                history.append({"role": "assistant", "content": heard})
-                print(f"  bot (cut): {heard!r}")
-                active_cancel = None
-                active_ledger = None
-                bot_task = None
-            continue
+            heard = active_ledger.heard_text()
+            full = " ".join(active_ledger.sentences_sent)
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.estimate",
+                session_id=SESSION_ID,
+                data={
+                    "stage": "interruption",
+                    "full_text": full,
+                    "heard_text": heard,
+                    "bytes_heard": active_ledger.bytes_sent,
+                },
+            )
+            # Rewrite history: the bot said *only* what the user heard.
+            history.append({"role": "assistant", "content": heard})
+            print(f"  bot (cut): {heard!r}")
+            active_cancel = None
+            active_ledger = None
+            bot_task = None
+            # Fall through so this start marker opens the barge-in STT stream.
 
         if tag == "speech_started":
             if stt is None:
