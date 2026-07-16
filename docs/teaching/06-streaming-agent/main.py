@@ -160,7 +160,8 @@ async def drain_sentences_to_speaker(
         synth_start = time.monotonic()
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                if first_audio_t is None:
+                accepted = await transport.send_audio(event.audio)
+                if accepted and first_audio_t is None:
                     first_audio_t = time.monotonic()
                     journal.append(
                         kind=JournalRecordKind.EVENT,
@@ -168,7 +169,6 @@ async def drain_sentences_to_speaker(
                         session_id=SESSION_ID,
                         data={"stage": "tts", "t_ms": first_audio_t * 1000},
                     )
-                await transport.send_audio(event.audio)
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",

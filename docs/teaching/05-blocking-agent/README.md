@@ -446,14 +446,18 @@ from pathlib import Path
 from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:6.1f} ms"
+
 for r in bundle.records():
     if r["name"] == "turn.gap":
         d = r["data"]
-        print(f"  STT final → agent dispatch  {d['stt_to_agent_ms']:6.1f} ms")
-        print(f"  agent (LLM call)            {d['agent_ms']:6.1f} ms")
-        print(f"  TTS → first audio           {d['tts_ms']:6.1f} ms")
-        print(f"  TOTAL → first audio         {d['total_gap_ms']:6.1f} ms")
-        print(f"  full TTS synth + enqueue    {d['tts_enqueue_ms']:6.1f} ms")
+        print(f"  STT final → agent dispatch  {format_ms(d['stt_to_agent_ms'])}")
+        print(f"  agent (LLM call)            {format_ms(d['agent_ms'])}")
+        print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
+        print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
+        print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
 ```
 
 You will see something like:
