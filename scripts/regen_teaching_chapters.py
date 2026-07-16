@@ -181,9 +181,12 @@ sync with the chapter's source code and ladder order:
       >
       > 1. Close the chapter narrative and every hint disclosure.
       > 2. Answer every numbered question below from memory, aloud or in writing.
-      > 3. Support each answer with evidence from your attempt record.
+      > 3. Support each answer with at least one observed field, measurement, or behavior
+      >    from your attempt record.
       >
-      > If an answer needs notes, repair that concept and retry it closed-book.
+      > If an answer needs notes, reopen only the section that owns the weak concept,
+      > correct your explanation, close it, and retry. Continue only when you can answer
+      > without looking.
       <!-- END auto:self-check-protocol -->
 
   The hand-authored chapter outcomes stay below this generated protocol; the

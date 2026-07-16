@@ -233,8 +233,9 @@ The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-1. Without running code, how would the same utterance change at 4 kHz, 8 kHz,
-   16 kHz, and 44.1 kHz, and which observed result supports each prediction?
+1. For the same utterance, how do waveform representation, available bandwidth,
+   and transcription behavior differ at 4 kHz, 8 kHz, 16 kHz, and 44.1 kHz,
+   and what evidence from both the 4 kHz and 44.1 kHz runs anchors your comparison?
 2. When you quote a sample rate, which boundary—wire, provider input, config
    default, pipeline, or media—do you mean, and where is conversion required?
 3. Which observed fields distinguish a raw provider config default from the
