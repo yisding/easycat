@@ -9,7 +9,8 @@ record names, measurements, and explanations in your copy—not credentials, raw
 or sensitive transcript text.
 
 A chapter is complete only when all eight boxes on its card are checked. Preserve wrong
-predictions: they are evidence to explain, not history to rewrite.
+predictions: they are evidence to explain, not history to rewrite. Complete both
+integration checks at each phase boundary before starting the next chapter card.
 
 ## Chapter 0 — Hello, Audio
 
@@ -186,6 +187,16 @@ predictions: they are evidence to explain, not history to rewrite.
   with evidence from an attempt record.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-evidence` and explain any mismatch.
 
+## Build phase review
+
+Complete this closed-book integration gate before entering the next phase.
+
+- [ ] **Integrate:** without notes, draw one turn from raw input format through STT partial/final,
+  endpointing, agent/TTS, transport acceptance, and barge-in cancellation; mark which observations
+  may revise and which actions commit.
+- [ ] **Ground it:** cite attempt evidence for format, partial/final policy, first audio, and
+  interruption ordering; state one caller-heard claim that transport acceptance still cannot prove.
+
 ## Chapter 10 — Cleaning the Signal
 
 [Narrative](./10-cleaning-signal/) · [Exercises](./10-cleaning-signal/EXERCISES.md)
@@ -238,6 +249,15 @@ predictions: they are evidence to explain, not history to rewrite.
   self-check](./12-evals-and-latency/EXERCISES.md#self-check) with evidence from an attempt record.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-evidence` and explain any mismatch.
 
+## Operate phase review
+
+Complete this closed-book integration gate before entering the next phase.
+
+- [ ] **Integrate:** given an unfamiliar bad call, write the diagnostic order for NR/AEC, journal
+  queries, and latency/eval coverage before proposing a fix.
+- [ ] **Ground it:** cite one bundle or probe result to name the bottleneck, strongest supported
+  cause, missing evidence, and metric that would catch a regression.
+
 ## Chapter 13 — Swap Providers AND Transports
 
 [Narrative](./13-swap-providers-and-transports/) · [Exercises](./13-swap-providers-and-transports/EXERCISES.md)
@@ -276,6 +296,15 @@ predictions: they are evidence to explain, not history to rewrite.
   record.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4 --show-evidence` and explain any mismatch.
 
+## Generalise phase review
+
+Complete this closed-book integration gate before entering the next phase.
+
+- [ ] **Integrate:** design one provider × transport × agent comparison that changes one axis at a
+  time while preserving the session and bridge contracts.
+- [ ] **Ground it:** name the config or bridge boundary for each axis, one invariant event/state
+  shape, and the measurement that decides the tradeoff.
+
 ## Chapter 15 — Operate in production
 
 [Narrative](./15-operate-in-production/) · [Exercises](./15-operate-in-production/EXERCISES.md)
@@ -295,8 +324,9 @@ predictions: they are evidence to explain, not history to rewrite.
   record.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence` and explain any mismatch.
 
-## Finish the ladder
+## Ship phase review and finish the ladder
 
 - [ ] **Replay everything:** run `uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence`.
 - [ ] **Teach it back:** without notes, explain the path from raw PCM through a multi-session
-  production service and cite the evidence that changed your model most.
+  production service, including ownership, start rollback, shutdown, and postmortem evidence; cite
+  the result that changed your model most.

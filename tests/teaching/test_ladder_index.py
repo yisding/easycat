@@ -279,6 +279,10 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "Narrative, exercises, self-check" in normalized_index
     assert "[progress worksheet](./PROGRESS.md)" in index
     assert "end-to-end completion record" in normalized_index
+    assert "closed-book integration reviews after the Build, Operate, and Generalise" in (
+        normalized_index
+    )
+    assert "Complete each phase gate before starting the next group" in normalized_index
     assert "one or more applied tasks in the dedicated `EXERCISES.md`" in normalized_index
     assert "Generated source diffs can make a README long" in normalized_index
     assert "Generated handoffs connect those steps" in normalized_index

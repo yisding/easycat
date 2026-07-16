@@ -191,6 +191,31 @@ PROGRESS_WORKSHEET = TEACHING / "PROGRESS.md"
 
 CHAPTER_RE = re.compile(r"^\d{2}-")
 
+PHASE_REVIEWS = {
+    9: (
+        "Build phase review",
+        "without notes, draw one turn from raw input format through STT partial/final, "
+        "endpointing, agent/TTS, transport acceptance, and barge-in cancellation; mark which "
+        "observations may revise and which actions commit",
+        "cite attempt evidence for format, partial/final policy, first audio, and interruption "
+        "ordering; state one caller-heard claim that transport acceptance still cannot prove",
+    ),
+    12: (
+        "Operate phase review",
+        "given an unfamiliar bad call, write the diagnostic order for NR/AEC, journal queries, "
+        "and latency/eval coverage before proposing a fix",
+        "cite one bundle or probe result to name the bottleneck, strongest supported cause, "
+        "missing evidence, and metric that would catch a regression",
+    ),
+    14: (
+        "Generalise phase review",
+        "design one provider × transport × agent comparison that changes one axis at a time "
+        "while preserving the session and bridge contracts",
+        "name the config or bridge boundary for each axis, one invariant event/state shape, "
+        "and the measurement that decides the tradeoff",
+    ),
+}
+
 SNIPPET_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:snippet (?P<attrs>[^>]*?) -->)"
     r"(?P<body>.*?)"
@@ -559,7 +584,8 @@ def render_progress_worksheet() -> str:
         "or sensitive transcript text.",
         "",
         "A chapter is complete only when all eight boxes on its card are checked. Preserve wrong",
-        "predictions: they are evidence to explain, not history to rewrite.",
+        "predictions: they are evidence to explain, not history to rewrite. Complete both",
+        "integration checks at each phase boundary before starting the next chapter card.",
     ]
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
@@ -605,10 +631,23 @@ def render_progress_worksheet() -> str:
                 ),
             ]
         )
+        if phase_review := PHASE_REVIEWS.get(chapter_number):
+            title, integrate, ground = phase_review
+            sections.extend(
+                [
+                    "",
+                    f"## {title}",
+                    "",
+                    "Complete this closed-book integration gate before entering the next phase.",
+                    "",
+                    _progress_item("Integrate", f"{integrate}."),
+                    _progress_item("Ground it", f"{ground}."),
+                ]
+            )
     sections.extend(
         [
             "",
-            "## Finish the ladder",
+            "## Ship phase review and finish the ladder",
             "",
             _progress_command_item(
                 "Replay everything",
@@ -618,7 +657,8 @@ def render_progress_worksheet() -> str:
             _progress_item(
                 "Teach it back",
                 "without notes, explain the path from raw PCM through a multi-session production "
-                "service and cite the evidence that changed your model most.",
+                "service, including ownership, start rollback, shutdown, and postmortem evidence; "
+                "cite the result that changed your model most.",
             ),
             "",
         ]
