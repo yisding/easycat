@@ -62,6 +62,7 @@ def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys, monkeyp
     evals.main()
 
     output = capsys.readouterr().out
+    assert "bundles=6  labels=6  latency=6  WER=6  barge-in=6" in output
     assert "P50                                        810 ms" in output
     assert "P95                                       2420 ms" in output
     assert "P95 / P50 ratio                           2.99" in output
