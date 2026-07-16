@@ -24,6 +24,11 @@ CANCEL_SCRIPTS = [
 ALL_SCRIPTS = [CHAPTER_9 / "ignore.py", *CANCEL_SCRIPTS]
 
 
+@pytest.fixture(autouse=True)
+def _stub_optional_openai(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=object))
+
+
 def load_script(path: Path):
     module_name = f"teaching_lifecycle_{path.parent.name}_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
