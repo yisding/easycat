@@ -132,10 +132,10 @@ class TestLateVoicemailDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
-            assert sm._late_voicemail_task is not None
+            assert sm._timers.active("late_voicemail_window")
             await bus.emit(CallEnded(call_sid="CA1"))
             assert sm.state == OutboundCallState.ENDED
-            assert sm._late_voicemail_task is None
+            assert not sm._timers.active("late_voicemail_window")
         finally:
             sm.stop()
 
@@ -390,10 +390,10 @@ class TestVoicemailPickupDetection:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="machine"))
             assert sm.state == OutboundCallState.VOICEMAIL
-            assert sm._voicemail_pickup_task is not None
+            assert sm._timers.active("voicemail_pickup_window")
             await bus.emit(CallEnded(call_sid="CA1"))
             assert sm.state == OutboundCallState.ENDED
-            assert sm._voicemail_pickup_task is None
+            assert not sm._timers.active("voicemail_pickup_window")
         finally:
             sm.stop()
 

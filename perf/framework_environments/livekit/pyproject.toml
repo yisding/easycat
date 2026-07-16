@@ -1,0 +1,5 @@
+[project]
+name = "easycat-livekit-latency-benchmark"
+version = "0.0.0"
+requires-python = ">=3.11,<3.15"
+dependencies = ["livekit-agents==1.6.4"]

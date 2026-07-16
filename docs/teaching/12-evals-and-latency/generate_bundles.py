@@ -1,18 +1,23 @@
-"""Build five eval bundles for chapter 12.
+"""Build six eval bundles for chapter 12.
 
 These fixtures mirror the event shape the chapter-6 streaming agent
 writes (``stt.final``, ``agent.first_token``, ``stage.tts.execute``,
 ``turn.gap``, and, where relevant, ``interruption.start``). The
 numbers are invented but representative.
 
-Run once; the checked-in bundles and ground_truth.csv are the
-artifacts the reader actually uses.
+The checked-in bundles and ``ground_truth.csv`` are the artifacts the reader
+actually uses. Generate into an ignored output root when experimenting:
 
-    uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
+    uv run python docs/teaching/12-evals-and-latency/generate_bundles.py \
+        --output-root .easycat/teaching/12-evals-and-latency
+
+Maintainers intentionally refreshing the checked-in fixtures can omit
+``--output-root``.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import types
 from pathlib import Path
@@ -21,21 +26,17 @@ from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
 HERE = Path(__file__).parent
-BUNDLES = HERE / "bundles"
-GOLDEN = BUNDLES / "golden"
-GROUND_TRUTH = HERE / "ground_truth.csv"
-GOLDEN_GROUND_TRUTH = GOLDEN / "ground_truth.csv"
 
 
 def _emit(j, name, sid, data):
     j.append(kind=JournalRecordKind.EVENT, name=name, session_id=sid, data=data)
 
 
-def _save(j, sid: str, filename: str, into: Path = BUNDLES) -> None:
+def _save(j, sid: str, filename: str, into: Path) -> None:
     into.mkdir(parents=True, exist_ok=True)
     path = into / filename
     export_debug_bundle(types.SimpleNamespace(journal=j), path, overwrite=True)
-    print(f"  wrote {path.relative_to(Path.cwd())}")
+    print(f"  wrote {path}")
 
 
 def _turn(
@@ -106,7 +107,9 @@ def _turn(
     )
 
 
-def build_all() -> list[dict[str, str]]:
+def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
+    bundles = output_root / "bundles"
+    ground_truth = output_root / "ground_truth.csv"
     specs: list[tuple[str, dict]] = [
         # Fast clean turn.
         (
@@ -199,7 +202,7 @@ def build_all() -> list[dict[str, str]]:
         sid = filename.removesuffix(".bundle")
         j = InMemoryRingBuffer(capacity=1_000)
         _turn(j, sid, **kwargs)
-        _save(j, sid, filename)
+        _save(j, sid, filename, into=bundles)
         rows.append(
             {
                 "bundle": filename,
@@ -209,7 +212,8 @@ def build_all() -> list[dict[str, str]]:
             }
         )
 
-    with GROUND_TRUTH.open("w", newline="") as f:
+    output_root.mkdir(parents=True, exist_ok=True)
+    with ground_truth.open("w", newline="") as f:
         w = csv.DictWriter(
             f,
             fieldnames=[
@@ -221,10 +225,11 @@ def build_all() -> list[dict[str, str]]:
         )
         w.writeheader()
         w.writerows(rows)
-    print(f"  wrote {GROUND_TRUTH.relative_to(Path.cwd())}")
+    print(f"  wrote {ground_truth}")
+    return rows
 
 
-def build_golden() -> None:
+def build_golden(output_root: Path = HERE) -> None:
     """Build the golden WER fixtures.
 
     Each bundle has a hand-tuned mismatch between the STT hypothesis
@@ -246,6 +251,8 @@ def build_golden() -> None:
     in ``evals.py`` measures). Punctuation matters — neither side
     includes any.
     """
+    golden = output_root / "bundles" / "golden"
+    golden_ground_truth = golden / "ground_truth.csv"
     cases = [
         {
             "filename": "golden_01_wer_5pct.bundle",
@@ -295,7 +302,7 @@ def build_golden() -> None:
             stt_text=case["hypothesis"],
             total_gap_ms=1000.0,
         )
-        _save(j, sid, case["filename"], into=GOLDEN)
+        _save(j, sid, case["filename"], into=golden)
         rows.append(
             {
                 "bundle": case["filename"],
@@ -308,8 +315,8 @@ def build_golden() -> None:
         )
         t += 100_000
 
-    GOLDEN.mkdir(parents=True, exist_ok=True)
-    with GOLDEN_GROUND_TRUTH.open("w", newline="") as f:
+    golden.mkdir(parents=True, exist_ok=True)
+    with golden_ground_truth.open("w", newline="") as f:
         w = csv.DictWriter(
             f,
             fieldnames=[
@@ -323,18 +330,29 @@ def build_golden() -> None:
         )
         w.writeheader()
         w.writerows(rows)
-    print(f"  wrote {GOLDEN_GROUND_TRUTH.relative_to(Path.cwd())}")
+    print(f"  wrote {golden_ground_truth}")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=HERE,
+        help="Chapter-shaped output root containing bundles/ and ground_truth.csv.",
+    )
+    args = parser.parse_args(argv)
+    golden = args.output_root / "bundles" / "golden"
+    golden_ground_truth = golden / "ground_truth.csv"
+
     print("Building evaluation bundles...")
-    build_all()
+    build_all(args.output_root)
     print("\nBuilding golden WER bundles (reproducible non-zero WER)...")
-    build_golden()
+    build_golden(args.output_root)
     print(
         "\nRun evals against the golden set with:\n"
-        f"  uv run python {(HERE / 'evals.py').relative_to(Path.cwd())} "
-        f"{GOLDEN.relative_to(Path.cwd())} {GOLDEN_GROUND_TRUTH.relative_to(Path.cwd())}\n"
+        f"  uv run python {HERE / 'evals.py'} "
+        f"{golden} {golden_ground_truth}\n"
         "Expected WERs: 5.0%, 10.0%, 25.0%, aggregate 10.5%."
     )
 
