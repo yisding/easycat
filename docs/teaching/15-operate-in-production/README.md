@@ -69,9 +69,9 @@
 
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,27 +18,19 @@
- import asyncio
+@@ -33,27 +19,19 @@
  import os
+ import shlex
  import time
 -from collections.abc import AsyncIterator
  from pathlib import Path
@@ -99,7 +99,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -72,114 +50,84 @@
+@@ -73,114 +51,84 @@
      )
 
 

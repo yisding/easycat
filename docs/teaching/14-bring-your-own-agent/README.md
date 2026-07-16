@@ -98,13 +98,14 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,21 +29,30 @@
+@@ -40,22 +29,31 @@
 
  from __future__ import annotations
 
 -import argparse
  import asyncio
  import os
+ import shlex
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
@@ -130,7 +131,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,85 +72,105 @@
+@@ -75,85 +73,105 @@
      )
 
 
@@ -292,7 +293,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -165,4 +183,7 @@
+@@ -166,4 +184,7 @@
 
 
  if __name__ == "__main__":

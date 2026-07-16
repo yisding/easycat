@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -65,10 +66,10 @@ def _display_path(path: Path) -> Path:
 
 def measurement_commands(path: Path) -> tuple[str, str]:
     """Commands that read this production-shaped bundle directly."""
-    display_path = _display_path(path)
+    base = ["uv", "run", "easycat", "latency", str(_display_path(path))]
     return (
-        f"uv run easycat latency {display_path}",
-        f"uv run easycat latency {display_path} --json",
+        shlex.join(base),
+        shlex.join([*base, "--json"]),
     )
 
 
