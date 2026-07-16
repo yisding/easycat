@@ -94,7 +94,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -73,35 +79,109 @@
+@@ -74,35 +80,109 @@
                  self._preroll.append(chunk)
  
  
@@ -227,7 +227,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -112,55 +192,26 @@
+@@ -113,55 +193,26 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -297,7 +297,7 @@
  
  
  async def main() -> None:
-@@ -172,6 +223,9 @@
+@@ -173,6 +224,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
@@ -307,7 +307,7 @@
  
      def stt_factory():
          return create_stt_provider(
-@@ -183,10 +237,9 @@
+@@ -184,10 +238,9 @@
          )
  
      await transport.connect()

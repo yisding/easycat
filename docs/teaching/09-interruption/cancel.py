@@ -73,9 +73,10 @@ class MiniTurnDetector:
             vad_events = [ev async for ev in self._vad.process(chunk)]
             for ev in vad_events:
                 if isinstance(ev, VADStartSpeaking):
-                    while self._preroll:
-                        yield "speech_started", self._preroll.popleft()
                     self._speaking = True
+                    yield "speech_started", None
+                    while self._preroll:
+                        yield "frame", self._preroll.popleft()
                 elif isinstance(ev, VADStopSpeaking):
                     self._speaking = False
                     yield "speech_ended", None
@@ -152,6 +153,22 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel: CancelToken, 
         )
 
 
+async def _reap_completed_bot_task(bot_task, active_cancel, journal):
+    """Observe a finished bot task and clear its per-turn state."""
+    if bot_task is None or not bot_task.done():
+        return bot_task, active_cancel
+    try:
+        await bot_task
+    except Exception as exc:
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="bot_task.error",
+            session_id=SESSION_ID,
+            data={"stage": "coordinator", "error": repr(exc)},
+        )
+    return None, None
+
+
 async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     stt = None
     bot_task: asyncio.Task | None = None
@@ -160,26 +177,42 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     while True:
         tag, chunk = await mic_queue.get()
 
+        # A bot may finish between microphone events. Reap it before
+        # checking whether this event is an active barge-in.
+        bot_task, active_cancel = await _reap_completed_bot_task(bot_task, active_cancel, journal)
+
         # Barge-in detection: user speech while bot talks → cancel.
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None:
+            if tag != "speech_started" or active_cancel is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=SESSION_ID,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            # Flush audio already in the speaker queue so the bot
+            # shuts up *now*, not after the current chunk finishes.
+            await transport.clear_audio()
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=SESSION_ID,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                # Flush audio already in the speaker queue so the bot
-                # shuts up *now*, not after the current chunk finishes.
-                await transport.clear_audio()
-            continue
+            bot_task = None
+            active_cancel = None
+            # Fall through: this same start marker must open STT for
+            # the barge-in whose preroll frames are already queued.
 
         if tag == "speech_started":
             if stt is None:
                 stt = stt_factory()
                 await stt.start_stream()
-            await stt.send_audio(chunk)
         elif tag == "frame" and stt is not None:
             await stt.send_audio(chunk)
         elif tag == "speech_ended" and stt is not None:

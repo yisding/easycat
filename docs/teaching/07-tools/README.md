@@ -133,7 +133,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -79,94 +127,152 @@
+@@ -80,94 +128,152 @@
                  self._preroll.append(chunk)
  
  
@@ -355,7 +355,7 @@
                  await transport.send_audio(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
-@@ -174,6 +280,7 @@
+@@ -175,6 +281,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -363,7 +363,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -181,7 +288,6 @@
+@@ -182,7 +289,6 @@
  
  
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -371,7 +371,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -192,26 +298,20 @@
+@@ -193,26 +299,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -401,7 +401,7 @@
  
  
  async def main() -> None:
-@@ -237,7 +337,7 @@
+@@ -238,7 +338,7 @@
          )
  
      await transport.connect()

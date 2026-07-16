@@ -118,10 +118,11 @@ class MiniTurnDetector:
                         self._state = "speaking"
                         self._pending_since = None
                     else:
+                        yield "speech_started", None
                         while self._preroll:
                             buf = self._preroll.popleft()
                             self._turn_audio.append(buf)
-                            yield "speech_started", buf
+                            yield "frame", buf
                         self._state = "speaking"
                 elif isinstance(ev, VADStopSpeaking) and self._state == "speaking":
                     confirmed = await self._classify()
@@ -145,11 +146,9 @@ class MiniTurnDetector:
                 self._turn_audio = []
                 yield "speech_ended", None
 
-            if self._state == "speaking":
+            if self._state in ("speaking", "pending"):
                 self._turn_audio.append(chunk)
                 yield "frame", chunk
-            elif self._state == "pending":
-                self._turn_audio.append(chunk)
             else:
                 self._preroll.append(chunk)
 
@@ -312,7 +311,6 @@ async def main() -> None:
                 if stt is None:
                     stt = stt_factory()
                     await stt.start_stream()
-                await stt.send_audio(chunk)
             elif tag == "frame" and stt is not None:
                 await stt.send_audio(chunk)
             elif tag == "speech_ended" and stt is not None:
