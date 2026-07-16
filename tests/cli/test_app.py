@@ -402,6 +402,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
+    assert "docs/teaching/PROGRESS.md" in paths
     assert "docs/teaching/00-hello-audio/" in paths
     assert "examples/README.md" in paths
     assert "CLAUDE.md" in paths
@@ -434,6 +435,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run --env-file .env python examples/openai_agents_voice.py",
         "uv run easycat console",
         "uv run python examples/journal_demo.py",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4",
         "uv run easycat init --list-templates",
         "uv run easycat init my-agent",
         "uv run easycat docs --audience maintainers",
@@ -467,6 +469,10 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert commands["docs/teaching/"][:2] == [
         "uv sync --extra local --group dev",
         "uv sync --extra quickstart --group dev",
+    ]
+    assert commands["docs/teaching/PROGRESS.md"] == [
+        "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
     ]
     assert commands["docs/teaching/00-hello-audio/"] == [
         "uv sync --extra local --group dev",
@@ -586,6 +592,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "https://github.com/yisding/easycat/blob/main/README.md#install"
     )
     assert urls["docs/teaching/"] == "https://github.com/yisding/easycat/tree/main/docs/teaching"
+    assert urls["docs/teaching/PROGRESS.md"] == (
+        "https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md"
+    )
     assert urls["docs/teaching/00-hello-audio/"] == (
         "https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio"
     )

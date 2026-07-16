@@ -1,8 +1,57 @@
 # Chapter 12 — Evals + the Latency Budget
 
+<!-- BEGIN auto:navigation -->
+**Progress: 13 of 16** · [← Chapter 11 — The Journal as Mental Model](../11-journal/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
 > The difference between *building* a voice bot and *operating* one
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.
+
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 10 — Cleaning the Signal**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> What changes with aligned AEC reference audio, and what should fail when reference audio is
+> missing or short?
+>
+> After recording your answer, explain one way `NR/AEC replay metrics` changes how you reason
+> about `small-sample P95 sensitivity`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `small-sample P95 sensitivity` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** Which bundle controls P95, and how far should P95 move when that bundle is
+> removed?
+>
+> ```bash
+> uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+> ```
+>
+> **Evidence to find:** removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms.
+>
+> **Explain the result:** Explain why one slow bundle controls a small-sample percentile and what
+> not to generalize.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 ## Prerequisites
 
@@ -12,12 +61,17 @@
   wants `OPENAI_API_KEY`; before running it, run
   `uv run easycat doctor` from the repo root. If the key lives in `.env`, run
   `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- The optional LLM judge makes a live provider call that may incur charges.
+  Review your provider billing and usage limits before running it.
+- The optional LLM judge sends eval content to the configured provider. Use
+  non-sensitive test data and review provider data-handling policies first.
 - If the key lives in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
 
 > **Minimum to skip the ladder:** chapter 11 (journal queries).
-> The metrics work on any bundle that follows the teaching shape
-> — you don't have to have built the pipeline.
+> The aggregate evaluator works on single-turn bundles that follow the
+> teaching shape and have matching CSV labels—you do not have to have
+> built the pipeline.
 
 ## Diff from chapter 11
 
@@ -25,18 +79,26 @@
   `evals.py` (aggregate P50/P95, WER, barge-in F1),
   `llm_judge.py` (LLM-as-judge triage); `generate_bundles.py`
   builds the eval set; `ground_truth.csv` ties each bundle to its
-  reference transcript and labels; `bundles/golden/` (added by
+  reference transcript and labels; `coverage_probe.py` makes
+  incomplete-manifest failures visible; `bundles/golden/` (added by
   this chapter's enhancement) — three bundles with controlled,
   reproducible WER values (5%, ~10%, ~25%) so the WER pipeline
   can be exercised without recording your own speech.
 - **Removed:** still no live pipeline. This chapter is pure
   measurement.
 
-## The five pre-recorded bundles
+## The six pre-recorded bundles
 
 ```bash
-uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
+uv run python docs/teaching/12-evals-and-latency/generate_bundles.py \
+    --output-root .easycat/teaching/12-evals-and-latency
 ```
+
+The fixtures used below are already checked in. The command above is a
+safe way to experiment: it writes a chapter-shaped copy under the
+gitignored `.easycat/` directory instead of rewriting tracked bundles.
+Maintainers intentionally refreshing the checked-in fixtures omit
+`--output-root` and review the resulting bundle and CSV diffs.
 
 - `turn_01_fast.bundle` — clean, fast turn.
 - `turn_02_slow_agent.bundle` — agent is slow; P95 spike.
@@ -57,9 +119,42 @@ and whether the interruption (if any) was real.
 > feed them bundles you generated or trust. See ch 11's README for
 > the full note.
 
+## Coverage before scores
+
+A point estimate is only honest when you know which examples were
+eligible to contribute. The chapter evaluator therefore uses a strict
+fixture contract:
+
+- every `*.bundle` has exactly one CSV row, and every CSV row names an
+  existing bundle;
+- `had_real_barge_in` is exactly `0` or `1`—a typo such as `yes` is not
+  silently interpreted as negative;
+- every bundle contains exactly one `stt.final` and one `turn.gap`;
+- missing first-audio turns fail the run instead of disappearing from
+  the latency percentile.
+
+One fixture represents one labeled turn. If you start from a multi-turn
+production bundle, split its turns into separately named fixtures and
+label each one; taking the last transcript and last gap would mix the
+wrong evidence.
+
+Run the provider-free failure probe:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/coverage_probe.py
+```
+
+A valid run of `evals.py` begins with matching coverage counts before it
+prints any metric:
+
+```text
+=== Coverage ===
+  bundles=6  labels=6  latency=6  WER=6  barge-in=6
+```
+
 ## The golden WER fixtures (`bundles/golden/`)
 
-The five fixtures above are useful for **latency** and **barge-in
+The six fixtures above are useful for **latency** and **barge-in
 F1** but they all happen to have STT hypotheses identical to their
 reference transcripts — so the WER pipeline reports 0.0% across
 the board. That tells you the pipeline runs without errors; it
@@ -106,9 +201,9 @@ Expected output:
 
 ```
 === turn_02_slow_agent.bundle ===
-  agent first token                2100 ms     budget   600 ms    OVER
-  tts synth (2 sent.)               610 ms     budget   400 ms    OVER
-  total (stt final → done)         2900 ms     budget  1000 ms    OVER
+  stt final → first token          2100 ms     budget   600 ms    OVER
+  first token → first audio         320 ms     budget   400 ms    OK
+  stt final → first audio          2420 ms     budget  1000 ms    OVER
 ```
 
 The budget isn't a timeout. It is a **drift detector**. When a
@@ -124,23 +219,28 @@ teams):
 | VAD silence wait | 200-500 ms |
 | STT final commit | 100-300 ms |
 | Agent → first token | 300-1000 ms |
-| TTS → first audio | 100-400 ms |
-| **Total (stt-final → bot-done)** | **<1000 ms** |
+| Agent first token → first audio | 100-400 ms |
+| **Total (STT final → first audio)** | **<1000 ms** |
 
 The budgets here are defensible starting points; real numbers are
 per-deployment.
 
-The check itself is straightforward — pull the spans out of the
-journal, compare each against its budget, label `OK` or `OVER`:
+The check follows one responsiveness milestone: the first audio
+chunk the transport accepted. Summing every `stage.tts.execute`
+span measures response-length-dependent synthesis throughput, not
+how long the user waited to hear the bot start. Instead, pull
+`stt.final`, `agent.first_token`, `tts.first_audio`, and `turn.gap`
+from the journal, compare the critical-path spans against their
+budgets, and label each `OK` or `OVER`:
 
-<!-- BEGIN auto:snippet src=latency_budget.py symbol=analyze -->
+<!-- BEGIN auto:snippet src=latency_budget.py symbol=measure -->
 ```python
-def analyze(path: Path) -> None:
+def measure(path: Path) -> dict[str, float | None]:
+    """Return the three first-audio critical-path measurements."""
     bundle = load_bundle(path)
     stt_final_t = None
     first_token_t = None
-    tts_total = 0.0
-    tts_count = 0
+    first_audio_t = None
     total_gap = None
 
     for r in bundle.records():
@@ -148,18 +248,26 @@ def analyze(path: Path) -> None:
             stt_final_t = r["data"].get("t_ms")
         elif r["name"] == "agent.first_token" and first_token_t is None:
             first_token_t = r["data"].get("t_ms")
-        elif r["name"] == "stage.tts.execute":
-            tts_total += r["data"].get("elapsed_ms", 0.0)
-            tts_count += 1
+        elif r["name"] == "tts.first_audio" and first_audio_t is None:
+            first_audio_t = r["data"].get("t_ms")
         elif r["name"] == "turn.gap" and total_gap is None:
             total_gap = r["data"].get("total_gap_ms")
 
-    agent_dispatch_ms = (first_token_t - stt_final_t) if (stt_final_t and first_token_t) else None
-
-    print(f"=== {path.name} ===")
-    _row("agent first token", agent_dispatch_ms, BUDGET_MS["agent_first_token"])
-    _row(f"tts synth ({tts_count} sent.)", tts_total, BUDGET_MS["tts_total"])
-    _row("total (stt final → done)", total_gap, BUDGET_MS["total"])
+    agent_dispatch_ms = (
+        first_token_t - stt_final_t
+        if stt_final_t is not None and first_token_t is not None
+        else None
+    )
+    first_token_to_audio_ms = (
+        first_audio_t - first_token_t
+        if first_audio_t is not None and first_token_t is not None
+        else None
+    )
+    return {
+        "stt_final_to_first_token_ms": agent_dispatch_ms,
+        "first_token_to_audio_ms": first_token_to_audio_ms,
+        "first_audio_gap_ms": total_gap,
+    }
 ```
 <!-- END auto:snippet -->
 
@@ -175,26 +283,58 @@ Three blocks of output:
 
 ### Latency percentiles
 
-Sort every bundle's `turn.gap`, then report P50 and P95. **P95 is
-the number you report.** Voice users remember the bad turns, not
-the good ones; a single stumble poisons an otherwise-fast bot's
-reputation. Track P50 so you know the median, but *target* P95.
+Sort every bundle's first-audio `turn.gap`, then report P50 and P95. The script
+uses the same `LatencyPercentileStats.from_values` helper as EasyCat's latency
+validation and debug CLI, so the lesson and the operator tooling agree.
+**P95 is the number you report.** Voice users remember the bad turns, not the
+good ones; a single stumble poisons an otherwise-fast bot's reputation. Track
+P50 so you know the median, but *target* P95.
 
-> With only five bundles, P95 is approximated by the fourth-
-> slowest — noisy. Real eval sets need dozens of turns for P95 to
-> be stable; re-run this against a directory full of your own
-> chapter-6 or chapter-10 runs for a number you can trend.
+> With only six bundles, the maintained clamped-exclusive calculation puts P95
+> at the slowest observed turn: 2420 ms. That makes the deliberate slow-agent
+> fixture visible, but it is still a noisy estimate of real tail latency. Real
+> eval sets need dozens of turns for P95 to stabilize; re-run this against a
+> directory full of your own chapter-6 or chapter-10 runs for a number you can
+> trend.
+
+#### One turn controls this P95
+
+The evaluator also recomputes P95 after omitting each bundle once. Run
+the same diagnostic directly:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+```
+
+For the six primary fixtures, the full P95 is 2,420 ms. Omitting
+`turn_02_slow_agent.bundle` lowers it to 1,160 ms; omitting any other
+bundle leaves it at 2,420 ms. The printed leave-one-out range is
+therefore 1,160–2,420 ms.
+
+A one-bundle eval set can still report its P50/P95, WER, and barge-in
+metrics, but it cannot omit a sample and retain a distribution. In that
+case the two leave-one-out rows print `n/a` instead of aborting the rest
+of the report.
+
+This is an **influence diagnostic, not a confidence interval**. It
+answers “which observed turn controls this statistic?” It does not
+estimate unseen traffic, sampling bias, or the probability that a
+candidate is faster. Use repeated representative turns, a paired
+baseline/candidate design where possible, and an uncertainty method
+suited to the decision before gating a small regression.
 
 ### WER — word error rate for STT
 
 WER = (substitutions + deletions + insertions) / reference words.
-For casual conversation: **10% is OK, 5% is great, below 5% is
-usually the model's ceiling.** Report aggregate across bundles,
-not per-bundle, to even out small-sample noise.
+There is **no universal good WER**: acceptable error depends on
+language, domain vocabulary, acoustics, and the cost of a wrong word.
+Report aggregate edits / reference words plus stratified results for
+the conditions you care about; compare against a labeled baseline
+rather than borrowing a generic threshold.
 
 > The bundled fixtures are synthetic — the STT "hypothesis" is
 > identical to the ground-truth transcript, so WER is trivially
-> 0% on all five. The script is wired and ready; point it at a
+> 0% on all six. The script is wired and ready; point it at a
 > bundle you recorded through a real STT in chapter 6 (plus a
 > hand-typed reference) and it will produce real edits.
 
@@ -213,8 +353,12 @@ problem per turn:
 - **False negatives** (FN) → the user tries to barge in, bot
   plows through.
 
-F1 = 2·P·R / (P+R). Target >0.9 on realistic eval sets. Tune NR
-/ AEC / VAD threshold from there.
+F1 = 2·P·R / (P+R). Choose a target from the relative cost of false
+stops and missed interruptions, then validate it on a representative
+labeled set. A single universal threshold hides that product tradeoff.
+If the set contains no positive labels or no predicted interruptions,
+the corresponding denominator is empty; the evaluator prints `n/a`
+instead of inventing a zero-valued precision, recall, or F1 score.
 
 ## 3 — LLM as judge
 
@@ -226,20 +370,27 @@ uv run python docs/teaching/12-evals-and-latency/llm_judge.py \
 The judge reads the bundle's transcript (STT + TTS text) and
 scores 1-5 on relevance, fluency, and appropriate-length.
 
-**Not a replacement for human eval.** Research (Hamming AI,
-Braintrust) places LLM-as-judge agreement with humans around
-95% on many rubrics — a fast triage layer, nothing more. A score
-of 5 means "the judge could not find something to complain about
-from the transcript alone" — it does not mean the turn sounded
-good. Audio quality, prosody, and awkward pacing don't show up in
-text.
+**Not a replacement for human eval.** Agreement varies with the judge
+model, rubric, prompt, and dataset. Calibrate the exact setup against a
+human-labeled sample and re-check that agreement when any of those
+inputs change. Until then, use it as triage, not ground truth. A score
+of 5 means "the judge could not find something to complain about from
+the transcript alone"—it does not mean the turn sounded good. Audio
+quality, prosody, and awkward pacing do not appear in text.
+
+JSON mode guarantees an object-shaped response, not valid rubric
+scores. The script checks that every score is an integer from 1 through
+5 and that `reasoning` is text before reporting the result. Its
+caller-owned `AsyncOpenAI` client is also scoped and closed after the
+request.
 
 Use the judge to:
 
 - Triage a large eval set cheaply; hand-review the low-scoring
   tail.
-- Regression-gate a PR: require no bundle's score to drop more
-  than N points vs a baseline.
+- Flag candidate regressions against a pinned judge/rubric baseline,
+  then review them. Before turning scores into a hard gate, measure
+  repeat variance and agreement with human labels.
 
 ## Why one number is never enough
 
@@ -252,7 +403,7 @@ No single score captures voice quality.
 - Manual spot-checks catch everything the above misses (prosody,
   emotion, audible clipping).
 
-A dashboard shows all five. A "quality score" that rolls them up
+A dashboard shows all six. A "quality score" that rolls them up
 hides exactly the regressions you care about.
 
 ## Try breaking it
@@ -263,8 +414,16 @@ hides exactly the regressions you care about.
 2. Add a `filler_appropriate` dimension to the LLM-judge rubric.
    Re-run on the chapter-7 tool-bearing bundles (you'll need to
    copy one over). Does the judge agree with your ears?
-3. Write a pytest test that fails if any bundle's P95 exceeds
+3. Write a pytest test that fails if the fixture set's P95 exceeds
    1200 ms. That is the seed of a latency regression suite.
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

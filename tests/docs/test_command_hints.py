@@ -41,6 +41,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "README.md#install": "uv run python examples/openai_agents_voice.py",
         "docs/teaching/": "uv run python docs/teaching/00-hello-audio/main.py",
         "docs/using-easycat/": ("uv run python docs/using-easycat/00-first-voice-app/main.py"),
+        "docs/teaching/PROGRESS.md": (
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence"
+        ),
         "README.md#cli": "easycat init --list-templates --json",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
@@ -101,6 +104,12 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run python examples/journal_demo.py" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )
+    assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
+    assert "uv run python docs/teaching/offline_spine.py --run --jobs 4 --json" in entries[
+        "docs/teaching/"
+    ].get("commands", ())
 
 
 def test_root_path_chooser_command_hints_are_locally_valid() -> None:

@@ -32,6 +32,7 @@ uv run easycat doctor --env-file .env --json
 uv run --env-file .env python examples/openai_agents_voice.py
 uv run easycat console
 uv run python examples/journal_demo.py
+uv run python docs/teaching/offline_spine.py --run --jobs 4
 uv run easycat init --list-templates
 uv run easycat init my-agent
 uv run easycat docs --audience maintainers
@@ -127,10 +128,28 @@ uv run easycat doctor --env-file .env --json
 uv run easycat docs --audience learners
 uv run easycat docs --audience learners --json
 uv run python docs/teaching/00-hello-audio/main.py
+uv run python docs/teaching/offline_spine.py
+uv run python docs/teaching/offline_spine.py --json
+uv run python docs/teaching/offline_spine.py --run --jobs 4
+uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 uv run easycat validate quick
 uv run easycat validate quick --json
 uv run easycat validate report .easycat/validation/latest.json
 uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Progress worksheet
+
+- Path: docs/teaching/PROGRESS.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md
+- Audience: learners
+- Track evidence-backed completion across all 16 teaching chapters.
+
+Commands:
+
+```bash
+uv run python docs/teaching/00-hello-audio/format_boundaries.py
+uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence
 ```
 
 ## First lesson
@@ -185,6 +204,136 @@ uv run easycat doctor --env-file .env
 uv run easycat doctor --env-file .env --json
 uv run python docs/using-easycat/00-first-voice-app/main.py
 uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py
+```
+
+## Feature runtime modes
+
+- Path: docs/using-easycat/01-runtime-modes/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/01-runtime-modes
+- Audience: learners
+- Run one VoiceApp locally, in a browser, over WebSocket, or on Twilio.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --extra webrtc --extra telephony --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/01-runtime-modes/main.py local
+uv run python docs/using-easycat/01-runtime-modes/main.py browser
+uv run python docs/using-easycat/01-runtime-modes/main.py websocket
+uv run python docs/using-easycat/01-runtime-modes/main.py twilio
+uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browser
+```
+
+## Feature providers and voices
+
+- Path: docs/using-easycat/02-providers-and-voices/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/02-providers-and-voices
+- Audience: learners
+- Select STT and TTS providers, models, and provider-specific voices.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run easycat doctor --provider deepgram
+uv run easycat doctor --provider elevenlabs
+uv run python docs/using-easycat/02-providers-and-voices/main.py list
+uv run python docs/using-easycat/02-providers-and-voices/main.py openai --voice alloy
+uv run python docs/using-easycat/02-providers-and-voices/main.py deepgram-stt --voice nova
+uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice
+uv run --env-file .env python docs/using-easycat/02-providers-and-voices/main.py deepgram-stt
+```
+
+## Feature conversation controls
+
+- Path: docs/using-easycat/03-conversation-controls/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/03-conversation-controls
+- Audience: learners
+- Tune turn taking, signal cleanup, interruption, and push-to-talk.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/03-conversation-controls/main.py balanced
+uv run python docs/using-easycat/03-conversation-controls/main.py vad-only
+uv run python docs/using-easycat/03-conversation-controls/main.py fast
+uv run python docs/using-easycat/03-conversation-controls/main.py clean
+uv run python docs/using-easycat/03-conversation-controls/main.py raw
+uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py
+uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast
+```
+
+## Feature tools and actions
+
+- Path: docs/using-easycat/04-tools-actions/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/04-tools-actions
+- Audience: learners
+- Separate agent tools, session actions, events, and spoken-output rules.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/04-tools-actions/main.py preview
+uv run python docs/using-easycat/04-tools-actions/main.py run
+uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run
+```
+
+## Feature agent bridges
+
+- Path: docs/using-easycat/05-agent-bridges/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/05-agent-bridges
+- Audience: learners
+- Choose a framework adapter or bring a custom workflow.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/05-agent-bridges/main.py matrix
+uv run python docs/using-easycat/05-agent-bridges/main.py run
+uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run
+```
+
+## Feature session control
+
+- Path: docs/using-easycat/06-session-control/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/06-session-control
+- Audience: learners
+- Own session lifecycle, events, text turns, resets, and teardown.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/06-session-control/main.py text
+uv run python docs/using-easycat/06-session-control/main.py voice
+uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice
 ```
 
 ## Examples
@@ -261,7 +410,7 @@ just guard-markdown
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing
@@ -307,7 +456,7 @@ just guard-markdown
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing
@@ -495,7 +644,7 @@ just guard-markdown
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing
@@ -651,7 +800,7 @@ just guard-markdown
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing

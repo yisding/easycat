@@ -117,7 +117,7 @@ def _enable_console_logging_from_env() -> None:
 
 
 def _run_session_until_shutdown(session: Session) -> None:
-    """Run a prebuilt session until SIGINT/SIGTERM from a sync entry point."""
+    """Run a prebuilt session until it closes or receives SIGINT/SIGTERM."""
 
     async def _run() -> None:
         # ``async with`` is the one public teardown idiom: __aenter__
@@ -127,12 +127,26 @@ def _run_session_until_shutdown(session: Session) -> None:
             stop_event = asyncio.Event()
             loop = asyncio.get_running_loop()
             if _install_shutdown_signal_handlers(loop, stop_event):
-                await stop_event.wait()
+                waiters = {
+                    asyncio.create_task(stop_event.wait()),
+                    asyncio.create_task(session.wait_closed()),
+                }
+                try:
+                    done, _pending = await asyncio.wait(
+                        waiters,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        task.result()
+                finally:
+                    for task in waiters:
+                        task.cancel()
+                    await asyncio.gather(*waiters, return_exceptions=True)
             else:
                 # No signal-handler support (e.g. Windows ProactorEventLoop).
-                # Block until KeyboardInterrupt; asyncio.run propagates it and
-                # ``async with session`` still tears the session down cleanly.
-                await asyncio.Event().wait()
+                # Session-driven shutdown still completes normally; Ctrl+C is
+                # propagated by asyncio.run and the context manager tears down.
+                await session.wait_closed()
 
     try:
         asyncio.run(_run())

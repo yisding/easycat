@@ -230,6 +230,49 @@ class _SlowStreamingWorkflow:
         yield "never"
 
 
+class _ClosableAsyncIterator:
+    """Non-generator iterator used to enforce the advertised bridge contract."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._first = True
+
+    def __aiter__(self) -> _ClosableAsyncIterator:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._first:
+            self._first = False
+            return "first "
+        await asyncio.Event().wait()
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _ShallowIteratorWorkflow:
+    def __init__(self) -> None:
+        self.stream = _ClosableAsyncIterator()
+
+    def on_user_turn(self, _text: str) -> AsyncIterator[str]:
+        return self.stream
+
+
+class _DeepIteratorWorkflow:
+    def __init__(self) -> None:
+        self.stream = _ClosableAsyncIterator()
+
+    def on_user_turn(
+        self,
+        _text: str,
+        *,
+        recorder: JournalAgentRecorder | None = None,
+        cancel_token=None,
+    ) -> AsyncIterator[str]:
+        return self.stream
+
+
 class TestStreamingStructuredOutput:
     """Finding 2 — streaming shallow mode leaves structured_output as None.
 
@@ -276,3 +319,17 @@ class TestCursorCleanupOnCancel:
         assert rec._open_cursors == []
         names = [r.name for r in journal.read()]
         assert names.count("unit_entered") == names.count("unit_exited")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("workflow_type", [_ShallowIteratorWorkflow, _DeepIteratorWorkflow])
+    async def test_aclose_propagates_to_non_generator_async_iterator(self, workflow_type):
+        workflow = workflow_type()
+        bridge = GenericWorkflowBridge(workflow)
+        stream = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "first "
+        await stream.aclose()
+
+        assert workflow.stream.closed

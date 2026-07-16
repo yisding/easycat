@@ -1,7 +1,56 @@
 # Chapter 9 — Interruption / Barge-in
 
+<!-- BEGIN auto:navigation -->
+**Progress: 10 of 16** · [← Chapter 8 — Smart-turn](../08-smart-turn/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+<!-- END auto:navigation -->
+
 > Three versions of the same feature. Each one better. Each one
 > teaching something the previous one didn't.
+
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 7 — Tools, Mid-stream**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Does a fast tool need filler; when slow filler is rejected, which audio becomes first?
+>
+> After recording your answer, explain one way `tool filler delivery` changes how you reason
+> about `barge-in cancellation`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/07-tools/filler_delivery_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `barge-in cancellation` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** Does the triggering speech event belong to the interrupted turn, and what
+> must finish before the next STT stream?
+>
+> ```bash
+> uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+> ```
+>
+> **Evidence to find:** triggering speech remains unconsumed while bot cancellation precedes the
+> next STT stream.
+>
+> **Explain the result:** Use the event order to explain how the next utterance survives
+> interruption cleanup.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 **Wrong-version-first, in triplicate.** Read them in order.
 
@@ -10,6 +59,11 @@
 - [Chapter 8](../08-smart-turn/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -25,16 +79,25 @@
 
 - **Added:** three separate scripts (`ignore.py`, `cancel.py`,
   `estimate.py`); `CancelToken` from `easycat.cancel`;
-  `transport.clear_audio()` calls; a `bytes_sent` / sentence
-  ledger in `estimate.py` plus an interruption-estimate formula
-  that rewrites conversation history to match what the user
-  actually heard.
+  `transport.clear_audio()` calls and cancellation-latency records;
+  a `bytes_accepted` / sentence ledger in `estimate.py` plus an interruption-estimate formula
+  that rewrites conversation history toward what the user could
+  actually have heard.
 - **Modified:** the pipeline splits into two coroutines
   (mic-producer + coordinator) connected by a queue, so the mic
   side never pauses while TTS runs.
 - **Removed:** smart-turn — to isolate the barge-in concept.
 
 ## The three scripts
+
+Start with the chapter's canonical entry point. It delegates to version A,
+the deliberately limited baseline:
+
+```bash
+uv run python docs/teaching/09-interruption/main.py
+```
+
+Then run all three named versions in order:
 
 ```bash
 uv run python docs/teaching/09-interruption/ignore.py    # A: answering-machine
@@ -85,8 +148,11 @@ On barge-in:
    stops pulling tokens.
 3. `drain_to_speaker` sees it and calls `tts.cancel()` to drop
    whatever chunk it was synthesising.
-4. `transport.clear_audio()` flushes the speaker queue so the bot
-   shuts up **now**, not after the current chunk finishes.
+4. `transport.clear_audio()` requests an immediate speaker-queue
+   flush instead of waiting for the current queue to drain.
+5. The same `speech_started` event falls through to the ordinary STT
+   branch, so the words that caused the interruption become the next
+   user turn instead of being thrown away.
 
 Three places, one token. That's the pattern.
 
@@ -129,6 +195,28 @@ async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
 ```
 <!-- END auto:snippet -->
 
+### Software cancellation is measurable
+
+“Immediate” needs a clock. Versions B and C write
+`interruption.start`, then `interruption.cancel_complete` after both
+software owners have settled. The completion record preserves:
+
+- `cancel_to_clear_audio_return_ms` — trigger to `clear_audio()` returning.
+- `cancel_to_bot_task_return_ms` — trigger to the cooperative bot task exiting.
+
+Run the deterministic provider-free probe:
+
+```bash
+uv run python docs/teaching/09-interruption/cancel_latency_probe.py
+```
+
+Its scripted transport returns from queue clearing at 30 ms, and the
+bot task exits at 80 ms. That proves ordering and software control
+latency. It does not prove acoustic silence: transport/device buffers
+or sound already in the room can remain after `clear_audio()` returns.
+Playback progress evidence later in this chapter answers a different,
+stronger question.
+
 **What this still doesn't solve:** the bot's memory. The LLM
 thinks it said its whole reply. Next turn it may reference "as I
 mentioned before" — but the user never heard it.
@@ -138,8 +226,9 @@ mentioned before" — but the user never heard it.
 Track two things per turn:
 
 - `sentences_sent` — the text dispatched to TTS, in order.
-- `bytes_sent` — the audio bytes that reached
-  `transport.send_audio`.
+- `bytes_accepted` — audio bytes for which
+  `transport.send_audio` returned `True`. Rejected/dropped chunks
+  never enter the estimate.
 
 OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 B/s. We estimate
 chars-per-byte with a deliberately crude assumption (~15 chars/s
@@ -150,23 +239,23 @@ character index. Then we rewrite the conversation history:
 history.append({"role": "assistant", "content": heard_text})
 ```
 
-Next turn, the LLM's memory matches the user's.
+Next turn, the LLM's memory is closer to the user's.
 
 <!-- BEGIN auto:snippet src=estimate.py symbol=TurnLedger -->
 ```python
 @dataclass
 class TurnLedger:
-    """Per-turn record of what the bot tried to say vs. what played.
+    """Per-turn record of what the bot tried to say vs. what was accepted.
 
     ``sentences_sent`` accumulates the text of each sentence dispatched
-    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
-    reached ``transport.send_audio``. At cancel time we combine them
-    to estimate where, in the concatenated text, the user's ear fell
-    silent.
+    to TTS in order. ``bytes_accepted`` tracks audio bytes for which
+    ``transport.send_audio`` returned ``True``. At cancel time we combine
+    them to estimate where, in the concatenated text, the user's ear
+    fell silent.
     """
 
     sentences_sent: list[str] = field(default_factory=list)
-    bytes_sent: int = 0
+    bytes_accepted: int = 0
 
     def heard_text(self) -> str:
         """Estimate the text prefix the user's ear actually reached.
@@ -180,42 +269,76 @@ class TurnLedger:
             return ""
         full_text = " ".join(self.sentences_sent)
         expected = max(1, _expected_bytes(full_text))
-        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+        estimated_chars = int(len(full_text) * self.bytes_accepted / expected)
         estimated_chars = max(0, min(estimated_chars, len(full_text)))
         return full_text[:estimated_chars]
 ```
 <!-- END auto:snippet -->
 
-## Honesty note — the triggering utterance
+## Preserving the triggering utterance
 
-When barge-in fires, the coordinator reads the `speech_started` tag
-off the mic queue and dispatches to the cancel branch. That tag
-is *consumed* — the user's new utterance starts but its start
-boundary never reaches STT. Production pipelines buffer the
-triggering audio into the next user turn; the toy here throws it
-away. On every real barge-in, the first ~200 ms of what you said
-is lost. The second mic event after bot-done picks things up
-normally. Exercise 1 nudges you to notice this.
+The cancel branch must not consume the event that proves the user
+started talking. Versions B and C settle the cooperative bot task and
+return `consumed=False`; the coordinator then sends that same
+`speech_started` event through its ordinary STT branch. While it waits
+for the bot task to unwind, the independent mic producer keeps placing
+pre-roll and live frames on `mic_queue`. Once STT starts, those queued
+frames follow the preserved boundary in their original order.
 
-## Why "bytes sent" ≠ "bytes heard"
+Version A intentionally does the opposite: `ignore.py` consumes every
+mic event while the bot is active. That is the answering-machine
+behavior the comparison is meant to expose.
+
+Run the provider-free probe, which calls `cancel.py`'s real barge-in
+router:
+
+```bash
+uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+```
+
+Look for `event_consumed: false`, followed by `stt.start`, `stt.frame`,
+`stt.end`, and `stt.close`. The remaining toy limitation is now stated
+accurately: the coordinator awaits cooperative bot shutdown before it
+starts STT, so an unresponsive agent can make the unbounded mic queue
+grow. Production uses bounded audio buffers and stronger cancellation
+deadlines; it does not silently discard the triggering turn.
+
+There are two shutdown owners here. The coordinator owns its active
+per-turn STT and background bot task, so its `finally` arm ends/closes
+STT and cancels/observes bot work. The outer `AsyncExitStack` owns the
+long-lived TTS, client, VAD, and transport and closes them only after
+the coordinator has stopped using them.
+
+## Why "bytes accepted" ≠ "bytes heard"
 
 Three reasons, all real:
 
-1. **OS playback buffer.** `transport.send_audio` enqueues chunks
-   on PortAudio. PortAudio holds ~10-100 ms before the speaker
-   driver. `clear_audio()` drops those — so "bytes sent" overcounts
-   by however much was in the PA buffer.
+1. **Playback queues.** A `True` return from `transport.send_audio`
+   means the transport accepted the chunk; it does not mean the user
+   heard it. `LocalTransport` and PortAudio can still hold queued
+   audio that `clear_audio()` drops, so `bytes_accepted` overcounts
+   by the unplayed backlog.
 2. **Markdown + SSML.** `strip_markdown(text)` is shorter than the
    raw LLM output. TTS synthesises the stripped version. Character
    counts drift.
 3. **Variable speech rate.** Our 15-chars/s constant is an
    average. "Hello" is slower than "uhh".
 
-Production `easycat.session.interruption` has a 200-line estimator
-that handles all three plus playback-ack marks. The toy here is a
-single-line formula — accurate enough that the bot's next turn
-doesn't claim it said things the user didn't hear. Read the
-production version once you understand why each correction exists.
+Production `easycat.session.interruption` has a more careful estimator
+that handles all three and combines the strongest progress evidence a
+transport exposes. Run the provider-free capability probe:
+
+```bash
+uv run python docs/teaching/09-interruption/playback_evidence.py
+```
+
+Local playback and WebRTC report delivered chunks through
+`TransportAudioDelivered`; Twilio supports explicit marks acknowledged
+as `PlaybackMarkAck`; transports with neither use a serial-playout
+estimate from the send log. These milestones constrain queued backlog,
+but none proves sound reached a human ear. The toy remains a single-line
+formula: excluding rejected chunks prevents invented audio, while its
+queue/rate errors stay visible for the exercise.
 
 ## Read the bundles
 
@@ -234,21 +357,32 @@ for b in Path("docs/teaching/09-interruption/runs/").glob("*.bundle"):
 Expect:
 
 - `ignore.py` bundle: only `user.barge_in.ignored` records.
-- `cancel.py` bundle: `interruption.start` at barge-in time.
+- `cancel.py` bundle: `interruption.start`, followed by
+  `interruption.cancel_complete` with clear-audio and bot-task return
+  latency.
 - `estimate.py` bundle: `interruption.estimate` with
-  `{full_text, heard_text, bytes_heard}`.
+  `{full_text, heard_text, bytes_accepted}`.
 
 ## Try breaking it
 
-1. Run `estimate.py`. Interrupt exactly after one word. Open the
-   bundle — does `heard_text` end at that word, or does it over- or
-   under-shoot?
+1. Run `estimate.py`. Interrupt as close as you can after hearing one
+   word, and repeat several times because human reaction time is not an
+   exact clock. In each bundle, does `heard_text` end at that word, or
+   does it over- or under-shoot?
 2. Have the agent reply with markdown-heavy output (ask it for a
    table). The stripped text fed to TTS is shorter than the
    original. How does this affect `heard_text` vs reality?
 3. Run on speakerphone (no headphones). The bot interrupts
    itself. Why does AEC fix this, and why is VAD alone not enough?
    (Preview of chapter 10.)
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

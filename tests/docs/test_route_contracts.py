@@ -219,6 +219,8 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     teaching_readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
     route_commands = entries["docs/teaching/"].get("commands", ())
+    progress = (REPO_ROOT / "docs" / "teaching" / "PROGRESS.md").read_text(encoding="utf-8")
+    progress_commands = entries["docs/teaching/PROGRESS.md"].get("commands", ())
     first_lesson = (REPO_ROOT / "docs" / "teaching" / "00-hello-audio" / "README.md").read_text(
         encoding="utf-8"
     )
@@ -232,6 +234,10 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
         "uv run easycat docs --audience learners",
         "uv run easycat docs --audience learners --json",
         "uv run python docs/teaching/00-hello-audio/main.py",
+        "uv run python docs/teaching/offline_spine.py",
+        "uv run python docs/teaching/offline_spine.py --json",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4 --json",
         "uv run easycat validate quick",
         "uv run easycat validate quick --json",
         "uv run easycat validate report .easycat/validation/latest.json",
@@ -239,6 +245,13 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     ):
         assert command in teaching_readme
         assert command in route_commands
+
+    for command in (
+        "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
+    ):
+        assert command in progress
+        assert command in progress_commands
 
     for command in (
         "uv sync --extra local --group dev",
@@ -284,6 +297,147 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
     ):
         assert command in ladder_readme
         assert command in ladder_commands
+
+
+def test_feature_runtime_modes_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "01-runtime-modes" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/01-runtime-modes/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --extra webrtc --extra telephony --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py local",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py browser",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py websocket",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py twilio",
+        "uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browser",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_provider_voices_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "02-providers-and-voices" / "README.md"
+    ).read_text(encoding="utf-8")
+    route = entries["docs/using-easycat/02-providers-and-voices/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --provider deepgram",
+        "uv run easycat doctor --provider elevenlabs",
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py list",
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py openai --voice alloy",
+        (
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+            "deepgram-stt --voice nova"
+        ),
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice",
+        (
+            "uv run --env-file .env python "
+            "docs/using-easycat/02-providers-and-voices/main.py deepgram-stt"
+        ),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_conversation_controls_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "03-conversation-controls" / "README.md"
+    ).read_text(encoding="utf-8")
+    route = entries["docs/using-easycat/03-conversation-controls/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py balanced",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py vad-only",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py fast",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py clean",
+        "uv run python docs/using-easycat/03-conversation-controls/main.py raw",
+        "uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py",
+        ("uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast"),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_tools_actions_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "04-tools-actions" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/04-tools-actions/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/04-tools-actions/main.py preview",
+        "uv run python docs/using-easycat/04-tools-actions/main.py run",
+        "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_agent_bridges_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "05-agent-bridges" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/05-agent-bridges/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+        "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_session_control_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "06-session-control" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/06-session-control/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/06-session-control/main.py text",
+        "uv run python docs/using-easycat/06-session-control/main.py voice",
+        "uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice",
+    ):
+        assert command in readme
+        assert command in route["commands"]
 
 
 def test_examples_docs_route_matches_examples_fast_path() -> None:
