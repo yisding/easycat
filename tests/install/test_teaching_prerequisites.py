@@ -40,6 +40,67 @@ def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
     )
 
 
+def test_teaching_provider_prerequisites_warn_about_live_usage_costs() -> None:
+    """Provider-backed lessons should set billing expectations before learners run them."""
+    teaching_root = REPO_ROOT / "docs" / "teaching"
+    overview = (teaching_root / "README.md").read_text(encoding="utf-8")
+    overview_prerequisites = " ".join(
+        overview.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0].split()
+    )
+    missing: list[str] = []
+
+    if "may incur charges" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: charge warning")
+    if "billing and usage limits" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: billing limits")
+
+    for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
+        text = path.read_text(encoding="utf-8")
+        match = MARKDOWN_PREREQS_RE.search(text)
+        if match is None:
+            continue
+        section = match.group("body")
+        if "API_KEY" not in section:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if "may incur charges" not in section:
+            missing.append(f"{rel}: charge warning")
+        if "billing and usage limits" not in section:
+            missing.append(f"{rel}: billing limits")
+
+    assert not missing, "Teaching provider cost guidance is incomplete:\n" + "\n".join(missing)
+
+
+def test_teaching_provider_prerequisites_warn_about_data_handling() -> None:
+    """Provider-backed lessons should keep sensitive data out of live exercises."""
+    teaching_root = REPO_ROOT / "docs" / "teaching"
+    overview = (teaching_root / "README.md").read_text(encoding="utf-8")
+    overview_prerequisites = overview.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0]
+    missing: list[str] = []
+
+    if "non-sensitive test content" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: non-sensitive content")
+    if "provider data-handling policies" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: provider policies")
+
+    for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
+        text = path.read_text(encoding="utf-8")
+        match = MARKDOWN_PREREQS_RE.search(text)
+        if match is None:
+            continue
+        section = match.group("body")
+        if "API_KEY" not in section:
+            continue
+        normalized_section = " ".join(section.split())
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if "non-sensitive test" not in normalized_section:
+            missing.append(f"{rel}: non-sensitive test data")
+        if "provider data-handling policies" not in normalized_section:
+            missing.append(f"{rel}: provider policies")
+
+    assert not missing, "Teaching provider data guidance is incomplete:\n" + "\n".join(missing)
+
+
 def test_teaching_provider_key_setup_names_required_extras() -> None:
     """Provider-key setup snippets should include the matching optional extra."""
     missing: list[str] = []
