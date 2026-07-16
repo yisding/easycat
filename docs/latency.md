@@ -58,6 +58,43 @@ no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
 `user_speech_start_to_bot_stopped_ms` barge-in delta is `null` for turns the
 user never interrupted.
 
+## Compare framework-owned scheduling
+
+The deterministic cross-framework harness compares EasyCat, LiveKit Agents,
+and Pipecat at one external boundary: an accepted transcript/text turn to the
+first audio frame accepted by the framework's transport or output sink.
+Provider behavior is normalized with the same delayed LLM and TTS doubles, so
+the result isolates framework scheduling rather than network or model speed.
+
+```bash
+uv run python perf/bench_framework_latency.py \
+  --iterations 30 \
+  --warmups 5 \
+  --output /tmp/framework-latency.json
+```
+
+The harness runs EasyCat from the checkout and starts LiveKit and Pipecat
+workers from committed, fully resolved `uv.lock` graphs in isolated
+environments using the exact same Python interpreter as EasyCat. Workers stay alive while
+the orchestrator randomizes their order on every warmup and measured round;
+process startup and dependency installation are outside the metric. Every
+sample must deliver its framework-specific expected TTS payload plus nonempty
+audio before it is eligible. (The expectation records punctuation normalization,
+such as LiveKit omitting terminal punctuation from its TTS chunk.) The JSON
+artifact includes raw transcript-to-audio latency and a
+framework-overhead value that subtracts each fake provider's measured elapsed
+time, with P50/P95/P99 for both. It also records pins, revision state, and the
+random seed, plus SHA-256 hashes of both environment locks. Rankings and the
+`easycat_fastest` result use framework overhead,
+so host sleep drift cannot masquerade as framework work. Add
+`--require-easycat-fastest` when a comparison should return a nonzero status
+unless EasyCat wins overhead at both P50 and P95.
+
+This is a framework-overhead benchmark, not a provider leaderboard or a claim
+about full microphone-to-speaker latency. Use the live validation lane and the
+per-turn waterfall for provider, endpointing, transport, and deployment
+comparisons.
+
 ## Latency-adding defaults
 
 These are the defaults that *add waiting time* on the response path. Each
@@ -82,24 +119,67 @@ Sources: [`turn_manager.py`](../src/easycat/turn_manager.py),
 [`integrations/agents/_agent_runner.py`](../src/easycat/integrations/agents/_agent_runner.py),
 and [`session/_types.py`](../src/easycat/session/_types.py).
 
+Plain `async run(text) -> str` agents can overlap model work with endpoint
+confirmation by setting
+`AgentRunnerConfig(preemptive_generation=True)`. This is intentionally opt-in:
+the agent may be cancelled and retried when speech resumes, so its `run()`
+implementation must be replayable and must not perform irreversible side
+effects for an unconfirmed transcript.
+
+## Provider-specific tuning
+
+- **OpenAI Realtime STT connection setup** — the provider keeps its
+  transcription WebSocket warm across turns by default, using each
+  `input_audio_buffer.commit` to delimit and clear a logical turn. Set
+  `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
+  turn. A final-transcript timeout discards the reusable socket before the
+  next turn so a late final cannot leak into the replacement transcript queue.
+- **Deepgram Nova STT connection setup** — EasyCat keeps Deepgram Nova's STT
+  WebSocket warm across turns by default, sends a provider `KeepAlive` while
+  idle, and uses `Finalize` to delimit each turn; set
+  `DeepgramSTTConfig.persistent_ws=False` to restore one socket per turn.
+  Flux keeps the one-socket-per-turn lifecycle because its v2 endpoint does
+  not support explicit `Finalize`.
+
 ## What is *not* a knob
 
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively. The one knob here is
+  or stream more aggressively. OpenAI TTS consumes the HTTP response at its
+  native cadence, releases the first 20 ms of PCM immediately, then coalesces
+  steady-state audio into 100 ms frames; this avoids making first audio wait
+  for a full steady-state frame without increasing per-frame overhead for the
+  rest of the utterance. The bounded final-transcript knobs are
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI
   occasionally stalls several seconds on that event, so the wait caps the
   worst-case end-of-turn pause; lower it to trade a little tail correction for
   snappier handoff, raise it if you see truncated end-of-turn transcripts.
+  `DeepgramSTTConfig.final_transcript_timeout_s` similarly defaults to `2.0`
+  seconds for a persistent Nova `Finalize`; on timeout EasyCat drops the stale
+  socket (a final already buffered in the close window is still delivered to
+  the ending turn), promotes the latest interim only when no final arrived,
+  and reconnects next turn so late text cannot leak across the turn boundary.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
   long as the clause is long enough to not sound clipped) to shave
   time-to-first-audio; every later payload keeps full-sentence granularity.
   That behavior is structural, not configurable delay.
+- **Bot-start lifecycle overlap** — on the first TTS payload, EasyCat starts
+  the provider request while `BotStartedSpeaking` handlers run. A one-shot
+  barrier preserves the public order (`BotStartedSpeaking` before
+  `AgentFinal`/`TTSAudio`) and prevents audio release until every lifecycle
+  handler completes, so handler latency and provider first-byte latency overlap
+  instead of adding together.
+- **Agent-delta observer overlap** — the first complete TTS clause is admitted
+  before asynchronous `AgentDelta` handlers finish, allowing the provider
+  request to begin while observers run. The same first-event barrier holds
+  `BotStartedSpeaking` and audio until delta dispatch succeeds, so public event
+  order and strict handler failures remain safe without putting observer time
+  in front of provider TTFB.
 - **Latency is reported, not gated** — every stage records its `elapsed_ms` to
   the journal and each turn emits a `turn_total_latency_ms` (voice) /
   `text_turn_latency_ms` (text) metric record, so slow turns are findable; see

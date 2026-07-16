@@ -308,14 +308,19 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     outbound manager, screening, number health, retries, twiml, session
     actions, compliance) must stay lazy.
     """
+    import json
     import subprocess
     import sys
 
     code = (
-        "import sys, easycat\n"
+        "import json, sys, easycat\n"
         "easycat.EasyConfig\n"
         "tele = sorted(m for m in sys.modules if m.startswith('easycat.telephony'))\n"
-        "print('\\n'.join(tele))\n"
+        "import easycat.config._telephony_wiring\n"
+        "print(json.dumps({\n"
+        "    'telephony_modules': tele,\n"
+        "    'outbound_builder_loaded': 'easycat.config._outbound_helpers' in sys.modules,\n"
+        "}))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -323,7 +328,9 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
         text=True,
         check=True,
     )
-    loaded = {line for line in result.stdout.splitlines() if line}
+    import_state = json.loads(result.stdout)
+    loaded = set(import_state["telephony_modules"])
+    assert import_state["outbound_builder_loaded"] is False
     # Only the package and the two config-only submodules are allowed.
     allowed = {
         "easycat.telephony",

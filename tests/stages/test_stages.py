@@ -8,7 +8,11 @@ import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
-from easycat.integrations.agents.base import AgentBridgeEvent, AgentTurnInput
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentTurnInput,
+    NullAgentRecorder,
+)
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
 from easycat.stages import (
@@ -654,6 +658,59 @@ class TestStageExecuteRecording:
         stage = AgentStage(_StubAgent())
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
+
+    @pytest.mark.parametrize(
+        ("stage", "input", "expected"),
+        [
+            (TTSStage(_StubTTS()), "hello", "audio:hello"),
+            (TransportStage(_StubTransport()), b"audio", True),
+        ],
+    )
+    async def test_tts_output_stages_skip_snapshots_without_capture(
+        self, monkeypatch, stage, input, expected
+    ):
+        """The live path avoids replay state work when both capture sinks are absent."""
+        monkeypatch.setattr(
+            stage,
+            "snapshot_state",
+            lambda: pytest.fail("snapshot_state should not run without capture"),
+        )
+
+        result = await stage.execute(input, _make_ctx(), _make_turn())
+
+        assert result == expected
+
+    async def test_streaming_tts_skips_frame_inspection_without_capture(self):
+        class _OpaqueEvent:
+            @property
+            def audio(self):
+                pytest.fail("audio replay metadata should not be inspected without capture")
+
+        class _StreamingTTS:
+            async def synthesize(self, payload):
+                _ = payload
+                yield _OpaqueEvent()
+
+        stage = TTSStage(_StreamingTTS())
+        stream = await stage.execute("hello", _make_ctx(), _make_turn())
+
+        assert isinstance(await anext(stream), _OpaqueEvent)
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+
+    def test_agent_stage_uses_contextual_null_recorder_without_capture(self):
+        stage = AgentStage(
+            _StubAgent(),
+            session_id="session-1",
+            mcp_servers=("weather",),
+        )
+
+        recorder = stage._make_recorder("turn-1", _make_ctx())
+
+        assert isinstance(recorder, NullAgentRecorder)
+        assert recorder.context.session_id == "session-1"
+        assert recorder.context.turn_id == "turn-1"
+        assert recorder.context.mcp_servers == ("weather",)
 
     async def test_constructor_journal_used_when_ctx_journal_is_none(self):
         """Lock the fallback: a constructor journal records even when
