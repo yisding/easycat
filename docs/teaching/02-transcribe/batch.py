@@ -28,10 +28,19 @@ from easycat.debug.export import export_debug_bundle
 from easycat.recipes import transcribe_file
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
-SAMPLE_RATE = 16_000  # OpenAI + most STT providers default to 16 kHz.
+# A narrowband-friendly teaching rate. transcribe_file reads the rate from the
+# WAV header rather than assuming one provider-wide default.
+SAMPLE_RATE = 16_000
 DURATION_S = 5
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch02-batch-{int(time.time())}"
+
+
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
 
 
 def record_wav(path: Path) -> None:
@@ -56,23 +65,37 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
 
-    # 1) Record to a temp WAV — the easiest input for transcribe_file.
-    wav_path = Path(tempfile.mkdtemp()) / "ch02-batch.wav"
-    record_wav(wav_path)
+    # 1) Record to a scoped temp WAV — the easiest input for
+    #    transcribe_file. TemporaryDirectory deletes the raw microphone
+    #    bytes on normal return and on provider/interrupt exceptions.
+    with tempfile.TemporaryDirectory(prefix="easycat-ch02-") as directory:
+        wav_path = Path(directory) / "ch02-batch.wav"
+        record_wav(wav_path)
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="recording.complete",
+            session_id=SESSION_ID,
+            data={
+                "duration_s": DURATION_S,
+                "filename": wav_path.name,
+                "retention": "temporary",
+            },
+        )
+
+        # 2) Send it to the default OpenAI STT provider in one call.
+        #    transcribe_file is the `easycat.recipes` convenience helper —
+        #    it is ~30 lines of code; read src/easycat/recipes.py if curious.
+        print("Transcribing...")
+        request_start = time.monotonic()
+        transcript = await transcribe_file(wav_path)
+        elapsed = time.monotonic() - request_start
+
     journal.append(
         kind=JournalRecordKind.EVENT,
-        name="recording.complete",
+        name="recording.cleaned",
         session_id=SESSION_ID,
-        data={"path": str(wav_path), "duration_s": DURATION_S},
+        data={"deleted": not wav_path.exists(), "filename": wav_path.name},
     )
-
-    # 2) Send it to the default OpenAI STT provider in one call.
-    #    transcribe_file is the `easycat.recipes` convenience helper —
-    #    it is ~30 lines of code; read src/easycat/recipes.py if curious.
-    print("Transcribing...")
-    request_start = time.monotonic()
-    transcript = await transcribe_file(wav_path)
-    elapsed = time.monotonic() - request_start
 
     journal.append(
         kind=JournalRecordKind.EVENT,
@@ -99,7 +122,7 @@ async def main() -> None:
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
     session_stub = types.SimpleNamespace(journal=journal)
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
-    print(f"Wrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    print(f"Wrote bundle → {_display_path(bundle_path)}")
 
 
 if __name__ == "__main__":

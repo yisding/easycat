@@ -109,9 +109,30 @@ contract breaks, and why would a persistent provider make that visible?
 3. A caller-supplied STT may be reused for another operation, so closing it
    would violate the caller's ownership.
 
+## 5. Audit recording retention
+
+**Task.** Run `batch.py`, open its newest bundle, and inspect
+`recording.complete` plus `recording.cleaned`. Which sensitive data survives,
+and which does not?
+
+**Hints**
+
+1. `recording.complete.data` contains the filename, duration, and
+   `retention="temporary"`; it does not persist the absolute system-temp path.
+2. `recording.cleaned.data.deleted` is `true` because bundle export happens
+   after the `TemporaryDirectory` exits. The raw WAV is not a bundle artifact.
+3. `stt.final.data.text` does survive. A transcript is PII-bearing even when
+   raw audio is gone, so protect and expire the bundle accordingly.
+4. Temporarily make `transcribe_file()` raise in a scratch copy. The context
+   still removes the WAV, although no success bundle is exported.
+5. If you intentionally retain audio, use an explicit project path or
+   artifact store with consent and a deletion policy. An untracked temp file
+   is not a retention strategy.
+
 ## Self-check
 
 You should be able to read any bundle from any chapter from now on without
 consulting the README that produced it, and explain why observing a partial is
 different from committing a side effect from one. You should also be able to
-distinguish ending one STT stream from closing the provider that owns it.
+distinguish ending one STT stream from closing the provider that owns it, and
+separate raw-audio retention from transcript retention.
