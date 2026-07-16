@@ -113,6 +113,7 @@ _SINGLE_CHAR_CODE_SPEECH: dict[str, str] = {
     ",": "comma",
     ":": "colon",
 }
+_CODE_SPEECH_CHARACTERS = frozenset(_SINGLE_CHAR_CODE_SPEECH)
 
 
 def _stash_code_span(
@@ -166,6 +167,8 @@ def _normalize_short_code_for_tts(code: str) -> str:
     if dunder_match:
         dunder_name = dunder_match.group(1).replace("_", " ")
         return f"dunder {dunder_name}".strip()
+    if _CODE_SPEECH_CHARACTERS.isdisjoint(snippet):
+        return snippet if _WS_RE.search(snippet) is None else _WS_RE.sub(" ", snippet).strip()
 
     normalized = snippet
     for pattern, spoken in _MULTI_CHAR_CODE_SPEECH:
@@ -378,6 +381,9 @@ class _MarkdownReferenceScanner:
 
 def _replace_markdown_links_and_images(text: str) -> str:
     """Render links as label+URL and images as alt text for voice output."""
+    if "[" not in text:
+        return text
+
     out: list[str] = []
     cursor = 0
     changed = False
@@ -406,7 +412,7 @@ def _has_markdown_link_or_image(text: str) -> bool:
     matching is resolved once in linear time via :class:`_DelimiterScanner`,
     keeping detection O(n) on adversarial inputs such as ``"[" * n + ")"``.
     """
-    return next(iter(_MarkdownReferenceScanner(text)), None) is not None
+    return "[" in text and next(iter(_MarkdownReferenceScanner(text)), None) is not None
 
 
 def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool = False) -> str:

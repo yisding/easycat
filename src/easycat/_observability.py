@@ -189,6 +189,16 @@ def observe_gauge(
     _record_metric(name, "observable_gauge", value, attributes)
 
 
+def tracing_available() -> bool:
+    """Whether the optional OpenTelemetry tracing API is importable."""
+    return _get_tracer() is not None
+
+
+def metrics_available() -> bool:
+    """Whether the optional OpenTelemetry metrics API is importable."""
+    return _get_meter() is not None
+
+
 def session_started() -> None:
     global _ACTIVE_SESSIONS
     with _ACTIVE_SESSIONS_LOCK:

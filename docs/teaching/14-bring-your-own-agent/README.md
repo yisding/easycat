@@ -1,5 +1,9 @@
 # Chapter 14 — Bring your own agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 15 of 16** · [← Chapter 13](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 →](../15-operate-in-production/)
+<!-- END auto:navigation -->
+
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
 > the OpenAI Agents SDK. `create_session` silently wrapped it in an
 > `OpenAIAgentsBridge`. In this chapter we drop the framework
@@ -11,6 +15,11 @@
 - [Chapter 13.](../13-swap-providers-and-transports/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
