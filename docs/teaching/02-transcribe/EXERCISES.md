@@ -1,5 +1,7 @@
 # Chapter 2 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Find the moment STT committed to the wrong guess
 
 **Task.** Say a word the STT consistently mishears ("bass" vs

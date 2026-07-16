@@ -1,5 +1,9 @@
 # Chapter 2 — Transcribe
 
+<!-- BEGIN auto:navigation -->
+**Progress: 3 of 16** · [← Chapter 1](../01-echo/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 3 →](../03-parrot-naive/)
+<!-- END auto:navigation -->
+
 > Speak, see text. Twice — once batch, once streaming. Feel the
 > latency difference. And meet the journal.
 
@@ -11,6 +15,11 @@
   `src/easycat/stt/factory.py`; add that provider's extra, such as
   `--extra deepgram`, and its API key, such as `DEEPGRAM_API_KEY`,
   when you switch).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -37,7 +46,7 @@
 ```diff
 --- docs/teaching/01-echo/main.py
 +++ docs/teaching/02-transcribe/streaming.py
-@@ -1,57 +1,111 @@
+@@ -1,57 +1,120 @@
 -"""Chapter 1 — Echo.
 +"""Chapter 2 — streaming transcription.
 
@@ -75,10 +84,13 @@
 +from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
 
--
++DURATION_S = 5
++RUNS_DIR = Path(__file__).parent / "runs"
++SESSION_ID = f"ch02-streaming-{int(time.time())}"
+
 -async def echo(transport) -> tuple[int, int]:
 -    """Pipe every inbound audio chunk straight to the outbound side.
--
+
 -    ``transport`` is deliberately untyped. Any object that matches
 -    the inbound/outbound audio shape of ``easycat.providers.Transport``
 -    will work — that is the whole point of duck-typed protocols.
@@ -98,9 +110,16 @@
 -        else:
 -            rejected += 1
 -    return accepted, rejected
-+DURATION_S = 5
-+RUNS_DIR = Path(__file__).parent / "runs"
-+SESSION_ID = f"ch02-streaming-{int(time.time())}"
++async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
++    """End an active stream once, then close its provider and transport."""
++    try:
++        if needs_stream_end:
++            await stt.end_stream()
++    finally:
++        try:
++            await close_if_supported(stt)
++        finally:
++            await transport.disconnect()
 
 
  async def main() -> None:
@@ -122,11 +141,13 @@
      await transport.connect()
 -    print("Echoing mic to speakers. Ctrl-C to stop.")
 +    await stt.start_stream()
++    stream_end_started = False
 +    start = time.monotonic()
 +    print(f"Speak for {DURATION_S} seconds...")
 +
 +    async def feed_audio() -> None:
 +        """Push mic chunks into STT until DURATION_S seconds elapse."""
++        nonlocal stream_end_started
 +        async for chunk in transport.receive_audio():
 +            await stt.send_audio(chunk)
 +            if time.monotonic() - start >= DURATION_S:
@@ -135,6 +156,7 @@
 +        # OpenAI's batch provider) or the final commit (for Deepgram).
 +        # For OpenAI this call blocks for the full round-trip: the
 +        # partials you see start arriving *after* we get here.
++        stream_end_started = True
 +        await stt.end_stream()
 +
 +    async def consume_events() -> None:
@@ -165,13 +187,7 @@
 +        await asyncio.gather(feed_audio(), consume_events())
      finally:
 -        await transport.disconnect()
-+        try:
-+            await stt.end_stream()
-+        finally:
-+            try:
-+                await close_if_supported(stt)
-+            finally:
-+                await transport.disconnect()
++        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
 +
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
@@ -192,6 +208,16 @@
 <!-- END auto:diff -->
 
 ## The two scripts
+
+Start with the chapter's canonical entry point. It delegates to the
+streaming version:
+
+```bash
+uv run python docs/teaching/02-transcribe/main.py
+```
+
+Then run the two named scripts directly to compare batch and streaming
+STT side by side:
 
 ```bash
 uv run python docs/teaching/02-transcribe/batch.py
