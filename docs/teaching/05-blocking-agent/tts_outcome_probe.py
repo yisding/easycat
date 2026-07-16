@@ -46,7 +46,7 @@ class ScriptedTransport:
 
 
 def _outcome(output: str) -> str:
-    if "first audio enqueued" in output:
+    if "first audio accepted" in output:
         return "first_audio_accepted"
     if "transport rejected all" in output:
         return "all_chunks_rejected"

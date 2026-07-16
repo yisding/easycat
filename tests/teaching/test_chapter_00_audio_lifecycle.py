@@ -5,9 +5,9 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+from collections.abc import Sized
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,7 +39,7 @@ class _FakeStream:
     def __exit__(self, exc_type, _exc, _traceback) -> None:
         self.events.extend(("stop", "close", ("exit_error", exc_type)))
 
-    def write(self, block: np.ndarray) -> None:
+    def write(self, block: Sized) -> None:
         self.events.append(("write", len(block)))
         if self.fail_write:
             raise RuntimeError("device write failed")
@@ -49,6 +49,7 @@ def test_chunked_playback_models_source_wait_and_names_enqueue_boundary(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    np = pytest.importorskip("numpy")
     stream = _FakeStream()
     chapter = _load_main(monkeypatch, stream)
     sleeps: list[float] = []
@@ -73,6 +74,7 @@ def test_chunked_playback_models_source_wait_and_names_enqueue_boundary(
 def test_chunked_playback_closes_stream_when_write_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    np = pytest.importorskip("numpy")
     stream = _FakeStream(fail_write=True)
     chapter = _load_main(monkeypatch, stream)
     monkeypatch.setattr(chapter.time, "sleep", lambda _seconds: None)
