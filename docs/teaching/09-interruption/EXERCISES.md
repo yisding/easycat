@@ -1,7 +1,7 @@
 # Chapter 9 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->

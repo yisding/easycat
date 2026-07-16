@@ -84,7 +84,7 @@ guard-examples:
 
 # Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
 guard-templates:
-    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+    uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
