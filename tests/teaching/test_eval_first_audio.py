@@ -53,14 +53,18 @@ def test_checked_in_eval_fixtures_end_turn_gap_at_first_audio() -> None:
     assert tool_names.index("tts.first_audio") < tool_names.index("tool.call.started")
 
 
-def test_eval_p95_includes_the_checked_in_slow_tail() -> None:
+def test_chapter_evals_reuse_maintained_small_sample_percentiles(capsys, monkeypatch) -> None:
     evals = _load_chapter_module("evals.py")
+    bundles = CHAPTER / "bundles"
+    ground_truth = CHAPTER / "ground_truth.csv"
 
-    p50, p95 = evals._latency_percentiles([650, 670, 710, 910, 1160, 2420])
+    monkeypatch.setattr(sys, "argv", ["evals.py", str(bundles), str(ground_truth)])
+    evals.main()
 
-    assert p50 == 810
-    assert p95 == 2420
-    assert p95 > 1200
+    output = capsys.readouterr().out
+    assert "P50                                        810 ms" in output
+    assert "P95                                       2420 ms" in output
+    assert "P95 / P50 ratio                           2.99" in output
 
 
 def test_slow_agent_budget_does_not_blame_all_sentence_tts(capsys) -> None:
