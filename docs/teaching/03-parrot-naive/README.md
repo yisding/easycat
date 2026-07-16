@@ -1,5 +1,9 @@
 # Chapter 3 — Parrot, the Naive Way
 
+<!-- BEGIN auto:navigation -->
+**Progress: 4 of 16** · [← Chapter 2](../02-transcribe/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 4 →](../04-vad-preroll/)
+<!-- END auto:navigation -->
+
 > A bot that repeats what you said. Except it breaks the instant
 > you say "um."
 
@@ -14,6 +18,11 @@ personally heard this fail on your own voice.
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -63,7 +72,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -24,54 +27,145 @@
+@@ -24,22 +27,64 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -79,6 +88,10 @@ personally heard this fail on your own voice.
 +SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch02-streaming-{int(time.time())}"
+-
+-
+-async def shutdown(stt, transport, *, needs_stream_end: bool) -> None:
+-    """End an active stream once, then close its provider and transport."""
 +SESSION_ID = f"ch03-parrot-{int(time.time())}"
 +
 +
@@ -126,13 +139,14 @@ personally heard this fail on your own voice.
 +
 +async def shutdown(stt, transport) -> None:
 +    """End the logical STT stream, close its provider, then disconnect."""
-+    try:
+     try:
+-        if needs_stream_end:
+-            await stt.end_stream()
 +        await stt.end_stream()
-+    finally:
-+        try:
-+            await close_if_supported(stt)
-+        finally:
-+            await transport.disconnect()
+     finally:
+         try:
+             await close_if_supported(stt)
+@@ -48,45 +93,79 @@
  
  
  async def main() -> None:
@@ -170,6 +184,7 @@ personally heard this fail on your own voice.
  
      await transport.connect()
      await stt.start_stream()
+-    stream_end_started = False
      start = time.monotonic()
 -    print(f"Speak for {DURATION_S} seconds...")
 +    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
@@ -180,6 +195,7 @@ personally heard this fail on your own voice.
  
      async def feed_audio() -> None:
 -        """Push mic chunks into STT until DURATION_S seconds elapse."""
+-        nonlocal stream_end_started
          async for chunk in transport.receive_audio():
              await stt.send_audio(chunk)
 -            if time.monotonic() - start >= DURATION_S:
@@ -220,6 +236,7 @@ personally heard this fail on your own voice.
 -        # OpenAI's batch provider) or the final commit (for Deepgram).
 -        # For OpenAI this call blocks for the full round-trip: the
 -        # partials you see start arriving *after* we get here.
+-        stream_end_started = True
 -        await stt.end_stream()
 -
 -    async def consume_events() -> None:
@@ -235,7 +252,7 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -82,23 +176,15 @@
+@@ -97,17 +176,15 @@
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -252,18 +269,12 @@ personally heard this fail on your own voice.
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
      finally:
--        try:
--            await stt.end_stream()
--        finally:
--            try:
--                await close_if_supported(stt)
--            finally:
--                await transport.disconnect()
+-        await shutdown(stt, transport, needs_stream_end=not stream_end_started)
 +        await shutdown(stt, transport)
  
      RUNS_DIR.mkdir(exist_ok=True)
      bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
-@@ -108,4 +194,7 @@
+@@ -117,4 +194,7 @@
  
  
  if __name__ == "__main__":

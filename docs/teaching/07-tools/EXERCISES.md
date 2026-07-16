@@ -1,5 +1,7 @@
 # Chapter 7 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Add a "still working on it" update for slow tools
 
 **Task.** Change `get_weather` to sleep 5 seconds. Run. One filler
