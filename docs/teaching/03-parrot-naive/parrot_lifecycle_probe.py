@@ -14,7 +14,7 @@ from contextlib import redirect_stdout
 
 from main import run_parrot
 
-from easycat.events import STTEvent, STTEventType
+from easycat.events import Error, ErrorStage, EventBus, STTEvent, STTEventType
 from easycat.runtime import InMemoryRingBuffer
 
 
@@ -63,12 +63,15 @@ class ScriptedSTT:
         *,
         fail_start: bool = False,
         hold_events: bool = False,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.events_log = events
         self.provider_started = provider_started
         self.fail_start = fail_start
         self.hold_events = hold_events
+        self.event_bus = event_bus
         self.ended = False
+        self.emit_task: asyncio.Task[None] | None = None
 
     async def start_stream(self) -> None:
         self.events_log.append("stt.start")
@@ -90,6 +93,16 @@ class ScriptedSTT:
         else:
             yield STTEvent(type=STTEventType.FINAL, text="probe complete")
             self.events_log.append("stt.events.end")
+            if self.event_bus is not None:
+                self.emit_task = asyncio.create_task(
+                    self.event_bus.emit(
+                        Error(
+                            exception=ConnectionError("stt websocket died"),
+                            stage=ErrorStage.STT,
+                            provider="probe",
+                        )
+                    )
+                )
 
     async def end_stream(self) -> None:
         if not self.ended:
@@ -111,9 +124,13 @@ async def run_case(
     fail_connect: bool = False,
     fail_start: bool = False,
     fail_receive: bool = False,
+    fail_event_stream: bool = False,
 ) -> dict[str, object]:
     events: list[str] = []
     provider_started = asyncio.Event()
+    provider_errors: list[BaseException] = []
+    event_bus = EventBus()
+    event_bus.subscribe(Error, lambda event: provider_errors.append(event.exception))
     error = None
     try:
         with redirect_stdout(io.StringIO()):
@@ -123,6 +140,7 @@ async def run_case(
                     provider_started,
                     fail_start=fail_start,
                     hold_events=fail_receive,
+                    event_bus=event_bus if fail_event_stream else None,
                 ),
                 ScriptedTransport(
                     events,
@@ -131,6 +149,7 @@ async def run_case(
                     fail_receive=fail_receive,
                 ),
                 InMemoryRingBuffer(capacity=20),
+                provider_errors,
             )
     except Exception as exc:  # noqa: BLE001 - report each failure shape as JSON
         error = _root_message(exc)
@@ -141,6 +160,7 @@ async def probe() -> dict[str, dict[str, object]]:
     return {
         "connect_failure": await run_case(fail_connect=True),
         "feed_failure": await run_case(fail_receive=True),
+        "failed_event_end": await run_case(fail_event_stream=True),
         "normal_event_end": await run_case(),
         "start_failure": await run_case(fail_start=True),
     }
