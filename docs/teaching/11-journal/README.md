@@ -40,7 +40,7 @@ planted-bug investigations below.
   `bundles/bug_*.bundle` — three planted-failure fixtures checked
   in (unlike the gitignored `runs/*` from earlier chapters);
   `generate_bundles.py` that builds those fixtures; an explicit
-  walkthrough of the `JournalView` query surface
+  walkthrough of the parallel `RunBundle` / `JournalView` query surface
   (`filter_by_stage`, `filter_by_turn`, `lookup_by_sequence`).
 - **Removed:** the entire live pipeline. This chapter writes no
   audio.
@@ -100,12 +100,18 @@ you want to choose a fixture or add filters:
 uv run python docs/teaching/11-journal/investigate.py \
     docs/teaching/11-journal/bundles/bug_01_empty_final.bundle
 
-# Filter by stage or by record name:
+# Filter by stage, record name, turn, or exact sequence:
 uv run python docs/teaching/11-journal/investigate.py \
     docs/teaching/11-journal/bundles/bug_02_tts_stutter.bundle --stage tts
 
 uv run python docs/teaching/11-journal/investigate.py \
     docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle --name interruption.start
+
+uv run python docs/teaching/11-journal/investigate.py \
+    docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle --turn ch11-bug03-turn-2
+
+uv run python docs/teaching/11-journal/investigate.py \
+    docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle --sequence 9
 ```
 
 Under the hood it is:
@@ -117,8 +123,14 @@ for r in b.records():
     ...
 ```
 
-You can also use the `JournalView` API for more structured queries
-— `filter_by_stage`, `filter_by_turn`, `lookup_by_sequence`.
+`RunBundle` exposes `filter_by_stage`, `filter_by_turn`, and
+`lookup_by_sequence` directly. A live session's read-only
+`session.journal` is a `JournalView` with the same query names.
+The vocabulary transfers, but the record representation differs:
+bundle records are dictionaries (`r["name"]`), while live journal
+records are typed objects (`r.name`). Both stage and turn filters
+return materialized lists; stage filtering scans the records, while
+an exact sequence lookup is bounded on a live journal backend.
 
 ## Investigation 1 — guided
 
