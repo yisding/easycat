@@ -81,6 +81,66 @@ class TestLocalTransport:
         assert not transport.is_connected
 
     @pytest.mark.asyncio
+    async def test_connect_rolls_back_input_when_output_start_fails(self, monkeypatch):
+        """A speaker startup failure must not leak the already-started microphone."""
+        transport = LocalTransport()
+        events: list[str] = []
+
+        class FakeStream:
+            def __init__(self, name: str, *, fail_start: bool = False) -> None:
+                self.name = name
+                self.fail_start = fail_start
+
+            def start(self) -> None:
+                events.append(f"{self.name}.start")
+                if self.fail_start:
+                    raise RuntimeError("output start failed")
+
+            def stop(self) -> None:
+                events.append(f"{self.name}.stop")
+
+            def close(self) -> None:
+                events.append(f"{self.name}.close")
+
+        class FakeSoundDevice:
+            @staticmethod
+            def InputStream(**_kwargs: object) -> FakeStream:
+                return FakeStream("input")
+
+            @staticmethod
+            def OutputStream(**_kwargs: object) -> FakeStream:
+                return FakeStream("output", fail_start=True)
+
+        def fake_require_module(module_name: str, **_kwargs: object) -> object:
+            if module_name == "sounddevice":
+                return FakeSoundDevice()
+            return object()
+
+        monkeypatch.setattr(local_mod, "require_module", fake_require_module)
+
+        with pytest.raises(RuntimeError, match="output start failed"):
+            await transport.connect()
+
+        assert events == [
+            "input.start",
+            "output.start",
+            "input.stop",
+            "input.close",
+            "output.stop",
+            "output.close",
+        ]
+        assert transport._input_stream is None
+        assert transport._output_stream is None
+        assert transport._loop is None
+        assert not transport.is_connected
+
+        # The exit-stack callback used by the teaching example may invoke
+        # disconnect again after connect() has already rolled itself back.
+        cleanup_events = events.copy()
+        await transport.disconnect()
+        assert events == cleanup_events
+
+    @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
         transport = LocalTransport()
         await transport.disconnect()

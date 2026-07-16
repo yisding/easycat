@@ -1,7 +1,7 @@
 # Chapter 1 — Echo
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 0 — Hello, Audio](../00-hello-audio/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
+**Progress: 2 of 16** · [← Chapter 0 — Hello, Audio](../00-hello-audio/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 > Mic to speaker, continuously, through the `Transport` protocol.
@@ -59,14 +59,14 @@
 +"""Chapter 1 — Echo.
  
 -Record 3 seconds of mic audio, play it back, show the byte math,
--then replay at different chunk sizes so the reader can *hear* the
--latency difference.
+-then replay at different chunk sizes while simulating the wait for
+-the first live chunk so the reader can *hear* the latency difference.
 +Mic → speaker, continuously, through EasyCat's ``Transport`` protocol.
 +Runs until Ctrl-C.
  
  Dependency:
      uv sync --extra local --group dev
-@@ -10,106 +9,49 @@
+@@ -10,112 +9,49 @@
  
  from __future__ import annotations
  
@@ -128,6 +128,11 @@
 -def play_chunked(samples: np.ndarray, chunk_ms: int) -> None:
 -    """Play the buffer in fixed-size chunks with a live-source startup delay.
 -
+-    This recording is already complete, so every chunk would otherwise
+-    be ready immediately. A real source has to collect one full chunk
+-    before it can hand that chunk downstream. Sleeping once before the
+-    first write makes that source-buffering cost explicit in the demo.
+-
 -    ``latency='low'`` and a matching ``blocksize`` keep PortAudio
 -    from letting a large host buffer hide the source-side delay that
 -    this demo is meant to expose.
@@ -188,9 +193,10 @@
 -    print("\nPlayback — one-shot:")
 -    play_one_shot(samples)
 -
--    # Chunk-size demo. 10ms feels instant; 200ms feels slow-start.
--    # We're not changing the audio — only how we *feed it* to the
--    # speaker. Perceived latency = chunk size + scheduling jitter.
+-    # Chunk-size demo. The full recording is already in memory, so each
+-    # replay waits one chunk before its first write to model the time a
+-    # live source spends filling that chunk. 10 ms feels instant; 200 ms
+-    # feels slow-start. Device scheduling adds latency of its own.
 -    print("\nPlayback — chunked:")
 -    for chunk_ms in (10, 50, 200):
 -        play_chunked(samples, chunk_ms)

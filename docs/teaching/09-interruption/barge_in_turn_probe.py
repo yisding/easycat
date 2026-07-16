@@ -11,10 +11,12 @@ import asyncio
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 
 def load_cancel_chapter():
+    sys.modules.setdefault("openai", types.SimpleNamespace(AsyncOpenAI=object))
     path = Path(__file__).with_name("cancel.py")
     spec = importlib.util.spec_from_file_location("teaching_ch09_cancel_probe", path)
     assert spec is not None and spec.loader is not None
