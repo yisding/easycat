@@ -6,8 +6,9 @@ bundle that looks healthy on a surface scan — but the journal
 shows neither one does anything useful.
 
     --mode nr-after-vad      NR runs *after* VAD has already decided.
-                             VAD's verdicts are unchanged → false-fires
-                             on keystrokes and fan noise persist.
+                             The ordering proves NR cannot affect that
+                             frame's VAD verdict; compare matched runs
+                             to measure any false-fire-rate difference.
 
     --mode aec-no-reference  AEC runs but no one ever calls
                              feed_reference(). The adaptive filter has
@@ -72,14 +73,39 @@ RUNS_DIR = Path(__file__).parent / "runs"
 
 
 class MiniTurnDetector:
-    def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
+    def __init__(
+        self,
+        vad,
+        journal,
+        session_id: str,
+        *,
+        record_before_nr: bool = False,
+        preroll_frames: int = PREROLL_FRAMES,
+    ) -> None:
         self._vad = vad
+        self._journal = journal
+        self._session_id = session_id
+        self._record_before_nr = record_before_nr
         self._preroll: collections.deque[AudioChunk] = collections.deque(maxlen=preroll_frames)
         self._speaking = False
+        self._frame_index = 0
 
     async def frames(self, audio_iter):
         async for chunk in audio_iter:
-            for ev in [e async for e in self._vad.process(chunk)]:
+            self._frame_index += 1
+            events = [event async for event in self._vad.process(chunk)]
+            if self._record_before_nr:
+                self._journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="vad.processed_before_nr",
+                    session_id=self._session_id,
+                    data={
+                        "stage": "vad",
+                        "frame_index": self._frame_index,
+                        "events": [type(event).__name__ for event in events],
+                    },
+                )
+            for ev in events:
                 if isinstance(ev, VADStartSpeaking):
                     self._speaking = True
                     yield "speech_started", None
@@ -97,10 +123,13 @@ class MiniTurnDetector:
 async def wrong_order_pipeline(transport, nr, aec, mode: str, journal, session_id):
     """Run NR + AEC, but in the wrong order or without a reference."""
     if mode == "nr-after-vad":
-        # VAD will run inside MiniTurnDetector on raw chunks. NR runs on
-        # whatever VAD passes through, *after* the verdict is recorded.
+        # VAD will run inside MiniTurnDetector before NR. AEC has already
+        # processed each chunk, so this is pre-NR input rather than raw mic
+        # audio. NR runs after the VAD verdict is recorded.
         # The journal records that NR ran but VAD never saw its output.
+        frame_index = 0
         async for chunk in transport.receive_audio():
+            frame_index += 1
             # AEC still runs in its right place (before VAD), but with a
             # live reference so isolation of the NR ordering is clean.
             chunk = await aec.process(chunk)
@@ -111,7 +140,11 @@ async def wrong_order_pipeline(transport, nr, aec, mode: str, journal, session_i
                 kind=JournalRecordKind.EVENT,
                 name="nr.applied_after_vad",
                 session_id=session_id,
-                data={"stage": "nr", "t_ms": time.monotonic() * 1000},
+                data={
+                    "stage": "nr",
+                    "frame_index": frame_index,
+                    "t_ms": time.monotonic() * 1000,
+                },
             )
     elif mode == "aec-no-reference":
         # NR runs in its right place. AEC runs in its right place too —
@@ -311,7 +344,12 @@ async def main() -> None:
 
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
     vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
+    detector = MiniTurnDetector(
+        vad,
+        journal,
+        session_id,
+        record_before_nr=args.mode == "nr-after-vad",
+    )
     client = AsyncOpenAI()
     tts = create_tts_provider(
         TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
@@ -329,7 +367,8 @@ async def main() -> None:
     await transport.connect()
     if args.mode == "nr-after-vad":
         print("Type loudly while you talk. NR is loaded but runs after VAD")
-        print("has already decided — keystrokes still fire VAD-on. Ctrl-C to stop.\n")
+        print("has already decided. Compare VAD events with a matched correct-order run.")
+        print("Ctrl-C to stop.\n")
     else:
         print("Use a speakerphone (no headphones) and ask the bot a long question.")
         print("AEC is loaded but never sees the TTS audio — bot will interrupt")
@@ -355,9 +394,8 @@ async def main() -> None:
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
     print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
     if args.mode == "nr-after-vad":
-        print("Check the journal: count `nr.applied_after_vad` records. Each one is")
-        print("an NR call whose output went nowhere. Then check `stage.vad.execute`")
-        print("verdicts on keystroke-heavy chunks — they should still fire 'speech.'")
+        print("Check the journal: each `vad.processed_before_nr` record precedes the")
+        print("matching `nr.applied_after_vad` frame index. NR's output went nowhere.")
     else:
         print("Check the journal: `aec.no_reference` is the smoking gun.")
         print("Also: `stage.tts.execute` records show `aec_reference_feeds: 0`.")

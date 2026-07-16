@@ -536,9 +536,10 @@ uv run python docs/teaching/10-cleaning-signal/wrong_order.py --mode aec-no-refe
 ```
 
 Both modes are technically running NR / AEC, and both produce a
-bundle. The journal shows the failure: VAD's false-fire rate
-doesn't change in `nr-after-vad`, and AEC's `feed_reference()`
-counter stays at zero in `aec-no-reference`. **Wrong-version-
+bundle. The journal shows the failure: each `vad.processed_before_nr`
+record precedes the matching `nr.applied_after_vad` frame index in
+`nr-after-vad`, and AEC's `feed_reference()` counter stays at zero
+in `aec-no-reference`. **Wrong-version-
 first** for pipeline ordering — the same components, wired
 wrong, do nothing.
 
