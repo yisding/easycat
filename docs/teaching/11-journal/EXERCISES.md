@@ -15,6 +15,10 @@ worked through them.
 write down **three** things that *could* go wrong on a flaky day,
 and for each one, name the record you'd query first.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. "Agent stalled" → compare `stt.final.data.t_ms` with
@@ -36,6 +40,9 @@ and for each one, name the record you'd query first.
    with anything in the audio. GC pauses or thread-pool stalls
    show up as record-to-record gaps with no work between.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Plant your own bug
 
 **Task.** Modify chapter 9c's `estimate.py` to introduce a real
@@ -51,6 +58,10 @@ bug — your choice. Possible bugs:
 Dump the bundle. Then: can a classmate (or your future self
 tomorrow morning) find the bug by reading only the bundle?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The best planted bugs are the ones where the *output looks
@@ -63,6 +74,9 @@ tomorrow morning) find the bug by reading only the bundle?
 3. Production bugs in voice pipelines almost always look like
    this: the audio sounds off, the logs are silent, only the
    journal tells you what actually happened.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 3. Compare bundle and live-journal queries
 
@@ -80,6 +94,10 @@ for r in session.journal.filter_by_turn(turn_id):
     print(r.name)
 ```
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `filter_by_stage` is convenient for "show me everything in one
@@ -91,6 +109,9 @@ for r in session.journal.filter_by_turn(turn_id):
 3. `filter_by_stage` and `filter_by_turn` return materialized lists.
    Stage filtering scans the journal because `stage` lives inside
    record data; do not mistake the read-only surface for a lazy one.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 4. Prove an empty query means what you think
 
@@ -105,6 +126,10 @@ uv run python docs/teaching/11-journal/investigate.py \
   --turn typo --require-match
 ```
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. A zero marginal count means that one filter is invalid for the
@@ -118,6 +143,9 @@ uv run python docs/teaching/11-journal/investigate.py \
 4. Do not infer dropped journal records from a filtered sequence gap;
    inspect the unfiltered source and its retention/export contract.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Find the payload-schema boundary
 
 **Task.** Run the provider-free payload probe, then explain which types
@@ -126,6 +154,10 @@ belong to the journal envelope and which belong to one record emitter:
 ```bash
 uv run python docs/teaching/11-journal/payload_schema_probe.py
 ```
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -140,6 +172,9 @@ uv run python docs/teaching/11-journal/payload_schema_probe.py
 4. JSON avoids regex parsing, but serialization alone is not schema
    validation. Use one stable schema per record name and version intentional
    changes when downstream consumers share that contract.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 6. Recover a session cause hidden by a turn query
 
@@ -157,6 +192,10 @@ uv run python docs/teaching/11-journal/investigate.py \
 Explain why sequence 1 belongs in the diagnostic context but not in the
 strict turn reconstruction.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `filter_by_turn` returns sequences 8–13 for turn 2. Sequence 1 has
@@ -170,6 +209,9 @@ strict turn reconstruction.
    target session to join safely.
 5. Use strict turn scope to reconstruct causality. Add same-session
    context only when investigating configuration or lifecycle causes.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

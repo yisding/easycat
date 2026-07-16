@@ -12,6 +12,10 @@ Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is
 diagnosis.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `turn_02_slow_agent.bundle` is the obvious one — `agent` is at
@@ -27,11 +31,18 @@ diagnosis.
    detector — you set a threshold based on your historical P50
    and alarm when the live number consistently breaks past it.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Add a `filler_appropriate` rubric dimension
 
 **Task.** Add a `filler_appropriate` dimension to the LLM-judge
 rubric. Re-run on the chapter-7 tool-bearing bundles. Does the
 judge agree with your ears?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -51,10 +62,17 @@ judge agree with your ears?
 4. Copy a `tools_*.bundle` from chapter 7's runs/ into chapter
    12's bundles/ for the judge to consume.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Wire a latency regression test
 
 **Task.** Write a pytest test that fails if the fixture set's P95 exceeds
 1200 ms. That's the seed of a latency regression suite.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -77,6 +95,9 @@ judge agree with your ears?
    numbers their filenames advertise. That's a regression test
    for the WER pipeline itself.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Break coverage before calculating a score
 
 **Task.** Run the provider-free coverage probe, then remove one row
@@ -88,6 +109,10 @@ uv run python docs/teaching/12-evals-and-latency/coverage_probe.py
 
 Why is a hard failure better than computing latency from the remaining
 bundles?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -101,6 +126,9 @@ bundles?
 4. Coverage is not a fifth quality metric. It is the precondition that
    makes the other four interpretable.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Find the turn that controls P95
 
 **Task.** Run the provider-free sensitivity probe:
@@ -112,6 +140,10 @@ uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
 Before reading the output, predict the P95 after omitting each fixture.
 Then explain what the 1,160–2,420 ms range proves—and what it cannot
 prove.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -127,11 +159,18 @@ prove.
    provider conditions when possible so traffic-mix changes do not
    masquerade as a latency win.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 6. (Bonus) Build a real eval set
 
 **Task.** Record 20 of your own chapter-6 or chapter-10 turns,
 hand-type the reference transcripts into a CSV, and run
 `evals.py` against the directory.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -147,6 +186,9 @@ hand-type the reference transcripts into a CSV, and run
    ground-truth set. Production teams maintain hundreds to
    thousands of these. The six fixtures here are training
    wheels.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

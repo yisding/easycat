@@ -10,6 +10,10 @@
 each of the four `--nr/--aec` combinations. Where does VAD fire
 in each?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Keyboard clicks are short, energetic, broadband — they look
@@ -26,12 +30,19 @@ in each?
    names them clearly because production teams routinely treat
    them as one thing.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Run the chapter-9-style barge-in problem with AEC
 
 **Task.** Run `--aec off` on speakerphone (no headphones). The bot
 interrupts itself on chapter 9's `cancel.py` style coordinator
 (this chapter's `main.py` is built on that shape). Then enable
 AEC. Compare bundles.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -45,6 +56,9 @@ AEC. Compare bundles.
    the user's actual barge-in (the "double-talk" failure mode
    described in the README). Tune carefully.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. NR on but AEC off — what changes?
 
 **Task.** Run the two single-component configurations separately:
@@ -56,6 +70,10 @@ uv run python docs/teaching/10-cleaning-signal/main.py --nr off --aec on
 
 Compare audio quality and each bundle's `audio.config` record. In the
 first run, which noises remain? In the second, which noises remain?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -75,11 +93,18 @@ first run, which noises remain? In the second, which noises remain?
    NR leaves it alone). This is why the pipeline is NR → AEC, not
    the other way.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Run `wrong_order.py` and confirm the journal
 
 **Task.** Run `wrong_order.py --mode nr-after-vad` and read the
 journal. Confirm that NR ran *after* VAD had already made its
 decision (so NR's output never affected what VAD saw).
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -101,6 +126,9 @@ decision (so NR's output never affected what VAD saw).
    right components, wrong wiring, indistinguishable from "no
    feature" except in the journal.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Make replay evidence fail closed
 
 **Task.** Run the provider-free replay metrics probe:
@@ -112,6 +140,10 @@ uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
 Explain why both rejected cases must fail before constructing the AEC
 backend. Then change one scripted scale filter from `0.5` to `1.0` and
 predict the per-frame and aggregate RMS values.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -128,6 +160,9 @@ predict the per-frame and aggregate RMS values.
    correct dataflow.
 5. RMS is not a quality score. A filter that deletes the user can show a
    dramatic energy reduction while making the voice path unusable.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

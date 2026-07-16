@@ -18,6 +18,7 @@ from easycat.events import (
 from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     EXERCISE_COMPLETION_RE,
+    EXERCISE_HINTS_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
     PRACTICE_HANDOFF_RE,
@@ -25,6 +26,7 @@ from scripts.regen_teaching_chapters import (
     TEACHING,
     Chapter,
     _ensure_exercise_completion,
+    _ensure_exercise_hints,
     _ensure_navigation,
     _ensure_practice_handoff,
     _resolve_child_path,
@@ -33,6 +35,7 @@ from scripts.regen_teaching_chapters import (
     regen_readme,
     render_diff,
     render_exercise_completion,
+    render_exercise_hints,
     render_exercise_navigation,
     render_navigation,
     render_offline_checkpoint,
@@ -306,6 +309,38 @@ def test_each_exercise_page_ends_with_current_generated_completion() -> None:
         assert matches[0].group("body").strip() == render_exercise_completion(chapter)
         assert matches[0].start() > exercises.index("## Self-check")
         assert exercises.rstrip().endswith("<!-- END auto:exercise-completion -->")
+
+
+def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
+    source = (
+        "## 1. Try it\n\n"
+        "**Task.** Make a prediction.\n\n"
+        "**Hints**\n\n"
+        "1. First clue.\n"
+        "2. Second clue.\n\n"
+        "## Self-check\n\n"
+        "Recall the result.\n"
+    )
+
+    wrapped = _ensure_exercise_hints(source)
+
+    assert render_exercise_hints("1. First clue.\n2. Second clue.") in wrapped
+    assert '<details markdown="1">' in wrapped
+    assert "<summary>Reveal hints after your first attempt</summary>" in wrapped
+    assert wrapped.index("<!-- END auto:exercise-hints -->") < wrapped.index("## Self-check")
+    assert _ensure_exercise_hints(wrapped) == wrapped
+
+
+def test_every_exercise_hint_is_concealed_until_after_an_attempt() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        matches = list(EXERCISE_HINTS_RE.finditer(exercises))
+
+        assert matches, chapter.slug
+        assert len(matches) == exercises.count("**Hints**"), chapter.slug
+        for match in matches:
+            assert match.group("body").strip(), chapter.slug
+            assert "Reveal hints after your first attempt" in match.group(0)
 
 
 def test_exercise_completion_is_moved_after_the_self_check() -> None:

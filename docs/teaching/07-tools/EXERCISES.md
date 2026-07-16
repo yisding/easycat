@@ -11,6 +11,10 @@ phrase is no longer enough — there are 3.5 quiet seconds after the
 filler ends and before the answer arrives. Add a "still working on
 it" filler at the 2.5-second mark.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The cleanest place to add this is inside the tool-call branch
@@ -24,6 +28,9 @@ it" filler at the 2.5-second mark.
    Past that, periodic updates ("still checking", "almost there")
    are the right pattern. Avoid the temptation to *narrate* —
    don't say "I'm still calling the weather API."
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Why is each session action *not* a tool?
 
@@ -39,6 +46,10 @@ bound in the runtime module rather than a hand-maintained count. For
 each of the seven action dataclasses, answer in one sentence: *why is
 this a deferred session action rather than a tool whose result must
 shape the current response?*
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -58,10 +69,17 @@ shape the current response?*
    The discipline is: if you'd be tempted to feed the result back to
    the LLM, make it a tool instead.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Plug a JSON-leak
 
 **Task.** Make a tool that returns a 5 KB JSON blob (mock weather
 forecast). Verify none of it reaches TTS.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -78,6 +96,9 @@ forecast). Verify none of it reaches TTS.
    defense is keeping the streams separate at parse time. By the
    time it's reached TTS it's already too late.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Reject the filler, not the reply
 
 **Task.** Run the provider-free filler attribution probe:
@@ -89,6 +110,10 @@ uv run python docs/teaching/07-tools/filler_delivery_probe.py
 Then change the slow case's transport decisions from `[False, True]`
 to `[True, False]`. Predict the first-audio kind and the two TTS
 records before re-running it.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -102,6 +127,9 @@ records before re-running it.
 4. Follow `tool_call_id` from `tool.call.started` to
    `tool.call.result` and the filler-kind `stage.tts.execute` record.
    Reply-kind TTS records intentionally have no tool-call ID.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

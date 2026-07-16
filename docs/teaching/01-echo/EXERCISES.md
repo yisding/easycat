@@ -22,6 +22,10 @@ async for chunk in transport.receive_audio():
 Now you have a delay line. Why does that create the sensation of
 an *echo* rather than just "a delay"?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. There are two paths from your mouth to your brain: through
@@ -42,6 +46,9 @@ an *echo* rather than just "a delay"?
   TTS audio back to the mic with a similar delay. The bot ends up
   hearing itself in just the same way you hear your delayed voice.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Make rejection observable
 
 **Task.** Run the provider-free contract probe:
@@ -54,6 +61,10 @@ Change its acceptance sequence to reject the first and third chunks. Predict
 the two counters before rerunning it. Then remove `version_info()` from
 `ScriptedTransport` and predict which structural checks change.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `False` means the chunk was not fully accepted for delivery. It does not
@@ -62,6 +73,9 @@ the two counters before rerunning it. Then remove `version_info()` from
    device buffer, and speaker can still sit downstream.
 3. The four connection/audio methods satisfy `TransportLike`; the full
    `Transport` also inherits `version_info()` for journaled provider metadata.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Bonus — what if you bypass the protocol entirely?
 

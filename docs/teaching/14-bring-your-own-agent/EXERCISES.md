@@ -13,6 +13,10 @@ that method is an explicit shallow-mode opt-in. Run the script and
 try to interrupt the bot mid-sentence. What stops, and what can no
 longer be reconciled?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The bridge still receives the session's cancel token in shallow
@@ -38,11 +42,18 @@ longer be reconciled?
    Alternatively, a shallow workflow may keep that hook as an explicit
    promise that it knows how to reconcile its own opaque state.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Custom action with a custom executor
 
 **Task.** Add a `CustomAction(name="play_chime", payload={"freq":
 440})` and a small executor that prints the action. Trigger it from
 the workflow. How does the journal record the action's lifecycle?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -94,6 +105,9 @@ the workflow. How does the journal record the action's lifecycle?
    `supports()` check narrow. The example claims only `CustomAction`
    objects named `play_chime`.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Watch the pronunciation pipeline at work
 
 **Task.** The chapter now builds its stack with
@@ -102,6 +116,10 @@ the workflow. How does the journal record the action's lifecycle?
 `easycat journal grep ... --query tts_payload_prepared --json`
 command. Which transformation survived into the provider-ready
 payload, and which guarantee was lost?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -129,11 +147,18 @@ payload, and which guarantee was lost?
    With such a provider, the record would show `prepared_format: ssml`
    and `ssml_downgraded: false`.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Move the custom client across the ownership boundary
 
 **Task.** Remove the outer `async with AsyncOpenAI()` block and create
 the client with `client = AsyncOpenAI()` instead. Which owner now closes
 that caller-owned `AsyncOpenAI` object?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -150,6 +175,9 @@ that caller-owned `AsyncOpenAI` object?
    journal survives session teardown, while the outer client remains
    open until the export finishes.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Define the workflow-state artifact boundary
 
 **Task.** Run the provider-free state probe:
@@ -161,6 +189,10 @@ uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
 Compare `bridge_snapshot.workflow_state` with `artifact_payload`. Why do
 neither contain `_client`, `_actions`, prompt text, or user text even though
 all four are reachable from `MyWorkflow`?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -175,6 +207,9 @@ all four are reachable from `MyWorkflow`?
 4. Treat the explicit dictionary as author-owned persisted data. Temporarily
    add `"api_key": "demo"` and rerun the probe: the field is visible. Remove
    it immediately, and never use a real credential for this experiment.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

@@ -16,6 +16,10 @@ each condition below, and for each one record which of the three
 | Add system prompt: *"Answer in one word."*     | ?                   | ?            |
 | Insert `await asyncio.sleep(0.5)` inside agent | ?                   | ?            |
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Switching to `gpt-4o` mostly affects the `agent_ms` span — same
@@ -28,6 +32,9 @@ each condition below, and for each one record which of the three
    this to verify your understanding of which code lives in which
    span.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. The "uh, what was I going to say" exercise
 
 **Task.** Have a friend (or yourself) ask the bot a 3-second
@@ -38,6 +45,10 @@ stopwatch.
 Now write down: **how many seconds was the human standing in the
 room holding their breath?**
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. 3 s question + ~3 s `turn.gap` + however long the bot speaks =
@@ -47,6 +58,9 @@ room holding their breath?**
 3. There's no software fix here. The fix is structural: don't make
    the user wait for the entire `agent.complete` event before
    starting to speak. That's chapter 6.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 3. Decompose somebody else's gap
 
@@ -61,6 +75,10 @@ attribute the time to the three sub-spans:
 - First audio → end-of-greeting (just speech duration; not in
   scope)
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The first sub-span is hard to measure from the outside (you
@@ -69,6 +87,9 @@ attribute the time to the three sub-spans:
 2. Good products run the gap at 600-900 ms total. Bad ones 2-4 s.
    Excellent ones (OpenAI Realtime API, smart-turn-equipped
    pipelines) target 300-500 ms.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 4. Diagnose a missing first-audio milestone
 
@@ -81,6 +102,10 @@ uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
 For each case, explain why `gap_available` has its value. Then delete the
 accepted/rejected fields from `stage.tts.execute` and `turn.gap` in a scratch
 copy. Which two root causes become observationally identical?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -95,6 +120,9 @@ copy. Which two root causes become observationally identical?
    though the scripted probe cannot produce it through `FirstAudioProbe`.
 5. None of these counts proves playback. Chapter 9 adds delivery-progress
    evidence later.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

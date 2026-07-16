@@ -16,6 +16,10 @@ transport capabilities without opening audio devices:
 uv run python docs/teaching/09-interruption/playback_evidence.py
 ```
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The toy estimator multiplies `bytes_accepted` by ~15 chars / 48000
@@ -40,12 +44,19 @@ uv run python docs/teaching/09-interruption/playback_evidence.py
    literal ground truth at the human ear: device, network, and acoustic
    delays can remain after the transport milestone.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Make markdown break the estimator
 
 **Task.** Have the agent reply with markdown-heavy output (ask it
 for a table or a bulleted list). The text fed to TTS is
 `strip_markdown(text)` — shorter than the original. How does this
 affect `heard_text` vs reality?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -61,11 +72,18 @@ affect `heard_text` vs reality?
 3. Production `interruption.py` keeps both: stripped for the user
    model, original for any tool that wants the structured text.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Why does AEC fix self-interruption?
 
 **Task.** Run `estimate.py` on speakerphone (no headphones). The
 bot interrupts itself. Why does AEC fix this, and why is VAD alone
 not enough?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -82,6 +100,9 @@ not enough?
    the information VAD needs isn't in its input.
 4. This is the preview of chapter 10.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Trace the turn that triggers barge-in
 
 **Task.** Run the provider-free continuity probe:
@@ -93,6 +114,10 @@ uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
 Explain why the triggering `speech_started` event must not be consumed
 by the cancellation branch, and why the mic frames are still available
 after the coordinator waits for the old bot task.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -108,6 +133,9 @@ after the coordinator waits for the old bot task.
    in-flight owners—STT and the bot task—before the shared TTS/client/VAD
    stack closes.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Separate cancel control from audible silence
 
 **Task.** Run the deterministic cancellation-latency probe:
@@ -119,6 +147,10 @@ uv run python docs/teaching/09-interruption/cancel_latency_probe.py
 Then change the scripted bot return from 80 ms to 150 ms without
 changing the transport's 30 ms return. Predict the completion record
 before re-running it.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -132,6 +164,9 @@ before re-running it.
 4. A fast `clear_audio()` return does not prove acoustic silence at the
    human ear. It is a software control milestone, not playback or
    perception evidence.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 
