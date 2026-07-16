@@ -1,5 +1,7 @@
 # Chapter 5 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Three controlled experiments on the same question
 
 **Task.** Ask the bot *"What is the capital of France?"* under

@@ -1,5 +1,7 @@
 # Chapter 10 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Type while you talk
 
 **Task.** Type loudly on your keyboard while saying "hello." Run
@@ -79,13 +81,13 @@ decision (so NR's output never affected what VAD saw).
 
 **Hints**
 
-1. The journal records `vad.processed_raw` followed by
+1. The journal records `vad.processed_before_nr` followed by
    `nr.applied_after_vad` with the same `frame_index`. NR is still
-   running, but only after VAD consumed the raw frame, so its output
+   running, but only after VAD consumed the pre-NR frame, so its output
    cannot influence that verdict.
 2. The `audio.config` record names the live backend, so you can
-   confirm RNNoise is loaded. `vad.processed_raw.data.events` names
-   any VAD transitions produced from each raw frame. The paired record
+   confirm RNNoise is loaded. `vad.processed_before_nr.data.events` names
+   any VAD transitions produced before NR runs on that frame. The paired record
    order proves NR cannot affect those transitions; a matched baseline
    run is still required before claiming the false-fire rate is
    unchanged.
