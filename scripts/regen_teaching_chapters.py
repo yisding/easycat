@@ -83,6 +83,22 @@ sync with the chapter's source code and ladder order:
   The renderer inserts this block after the chapter's opening summary and
   refreshes the concept and command from the spine's single manifest.
 
+* A two-chapter-lag retrieval prompt before chapters 2-15::
+
+      <!-- BEGIN auto:spaced-retrieval -->
+      ## Recall before reading
+
+      > **Following the ladder? Spaced retrieval — Chapter 3**
+      >
+      > Close earlier chapters and answer the Chapter 3 checkpoint prediction
+      > from memory before reading further. Then connect its concept to the
+      > current chapter and rerun its probe only after recording an answer.
+      <!-- END auto:spaced-retrieval -->
+
+  The prompt reuses the earlier checkpoint manifest without revealing its
+  expected evidence. Learners entering at a later chapter may skip it; learners
+  following the ladder get delayed, interleaved recall before new material.
+
 * A narrative-to-practice handoff before the chapter's next-step section::
 
       <!-- BEGIN auto:practice-handoff -->
@@ -244,6 +260,12 @@ OFFLINE_CHECKPOINT_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:offline-checkpoint -->)"
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:offline-checkpoint -->)",
+    re.DOTALL,
+)
+SPACED_RETRIEVAL_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:spaced-retrieval -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:spaced-retrieval -->)",
     re.DOTALL,
 )
 PRACTICE_HANDOFF_RE = re.compile(
@@ -453,6 +475,14 @@ def render_linkhash(chapter: Chapter, attrs: dict[str, str], prefix: str) -> str
     return prefix + anchor
 
 
+def _spaced_retrieval_for(chapter: Chapter) -> tuple[Chapter, dict[str, object]] | None:
+    chapters, index = _chapter_position(chapter)
+    if index < 2:
+        return None
+    earlier = chapters[index - 2]
+    return earlier, _offline_checkpoint_for(earlier)
+
+
 def render_exercise_protocol() -> str:
     return (
         "> **Completion evidence for every task**\n"
@@ -474,6 +504,50 @@ def render_practice_handoff() -> str:
         "Work through [the chapter exercises](./EXERCISES.md), then try their closing\n"
         "self-check from memory. If an answer is weak, rerun the hardware-free\n"
         "checkpoint or revisit the section that owns the gap."
+    )
+
+
+def render_spaced_retrieval(chapter: Chapter) -> str | None:
+    retrieval = _spaced_retrieval_for(chapter)
+    if retrieval is None:
+        return None
+    earlier, earlier_checkpoint = retrieval
+    current_checkpoint = _offline_checkpoint_for(chapter)
+    prediction_lines = textwrap.wrap(
+        str(earlier_checkpoint["prediction"]),
+        width=93,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    connection_lines = textwrap.wrap(
+        f"After recording your answer, explain one way `{earlier_checkpoint['concept']}` "
+        f"changes how you reason about `{current_checkpoint['concept']}`. Keep the first "
+        "answer visible.",
+        width=93,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return (
+        "## Recall before reading\n\n"
+        f"> **Following the ladder? Spaced retrieval — {_chapter_title(earlier)}**\n"
+        ">\n"
+        "> Close earlier chapters and answer from memory before reading further. If this\n"
+        "> chapter is your starting point, skip this block.\n"
+        ">\n"
+        "> **Answer from memory:**\n"
+        ">\n"
+        + "".join(f"> {line}\n" for line in prediction_lines)
+        + ">\n"
+        + "".join(f"> {line}\n" for line in connection_lines)
+        + ">\n"
+        + "> **Check only after answering:**\n"
+        ">\n"
+        "> ```bash\n"
+        f"> {earlier_checkpoint['command']}\n"
+        "> ```\n"
+        ">\n"
+        "> Cite one observed field, measurement, or behavior; repair only the part your\n"
+        "> evidence disproved.\n"
     )
 
 
@@ -592,9 +666,10 @@ def render_progress_worksheet() -> str:
         "record names, measurements, and explanations in your copy—not credentials, raw audio,",
         "or sensitive transcript text.",
         "",
-        "A chapter is complete only when all eight boxes on its card are checked. Preserve wrong",
-        "predictions: they are evidence to explain, not history to rewrite. Complete both",
-        "integration checks at each phase boundary before starting the next chapter card.",
+        "A chapter is complete only when every box on its card is checked. Chapters 2-15 begin",
+        "with a two-chapter-lag recall before the new narrative. Preserve wrong predictions:",
+        "they are evidence to explain, not history to rewrite. Complete both integration checks",
+        "at each phase boundary before starting the next chapter card.",
     ]
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
@@ -606,6 +681,20 @@ def render_progress_worksheet() -> str:
                 "",
                 f"[Narrative](./{chapter.slug}/) · [Exercises](./{chapter.slug}/EXERCISES.md)",
                 "",
+            ]
+        )
+        if spaced_retrieval := _spaced_retrieval_for(chapter):
+            earlier, _ = spaced_retrieval
+            sections.append(
+                _progress_item(
+                    "Recall earlier",
+                    f"before the narrative, retrieve {_chapter_title(earlier)} in "
+                    f"[Recall before reading](./{chapter.slug}/#recall-before-reading); keep "
+                    "the first answer and its evidence-backed repair.",
+                )
+            )
+        sections.extend(
+            [
                 _progress_item("Predict", str(checkpoint["prediction"])),
                 _progress_command_item(
                     "Prepare",
@@ -720,6 +809,13 @@ def _render_offline_checkpoint_block(chapter: Chapter) -> str:
     )
 
 
+def _render_spaced_retrieval_block(chapter: Chapter) -> str | None:
+    rendered = render_spaced_retrieval(chapter)
+    if rendered is None:
+        return None
+    return f"<!-- BEGIN auto:spaced-retrieval -->\n{rendered}<!-- END auto:spaced-retrieval -->"
+
+
 def _render_practice_handoff_block() -> str:
     return (
         "<!-- BEGIN auto:practice-handoff -->\n"
@@ -769,6 +865,23 @@ def _ensure_offline_checkpoint(chapter: Chapter, text: str) -> str:
     summary_end = summary_start + summary.end()
     prefix = text[:summary_end].rstrip("\n")
     remainder = text[summary_end:].lstrip("\n")
+    return f"{prefix}\n\n{block}\n\n{remainder}"
+
+
+def _ensure_spaced_retrieval(chapter: Chapter, text: str) -> str:
+    block = _render_spaced_retrieval_block(chapter)
+    if block is None:
+        if SPACED_RETRIEVAL_RE.search(text):
+            return SPACED_RETRIEVAL_RE.sub("", text).replace("\n\n\n", "\n\n")
+        return text
+    if SPACED_RETRIEVAL_RE.search(text):
+        return SPACED_RETRIEVAL_RE.sub(lambda _match: block, text)
+
+    checkpoint = OFFLINE_CHECKPOINT_RE.search(text)
+    if checkpoint is None:
+        raise ValueError(f"{chapter.slug}/README.md is missing its hardware-free checkpoint")
+    prefix = text[: checkpoint.start()].rstrip("\n")
+    remainder = text[checkpoint.start() :].lstrip("\n")
     return f"{prefix}\n\n{block}\n\n{remainder}"
 
 
@@ -865,6 +978,7 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
 
     updated = _ensure_navigation(chapter, original, render_navigation(chapter))
     updated = _ensure_offline_checkpoint(chapter, updated)
+    updated = _ensure_spaced_retrieval(chapter, updated)
     updated = _ensure_practice_handoff(chapter, updated)
     updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)

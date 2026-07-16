@@ -207,7 +207,9 @@ Each chapter's README lists its own prerequisites up front.
   kept an initial plan, the exact command or change plus an observation, and a
   causal explanation. Closing self-checks are closed-book retrieval gates:
   support recalled answers with attempt evidence, repair only weak concepts,
-  and retry before advancing.
+  and retry before advancing. From chapter 2 onward, a generated prompt also
+  revisits the checkpoint from two chapters earlier before the new narrative,
+  then asks the learner to connect both concepts before checking the old probe.
 - **Journals are the single source of truth.** From chapter 2
   onward each runnable chapter dumps a `RunBundle` to
   `runs/*.bundle` in its own folder. The `runs/` directory is
@@ -236,3 +238,6 @@ Each chapter's README lists its own prerequisites up front.
    chapter either dumps a `RunBundle` or reads one.
 5. **One primary axis per step.** Companion probes may expose adjacent
    boundary claims, but the chapter narrative keeps one question in focus.
+6. **Recall is spaced and interleaved.** New chapters retrieve an earlier
+   checkpoint before introducing their own concept; phase reviews then combine
+   several chapters into one evidence-backed explanation.

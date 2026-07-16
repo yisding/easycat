@@ -10,6 +10,31 @@
 > entirely and plug in a plain async class — same Session code,
 > different brain.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 12 — Evals + the Latency Budget**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which bundle controls P95, and how far should P95 move when that bundle is removed?
+>
+> After recording your answer, explain one way `small-sample P95 sensitivity` changes how you
+> reason about `plain workflow bridge contract`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `plain workflow bridge contract` without a microphone,
 > speakers, or provider credentials:

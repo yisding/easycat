@@ -7,6 +7,32 @@
 > A bot that repeats what you said. Except it breaks the instant
 > you say "um."
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 1 — Echo**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How many chunks will be accepted or rejected, and does matching `TransportLike` imply full
+> `Transport` conformance?
+>
+> After recording your answer, explain one way `transport acceptance` changes how you reason
+> about `silence-timeout tradeoff`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/01-echo/transport_contract_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `silence-timeout tradeoff` without a microphone,
 > speakers, or provider credentials:

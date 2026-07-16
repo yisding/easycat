@@ -7,6 +7,31 @@
 > Start speaking before the LLM is done thinking. First real
 > pipeline overlap.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 4 — VAD + Pre-roll**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which frames disappear when pre-roll is disabled, and does the trigger frame itself remain?
+>
+> After recording your answer, explain one way `VAD pre-roll frame order` changes how you
+> reason about `sentence-level TTS handoff`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/04-vad-preroll/preroll_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `sentence-level TTS handoff` without a microphone,
 > speakers, or provider credentials:
