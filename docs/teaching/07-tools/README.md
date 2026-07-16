@@ -1,14 +1,69 @@
 # Chapter 7 — Tools, Mid-stream
 
+<!-- BEGIN auto:navigation -->
+**Progress: 8 of 16** · [← Chapter 6 — Streaming Agent + Sentence TTS](../06-streaming-agent/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+<!-- END auto:navigation -->
+
 > The agent pauses to fetch something. The user hears silence — or
 > hears "let me check that for you." That choice is the whole
 > chapter.
+
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 5 — The Blocking Agent**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which sub-gap dominates first-audio latency, and does full TTS enqueue define when the user
+> first hears audio?
+>
+> After recording your answer, explain one way `blocking first-audio gap` changes how you
+> reason about `tool filler delivery`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `tool filler delivery` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** Does a fast tool need filler; when slow filler is rejected, which audio
+> becomes first?
+>
+> ```bash
+> uv run python docs/teaching/07-tools/filler_delivery_probe.py
+> ```
+>
+> **Evidence to find:** fast tools skip filler; rejected filler has zero accepted chunks and
+> reply audio comes first.
+>
+> **Explain the result:** Explain why filler production alone cannot establish what the caller
+> heard first.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 ## Prerequisites
 
 - [Chapter 6](../06-streaming-agent/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -22,12 +77,12 @@
 - **Added:** two demo tools (`get_weather`, `set_timer`); a filler
   heuristic in `should_play_filler`; `tool.call.started` /
   `tool.call.result` journal records; sentence-queue items become
-  `("reply" | "filler", text)` tuples; `blocking_tool.py` showing
-  what happens *without* a filler.
+  `(kind, text, tool_call_id)` tuples so filler delivery stays
+  attributable; `blocking_tool.py` shows what happens *without* a filler.
 - **Modified:** the agent loop now handles `delta.tool_calls` and
   runs a second LLM iteration once tool results return.
 
-<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py -->
+<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>06-streaming-agent/main.py</code> (auto-generated)</summary>
 
@@ -53,11 +108,11 @@
 +The slow one triggers a filler utterance so the user doesn't hear
 +a void. The fast one doesn't — fillers only help when the gap
 +would otherwise feel broken.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
 @@ -21,7 +23,9 @@
- 
+
  import asyncio
  import collections
 +import json
@@ -65,8 +120,8 @@
 +import random
  import time
  import types
- from pathlib import Path
-@@ -51,11 +55,55 @@
+ from contextlib import AsyncExitStack
+@@ -53,11 +57,56 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -116,18 +171,19 @@
 +]
 +
 +TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
- 
- 
++SentenceItem = tuple[str, str, str | None]
+
+
  class MiniTurnDetector:
 -    """Same as chapters 4 & 5."""
 +    """Same as chapters 4-6."""
- 
+
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -79,94 +127,152 @@
+@@ -82,84 +131,162 @@
                  self._preroll.append(chunk)
- 
- 
+
+
 -async def stream_sentences_to_tts(
 +# ── Filler utterance heuristic ────────────────────────────────────
 +
@@ -154,7 +210,7 @@
      client: AsyncOpenAI,
      user_text: str,
 -    sentence_queue: asyncio.Queue[str | None],
-+    sentence_queue: asyncio.Queue,
++    sentence_queue: asyncio.Queue[SentenceItem | None],
      journal: InMemoryRingBuffer,
  ) -> None:
 -    """Iterate the LLM's token stream; flush sentence-by-sentence to the queue.
@@ -164,9 +220,9 @@
 -    sentence queue so the TTS drain coroutine can start synth immediately.
 +    """Run the agent, call tools if requested, push sentences to TTS.
 +
-+    ``sentence_queue`` carries ``(kind, text)`` tuples. ``kind`` is
-+    ``"reply"`` for normal agent text and ``"filler"`` for tool-gap
-+    fillers — the drain side tags them separately in the journal.
++    ``sentence_queue`` carries ``(kind, text, tool_call_id)`` tuples.
++    Replies have no tool-call ID; fillers keep theirs so the drain can
++    attribute transport acceptance to the tool that requested them.
      """
 -    stream = await client.chat.completions.create(
 -        model=MODEL,
@@ -213,7 +269,7 @@
 +                if ready.strip():
 +                    spoken = strip_markdown(ready).strip()
 +                    if spoken:
-+                        await sentence_queue.put(("reply", spoken))
++                        await sentence_queue.put(("reply", spoken, None))
 +
 +            for tc in delta.tool_calls or []:
 +                entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "args": ""})
@@ -230,7 +286,7 @@
 +                if buffer.strip():
 +                    spoken = strip_markdown(buffer).strip()
 +                    if spoken:
-+                        await sentence_queue.put(("reply", spoken))
++                        await sentence_queue.put(("reply", spoken, None))
 +                await sentence_queue.put(None)
 +                return
 +
@@ -260,8 +316,9 @@
 +            name = tc["name"]
 +            args = json.loads(tc["args"] or "{}")
 +
-+            if should_play_filler(name):
-+                await sentence_queue.put(("filler", FILLER_PHRASES[name]))
++            filler_enqueued = should_play_filler(name)
++            if filler_enqueued:
++                await sentence_queue.put(("filler", FILLER_PHRASES[name], tc["id"]))
 +
              journal.append(
                  kind=JournalRecordKind.EVENT,
@@ -269,7 +326,13 @@
 +                name="tool.call.started",
                  session_id=SESSION_ID,
 -                data={"stage": "agent", "t_ms": first_token_t * 1000},
-+                data={"stage": "tool", "name": name, "args": args},
++                data={
++                    "stage": "tool",
++                    "name": name,
++                    "tool_call_id": tc["id"],
++                    "args": args,
++                    "filler_enqueued": filler_enqueued,
++                },
              )
 -        buffer += delta
 -
@@ -304,6 +367,7 @@
 +                data={
 +                    "stage": "tool",
 +                    "name": name,
++                    "tool_call_id": tc["id"],
 +                    "elapsed_ms": (time.monotonic() - t0) * 1000,
 +                    "result": result,
 +                },
@@ -311,19 +375,23 @@
 +            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(result)})
 +
      await sentence_queue.put(None)
- 
- 
+
+
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-+    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
- ) -> None:
++    tts,
++    transport,
++    sentence_queue: asyncio.Queue[SentenceItem | None],
++    journal: InMemoryRingBuffer,
+ ) -> tuple[float | None, int, int]:
 -    """Take one sentence at a time, synthesise, stream audio to speaker.
 -
 -    Because ``transport.send_audio`` returns as soon as the chunk is
 -    enqueued for playback, the next ``tts.synthesize`` can start while
 -    the current sentence is still audible. That is the pipeline overlap.
 -    """
--    first_audio_t: float | None = None
+     first_audio_t: float | None = None
+     accepted_chunks = rejected_chunks = 0
      while True:
 -        sentence = await sentence_queue.get()
 -        if sentence is None:
@@ -331,41 +399,45 @@
 +        if item is None:
              break
 -
-+        kind, sentence = item
++        kind, sentence, tool_call_id = item
          synth_start = time.monotonic()
+         sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-             if event.type == TTSEventType.AUDIO and event.audio is not None:
--                if first_audio_t is None:
--                    first_audio_t = time.monotonic()
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="tts.first_audio",
--                        session_id=SESSION_ID,
--                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
--                    )
-                 await transport.send_audio(event.audio)
-         journal.append(
-             kind=JournalRecordKind.EVENT,
-@@ -174,6 +280,7 @@
+@@ -174,7 +301,12 @@
+                             kind=JournalRecordKind.EVENT,
+                             name="tts.first_audio",
+                             session_id=SESSION_ID,
+-                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
++                            data={
++                                "stage": "tts",
++                                "kind": kind,
++                                "tool_call_id": tool_call_id,
++                                "t_ms": first_audio_t * 1000,
++                            },
+                         )
+                 else:
+                     rejected_chunks += 1
+@@ -185,6 +317,8 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
 +                "kind": kind,
++                "tool_call_id": tool_call_id,
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
-                 "text": sentence,
-             },
-@@ -181,7 +288,6 @@
- 
- 
+                 "accepted_chunks": sentence_accepted,
+                 "rejected_chunks": sentence_rejected,
+@@ -195,7 +329,6 @@
+
+
  async def run_turn(transport, stt, client, tts, journal) -> None:
 -    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -192,26 +298,20 @@
+@@ -206,16 +339,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
 -    journal.append(
 -        kind=JournalRecordKind.EVENT,
 -        name="stt.final",
@@ -374,33 +446,22 @@
 -    )
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    sentence_queue: asyncio.Queue = asyncio.Queue()
-     await asyncio.gather(
++    sentence_queue: asyncio.Queue[SentenceItem | None] = asyncio.Queue()
+     _, delivery = await asyncio.gather(
 -        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        run_agent_streaming(client, final_text, sentence_queue, journal),
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
-     total_gap = (time.monotonic() - stt_final_t) * 1000
--    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
-     journal.append(
-         kind=JournalRecordKind.EVENT,
-         name="turn.gap",
-         session_id=SESSION_ID,
-         data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
-     )
-+    print(f"  (turn gap: {total_gap:.0f} ms)")
- 
- 
- async def main() -> None:
-@@ -237,7 +337,7 @@
+     first_audio_t, accepted_chunks, rejected_chunks = delivery
+@@ -305,7 +432,7 @@
          )
- 
-     await transport.connect()
--    print("Streaming agent. Ctrl-C to stop.\n")
-+    print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
- 
-     async def collect_turns():
-         stt = None
+         resources.push_async_callback(close_if_supported, tts)
+
+-        print("Streaming agent. Ctrl-C to stop.\n")
++        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
+
+         try:
+             await collect_turns(transport, detector, stt_factory, client, tts, journal)
 ```
 
 </details>
@@ -471,6 +532,36 @@ def should_play_filler(tool_name: str) -> bool:
 ```
 <!-- END auto:snippet -->
 
+### Enqueued is not delivered
+
+`should_play_filler` decides whether to put a filler on the sentence
+queue. The `tool.call.started` record names that decision
+`filler_enqueued`; it deliberately does not say “played.” TTS can
+produce no chunks, or the transport can reject every chunk after the
+decision was made.
+
+Run the provider-free attribution probe:
+
+```bash
+uv run python docs/teaching/07-tools/filler_delivery_probe.py
+```
+
+The slow-tool case enqueues a filler and then scripts its only audio
+chunk to be rejected. The first accepted reply chunk still becomes
+`tts.first_audio`. The shared `tool_call_id` connects
+`tool.call.started`, `tool.call.result`, and the filler-kind
+`stage.tts.execute` record, whose accepted/rejected counts prove what
+was scheduled for delivery.
+
+This gives the journal two separate facts:
+
+- `filler_enqueued: true` means the UX policy requested a filler.
+- `kind: filler` with `accepted_chunks > 0` means filler audio reached
+  the transport's delivery queue.
+
+Neither fact proves that the speaker rendered the audio or that the
+user heard it.
+
 ## Inline tools vs. session actions
 
 Two different things live in `easycat.session.actions`:
@@ -479,7 +570,9 @@ Two different things live in `easycat.session.actions`:
   turn. The result is fed back to the LLM, which then speaks an
   answer informed by the tool output.
 - **Session actions**: requested by the agent, run *after* the
-  turn, and do *not* return data to the LLM. Five types ship:
+  turn, and do *not* return data to the LLM. Run the maintained
+  [`action_catalog.py`](action_catalog.py) probe to discover the seven
+  types currently shipped:
 
 | Action | What it does |
 |---|---|
@@ -487,6 +580,8 @@ Two different things live in `easycat.session.actions`:
 | `TransferCallAction` | Hands off to a human or another number |
 | `SendDTMFAction` | Plays DTMF tones on a telephony leg |
 | `SendSMSAction` | Sends a text-message side effect |
+| `AddToDNCAction` | Adds the current caller or a supplied number to the DNC store |
+| `RemoveFromDNCAction` | Removes the current caller or a supplied number from the DNC store |
 | `CustomAction` | Escape hatch — anything else |
 
 A weather lookup is a tool. "Hang up" is not a tool — there is
@@ -520,9 +615,11 @@ from easycat.debug.testing import load_bundle
 b = load_bundle(next(Path("docs/teaching/07-tools/runs/").glob("*.bundle")))
 for r in b.records():
     if r["name"] in ("tool.call.started", "tool.call.result"):
-        print(r["name"], r["data"].get("name"), r["data"].get("elapsed_ms", ""))
+        print(r["name"], r["data"].get("tool_call_id"), r["data"].get("filler_enqueued"))
     if r["name"] == "stage.tts.execute":
-        print(f"  tts [{r['data']['kind']:>6}] {r['data']['text']}")
+        d = r["data"]
+        print(f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
+              f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}")
 ```
 
 You will see `filler`-kind TTS spans interleaved with
@@ -533,15 +630,23 @@ visible.
 
 1. Change `get_weather` to sleep 5 s. Listen — one filler is no
    longer enough. Add a "still working on it" at the 2.5 s mark.
-2. Open `src/easycat/session/actions.py` and read the five
-   action dataclasses. For each one, answer in one sentence:
-   *why is this a session action and not a tool?* (The test is
-   whether the LLM has anything useful to do with the return
-   value.) The chapter ships no concrete action wiring because
-   the executors live at the Session layer, which we don't have
-   yet — but the reasoning is the payload.
+2. Run [`action_catalog.py`](action_catalog.py) and read the seven
+   action dataclasses it discovers. For each one, answer in one
+   sentence: *why is this a session action and not an inline tool?*
+   Then compare `core_supported`: every session registers
+   `CoreSessionActionExecutor` for `EndCallAction`, `AddToDNCAction`,
+   and `RemoveFromDNCAction`; transfer, DTMF, SMS, and custom actions
+   need a configured provider or application executor.
 3. Make a tool that returns a 5 KB JSON blob. Verify none of it
    reaches TTS. If it does, find the leak.
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

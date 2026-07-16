@@ -133,8 +133,10 @@ def test_first_feature_chapter_names_the_registered_realtime_stt() -> None:
 
     assert 'stt="openai-realtime"' in exercises
     assert 'stt="openai/realtime"' not in exercises
-    config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
-    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
+    default_config = EasyConfig(openai_api_key="test-key")
+    explicit_config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
+    assert isinstance(default_config.stt, OpenAIRealtimeSTTConfig)
+    assert explicit_config.stt == default_config.stt
 
 
 def test_feature_scripts_do_not_import_easycat_internals() -> None:

@@ -34,7 +34,8 @@ them. Multi-word audience filters accept hyphens or underscores, so
   example with `uv run --env-file .env python examples/openai_agents_voice.py`.
 - Learning voice pipelines from scratch: follow the
   [teaching ladder](teaching/), starting at
-  [00-hello-audio](teaching/00-hello-audio/).
+  [00-hello-audio](teaching/00-hello-audio/), and copy the generated
+  [progress worksheet](teaching/PROGRESS.md) to track evidence-backed completion.
 - Learning EasyCat's product surface by building an app: follow the
   [EasyCat feature ladder](using-easycat/), starting at
   [00-first-voice-app](using-easycat/00-first-voice-app/). It begins with the
