@@ -5,13 +5,17 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "10-cleaning-signal"
 
 
-def _load_wrong_order():
+def _load_wrong_order(monkeypatch: pytest.MonkeyPatch):
     path = CHAPTER / "wrong_order.py"
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=object))
     spec = importlib.util.spec_from_file_location("teaching_ch10_wrong_order", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -20,8 +24,10 @@ def _load_wrong_order():
     return module
 
 
-async def test_wrong_order_pairs_vad_and_late_nr_by_frame_index() -> None:
-    chapter = _load_wrong_order()
+async def test_wrong_order_pairs_vad_and_late_nr_by_frame_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chapter = _load_wrong_order(monkeypatch)
     rows: list[dict] = []
 
     class Journal:
@@ -46,19 +52,21 @@ async def test_wrong_order_pairs_vad_and_late_nr_by_frame_index() -> None:
     pipeline = chapter.wrong_order_pipeline(
         Transport(), Passthrough(), Passthrough(), "nr-after-vad", journal, "ch10"
     )
-    detector = chapter.MiniTurnDetector(SilentVAD(), journal, "ch10", record_raw_input=True)
+    detector = chapter.MiniTurnDetector(SilentVAD(), journal, "ch10", record_before_nr=True)
 
     assert [event async for event in detector.frames(pipeline)] == []
     assert [(row["name"], row["data"]["frame_index"]) for row in rows] == [
-        ("vad.processed_raw", 1),
+        ("vad.processed_before_nr", 1),
         ("nr.applied_after_vad", 1),
-        ("vad.processed_raw", 2),
+        ("vad.processed_before_nr", 2),
         ("nr.applied_after_vad", 2),
     ]
 
 
-async def test_aec_no_reference_mode_does_not_label_cleaned_vad_input_raw() -> None:
-    chapter = _load_wrong_order()
+async def test_aec_no_reference_mode_does_not_label_cleaned_vad_input_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chapter = _load_wrong_order(monkeypatch)
     rows: list[dict] = []
 
     class Journal:
@@ -98,6 +106,10 @@ def test_exercises_name_real_signal_quadrants_and_records() -> None:
     assert "`--aec off` installs `_Passthrough`" in exercises
     assert "stage.vad.execute" not in exercises
     assert "stage.nr.execute" not in exercises
-    for name in ("vad.processed_raw", "nr.applied_after_vad"):
+    for name in ("vad.processed_before_nr", "nr.applied_after_vad"):
         assert name in readme
         assert name in exercises
+    source = (CHAPTER / "wrong_order.py").read_text(encoding="utf-8")
+    assert "vad.processed_raw" not in readme + exercises + source
+    assert "VAD's verdicts are unchanged" not in source
+    assert "keystrokes still fire VAD-on" not in source

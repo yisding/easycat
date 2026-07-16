@@ -1,5 +1,9 @@
 # Chapter 5 — The Blocking Agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 6 of 16** · [← Chapter 4](../04-vad-preroll/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 6 →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 
@@ -11,6 +15,11 @@ build movement (chapters 6-9) exists to close this gap.
 - [Chapter 4](../04-vad-preroll/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -41,8 +50,8 @@ build movement (chapters 6-9) exists to close this gap.
 -detector plus a pre-roll ring buffer. The same parrot loop, now gated
 -on VAD turn boundaries instead of "500 ms since the last STT event."
 -
--Run with ``--no-preroll`` to hear the start-of-utterance truncation
--this chapter was designed to fix.
+-Run with ``--no-preroll`` to compare a stream that omits cached audio
+-received before VAD-on.
 +"""Chapter 5 — The blocking agent.
 +
 +Same pipeline as chapter 4, but instead of parroting the transcript
@@ -115,7 +124,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -65,127 +59,186 @@
+@@ -65,127 +59,187 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -203,9 +212,10 @@ build movement (chapters 6-9) exists to close this gap.
 +
 +    async def send_audio(self, chunk: AudioChunk) -> bool:
 +        accepted = await self._transport.send_audio(chunk)
-+        if accepted and self.first_audio_at is None:
++        normalized = accepted is None or bool(accepted)
++        if normalized and self.first_audio_at is None:
 +            self.first_audio_at = time.monotonic()
-+        return accepted
++        return normalized
 +
 +
 +def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -308,9 +318,9 @@ build movement (chapters 6-9) exists to close this gap.
 +        },
 +    )
 +    if total_gap is None:
-+        print("  (turn gap unavailable — TTS produced no audio)")
++        print("  (turn gap unavailable — TTS produced no accepted audio)")
 +    else:
-+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
++        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
  
  
  async def main() -> None:
@@ -318,7 +328,7 @@ build movement (chapters 6-9) exists to close this gap.
 -    parser.add_argument(
 -        "--no-preroll",
 -        action="store_true",
--        help="Disable pre-roll; start-of-utterance will be clipped.",
+-        help="Disable pre-roll; omit cached frames received before VAD-on.",
 -    )
 -    args = parser.parse_args()
 -
@@ -407,7 +417,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L102-L111)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L103-L112)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->
@@ -445,14 +455,18 @@ from pathlib import Path
 from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:6.1f} ms"
+
 for r in bundle.records():
     if r["name"] == "turn.gap":
         d = r["data"]
-        print(f"  STT final → agent dispatch  {d['stt_to_agent_ms']:6.1f} ms")
-        print(f"  agent (LLM call)            {d['agent_ms']:6.1f} ms")
-        print(f"  TTS → first audio           {d['tts_ms']:6.1f} ms")
-        print(f"  TOTAL → first audio         {d['total_gap_ms']:6.1f} ms")
-        print(f"  full TTS synth + enqueue    {d['tts_enqueue_ms']:6.1f} ms")
+        print(f"  STT final → agent dispatch  {format_ms(d['stt_to_agent_ms'])}")
+        print(f"  agent (LLM call)            {format_ms(d['agent_ms'])}")
+        print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
+        print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
+        print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
 ```
 
 You will see something like:
