@@ -102,6 +102,7 @@ TOOLS = [
 ]
 
 TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
+SentenceItem = tuple[str, str, str | None]
 
 
 class MiniTurnDetector:
@@ -154,14 +155,14 @@ def should_play_filler(tool_name: str) -> bool:
 async def run_agent_streaming(
     client: AsyncOpenAI,
     user_text: str,
-    sentence_queue: asyncio.Queue,
+    sentence_queue: asyncio.Queue[SentenceItem | None],
     journal: InMemoryRingBuffer,
 ) -> None:
     """Run the agent, call tools if requested, push sentences to TTS.
 
-    ``sentence_queue`` carries ``(kind, text)`` tuples. ``kind`` is
-    ``"reply"`` for normal agent text and ``"filler"`` for tool-gap
-    fillers — the drain side tags them separately in the journal.
+    ``sentence_queue`` carries ``(kind, text, tool_call_id)`` tuples.
+    Replies have no tool-call ID; fillers keep theirs so the drain can
+    attribute transport acceptance to the tool that requested them.
     """
     messages = [
         {"role": "system", "content": "You are a helpful voice assistant. Keep replies brief."},
@@ -191,7 +192,7 @@ async def run_agent_streaming(
                 if ready.strip():
                     spoken = strip_markdown(ready).strip()
                     if spoken:
-                        await sentence_queue.put(("reply", spoken))
+                        await sentence_queue.put(("reply", spoken, None))
 
             for tc in delta.tool_calls or []:
                 entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "args": ""})
@@ -208,7 +209,7 @@ async def run_agent_streaming(
                 if buffer.strip():
                     spoken = strip_markdown(buffer).strip()
                     if spoken:
-                        await sentence_queue.put(("reply", spoken))
+                        await sentence_queue.put(("reply", spoken, None))
                 await sentence_queue.put(None)
                 return
 
@@ -238,14 +239,21 @@ async def run_agent_streaming(
             name = tc["name"]
             args = json.loads(tc["args"] or "{}")
 
-            if should_play_filler(name):
-                await sentence_queue.put(("filler", FILLER_PHRASES[name]))
+            filler_enqueued = should_play_filler(name)
+            if filler_enqueued:
+                await sentence_queue.put(("filler", FILLER_PHRASES[name], tc["id"]))
 
             journal.append(
                 kind=JournalRecordKind.EVENT,
                 name="tool.call.started",
                 session_id=SESSION_ID,
-                data={"stage": "tool", "name": name, "args": args},
+                data={
+                    "stage": "tool",
+                    "name": name,
+                    "tool_call_id": tc["id"],
+                    "args": args,
+                    "filler_enqueued": filler_enqueued,
+                },
             )
             t0 = time.monotonic()
             result = await TOOL_IMPLS[name](**args)
@@ -256,6 +264,7 @@ async def run_agent_streaming(
                 data={
                     "stage": "tool",
                     "name": name,
+                    "tool_call_id": tc["id"],
                     "elapsed_ms": (time.monotonic() - t0) * 1000,
                     "result": result,
                 },
@@ -266,7 +275,10 @@ async def run_agent_streaming(
 
 
 async def drain_sentences_to_speaker(
-    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
+    tts,
+    transport,
+    sentence_queue: asyncio.Queue[SentenceItem | None],
+    journal: InMemoryRingBuffer,
 ) -> tuple[float | None, int, int]:
     first_audio_t: float | None = None
     accepted_chunks = rejected_chunks = 0
@@ -274,7 +286,7 @@ async def drain_sentences_to_speaker(
         item = await sentence_queue.get()
         if item is None:
             break
-        kind, sentence = item
+        kind, sentence, tool_call_id = item
         synth_start = time.monotonic()
         sentence_accepted = sentence_rejected = 0
         async for event in tts.synthesize(TTSInput(text=sentence)):
@@ -292,6 +304,7 @@ async def drain_sentences_to_speaker(
                             data={
                                 "stage": "tts",
                                 "kind": kind,
+                                "tool_call_id": tool_call_id,
                                 "t_ms": first_audio_t * 1000,
                             },
                         )
@@ -305,6 +318,7 @@ async def drain_sentences_to_speaker(
             data={
                 "stage": "tts",
                 "kind": kind,
+                "tool_call_id": tool_call_id,
                 "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                 "accepted_chunks": sentence_accepted,
                 "rejected_chunks": sentence_rejected,
@@ -326,7 +340,7 @@ async def run_turn(transport, stt, client, tts, journal) -> None:
         return
 
     print(f"  user: {final_text!r}")
-    sentence_queue: asyncio.Queue = asyncio.Queue()
+    sentence_queue: asyncio.Queue[SentenceItem | None] = asyncio.Queue()
     _, delivery = await asyncio.gather(
         run_agent_streaming(client, final_text, sentence_queue, journal),
         drain_sentences_to_speaker(tts, transport, sentence_queue, journal),

@@ -31,8 +31,8 @@
 - **Added:** two demo tools (`get_weather`, `set_timer`); a filler
   heuristic in `should_play_filler`; `tool.call.started` /
   `tool.call.result` journal records; sentence-queue items become
-  `("reply" | "filler", text)` tuples; `blocking_tool.py` showing
-  what happens *without* a filler.
+  `(kind, text, tool_call_id)` tuples so filler delivery stays
+  attributable; `blocking_tool.py` shows what happens *without* a filler.
 - **Modified:** the agent loop now handles `delta.tool_calls` and
   runs a second LLM iteration once tool results return.
 
@@ -75,7 +75,7 @@
  import time
  import types
  from contextlib import AsyncExitStack
-@@ -53,11 +57,55 @@
+@@ -53,11 +57,56 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -125,6 +125,7 @@
 +]
 +
 +TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
++SentenceItem = tuple[str, str, str | None]
 
 
  class MiniTurnDetector:
@@ -133,7 +134,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -82,84 +130,151 @@
+@@ -82,84 +131,162 @@
                  self._preroll.append(chunk)
 
 
@@ -163,7 +164,7 @@
      client: AsyncOpenAI,
      user_text: str,
 -    sentence_queue: asyncio.Queue[str | None],
-+    sentence_queue: asyncio.Queue,
++    sentence_queue: asyncio.Queue[SentenceItem | None],
      journal: InMemoryRingBuffer,
  ) -> None:
 -    """Iterate the LLM's token stream; flush sentence-by-sentence to the queue.
@@ -173,9 +174,9 @@
 -    sentence queue so the TTS drain coroutine can start synth immediately.
 +    """Run the agent, call tools if requested, push sentences to TTS.
 +
-+    ``sentence_queue`` carries ``(kind, text)`` tuples. ``kind`` is
-+    ``"reply"`` for normal agent text and ``"filler"`` for tool-gap
-+    fillers — the drain side tags them separately in the journal.
++    ``sentence_queue`` carries ``(kind, text, tool_call_id)`` tuples.
++    Replies have no tool-call ID; fillers keep theirs so the drain can
++    attribute transport acceptance to the tool that requested them.
      """
 -    stream = await client.chat.completions.create(
 -        model=MODEL,
@@ -222,7 +223,7 @@
 +                if ready.strip():
 +                    spoken = strip_markdown(ready).strip()
 +                    if spoken:
-+                        await sentence_queue.put(("reply", spoken))
++                        await sentence_queue.put(("reply", spoken, None))
 +
 +            for tc in delta.tool_calls or []:
 +                entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "args": ""})
@@ -239,7 +240,7 @@
 +                if buffer.strip():
 +                    spoken = strip_markdown(buffer).strip()
 +                    if spoken:
-+                        await sentence_queue.put(("reply", spoken))
++                        await sentence_queue.put(("reply", spoken, None))
 +                await sentence_queue.put(None)
 +                return
 +
@@ -269,8 +270,9 @@
 +            name = tc["name"]
 +            args = json.loads(tc["args"] or "{}")
 +
-+            if should_play_filler(name):
-+                await sentence_queue.put(("filler", FILLER_PHRASES[name]))
++            filler_enqueued = should_play_filler(name)
++            if filler_enqueued:
++                await sentence_queue.put(("filler", FILLER_PHRASES[name], tc["id"]))
 +
              journal.append(
                  kind=JournalRecordKind.EVENT,
@@ -278,7 +280,13 @@
 +                name="tool.call.started",
                  session_id=SESSION_ID,
 -                data={"stage": "agent", "t_ms": first_token_t * 1000},
-+                data={"stage": "tool", "name": name, "args": args},
++                data={
++                    "stage": "tool",
++                    "name": name,
++                    "tool_call_id": tc["id"],
++                    "args": args,
++                    "filler_enqueued": filler_enqueued,
++                },
              )
 -        buffer += delta
 -
@@ -313,6 +321,7 @@
 +                data={
 +                    "stage": "tool",
 +                    "name": name,
++                    "tool_call_id": tc["id"],
 +                    "elapsed_ms": (time.monotonic() - t0) * 1000,
 +                    "result": result,
 +                },
@@ -324,7 +333,10 @@
 
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-+    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
++    tts,
++    transport,
++    sentence_queue: asyncio.Queue[SentenceItem | None],
++    journal: InMemoryRingBuffer,
  ) -> tuple[float | None, int, int]:
 -    """Take one sentence at a time, synthesise, stream audio to speaker.
 -
@@ -341,11 +353,11 @@
 +        if item is None:
              break
 -
-+        kind, sentence = item
++        kind, sentence, tool_call_id = item
          synth_start = time.monotonic()
          sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-@@ -174,7 +289,11 @@
+@@ -174,7 +301,12 @@
                              kind=JournalRecordKind.EVENT,
                              name="tts.first_audio",
                              session_id=SESSION_ID,
@@ -353,20 +365,22 @@
 +                            data={
 +                                "stage": "tts",
 +                                "kind": kind,
++                                "tool_call_id": tool_call_id,
 +                                "t_ms": first_audio_t * 1000,
 +                            },
                          )
                  else:
                      rejected_chunks += 1
-@@ -185,6 +304,7 @@
+@@ -185,6 +317,8 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
 +                "kind": kind,
++                "tool_call_id": tool_call_id,
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -195,7 +315,6 @@
+@@ -195,7 +329,6 @@
 
 
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -374,7 +388,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -206,16 +325,10 @@
+@@ -206,16 +339,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -386,14 +400,14 @@
 -    )
      print(f"  user: {final_text!r}")
 -    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    sentence_queue: asyncio.Queue = asyncio.Queue()
++    sentence_queue: asyncio.Queue[SentenceItem | None] = asyncio.Queue()
      _, delivery = await asyncio.gather(
 -        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        run_agent_streaming(client, final_text, sentence_queue, journal),
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
      first_audio_t, accepted_chunks, rejected_chunks = delivery
-@@ -305,7 +418,7 @@
+@@ -305,7 +432,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
@@ -472,6 +486,36 @@ def should_play_filler(tool_name: str) -> bool:
 ```
 <!-- END auto:snippet -->
 
+### Enqueued is not delivered
+
+`should_play_filler` decides whether to put a filler on the sentence
+queue. The `tool.call.started` record names that decision
+`filler_enqueued`; it deliberately does not say “played.” TTS can
+produce no chunks, or the transport can reject every chunk after the
+decision was made.
+
+Run the provider-free attribution probe:
+
+```bash
+uv run python docs/teaching/07-tools/filler_delivery_probe.py
+```
+
+The slow-tool case enqueues a filler and then scripts its only audio
+chunk to be rejected. The first accepted reply chunk still becomes
+`tts.first_audio`. The shared `tool_call_id` connects
+`tool.call.started`, `tool.call.result`, and the filler-kind
+`stage.tts.execute` record, whose accepted/rejected counts prove what
+was scheduled for delivery.
+
+This gives the journal two separate facts:
+
+- `filler_enqueued: true` means the UX policy requested a filler.
+- `kind: filler` with `accepted_chunks > 0` means filler audio reached
+  the transport's delivery queue.
+
+Neither fact proves that the speaker rendered the audio or that the
+user heard it.
+
 ## Inline tools vs. session actions
 
 Two different things live in `easycat.session.actions`:
@@ -525,9 +569,11 @@ from easycat.debug.testing import load_bundle
 b = load_bundle(next(Path("docs/teaching/07-tools/runs/").glob("*.bundle")))
 for r in b.records():
     if r["name"] in ("tool.call.started", "tool.call.result"):
-        print(r["name"], r["data"].get("name"), r["data"].get("elapsed_ms", ""))
+        print(r["name"], r["data"].get("tool_call_id"), r["data"].get("filler_enqueued"))
     if r["name"] == "stage.tts.execute":
-        print(f"  tts [{r['data']['kind']:>6}] {r['data']['text']}")
+        d = r["data"]
+        print(f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
+              f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}")
 ```
 
 You will see `filler`-kind TTS spans interleaved with

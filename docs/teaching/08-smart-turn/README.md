@@ -106,7 +106,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -57,224 +59,205 @@
+@@ -57,236 +59,205 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -155,6 +155,7 @@
 -]
 -
 -TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
+-SentenceItem = tuple[str, str, str | None]
 +
 +# Baseline: VAD waits a long silence before calling the turn over.
 +# Smart: VAD fires early (short silence), then smart-turn *gates* the
@@ -304,14 +305,14 @@
 -async def run_agent_streaming(
 -    client: AsyncOpenAI,
 -    user_text: str,
--    sentence_queue: asyncio.Queue,
+-    sentence_queue: asyncio.Queue[SentenceItem | None],
 -    journal: InMemoryRingBuffer,
 -) -> None:
 -    """Run the agent, call tools if requested, push sentences to TTS.
 -
--    ``sentence_queue`` carries ``(kind, text)`` tuples. ``kind`` is
--    ``"reply"`` for normal agent text and ``"filler"`` for tool-gap
--    fillers — the drain side tags them separately in the journal.
+-    ``sentence_queue`` carries ``(kind, text, tool_call_id)`` tuples.
+-    Replies have no tool-call ID; fillers keep theirs so the drain can
+-    attribute transport acceptance to the tool that requested them.
 -    """
 -    messages = [
 -        {"role": "system", "content": "You are a helpful voice assistant. Keep replies brief."},
@@ -341,7 +342,7 @@
 -                if ready.strip():
 -                    spoken = strip_markdown(ready).strip()
 -                    if spoken:
--                        await sentence_queue.put(("reply", spoken))
+-                        await sentence_queue.put(("reply", spoken, None))
 -
 -            for tc in delta.tool_calls or []:
 -                entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "args": ""})
@@ -358,7 +359,7 @@
 -                if buffer.strip():
 -                    spoken = strip_markdown(buffer).strip()
 -                    if spoken:
--                        await sentence_queue.put(("reply", spoken))
+-                        await sentence_queue.put(("reply", spoken, None))
 -                await sentence_queue.put(None)
 -                return
 -
@@ -388,8 +389,9 @@
 -            name = tc["name"]
 -            args = json.loads(tc["args"] or "{}")
 -
--            if should_play_filler(name):
--                await sentence_queue.put(("filler", FILLER_PHRASES[name]))
+-            filler_enqueued = should_play_filler(name)
+-            if filler_enqueued:
+-                await sentence_queue.put(("filler", FILLER_PHRASES[name], tc["id"]))
 -
 -            journal.append(
 +    def _commit_endpoint(self, reason: str) -> float:
@@ -404,14 +406,14 @@
                  kind=JournalRecordKind.EVENT,
 -                name="tool.call.started",
 -                session_id=SESSION_ID,
--                data={"stage": "tool", "name": name, "args": args},
--            )
--            t0 = time.monotonic()
--            result = await TOOL_IMPLS[name](**args)
--            journal.append(
 +                name="turn.endpoint_commit",
 +                session_id=self._session_id,
-+                data={
+                 data={
+-                    "stage": "tool",
+-                    "name": name,
+-                    "tool_call_id": tc["id"],
+-                    "args": args,
+-                    "filler_enqueued": filler_enqueued,
 +                    "stage": "turn",
 +                    "mode": "smart" if self._smart is not None else "vad",
 +                    "reason": reason,
@@ -419,8 +421,11 @@
 +                    "estimated_speech_end_ms": estimated_speech_end_t * 1000,
 +                    "committed_at_ms": committed_at * 1000,
 +                    "endpoint_wait_ms": (committed_at - estimated_speech_end_t) * 1000,
-+                },
-+            )
+                 },
+             )
+-            t0 = time.monotonic()
+-            result = await TOOL_IMPLS[name](**args)
+-            journal.append(
 +        return estimated_speech_end_t
 +
 +    async def _classify(self) -> bool:
@@ -441,6 +446,7 @@
                  data={
 -                    "stage": "tool",
 -                    "name": name,
+-                    "tool_call_id": tc["id"],
 -                    "elapsed_ms": (time.monotonic() - t0) * 1000,
 -                    "result": result,
 +                    "stage": "turn",
@@ -486,7 +492,10 @@
 
 
  async def drain_sentences_to_speaker(
--    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
+-    tts,
+-    transport,
+-    sentence_queue: asyncio.Queue[SentenceItem | None],
+-    journal: InMemoryRingBuffer,
 +    tts, transport, sentence_queue, journal, session_id
  ) -> tuple[float | None, int, int]:
      first_audio_t: float | None = None
@@ -497,11 +506,11 @@
 +        sentence = await sentence_queue.get()
 +        if sentence is None:
              break
--        kind, sentence = item
+-        kind, sentence, tool_call_id = item
          synth_start = time.monotonic()
          sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-@@ -288,12 +271,8 @@
+@@ -300,13 +271,8 @@
                          journal.append(
                              kind=JournalRecordKind.EVENT,
                              name="tts.first_audio",
@@ -509,6 +518,7 @@
 -                            data={
 -                                "stage": "tts",
 -                                "kind": kind,
+-                                "tool_call_id": tool_call_id,
 -                                "t_ms": first_audio_t * 1000,
 -                            },
 +                            session_id=session_id,
@@ -516,7 +526,7 @@
                          )
                  else:
                      rejected_chunks += 1
-@@ -301,10 +280,9 @@
+@@ -314,11 +280,9 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -525,10 +535,11 @@
              data={
                  "stage": "tts",
 -                "kind": kind,
+-                "tool_call_id": tool_call_id,
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -314,33 +292,42 @@
+@@ -328,33 +292,42 @@
      return first_audio_t, accepted_chunks, rejected_chunks
 
 
@@ -545,7 +556,7 @@
          return
 
      print(f"  user: {final_text!r}")
--    sentence_queue: asyncio.Queue = asyncio.Queue()
+-    sentence_queue: asyncio.Queue[SentenceItem | None] = asyncio.Queue()
 +    q: asyncio.Queue = asyncio.Queue()
      _, delivery = await asyncio.gather(
 -        run_agent_streaming(client, final_text, sentence_queue, journal),
@@ -577,7 +588,7 @@
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "tts_accepted_chunks": accepted_chunks,
              "tts_rejected_chunks": rejected_chunks,
-@@ -358,9 +345,15 @@
+@@ -372,9 +345,15 @@
              print("  (turn gap unavailable — TTS produced no audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
@@ -596,7 +607,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -376,7 +369,15 @@
+@@ -390,7 +369,15 @@
                  stt = None
                  try:
                      await active_stt.end_stream()
@@ -613,7 +624,7 @@
                  finally:
                      await close_if_supported(active_stt)
      finally:
-@@ -388,8 +389,25 @@
+@@ -402,8 +389,25 @@
 
 
  async def main() -> None:
@@ -639,7 +650,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -407,9 +425,21 @@
+@@ -421,9 +425,21 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
 
@@ -663,7 +674,7 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -418,15 +448,15 @@
+@@ -432,15 +448,15 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
