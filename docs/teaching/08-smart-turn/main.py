@@ -303,7 +303,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
         if first_audio_t is None or estimated_speech_end_t is None
         else (first_audio_t - estimated_speech_end_t) * 1000
     )
-    endpoint_to_stt_final = (
+    speech_end_to_stt_final = (
         None if estimated_speech_end_t is None else (stt_final_t - estimated_speech_end_t) * 1000
     )
     journal.append(
@@ -314,7 +314,7 @@ async def run_turn(transport, stt, client, tts, journal, session_id, estimated_s
             "stage": "turn",
             "total_gap_ms": total_gap,
             "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
-            "endpoint_to_stt_final_ms": endpoint_to_stt_final,
+            "estimated_speech_end_to_stt_final_ms": speech_end_to_stt_final,
             "reply_enqueue_gap_ms": reply_enqueue_gap,
             "text": final_text,
         },

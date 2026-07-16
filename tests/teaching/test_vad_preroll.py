@@ -121,14 +121,15 @@ async def test_smart_turn_pending_frames_stay_on_open_stt_stream(monkeypatch) ->
         )
     ]
 
-    assert events == [
+    assert events[:-1] == [
         ("speech_started", None),
         ("frame", "first"),
         ("frame", "pause"),
         ("frame", "resuming"),
         ("frame", "continued"),
-        ("speech_ended", None),
     ]
+    assert events[-1][0] == "speech_ended"
+    assert isinstance(events[-1][1], float)
 
 
 def test_copied_turn_detectors_keep_audio_out_of_start_events() -> None:

@@ -556,7 +556,7 @@
 +        if first_audio_t is None or estimated_speech_end_t is None
 +        else (first_audio_t - estimated_speech_end_t) * 1000
 +    )
-+    endpoint_to_stt_final = (
++    speech_end_to_stt_final = (
 +        None if estimated_speech_end_t is None else (stt_final_t - estimated_speech_end_t) * 1000
 +    )
      journal.append(
@@ -568,7 +568,7 @@
              "stage": "turn",
              "total_gap_ms": total_gap,
 +            "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
-+            "endpoint_to_stt_final_ms": endpoint_to_stt_final,
++            "estimated_speech_end_to_stt_final_ms": speech_end_to_stt_final,
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "text": final_text,
          },
@@ -752,6 +752,10 @@ journal with `probability`, `prediction`, `confirmed`, and
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:.0f}ms"
+
 for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
     bundle = load_bundle(b)
     for r in bundle.records():
@@ -765,9 +769,9 @@ for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
                   f"reason={d['reason']}")
         if r["name"] == "turn.gap":
             d = r["data"]
-            print(f"  {b.name}  stt_final_to_audio={d['total_gap_ms']:.0f}ms  "
+            print(f"  {b.name}  stt_final_to_audio={format_ms(d['total_gap_ms'])}  "
                   f"speech_end_to_audio="
-                  f"{d['estimated_speech_end_to_first_audio_ms']:.0f}ms")
+                  f"{format_ms(d['estimated_speech_end_to_first_audio_ms'])}")
 ```
 
 ## The failure modes
