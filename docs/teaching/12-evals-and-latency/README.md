@@ -1,5 +1,9 @@
 # Chapter 12 — Evals + the Latency Budget
 
+<!-- BEGIN auto:navigation -->
+**Progress: 13 of 16** · [← Chapter 11](../11-journal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 13 →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
 > The difference between *building* a voice bot and *operating* one
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.
@@ -12,6 +16,10 @@
   wants `OPENAI_API_KEY`; before running it, run
   `uv run easycat doctor` from the repo root. If the key lives in `.env`, run
   `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- The optional LLM judge makes a live provider call that may incur charges.
+  Review your provider billing and usage limits before running it.
+- The optional LLM judge sends eval content to the configured provider. Use
+  non-sensitive test data and review provider data-handling policies first.
 - If the key lives in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
 
@@ -37,8 +45,15 @@
 ## The six pre-recorded bundles
 
 ```bash
-uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
+uv run python docs/teaching/12-evals-and-latency/generate_bundles.py \
+    --output-root .easycat/teaching/12-evals-and-latency
 ```
+
+The fixtures used below are already checked in. The command above is a
+safe way to experiment: it writes a chapter-shaped copy under the
+gitignored `.easycat/` directory instead of rewriting tracked bundles.
+Maintainers intentionally refreshing the checked-in fixtures omit
+`--output-root` and review the resulting bundle and CSV diffs.
 
 - `turn_01_fast.bundle` — clean, fast turn.
 - `turn_02_slow_agent.bundle` — agent is slow; P95 spike.
@@ -251,6 +266,11 @@ For the six primary fixtures, the full P95 is 2,420 ms. Omitting
 bundle leaves it at 2,420 ms. The printed leave-one-out range is
 therefore 1,160–2,420 ms.
 
+A one-bundle eval set can still report its P50/P95, WER, and barge-in
+metrics, but it cannot omit a sample and retain a distribution. In that
+case the two leave-one-out rows print `n/a` instead of aborting the rest
+of the report.
+
 This is an **influence diagnostic, not a confidence interval**. It
 answers “which observed turn controls this statistic?” It does not
 estimate unseen traffic, sampling bias, or the probability that a
@@ -338,7 +358,7 @@ No single score captures voice quality.
 - Manual spot-checks catch everything the above misses (prosody,
   emotion, audible clipping).
 
-A dashboard shows all five. A "quality score" that rolls them up
+A dashboard shows all six. A "quality score" that rolls them up
 hides exactly the regressions you care about.
 
 ## Try breaking it

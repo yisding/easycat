@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
@@ -14,6 +17,14 @@ from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "08-smart-turn"
 SWEEP = CHAPTER / "threshold_sweep.py"
+
+
+def _load_sweep_module():
+    spec = importlib.util.spec_from_file_location("teaching_ch08_threshold_sweep", SWEEP)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _bundle(tmp_path: Path) -> Path:
@@ -86,6 +97,69 @@ def test_labeled_sweep_distinguishes_helpful_acceptance_from_false_positive(
     }
 
 
+def test_threshold_sweep_matches_runtime_strict_boundary() -> None:
+    sweep = _load_sweep_module()
+    report = sweep.sweep_records(
+        [
+            {"sequence": 1, "name": "smart_turn.classify", "data": {"probability": 0.3}},
+            {"sequence": 2, "name": "smart_turn.classify", "data": {"probability": 0.5}},
+        ],
+        baseline=0.5,
+        candidate=0.3,
+    )
+
+    assert report["classifications"] == [
+        {
+            "sequence": 1,
+            "probability": 0.3,
+            "recorded_confirmed": None,
+            "baseline_accepts": False,
+            "candidate_accepts": False,
+            "newly_accepted": False,
+            "user_was_done": None,
+        },
+        {
+            "sequence": 2,
+            "probability": 0.5,
+            "recorded_confirmed": None,
+            "baseline_accepts": False,
+            "candidate_accepts": True,
+            "newly_accepted": True,
+            "user_was_done": None,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("labels", "message"),
+    [
+        ({}, "missing sequences [1, 2, 3, 4]"),
+        ({"99": True}, "unknown sequences [99]"),
+        ({"1": False, "2": False}, "missing sequences [3, 4]"),
+    ],
+    ids=("empty", "unknown", "partial"),
+)
+def test_incomplete_or_unknown_labels_are_rejected(
+    labels: dict[str, bool],
+    message: str,
+    tmp_path: Path,
+) -> None:
+    labels_path = tmp_path / "labels.json"
+    labels_path.write_text(json.dumps(labels))
+
+    result = subprocess.run(
+        [sys.executable, str(SWEEP), str(_bundle(tmp_path)), "--labels", str(labels_path)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert result.stdout == ""
+
+
 def test_threshold_lesson_requires_labels_before_naming_errors() -> None:
     readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
     exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
@@ -96,3 +170,4 @@ def test_threshold_lesson_requires_labels_before_naming_errors() -> None:
     assert "decision changes, not automatically" in readme
     assert "Without labels" in exercises
     assert "metrics` as `null`" in exercises
+    assert "label every classification sequence exactly" in exercises

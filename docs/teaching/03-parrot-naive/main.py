@@ -28,7 +28,7 @@ from pathlib import Path
 from easycat import LocalTransportConfig
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.debug.export import export_debug_bundle
-from easycat.events import EventBus, STTEvent, STTEventType
+from easycat.events import Error, EventBus, STTEvent, STTEventType
 from easycat.recipes import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.runtime.capabilities import close_if_supported
@@ -148,6 +148,7 @@ async def listen_stt(
     ev_queue: asyncio.Queue[STTQueueItem],
     journal: InMemoryRingBuffer,
     start: float,
+    provider_errors: list[BaseException] | None = None,
 ) -> None:
     event_id = 0
     async for event in stt.events():
@@ -161,6 +162,12 @@ async def listen_stt(
             queue_depth=ev_queue.qsize(),
         )
         await ev_queue.put((event_id, event, received_offset_ms))
+    # Provider errors are emitted on a task immediately before the terminal
+    # sentinel is queued. Yield once so the synchronous subscriber records an
+    # exhausted-socket failure before we classify stream exhaustion as normal.
+    await asyncio.sleep(0)
+    if provider_errors:
+        raise provider_errors[-1]
     await ev_queue.put(None)
 
 
@@ -225,7 +232,12 @@ async def stop_when_parrot_ends(
     raise ParrotEventStreamEndedError
 
 
-async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
+async def run_parrot(
+    stt,
+    transport,
+    journal: InMemoryRingBuffer,
+    provider_errors: list[BaseException] | None = None,
+) -> None:
     """Own one parrot stream until cancellation, failure, or STT exhaustion."""
     async with AsyncExitStack() as resources:
         # These objects exist before connect(), so register final cleanup
@@ -241,11 +253,14 @@ async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
         start = time.monotonic()
         print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
         ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
+        observed_provider_errors = provider_errors if provider_errors is not None else []
 
         try:
             async with asyncio.TaskGroup() as streams:
                 streams.create_task(feed_audio(stt, transport))
-                streams.create_task(listen_stt(stt, ev_queue, journal, start))
+                streams.create_task(
+                    listen_stt(stt, ev_queue, journal, start, observed_provider_errors)
+                )
                 streams.create_task(stop_when_parrot_ends(transport, ev_queue, journal, start))
         except* ParrotEventStreamEndedError:
             # ``parrot_events`` consumed the listener's None sentinel. Raising
@@ -266,19 +281,21 @@ async def main() -> None:
     # Deepgram emits partials mid-speech, which is what this chapter needs
     # to feel break. Its STT factory config takes provider-specific args via
     # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
-    # format; ``event_bus`` is only used by Deepgram for WebSocket-reconnect
-    # telemetry — we wire a fresh bus here with no subscribers to satisfy
-    # the provider's constructor.
+    # format. Capture terminal provider errors so an exhausted reconnect loop
+    # cannot look like an ordinary end of the STT event stream.
+    provider_errors: list[BaseException] = []
+    event_bus = EventBus()
+    event_bus.subscribe(Error, lambda event: provider_errors.append(event.exception))
     stt = create_stt_provider(
         STTProviderConfig(
             provider="deepgram",
             api_key=dg_key,
-            params={"sample_rate": 24000, "event_bus": EventBus()},
+            params={"sample_rate": 24000, "event_bus": event_bus},
         )
     )
 
     try:
-        await run_parrot(stt, transport, journal)
+        await run_parrot(stt, transport, journal, provider_errors)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
 

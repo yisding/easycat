@@ -1,5 +1,7 @@
 # Chapter 14 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Demote yourself to shallow mode
 
 **Task.** Change `on_user_turn` to `async def on_user_turn(self,
