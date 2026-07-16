@@ -80,10 +80,37 @@ not enough?
    the information VAD needs isn't in its input.
 4. This is the preview of chapter 10.
 
+## 4. Trace the turn that triggers barge-in
+
+**Task.** Run the provider-free continuity probe:
+
+```bash
+uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+```
+
+Explain why the triggering `speech_started` event must not be consumed
+by the cancellation branch, and why the mic frames are still available
+after the coordinator waits for the old bot task.
+
+**Hints**
+
+1. `route_barge_in` returns `event_consumed: false`. The coordinator
+   therefore falls through to the same STT-start branch used by an
+   ordinary user turn.
+2. `mic_producer` is a separate coroutine. It keeps adding pre-roll and
+   live frames to `mic_queue` while cooperative bot shutdown finishes.
+3. Change the probe's fallthrough condition to act as if the event were
+   consumed. The STT lifecycle disappears, which is the old behavior:
+   the bot stops, but the user must repeat the interruption.
+4. On process shutdown, the coordinator must stop both possible
+   in-flight owners—STT and the bot task—before the shared TTS/client/VAD
+   stack closes.
+
 ## Self-check
 
 You should be able to: (a) name the three differences between
 versions A, B, and C, (b) describe why "bytes accepted ≠ bytes heard"
 without re-reading the README—including why rejected differs from
 accepted-but-queued—and (c) explain why `CancelToken` is a token
-and not an exception.
+and not an exception, and (d) trace the triggering `speech_started`
+event into the next STT turn.

@@ -30,6 +30,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -45,6 +46,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.session import split_at_sentence_boundaries
 from easycat.strip_markdown import strip_markdown
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -153,20 +155,73 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel: CancelToken, 
         )
 
 
-async def _reap_completed_bot_task(bot_task, active_cancel, journal):
-    """Observe a finished bot task and clear its per-turn state."""
-    if bot_task is None or not bot_task.done():
-        return bot_task, active_cancel
-    try:
-        await bot_task
-    except Exception as exc:
+async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
+    """Retrieve a background result so failures never become orphan warnings."""
+    (result,) = await asyncio.gather(bot_task, return_exceptions=True)
+    if isinstance(result, Exception):
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="bot_task.error",
             session_id=SESSION_ID,
-            data={"stage": "coordinator", "error": repr(exc)},
+            data={"stage": "coordinator", "error": repr(result)},
         )
-    return None, None
+
+
+async def finish_stt_turn(stt) -> str:
+    """End, drain, and close one completed STT turn."""
+    try:
+        await stt.end_stream()
+        final_text = ""
+        async for event in stt.events():
+            if event.type == STTEventType.FINAL:
+                final_text = event.text
+        return final_text
+    finally:
+        await close_if_supported(stt)
+
+
+async def close_started_stt(stt) -> None:
+    """End and close an STT turn whose speech boundary never arrived."""
+    try:
+        await stt.end_stream()
+    finally:
+        await close_if_supported(stt)
+
+
+async def shutdown_coordinator(stt, bot_task, active_cancel, journal) -> None:
+    """Release both possible in-flight owners before shared providers close."""
+    try:
+        if stt is not None:
+            await close_started_stt(stt)
+    finally:
+        if bot_task is not None:
+            if active_cancel is not None:
+                active_cancel.cancel()
+            if not bot_task.done():
+                bot_task.cancel()
+            await observe_bot_task(bot_task, journal)
+
+
+async def route_barge_in(tag, bot_task, active_cancel, transport, journal):
+    """Cancel active output while preserving speech_started for STT below."""
+    if bot_task is None:
+        return bot_task, active_cancel, False
+    if bot_task.done():
+        await observe_bot_task(bot_task, journal)
+        return None, None, False
+    if tag != "speech_started" or active_cancel is None:
+        return bot_task, active_cancel, True
+
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="interruption.start",
+        session_id=SESSION_ID,
+        data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+    )
+    active_cancel.cancel()
+    await transport.clear_audio()
+    await observe_bot_task(bot_task, journal)
+    return None, None, False
 
 
 async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
@@ -174,69 +229,44 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
     bot_task: asyncio.Task | None = None
     active_cancel: CancelToken | None = None
 
-    while True:
-        tag, chunk = await mic_queue.get()
+    try:
+        while True:
+            tag, chunk = await mic_queue.get()
 
-        # A bot may finish between microphone events. Reap it before
-        # checking whether this event is an active barge-in.
-        bot_task, active_cancel = await _reap_completed_bot_task(bot_task, active_cancel, journal)
-
-        # Barge-in detection: user speech while bot talks → cancel.
-        if bot_task is not None and not bot_task.done():
-            if tag != "speech_started" or active_cancel is None:
-                continue
-            journal.append(
-                kind=JournalRecordKind.EVENT,
-                name="interruption.start",
-                session_id=SESSION_ID,
-                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            # Cancel output, but fall through with speech_started intact.
+            bot_task, active_cancel, consumed = await route_barge_in(
+                tag, bot_task, active_cancel, transport, journal
             )
-            active_cancel.cancel()
-            # Flush audio already in the speaker queue so the bot
-            # shuts up *now*, not after the current chunk finishes.
-            await transport.clear_audio()
-            try:
-                await bot_task
-            except Exception as exc:
-                journal.append(
-                    kind=JournalRecordKind.EVENT,
-                    name="bot_task.error",
-                    session_id=SESSION_ID,
-                    data={"stage": "coordinator", "error": repr(exc)},
-                )
-            bot_task = None
-            active_cancel = None
-            # Fall through: this same start marker must open STT for
-            # the barge-in whose preroll frames are already queued.
-
-        if tag == "speech_started":
-            if stt is None:
-                stt = stt_factory()
-                await stt.start_stream()
-        elif tag == "frame" and stt is not None:
-            await stt.send_audio(chunk)
-        elif tag == "speech_ended" and stt is not None:
-            await stt.end_stream()
-            final_text = ""
-            async for ev in stt.events():
-                if ev.type == STTEventType.FINAL:
-                    final_text = ev.text
-            stt = None
-            if not final_text.strip():
+            if consumed:
                 continue
-            print(f"  user: {final_text!r}")
 
-            cancel = CancelToken()
-            active_cancel = cancel
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+            elif tag == "speech_ended" and stt is not None:
+                active_stt = stt
+                stt = None
+                final_text = await finish_stt_turn(active_stt)
+                if not final_text.strip():
+                    continue
+                print(f"  user: {final_text!r}")
 
-            async def _bot(text=final_text, ct=cancel):
-                q: asyncio.Queue = asyncio.Queue()
-                await asyncio.gather(
-                    run_agent(client, text, q, ct),
-                    drain_to_speaker(tts, transport, q, ct, journal),
-                )
+                cancel = CancelToken()
+                active_cancel = cancel
 
-            bot_task = asyncio.create_task(_bot())
+                async def _bot(text=final_text, ct=cancel):
+                    q: asyncio.Queue = asyncio.Queue()
+                    await asyncio.gather(
+                        run_agent(client, text, q, ct),
+                        drain_to_speaker(tts, transport, q, ct, journal),
+                    )
+
+                bot_task = asyncio.create_task(_bot())
+    finally:
+        await shutdown_coordinator(stt, bot_task, active_cancel, journal)
 
 
 async def main() -> None:
@@ -245,12 +275,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad)
-    client = AsyncOpenAI()
-    tts = create_tts_provider(
-        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-    )
 
     def stt_factory():
         return create_stt_provider(
@@ -261,19 +285,31 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Cancel on barge-in. Interrupt freely. Ctrl-C to stop.\n")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    mic_queue: asyncio.Queue = asyncio.Queue()
-    try:
-        await asyncio.gather(
-            mic_producer(detector, transport, mic_queue),
-            coordinator(mic_queue, stt_factory, client, tts, transport, journal),
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad)
+
+        client = AsyncOpenAI()
+        resources.push_async_callback(close_if_supported, client)
+        tts = create_tts_provider(
+            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
         )
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        resources.push_async_callback(close_if_supported, tts)
+
+        print("Cancel on barge-in. Interrupt freely. Ctrl-C to stop.\n")
+
+        mic_queue: asyncio.Queue = asyncio.Queue()
+        try:
+            await asyncio.gather(
+                mic_producer(detector, transport, mic_queue),
+                coordinator(mic_queue, stt_factory, client, tts, transport, journal),
+            )
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

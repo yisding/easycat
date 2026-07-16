@@ -105,6 +105,9 @@ On barge-in:
    whatever chunk it was synthesising.
 4. `transport.clear_audio()` flushes the speaker queue so the bot
    shuts up **now**, not after the current chunk finishes.
+5. The same `speech_started` event falls through to the ordinary STT
+   branch, so the words that caused the interruption become the next
+   user turn instead of being thrown away.
 
 Three places, one token. That's the pattern.
 
@@ -205,16 +208,39 @@ class TurnLedger:
 ```
 <!-- END auto:snippet -->
 
-## Honesty note — the triggering utterance
+## Preserving the triggering utterance
 
-When barge-in fires, the coordinator reads the `speech_started` tag
-off the mic queue and dispatches to the cancel branch. That tag
-is *consumed* — the user's new utterance starts but its start
-boundary never reaches STT. Production pipelines buffer the
-triggering audio into the next user turn; the toy here throws it
-away. On every real barge-in, the first ~200 ms of what you said
-is lost. The second mic event after bot-done picks things up
-normally. Exercise 1 nudges you to notice this.
+The cancel branch must not consume the event that proves the user
+started talking. Versions B and C settle the cooperative bot task and
+return `consumed=False`; the coordinator then sends that same
+`speech_started` event through its ordinary STT branch. While it waits
+for the bot task to unwind, the independent mic producer keeps placing
+pre-roll and live frames on `mic_queue`. Once STT starts, those queued
+frames follow the preserved boundary in their original order.
+
+Version A intentionally does the opposite: `ignore.py` consumes every
+mic event while the bot is active. That is the answering-machine
+behavior the comparison is meant to expose.
+
+Run the provider-free probe, which calls `cancel.py`'s real barge-in
+router:
+
+```bash
+uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+```
+
+Look for `event_consumed: false`, followed by `stt.start`, `stt.frame`,
+`stt.end`, and `stt.close`. The remaining toy limitation is now stated
+accurately: the coordinator awaits cooperative bot shutdown before it
+starts STT, so an unresponsive agent can make the unbounded mic queue
+grow. Production uses bounded audio buffers and stronger cancellation
+deadlines; it does not silently discard the triggering turn.
+
+There are two shutdown owners here. The coordinator owns its active
+per-turn STT and background bot task, so its `finally` arm ends/closes
+STT and cancels/observes bot work. The outer `AsyncExitStack` owns the
+long-lived TTS, client, VAD, and transport and closes them only after
+the coordinator has stopped using them.
 
 ## Why "bytes accepted" ≠ "bytes heard"
 

@@ -22,6 +22,7 @@ import asyncio
 import time
 import types
 import wave
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from easycat.audio_format import AudioChunk, AudioFormat
@@ -30,6 +31,7 @@ from easycat.echo_cancellation import EchoCancellationConfig, create_echo_cancel
 from easycat.events import VADStartSpeaking
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
@@ -76,42 +78,46 @@ async def run(mic_path: Path, ref_path: Path | None, nr_flag: str, aec_flag: str
     if ref_path and mic_fmt != ref_fmt:
         raise SystemExit(f"mic and ref formats differ: {mic_fmt} vs {ref_fmt}")
 
-    nr = create_noise_reducer(NoiseReducerConfig()) if nr_flag == "on" else _Passthrough()
-    aec = (
-        create_echo_canceller(EchoCancellationConfig(enabled=True))
-        if aec_flag == "on"
-        else _Passthrough()
-    )
-    vad = create_vad(VADConfig())
-
     journal = InMemoryRingBuffer(capacity=10_000)
     session_id = f"ch10-replay-{mic_path.stem}-nr{nr_flag}-aec{aec_flag}-{int(time.time())}"
-    journal.append(
-        kind=JournalRecordKind.EVENT,
-        name="audio.config",
-        session_id=session_id,
-        data={
-            "stage": "audio",
-            "nr": nr.version_info().get("provider", "unknown"),
-            "aec": aec.version_info().get("provider", "unknown"),
-            "mic": str(mic_path),
-            "ref": str(ref_path) if ref_path else None,
-        },
-    )
-
-    mic_iter = _chunks(mic_data, mic_fmt)
-    ref_iter = _chunks(ref_data, ref_fmt) if ref_path else iter([])
     vad_starts = 0
 
-    for mic_chunk in mic_iter:
-        ref_chunk = next(ref_iter, None)
-        if ref_chunk is not None:
-            aec.feed_reference(ref_chunk)
-        cleaned = await nr.process(mic_chunk)
-        cleaned = await aec.process(cleaned)
-        async for ev in vad.process(cleaned):
-            if isinstance(ev, VADStartSpeaking):
-                vad_starts += 1
+    async with AsyncExitStack() as resources:
+        nr = create_noise_reducer(NoiseReducerConfig()) if nr_flag == "on" else _Passthrough()
+        resources.push_async_callback(close_if_supported, nr)
+        aec = (
+            create_echo_canceller(EchoCancellationConfig(enabled=True))
+            if aec_flag == "on"
+            else _Passthrough()
+        )
+        resources.push_async_callback(close_if_supported, aec)
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="audio.config",
+            session_id=session_id,
+            data={
+                "stage": "audio",
+                "nr": nr.version_info().get("provider", "unknown"),
+                "aec": aec.version_info().get("provider", "unknown"),
+                "mic": str(mic_path),
+                "ref": str(ref_path) if ref_path else None,
+            },
+        )
+
+        mic_iter = _chunks(mic_data, mic_fmt)
+        ref_iter = _chunks(ref_data, ref_fmt) if ref_path else iter([])
+        for mic_chunk in mic_iter:
+            ref_chunk = next(ref_iter, None)
+            if ref_chunk is not None:
+                aec.feed_reference(ref_chunk)
+            cleaned = await nr.process(mic_chunk)
+            cleaned = await aec.process(cleaned)
+            async for ev in vad.process(cleaned):
+                if isinstance(ev, VADStartSpeaking):
+                    vad_starts += 1
 
     frame_bytes = mic_fmt.sample_rate * FRAME_MS // 1000 * mic_fmt.frame_size
     journal.append(

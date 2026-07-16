@@ -14,12 +14,18 @@ COORDINATORS = (
     ROOT / "docs/teaching/10-cleaning-signal/main.py",
     ROOT / "docs/teaching/10-cleaning-signal/wrong_order.py",
 )
-CLEANUP_FIELDS = {
-    COORDINATORS[0]: ("bot_task", "active_cancel"),
-    COORDINATORS[1]: ("bot_task", "active_cancel", "active_ledger"),
-    COORDINATORS[2]: ("bot_task", "active_cancel"),
-    COORDINATORS[3]: ("bot_task", "active_cancel"),
+ROUTE_FIELDS = {
+    COORDINATORS[0]: ("bot_task", "active_cancel", "consumed"),
+    COORDINATORS[1]: ("bot_task", "active_cancel", "active_ledger", "consumed"),
+    COORDINATORS[2]: ("bot_task", "active_cancel", "consumed"),
+    COORDINATORS[3]: ("bot_task", "active_cancel", "consumed"),
 }
+
+
+def _coordinator_loop(coordinator: ast.AsyncFunctionDef) -> ast.While:
+    loops = [node for node in ast.walk(coordinator) if isinstance(node, ast.While)]
+    assert len(loops) == 1
+    return loops[0]
 
 
 @pytest.mark.parametrize("path", COORDINATORS, ids=lambda path: path.stem)
@@ -30,66 +36,57 @@ def test_barge_in_start_marker_falls_through_to_open_stt(path: Path) -> None:
         for node in tree.body
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "coordinator"
     )
-    loop = next(node for node in coordinator.body if isinstance(node, ast.While))
-    active_bot_index, active_bot = next(
+    loop = _coordinator_loop(coordinator)
+    route_index, route = next(
         (index, node)
         for index, node in enumerate(loop.body)
-        if isinstance(node, ast.If) and "not bot_task.done()" in ast.unparse(node.test)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Await)
+        and "route_barge_in" in ast.unparse(node.value)
     )
 
-    assert any(
-        isinstance(node, ast.Await) and ast.unparse(node.value) == "bot_task"
-        for node in ast.walk(active_bot)
-    )
-    assert not isinstance(active_bot.body[-1], ast.Continue)
+    target = route.targets[0]
+    assert isinstance(target, ast.Tuple)
+    assert tuple(ast.unparse(element) for element in target.elts) == ROUTE_FIELDS[path]
 
-    start_handler = loop.body[active_bot_index + 1]
+    consumed_handler = loop.body[route_index + 1]
+    assert isinstance(consumed_handler, ast.If)
+    assert ast.unparse(consumed_handler.test) == "consumed"
+    assert isinstance(consumed_handler.body[-1], ast.Continue)
+
+    start_handler = loop.body[route_index + 2]
     assert isinstance(start_handler, ast.If)
     assert ast.unparse(start_handler.test) == "tag == 'speech_started'"
     assert "await stt.start_stream()" in ast.unparse(start_handler)
 
 
 @pytest.mark.parametrize("path", COORDINATORS, ids=lambda path: path.stem)
-def test_completed_bot_tasks_are_reaped_before_barge_in_checks(path: Path) -> None:
+def test_completed_bot_tasks_are_reaped_inside_barge_in_router(path: Path) -> None:
     tree = ast.parse(path.read_text())
-    coordinator = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "coordinator"
-    )
-    loop = next(node for node in coordinator.body if isinstance(node, ast.While))
-    cleanup_index, cleanup = next(
-        (index, node)
-        for index, node in enumerate(loop.body)
-        if isinstance(node, ast.Assign)
-        and isinstance(node.value, ast.Await)
-        and "_reap_completed_bot_task" in ast.unparse(node.value)
-    )
-    active_index = next(
-        index
-        for index, node in enumerate(loop.body)
-        if isinstance(node, ast.If) and "not bot_task.done()" in ast.unparse(node.test)
-    )
-
-    assert cleanup_index < active_index
-    target = cleanup.targets[0]
-    assert isinstance(target, ast.Tuple)
-    assert tuple(ast.unparse(element) for element in target.elts) == CLEANUP_FIELDS[path]
-
     helper = next(
         node
         for node in tree.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_reap_completed_bot_task"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "route_barge_in"
     )
-    helper_source = ast.unparse(helper)
-    assert "bot_task.done()" in helper_source
-    assert "await bot_task" in helper_source
-    assert "name='bot_task.error'" in helper_source
-    terminal_return = helper.body[-1]
-    assert isinstance(terminal_return, ast.Return)
-    assert isinstance(terminal_return.value, ast.Tuple)
-    assert all(
-        isinstance(value, ast.Constant) and value.value is None
-        for value in terminal_return.value.elts
+    done_index, done_handler = next(
+        (index, node)
+        for index, node in enumerate(helper.body)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "bot_task.done()"
     )
-    assert len(terminal_return.value.elts) == len(CLEANUP_FIELDS[path])
+    tag_index = next(
+        index
+        for index, node in enumerate(helper.body)
+        if isinstance(node, ast.If) and "tag != 'speech_started'" in ast.unparse(node.test)
+    )
+
+    assert done_index < tag_index
+    assert any(
+        isinstance(node, ast.Await) and "observe_bot_task" in ast.unparse(node.value)
+        for node in ast.walk(done_handler)
+    )
+    terminal_return = done_handler.body[-1]
+    assert isinstance(terminal_return, ast.Return) and isinstance(terminal_return.value, ast.Tuple)
+    values = terminal_return.value.elts
+    assert all(isinstance(value, ast.Constant) and value.value is None for value in values[:-1])
+    assert isinstance(values[-1], ast.Constant) and values[-1].value is False
+    assert len(values) == len(ROUTE_FIELDS[path])
