@@ -66,7 +66,44 @@ def _has_env_file_run_hint(text: str) -> bool:
     return _ENV_FILE_RUN_HINT in text.replace("``", "`").lower()
 
 
+def _without_fenced_code(markdown: str) -> str:
+    """Mask fenced code while preserving line boundaries for heading scans."""
+    visible: list[str] = []
+    fence_char = ""
+    fence_length = 0
+
+    for line in markdown.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        line_ending = line[len(body) :]
+        stripped = body.lstrip(" ")
+        indent = len(body) - len(stripped)
+
+        if fence_char:
+            closing = stripped.rstrip(" \t")
+            if indent <= 3 and len(closing) >= fence_length and set(closing) == {fence_char}:
+                fence_char = ""
+                fence_length = 0
+            visible.append(line_ending)
+            continue
+
+        if indent <= 3:
+            opening = re.match(r"(?P<fence>`{3,}|~{3,})", stripped)
+            if opening is not None:
+                fence = opening.group("fence")
+                info = stripped[opening.end() :]
+                if fence[0] != "`" or "`" not in info:
+                    fence_char = fence[0]
+                    fence_length = len(fence)
+                    visible.append(line_ending)
+                    continue
+
+        visible.append(line)
+
+    return "".join(visible)
+
+
 def _self_check_sections(markdown: str) -> list[str]:
+    markdown = _without_fenced_code(markdown)
     sections: list[str] = []
 
     for heading in _SELF_CHECK_HEADING_RE.finditer(markdown):
@@ -619,6 +656,18 @@ Ordinary prose containing ## Self-check should not count either.
 """
 
     assert _self_check_sections(malformed) == []
+
+
+def test_self_check_sections_ignore_fenced_heading_lookalikes() -> None:
+    fenced = """\
+```markdown
+## Self-check
+
+You should not let a code sample satisfy the exercise guard.
+```
+"""
+
+    assert _self_check_sections(fenced) == []
 
 
 def test_self_check_sections_stop_at_the_next_level_two_heading() -> None:
