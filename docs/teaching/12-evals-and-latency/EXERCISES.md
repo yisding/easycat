@@ -1,8 +1,10 @@
 # Chapter 12 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Find the budget-blower, propose a fix without coding it
 
-**Task.** Run `latency_budget.py` over each of the five turn
+**Task.** Run `latency_budget.py` over each of the six turn
 bundles. Identify the slowest. Which stage blew its budget?
 Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is
@@ -105,10 +107,11 @@ hand-type the reference transcripts into a CSV, and run
 
 **Hints**
 
-1. Real numbers feel different. Twenty turns are better than six, but
-   no fixed sample count guarantees precision. Report the number of
-   turns and reference words, then estimate uncertainty—for example by
-   bootstrapping turns—before claiming a small regression.
+1. Real numbers feel different. P95 over 6 bundles is too unstable to
+   generalize; twenty turns are better than six, but no fixed sample count
+   guarantees precision. Report the number of turns and reference words,
+   then estimate uncertainty—for example by bootstrapping turns—before
+   claiming a small regression.
 2. Use a mix of clean and adversarial inputs (whisper, fast
    speech, accented speech, background TV) to stress different
    stages.
