@@ -13,7 +13,7 @@ Run every checkpoint (captured output stays quiet unless one fails)::
 Replay only the cumulative spine through a completed chapter::
 
     uv sync --extra quickstart --group dev
-    uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+    uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
 
 The runner removes every ``*_API_KEY`` variable from child environments and
 disables bytecode-cache writes. The selected scripts are designed not to open
@@ -219,9 +219,11 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
             "status": "timeout",
             "returncode": None,
             "detail": f"exceeded {timeout_s:g}s",
+            "observed": None,
         }
 
     detail = ""
+    observed: object | None = None
     if completed.returncode:
         lines = [line for line in completed.stderr.splitlines() if line.strip()]
         detail = lines[-1] if lines else "checkpoint exited without stderr"
@@ -231,7 +233,7 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
         detail = f"unexpected stderr: {unexpected_output}"
     else:
         try:
-            json.loads(completed.stdout)
+            observed = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             detail = f"stdout is not one JSON document: {exc.msg}"
     return {
@@ -239,6 +241,7 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
         "status": "pass" if not detail else "fail",
         "returncode": completed.returncode,
         "detail": detail,
+        "observed": observed,
     }
 
 
@@ -266,6 +269,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="CHAPTER",
         help="limit list or run to chapters 0 through CHAPTER",
     )
+    parser.add_argument(
+        "--show-evidence",
+        action="store_true",
+        help="print each observed JSON document in human run mode",
+    )
     parser.add_argument("--jobs", type=int, default=1, help="parallel checkpoints (default: 1)")
     parser.add_argument(
         "--timeout-s",
@@ -284,6 +292,8 @@ def _parse_args() -> argparse.Namespace:
         raise SystemExit("--jobs must be at least 1")
     if args.timeout_s <= 0:
         raise SystemExit("--timeout-s must be positive")
+    if args.show_evidence and not args.run:
+        parser.error("--show-evidence requires --run")
     final_chapter = CHECKPOINTS[-1].chapter
     if args.through is not None and not 0 <= args.through <= final_chapter:
         parser.error(f"--through must be between 0 and {final_chapter}")
@@ -329,6 +339,10 @@ def main() -> None:
             label = str(row["status"]).upper()
             print(f"{label:<7} {row['chapter']:>2}  {row['concept']}")
             print(f"           Look for: {row['evidence']}")
+            if args.show_evidence and row["observed"] is not None:
+                print("           Observed:")
+                for line in json.dumps(row["observed"], indent=2, sort_keys=True).splitlines():
+                    print(f"             {line}")
             if row["detail"]:
                 print(f"           {row['detail']}")
         print(f"{passed}/{len(rows)} checkpoints passed")

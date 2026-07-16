@@ -185,7 +185,7 @@ Self-check complete? Prepare the cumulative spine, then replay it through this c
 
 ```bash
 uv sync --extra quickstart --group dev
-uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4
+uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence
 ```
 
 - [Review the chapter narrative](./README.md)

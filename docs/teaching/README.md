@@ -52,7 +52,7 @@ For example, after Chapter 5:
 
 ```bash
 uv sync --extra quickstart --group dev
-uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --json
 ```
 
@@ -72,11 +72,12 @@ The runner strips all `*_API_KEY` variables from each child process and
 disables bytecode writes. Its curated probes keep generated artifacts in
 temporary directories, so the full run leaves the checkout unchanged. The
 runner captures successful output; rerun any printed chapter command directly
-to study its full evidence. A pass requires exit code zero, one parseable JSON
-document on stdout, and empty stderr; probes put intentional failure scenarios
-inside the JSON instead of printing alarming errors. These checkpoints are a
-hardware-free conceptual spine, not replacements for the chapters'
-microphone/provider-backed main paths.
+to study its full evidence, add `--show-evidence` to a human run, or read each
+row's `observed` value in a JSON run. A pass requires exit code zero, one
+parseable JSON document on stdout, and empty stderr; probes put intentional
+failure scenarios inside the JSON instead of printing alarming errors. These
+checkpoints are a hardware-free conceptual spine, not replacements for the
+chapters' microphone/provider-backed main paths.
 
 After editing a chapter, changing its copied code, or using one as a starting
 point, run the repository validation lane from the root:
