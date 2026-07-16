@@ -67,8 +67,8 @@ def sweep_records(
         sequence = record.get("sequence")
         if not isinstance(probability, (int, float)) or not isinstance(sequence, int):
             continue
-        baseline_accepts = probability >= baseline
-        candidate_accepts = probability >= candidate
+        baseline_accepts = probability > baseline
+        candidate_accepts = probability > candidate
         rows.append(
             {
                 "sequence": sequence,
@@ -81,7 +81,20 @@ def sweep_records(
             }
         )
 
-    labeled_count = sum(row["user_was_done"] is not None for row in rows)
+    if labels is not None:
+        expected_sequences = {row["sequence"] for row in rows}
+        provided_sequences = set(labels)
+        missing = sorted(expected_sequences - provided_sequences)
+        unknown = sorted(provided_sequences - expected_sequences)
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append(f"missing sequences {missing}")
+            if unknown:
+                details.append(f"unknown sequences {unknown}")
+            raise ValueError("labels must exactly cover classifications: " + "; ".join(details))
+
+    labeled_count = len(rows) if labels is not None else 0
     return {
         "baseline_threshold": baseline,
         "candidate_threshold": candidate,
@@ -113,12 +126,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     bundle = load_bundle(args.bundle)
-    report = sweep_records(
-        bundle.records(),
-        baseline=args.baseline,
-        candidate=args.candidate,
-        labels=load_labels(args.labels),
-    )
+    try:
+        report = sweep_records(
+            bundle.records(),
+            baseline=args.baseline,
+            candidate=args.candidate,
+            labels=load_labels(args.labels),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["classification_count"] else 1
 

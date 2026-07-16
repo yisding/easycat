@@ -1,7 +1,7 @@
 # Chapter 13 — Swap Providers AND Transports
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 12 — Evals + the Latency Budget](../12-evals-and-latency/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+**Progress: 14 of 16** · [← Chapter 12 — Evals + the Latency Budget](../12-evals-and-latency/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
 <!-- END auto:navigation -->
 
 > The same `Session`, run with **two orthogonal axes of choice**:
@@ -71,6 +71,11 @@ debug bundles — see the
 - `--extra telephony` for the Twilio transport.
 - `OPENAI_API_KEY` always; `DEEPGRAM_API_KEY` + `ELEVENLABS_API_KEY`
   for the `deepgram-eleven` mix.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.

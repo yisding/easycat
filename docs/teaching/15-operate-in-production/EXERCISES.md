@@ -1,7 +1,7 @@
 # Chapter 15 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -45,12 +45,14 @@ the session's responsibility?
 2. `add(key, session)` reserves a unique key before awaiting
    `session.start()`. A duplicate raises `ValueError` without starting
    the duplicate. If start raises or the add task is cancelled, the
-   manager removes the reserved key before re-raising, so a later
-   connection can reuse it. `asyncio.CancelledError` inherits from
-   `BaseException`, not `Exception`, which is why cancellation needs
-   explicit rollback coverage. The session's own `start()` implementation
-   must roll back resources it opened before failing or being cancelled;
-   the manager does not call `stop()` on that partially started object.
+   manager removes its reservation before re-raising, so a later
+   connection can reuse it. If `remove()` or `stop_all()` already released
+   that reservation and a replacement claimed the key, rollback preserves
+   the replacement. `asyncio.CancelledError` inherits from `BaseException`,
+   not `Exception`, which is why cancellation needs explicit rollback
+   coverage. The session's own `start()` implementation must roll back
+   resources it opened before failing or being cancelled; the manager does
+   not call `stop()` on that partially started object.
 3. Each `connection(...)` context calls `remove()` in `finally`, which
    removes the slot and awaits graceful `session.stop()`. Do not race
    `remove()` or `stop_all()` against code still running inside an
@@ -129,7 +131,7 @@ liveness but not credential validity?
 ```bash
 uv run easycat latency PATH --json \
   | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
-      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
+      --metric 'vad->tts' --percentile p95 --max-ms 2000 --min-samples 5
 ```
 
 Then lower `--max-ms` until the gate fails. Finally raise
@@ -200,6 +202,15 @@ type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
 </details>
 <!-- END auto:exercise-hints -->
 
+## The teaching ladder, complete
+
+If you got here, you've built a voice pipeline from raw PCM to a
+multi-session production server. Every remaining EasyCat surface
+is either a new provider in the existing factories, a new
+transport in the existing config, a new bridge in the existing
+shim, or a new telephony deep-cut in the existing executors. The
+pattern doesn't change.
+
 ## Self-check
 
 <!-- BEGIN auto:self-check-protocol -->
@@ -221,15 +232,6 @@ session:`, `await session.stop()`, `await session.stop(force=True)`,
 including why the cached view keeps its identity, and (c) sketch the
 `SessionManager` usage pattern for a WebSocket server in 10 lines
 without looking at the file.
-
-## The teaching ladder, complete
-
-If you got here, you've built a voice pipeline from raw PCM to a
-multi-session production server. Every remaining EasyCat surface
-is either a new provider in the existing factories, a new
-transport in the existing config, a new bridge in the existing
-shim, or a new telephony deep-cut in the existing executors. The
-pattern doesn't change.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
