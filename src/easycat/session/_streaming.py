@@ -64,6 +64,12 @@ _MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
 # also warrants a markdown-mode recheck.
 _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 
+# Every Markdown construct handled by ``strip_markdown`` contains at least one
+# of these characters. Digits conservatively keep ordered-list candidates on
+# the full parser path. A rolling window without any sentinel is guaranteed to
+# be ordinary prose, so it can go straight to sentence splitting.
+_MARKDOWN_SENTINEL_CHARS = frozenset("*_~`#-+>[]!0123456789")
+
 
 @dataclass
 class AgentStreamResult:
@@ -227,6 +233,14 @@ class _SentenceStreamBuffer:
                 and not any(ch in delta for ch in triggers)
             ):
                 return False
+
+        if not self._markdown_window_open and not any(
+            ch in self._text for ch in _MARKDOWN_SENTINEL_CHARS
+        ):
+            ready, self._text = self._split_pending(self._text)
+            if ready:
+                return await self._put_payload(ready, is_final=False)
+            return False
 
         self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
         if self._markdown_window_open:

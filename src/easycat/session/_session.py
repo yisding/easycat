@@ -208,7 +208,9 @@ class Session:
             self.event_bus,
             config=cfg.turn_manager_config,
         )
-        self._turn_manager.bind_journal_hook(self._on_turn_state_changed)
+        self._turn_manager.bind_journal_hook(
+            self._on_turn_state_changed if cfg.journal is not None else None
+        )
 
         # ── Reliability / observability config ───────────────────
         self._timeout_config = cfg.timeout_config or self._default_timeout_config()
