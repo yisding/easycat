@@ -36,7 +36,9 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `remote_agent_api_key` — API key forwarded to a remote Responses API
   agent.
 - `agent_runner` — optional `AgentRunnerConfig` tuning the timeout, history,
-  and cancellation wrapper applied to plain `async run` agents.
+  and cancellation wrapper applied to plain `async run` agents. Preemptive
+  generation is opt-in; enable it only for replayable, side-effect-free
+  agents because an unconfirmed transcript may be cancelled and retried.
 - `wrap_agent` — when `True` (default), plain agents are wrapped in
   `AgentRunner`; set `False` only when passing a fully-constructed bridge.
 - `observability` — grouped `ObservabilityConfig` (journal/debug knobs); see
