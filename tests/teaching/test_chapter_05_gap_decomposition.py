@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import json
 import subprocess
@@ -62,12 +61,12 @@ def test_gap_probe_import_does_not_require_or_leak_openai() -> None:
             sys.modules["openai"] = previous_openai
 
 
-def test_gap_probe_restores_chapter_globals_on_success_and_failure(monkeypatch) -> None:
+async def test_gap_probe_restores_chapter_globals_on_success_and_failure(monkeypatch) -> None:
     probe = load_probe()
     chapter = probe.chapter
     originals = (chapter.time.monotonic, chapter.blocking_agent, chapter.speak)
 
-    asyncio.run(probe.probe())
+    await probe.probe()
     assert (chapter.time.monotonic, chapter.blocking_agent, chapter.speak) == originals
 
     async def fail_run_turn(*_args, **_kwargs) -> None:
@@ -75,5 +74,5 @@ def test_gap_probe_restores_chapter_globals_on_success_and_failure(monkeypatch) 
 
     monkeypatch.setattr(chapter, "run_turn", fail_run_turn)
     with pytest.raises(RuntimeError, match="scripted failure"):
-        asyncio.run(probe.probe())
+        await probe.probe()
     assert (chapter.time.monotonic, chapter.blocking_agent, chapter.speak) == originals
