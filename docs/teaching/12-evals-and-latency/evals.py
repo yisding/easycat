@@ -101,7 +101,6 @@ def main() -> None:
             lat_ms.append(val)
             print(f"  {b.name:38}  {val:>6.0f} ms")
     if lat_ms:
-        lat_ms.sort()
         latency = LatencyPercentileStats.from_values(lat_ms)
         assert latency.p50 is not None and latency.p95 is not None
         p50 = latency.p50
