@@ -15,10 +15,13 @@ with the chapter's source code:
 * Previous/index/next navigation derived from the chapter folders::
 
       <!-- BEGIN auto:navigation -->
-      **Progress: 2 of 16** · [← Chapter 0](../00-hello-audio/) ·
+      **Progress: 2 of 16** · [← Chapter 0 — Hello, Audio](../00-hello-audio/) ·
       [Ladder index](../) · [Exercises](./EXERCISES.md) ·
-      [Chapter 2 →](../02-transcribe/)
+      [Chapter 2 — Transcribe →](../02-transcribe/)
       <!-- END auto:navigation -->
+
+  The renderer inserts this block immediately after the H1 when it is missing
+  and refreshes adjacent chapter titles/links when the ladder changes.
 
 * The unified diff against the previous chapter's source::
 
@@ -156,27 +159,56 @@ def render_snippet(chapter: Chapter, attrs: dict[str, str]) -> str:
     return f"\n```{lang}\n{body}```\n"
 
 
+def _chapter_title(chapter: Chapter) -> str:
+    readme = chapter.path / "README.md"
+    heading = readme.read_text(encoding="utf-8").splitlines()[0]
+    if not heading.startswith("# "):
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    return heading.removeprefix("# ")
+
+
 def render_navigation(chapter: Chapter) -> str:
     chapters = discover_chapters()
     try:
-        position = next(
-            i for i, candidate in enumerate(chapters) if candidate.slug == chapter.slug
-        )
+        index = next(i for i, candidate in enumerate(chapters) if candidate.slug == chapter.slug)
     except StopIteration as exc:
-        raise ValueError(f"chapter {chapter.slug!r} is not in the teaching ladder") from exc
+        raise ValueError(f"unknown teaching chapter: {chapter.slug}") from exc
 
     links: list[str] = []
-    if position > 0:
-        previous = chapters[position - 1]
-        links.append(f"[← Chapter {position - 1}](../{previous.slug}/)")
+    if index:
+        previous = chapters[index - 1]
+        links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
     links.append("[Ladder index](../)")
     links.append("[Exercises](./EXERCISES.md)")
-    if position + 1 < len(chapters):
-        following = chapters[position + 1]
-        links.append(f"[Chapter {position + 1} →](../{following.slug}/)")
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
 
-    progress = f"**Progress: {position + 1} of {len(chapters)}**"
+    progress = f"**Progress: {index + 1} of {len(chapters)}**"
     return f"\n{progress} · {' · '.join(links)}\n"
+
+
+def _render_navigation_block(chapter: Chapter) -> str:
+    return (
+        f"<!-- BEGIN auto:navigation -->{render_navigation(chapter)}<!-- END auto:navigation -->"
+    )
+
+
+def _ensure_navigation(chapter: Chapter, text: str) -> str:
+    block = _render_navigation_block(chapter)
+    if NAVIGATION_RE.search(text):
+        updated = NAVIGATION_RE.sub(lambda _match: block, text)
+        match = NAVIGATION_RE.search(updated)
+        assert match is not None
+        remainder = updated[match.end() :].lstrip("\n")
+        return f"{updated[: match.end()]}\n\n{remainder}"
+
+    heading = re.match(r"^# [^\n]+\n", text)
+    if heading is None:
+        readme = chapter.path / "README.md"
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    remainder = text[heading.end() :].lstrip("\n")
+    return f"{text[: heading.end()]}\n{block}\n\n{remainder}"
 
 
 def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
@@ -225,9 +257,6 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return m.group("begin") + render_snippet(chapter, attrs) + m.group("end")
 
-    def _navigation_sub(m: re.Match[str]) -> str:
-        return m.group("begin") + render_navigation(chapter) + m.group("end")
-
     def _diff_sub(m: re.Match[str]) -> str:
         attrs = parse_attrs(m.group("attrs"))
         return m.group("begin") + render_diff(chapter, attrs) + m.group("end")
@@ -240,7 +269,7 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return render_linkhash(chapter, attrs, m.group(1))
 
-    updated = NAVIGATION_RE.sub(_navigation_sub, original)
+    updated = _ensure_navigation(chapter, original)
     updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)

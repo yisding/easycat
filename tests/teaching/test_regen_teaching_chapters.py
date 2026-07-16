@@ -17,9 +17,11 @@ from easycat.events import (
 )
 from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
+    NAVIGATION_RE,
     ROOT,
     TEACHING,
     Chapter,
+    _ensure_navigation,
     _resolve_child_path,
     discover_chapters,
     regen_readme,
@@ -79,6 +81,37 @@ def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
     )
 
 
+def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
+    chapters = discover_chapters()
+
+    assert render_navigation(chapters[0]) == (
+        "\n**Progress: 1 of 16** · [Ladder index](../) · "
+        "[Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)\n"
+    )
+    assert render_navigation(chapters[8]) == (
+        "\n**Progress: 9 of 16** · "
+        "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
+        "[Ladder index](../) · [Exercises](./EXERCISES.md) · "
+        "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)\n"
+    )
+    assert render_navigation(chapters[-1]) == (
+        "\n**Progress: 16 of 16** · "
+        "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
+        "[Ladder index](../) · [Exercises](./EXERCISES.md)\n"
+    )
+
+
+def test_missing_navigation_is_inserted_immediately_after_h1() -> None:
+    chapter = discover_chapters()[0]
+
+    updated = _ensure_navigation(chapter, "# Temporary chapter\n\nIntro text.\n")
+
+    assert updated.startswith("# Temporary chapter\n\n<!-- BEGIN auto:navigation -->")
+    assert updated.count("<!-- BEGIN auto:navigation -->") == 1
+    assert updated.count("<!-- END auto:navigation -->") == 1
+    assert updated.index("<!-- END auto:navigation -->") < updated.index("Intro text.")
+
+
 def test_teaching_readmes_have_one_generated_navigation_block() -> None:
     missing_or_duplicated: list[str] = []
 
@@ -96,30 +129,15 @@ def test_teaching_readmes_have_one_generated_navigation_block() -> None:
     )
 
 
-def test_render_navigation_tracks_the_first_middle_and_last_chapters() -> None:
-    chapters = discover_chapters()
-    chapter_count = len(chapters)
-    middle_position = chapter_count // 2
+def test_each_chapter_has_one_current_generated_navigation_block() -> None:
+    for chapter in discover_chapters():
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        matches = list(NAVIGATION_RE.finditer(readme))
 
-    first = render_navigation(chapters[0])
-    middle = render_navigation(chapters[middle_position])
-    last = render_navigation(chapters[-1])
-
-    assert f"**Progress: 1 of {chapter_count}**" in first
-    assert "[Ladder index](../)" in first
-    assert "[Exercises](./EXERCISES.md)" in first
-    assert "Chapter -1" not in first
-    assert f"[Chapter 1 →](../{chapters[1].slug}/)" in first
-
-    assert f"**Progress: {middle_position + 1} of {chapter_count}**" in middle
-    assert "[Exercises](./EXERCISES.md)" in middle
-    assert f"[← Chapter {middle_position - 1}](../{chapters[middle_position - 1].slug}/)" in middle
-    assert f"[Chapter {middle_position + 1} →](../{chapters[middle_position + 1].slug}/)" in middle
-
-    assert f"**Progress: {chapter_count} of {chapter_count}**" in last
-    assert "[Exercises](./EXERCISES.md)" in last
-    assert f"[← Chapter {chapter_count - 2}](../{chapters[-2].slug}/)" in last
-    assert f"Chapter {chapter_count}" not in last
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_navigation(chapter).strip()
+        assert matches[0].start() > readme.index("# ")
+        assert matches[0].start() < readme.find("\n## ")
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

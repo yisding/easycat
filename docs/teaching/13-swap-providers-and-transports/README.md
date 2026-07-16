@@ -1,7 +1,7 @@
 # Chapter 13 — Swap Providers AND Transports
 
 <!-- BEGIN auto:navigation -->
-**Progress: 14 of 16** · [← Chapter 12](../12-evals-and-latency/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 14 →](../14-bring-your-own-agent/)
+**Progress: 14 of 16** · [← Chapter 12 — Evals + the Latency Budget](../12-evals-and-latency/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
 <!-- END auto:navigation -->
 
 > The same `Session`, run with **two orthogonal axes of choice**:

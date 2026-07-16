@@ -1,7 +1,7 @@
 # Chapter 14 — Bring your own agent
 
 <!-- BEGIN auto:navigation -->
-**Progress: 15 of 16** · [← Chapter 13](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 →](../15-operate-in-production/)
+**Progress: 15 of 16** · [← Chapter 13 — Swap Providers AND Transports](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
 <!-- END auto:navigation -->
 
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
