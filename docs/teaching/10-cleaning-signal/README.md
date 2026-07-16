@@ -258,7 +258,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -168,123 +168,81 @@
+@@ -168,128 +168,81 @@
      await sentence_queue.put(None)
  
  
@@ -279,8 +279,13 @@ hearing.
 -                # callback-sized frame at a time makes acceptance atomic, so
 -                # the ledger can still credit an accepted head accurately.
 -                for frame in _local_output_frames(event.audio):
+-                    if cancel.is_cancelled:
+-                        await tts.cancel()
+-                        break
 -                    if await transport.send_audio(frame):
 -                        ledger.bytes_accepted += len(frame.data)
+-                if cancel.is_cancelled:
+-                    break
 +                await transport.send_audio(event.audio)
 +                # The crucial dual-input line: AEC needs to know what we
 +                # asked the speaker to play, so it can subtract that
@@ -410,7 +415,7 @@ hearing.
  
          if tag == "speech_started":
              if stt is None:
-@@ -302,39 +260,57 @@
+@@ -307,39 +260,57 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -485,7 +490,7 @@ hearing.
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
-@@ -352,13 +328,14 @@
+@@ -357,13 +328,14 @@
          )
  
      await transport.connect()
@@ -503,7 +508,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -366,7 +343,7 @@
+@@ -371,7 +343,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

@@ -108,6 +108,58 @@ async def test_partial_local_transport_chunk_credits_enqueued_head(monkeypatch) 
     assert ledger.bytes_accepted == frame_bytes
 
 
+async def test_cancellation_stops_remaining_frames_in_same_tts_event(monkeypatch) -> None:
+    chapter = _load_chapter(monkeypatch)
+    frame_bytes = chapter.TTS_BYTES_PER_SECOND * chapter.LOCAL_OUTPUT_FRAME_MS // 1000
+    cancel = chapter.CancelToken()
+
+    class FakeTTS:
+        cancelled = False
+
+        async def synthesize(self, _payload):
+            yield types.SimpleNamespace(
+                type=chapter.TTSEventType.AUDIO,
+                audio=chapter.AudioChunk(
+                    data=bytes(frame_bytes * 2),
+                    format=chapter.PCM16_MONO_24K,
+                ),
+            )
+
+        async def cancel(self) -> None:
+            self.cancelled = True
+
+    class FakeTransport:
+        calls = 0
+
+        async def send_audio(self, _chunk) -> bool:
+            self.calls += 1
+            cancel.cancel()
+            return True
+
+    class FakeJournal:
+        def append(self, **_row) -> None: ...
+
+    queue: asyncio.Queue = asyncio.Queue()
+    await queue.put("hello world")
+    await queue.put(None)
+    ledger = chapter.TurnLedger()
+    tts = FakeTTS()
+    transport = FakeTransport()
+
+    await chapter.drain_to_speaker(
+        tts,
+        transport,
+        queue,
+        cancel,
+        ledger,
+        FakeJournal(),
+    )
+
+    assert transport.calls == 1
+    assert ledger.bytes_accepted == frame_bytes
+    assert tts.cancelled
+
+
 def test_heard_text_uses_accepted_byte_ratio(monkeypatch) -> None:
     chapter = _load_chapter(monkeypatch)
     ledger = chapter.TurnLedger(

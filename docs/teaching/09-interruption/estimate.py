@@ -183,8 +183,13 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 # callback-sized frame at a time makes acceptance atomic, so
                 # the ledger can still credit an accepted head accurately.
                 for frame in _local_output_frames(event.audio):
+                    if cancel.is_cancelled:
+                        await tts.cancel()
+                        break
                     if await transport.send_audio(frame):
                         ledger.bytes_accepted += len(frame.data)
+                if cancel.is_cancelled:
+                    break
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
