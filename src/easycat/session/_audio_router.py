@@ -399,6 +399,7 @@ class AudioRouter:
             or not self._outbound_queue.empty()
         ):
             return False
+        turn = self._current_turn()
         self._claim_outbound_send()
         try:
             async with self._outbound_send_lock:
@@ -412,9 +413,9 @@ class AudioRouter:
                     or not self._outbound_queue.empty()
                 ):
                     return False
-                send_task = asyncio.create_task(
-                    self._send_outbound_chunk(chunk),
-                    name=self._INLINE_SEND_TASK_NAME,
+                send_task = self._runtime_scope.create_task(
+                    self._INLINE_SEND_TASK_NAME,
+                    self._send_outbound_chunk(chunk, turn),
                 )
                 await self._await_non_cancellable_send(send_task)
                 return True
@@ -802,13 +803,18 @@ class AudioRouter:
                 self._replay_chunks_pending > 0
                 and getattr(chunk, "_easycat_replay_chunk", False) is True
             )
+            # Snapshot ownership at dequeue time. A queued chunk can wait
+            # behind an inline send, during which barge-in may replace the
+            # active turn; delivery must remain attributed to the turn that
+            # owned the chunk when the drain claimed it.
+            turn = self._current_turn()
             # Claim before waiting for the send lock. Otherwise a contended
             # dequeued chunk disappears from both queue depth and in-flight
             # accounting, allowing await_drain() to report a false idle gap.
             self._claim_outbound_send()
             try:
                 async with self._outbound_send_lock:
-                    await self._send_outbound_chunk(chunk)
+                    await self._send_outbound_chunk(chunk, turn)
             finally:
                 await self._finish_outbound_send(replayed_chunk=replayed_chunk)
 
@@ -819,9 +825,12 @@ class AudioRouter:
         self._outbound_in_flight += 1
         self._update_outbound_idle()
 
-    async def _send_outbound_chunk(self, chunk: AudioChunk) -> None:
+    async def _send_outbound_chunk(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
         """Deliver one claimed chunk and apply shared accounting/error policy."""
-        turn = self._current_turn()
         bind_turn(turn.id if turn is not None else None)
         try:
             self._stamp_outbound_chunk(chunk, turn)

@@ -388,6 +388,38 @@ async def test_inline_send_defers_caller_cancellation_until_transport_finishes()
 
 
 @pytest.mark.asyncio
+async def test_force_scope_cancel_aborts_owned_inline_send():
+    started = asyncio.Event()
+    transport_cancelled = False
+
+    class _BlockedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            nonlocal transport_cancelled
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                transport_cancelled = True
+                raise
+
+    router, state = _make_router(transport=_BlockedTransport())
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    inline.cancel()
+    state["runtime_scope"].cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert transport_cancelled
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+    await state["runtime_scope"].cancel_and_drain()
+
+
+@pytest.mark.asyncio
 async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
     first_started = asyncio.Event()
     release_first = asyncio.Event()
@@ -405,8 +437,10 @@ async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
             self.sent.append(chunk)
             return True
 
+    original_turn = TurnContext(turn_id="original", cancel_token=CancelToken())
+    replacement_turn = TurnContext(turn_id="replacement", cancel_token=CancelToken())
     transport = _ContendedTransport()
-    router, state = _make_router(transport=transport)
+    router, state = _make_router(transport=transport, current_turn=original_turn)
     router.start_outbound()
 
     inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk(byte_value=1)))
@@ -423,6 +457,7 @@ async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
     assert router._outbound_in_flight == 2
     assert not router._outbound_idle.is_set()
 
+    state["current_turn"] = replacement_turn
     release_first.set()
     assert await asyncio.wait_for(inline, timeout=1) is True
     await asyncio.wait_for(second_started.wait(), timeout=1)
@@ -432,6 +467,7 @@ async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
     release_second.set()
     await router.await_drain(timeout=1)
     assert len(transport.sent) == 2
+    assert transport.sent[1]._easycat_turn_id == original_turn.id
 
     state["running"] = False
     await router.stop_outbound()
