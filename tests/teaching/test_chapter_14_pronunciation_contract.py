@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
 
 
-def _load_main_module():
+def _load_main_module() -> ModuleType:
     path = CHAPTER / "main.py"
     spec = importlib.util.spec_from_file_location("teaching_ch14_pronunciation", path)
     assert spec is not None and spec.loader is not None
@@ -66,7 +67,8 @@ def test_bundled_tts_providers_use_the_plain_text_policy() -> None:
 
 def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None:
     chapter = _load_main_module()
-    bundle = tmp_path / "ch14.bundle"
+    bundle = tmp_path / "path with spaces" / "ch14.bundle"
+    bundle.parent.mkdir()
     record = JournalRecord(
         sequence=1,
         session_id="ch14",
@@ -87,10 +89,17 @@ def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None
     export_debug_bundle(SimpleNamespace(journal=SimpleNamespace(read=lambda: [record])), bundle)
     _register_commands()
 
-    assert chapter.pronunciation_command(bundle) == (
-        f"uv run easycat journal grep {chapter._display_path(bundle)} "
-        "--query tts_payload_prepared --json"
-    )
+    assert shlex.split(chapter.pronunciation_command(bundle)) == [
+        "uv",
+        "run",
+        "easycat",
+        "journal",
+        "grep",
+        str(chapter._display_path(bundle)),
+        "--query",
+        "tts_payload_prepared",
+        "--json",
+    ]
     result = CliRunner().invoke(
         app,
         ["journal", "grep", str(bundle), "--query", "tts_payload_prepared", "--json"],

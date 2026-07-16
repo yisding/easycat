@@ -84,9 +84,10 @@ class FirstAudioProbe:
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         accepted = await self._transport.send_audio(chunk)
-        if accepted and self.first_audio_at is None:
+        normalized = accepted is None or bool(accepted)
+        if normalized and self.first_audio_at is None:
             self.first_audio_at = time.monotonic()
-        return accepted
+        return normalized
 
 
 def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
@@ -189,9 +190,9 @@ async def run_turn(transport, stt, client, journal) -> None:
         },
     )
     if total_gap is None:
-        print("  (turn gap unavailable — TTS produced no audio)")
+        print("  (turn gap unavailable — TTS produced no accepted audio)")
     else:
-        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
 async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
