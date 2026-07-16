@@ -69,4 +69,6 @@ Then run `--backend smart` and check.
 You should be able to: (a) describe what input smart-turn takes
 and what it outputs, (b) explain why the fallback silence
 threshold still has to be there even with smart-turn on, and (c)
-name two utterance patterns that will reliably misclassify.
+name two utterance patterns that will reliably misclassify, and
+(d) explain why STT-final → first-audio cannot measure an endpoint
+detector's latency win.
