@@ -252,6 +252,11 @@ class _SentenceStreamBuffer:
             text = self._text
             if self._strip_md:
                 text = strip_markdown(text, normalize_code_spans=True)
+            # Commit the flush before queueing. The first-payload handoff
+            # yields after the payload is accepted, so cancellation in that
+            # window must not leave the already-queued final text pending for
+            # a later flush to duplicate.
+            self._text = ""
             queued = await self._put_payload(text, is_final=True)
         self._text = ""
         return queued

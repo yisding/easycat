@@ -552,3 +552,36 @@ async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
     remainder = await tts_queue.get()
     assert remainder is not None
     assert remainder.text == "please and continue."
+
+
+async def test_flush_commits_text_before_first_payload_handoff():
+    """Cancellation after queueing a final payload must not queue it twice."""
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    class SelfCancellingQueue(asyncio.Queue[TTSInput | None]):
+        cancel_next_put = True
+
+        async def put(self, item: TTSInput | None) -> None:
+            await super().put(item)
+            if item is not None and self.cancel_next_put:
+                self.cancel_next_put = False
+                task = asyncio.current_task()
+                assert task is not None
+                task.cancel()
+
+    tts_queue = SelfCancellingQueue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=False,
+    )
+    buffer.replace("A short final reply.")
+
+    with pytest.raises(asyncio.CancelledError):
+        await buffer.flush()
+
+    first = await tts_queue.get()
+    assert first is not None
+    assert first.text == "A short final reply."
+    assert await buffer.flush() is False
+    assert tts_queue.empty()
