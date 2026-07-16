@@ -29,6 +29,7 @@ from typing import Any, Literal
 Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
 ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
+LOCK_EXCLUDE_NEWER = "2026-07-11T22:00:00Z"
 PINS = {
     framework: tuple(
         tomllib.loads((ENVIRONMENT_ROOT / framework / "pyproject.toml").read_text())["project"][
@@ -72,6 +73,9 @@ def worker_specs(
                 "run",
                 "--quiet",
                 "--no-progress",
+                "--no-config",
+                "--exclude-newer",
+                LOCK_EXCLUDE_NEWER,
                 "--isolated",
                 "--project",
                 str(project),

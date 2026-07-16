@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -69,6 +71,10 @@ class HangingAgent:
         return "never"
 
 
+def _preemptive_runner(agent: object) -> AgentRunner:
+    return AgentRunner(agent, AgentRunnerConfig(preemptive_generation=True))
+
+
 # ── Protocol conformance ──────────────────────────────────────────
 
 
@@ -127,6 +133,72 @@ async def test_invoke_records_history():
 
 
 @pytest.mark.asyncio
+async def test_prepare_response_defers_history_until_invoke_prepared():
+    runner = _preemptive_runner(EchoAgent())
+
+    prepared = await runner.prepare_response(AgentTurnInput.from_text("hello"))
+
+    assert prepared.response == "Echo: hello"
+    assert runner.history == []
+
+    events = [event async for event in runner.invoke_prepared(prepared, _recorder())]
+    assert [event.kind for event in events] == ["text_delta", "done"]
+    assert runner.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Echo: hello"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_discarded_prepared_response_never_mutates_history():
+    runner = _preemptive_runner(EchoAgent())
+
+    await runner.prepare_response(AgentTurnInput.from_text("discard me"))
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_prepared_response_never_commits_history():
+    runner = _preemptive_runner(EchoAgent())
+    prepared = await runner.prepare_response(AgentTurnInput.from_text("cancel me"))
+    token = CancelToken()
+    token.cancel()
+
+    events = [event async for event in runner.invoke_prepared(prepared, _recorder(), token)]
+
+    assert events == []
+    assert runner.history == []
+    assert not prepared.committed
+
+
+@pytest.mark.asyncio
+async def test_preemptive_generation_is_opt_in():
+    runner = AgentRunner(EchoAgent())
+
+    assert not runner.supports_preemptive_generation
+    with pytest.raises(RuntimeError, match="does not support"):
+        await runner.prepare_response(AgentTurnInput.from_text("hello"))
+
+    assert _preemptive_runner(EchoAgent()).supports_preemptive_generation
+
+
+@pytest.mark.asyncio
+async def test_prepared_cursor_uses_actual_generation_start_time():
+    runner = _preemptive_runner(EchoAgent())
+    before = time.monotonic_ns()
+    prepared = await runner.prepare_response(AgentTurnInput.from_text("hello"))
+    recorder = MagicMock()
+
+    events = [event async for event in runner.invoke_prepared(prepared, recorder)]
+
+    cursor = recorder.record_unit_entered.call_args.args[0]
+    assert prepared.started_at_ns >= before
+    assert cursor.entered_at == prepared.started_at_ns
+    assert [event.kind for event in events] == ["text_delta", "done"]
+
+
+@pytest.mark.asyncio
 async def test_invoke_multi_turn_history():
     runner = AgentRunner(UpperAgent())
     await _drain(runner, "first")
@@ -148,6 +220,17 @@ async def test_timeout_rolls_back_history():
     with pytest.raises(AgentTimeoutError) as exc:
         await _drain(runner, "test")
     assert exc.value.timeout == 0.05
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_zero_timeout_rejects_immediate_plain_agent():
+    runner = AgentRunner(EchoAgent(), AgentRunnerConfig(timeout=0.0))
+
+    with pytest.raises(AgentTimeoutError) as exc:
+        await _drain(runner, "test")
+
+    assert exc.value.timeout == 0.0
     assert runner.history == []
 
 
@@ -190,10 +273,9 @@ async def test_invoke_cancelled_before_completion_skips_events():
     runner = AgentRunner(InstantAgent())
     token.cancel()
     events = await _drain(runner, "hello", token)
-    # Cancellation before completion yields no events; history still records
-    # the assistant response so apply_interruption can truncate it.
+    # Work that is cancelled before invocation never starts or mutates history.
     assert events == []
-    assert runner.history[-1]["role"] == "assistant"
+    assert runner.history == []
 
 
 # ── apply_interruption / replace / append tests ───────────────────
