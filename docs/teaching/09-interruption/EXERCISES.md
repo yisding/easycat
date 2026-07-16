@@ -10,15 +10,16 @@ does it over- or under-shoot?
 
 **Hints**
 
-1. The toy estimator multiplies `bytes_sent` by ~15 chars / 48000
+1. The toy estimator multiplies `bytes_accepted` by ~15 chars / 48000
    bytes / second (24 kHz × 2 bytes/sample). The constant is an
    *average* — a fast word like "yes" lasts ~150 ms but the formula
    assigns it ~500 ms; a slow word like "elephant" lasts ~600 ms
    and gets the same ~500 ms.
-2. The OS playback buffer also lies: `transport.send_audio`
-   enqueues PortAudio chunks, which hold ~10-100 ms before the
-   speaker driver hands them off. `clear_audio()` drops those, so
-   `bytes_sent` *overcounts* by that buffer.
+2. The playback queue also lies: `transport.send_audio=True`
+   means accepted, not heard. `clear_audio()` drops queued chunks,
+   so `bytes_accepted` *overcounts* by that unplayed backlog. A
+   `False` return is different: that chunk was rejected and the
+   corrected toy does not count it at all.
 3. Net effect: `heard_text` *usually* overshoots by 0-2 words. On
    a *slow* word at the start of a sentence it can undershoot.
 4. Production `easycat.session.interruption` uses playback-ack
@@ -36,8 +37,9 @@ affect `heard_text` vs reality?
 **Hints**
 
 1. `sentences_sent` records the *stripped* text (what TTS actually
-   spoke). `bytes_sent` is real bytes of the stripped audio. So
-   `bytes_sent → heard_chars` is correct *on the stripped text*.
+   spoke). `bytes_accepted` is accepted bytes of the stripped audio.
+   So `bytes_accepted → heard_chars` is internally consistent *on
+   the stripped text*, before the playback-queue correction.
 2. The bug arises when you append `heard_text` back into the
    conversation history — should it be the stripped version (what
    the user heard) or the original (what the LLM produced)? The
@@ -70,6 +72,7 @@ not enough?
 ## Self-check
 
 You should be able to: (a) name the three differences between
-versions A, B, and C, (b) describe why "bytes sent ≠ bytes heard"
-without re-reading the README, and (c) explain why `CancelToken`
-is a token and not an exception.
+versions A, B, and C, (b) describe why "bytes accepted ≠ bytes heard"
+without re-reading the README—including why rejected differs from
+accepted-but-queued—and (c) explain why `CancelToken` is a token
+and not an exception.

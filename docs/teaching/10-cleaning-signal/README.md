@@ -61,18 +61,17 @@ hearing.
 ```diff
 --- docs/teaching/09-interruption/estimate.py
 +++ docs/teaching/10-cleaning-signal/main.py
-@@ -1,20 +1,33 @@
--"""Chapter 9c — cancel + estimate what the user actually heard.
+@@ -1,19 +1,33 @@
+-"""Chapter 9c — cancel + estimate what the user could have heard.
 -
--Same as ``cancel.py`` plus: we track bytes of TTS audio that made
--it onto the speaker before the cancel fires, compute the character
--position in the bot's *text* reply that corresponds to those bytes,
--and rewrite the assistant turn in the conversation history to end
--there. Next turn, the LLM has the same picture of reality the
--user does.
+-Same as ``cancel.py`` plus: we track bytes of TTS audio accepted by
+-the transport before the cancel fires, compute the character position
+-in the bot's *text* reply that corresponds to those bytes, and rewrite
+-the assistant turn in the conversation history to end there. Next turn,
+-the LLM has a closer picture of what the user could have heard.
 -
--The byte-to-char estimate is deliberately simple: bytes heard ÷
--total bytes × total chars. The production
+-The byte-to-char estimate is deliberately simple: accepted bytes ÷
+-expected bytes × total chars. The production
 -`easycat.session.interruption` estimator is a lot more careful
 -about silence, SSML, markdown, and playback-ack fudge factors —
 -read it after you understand the toy.
@@ -96,8 +95,8 @@ hearing.
 +
 +NR is single-input — it only sees the mic. AEC is dual-input —
 +it needs both the mic *and* the far-end reference (the TTS audio
-+we sent to the speaker). We feed the reference every time we
-+emit a TTS chunk.
++we sent to the speaker). We feed the reference every time the
++transport accepts a complete TTS chunk.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -109,7 +108,7 @@ hearing.
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -25,19 +38,23 @@
+@@ -24,20 +38,23 @@
  
  from __future__ import annotations
  
@@ -119,6 +118,7 @@ hearing.
  import os
  import time
  import types
+-from collections.abc import Iterator
 -from dataclasses import dataclass, field
  from pathlib import Path
  
@@ -143,7 +143,7 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
  from easycat.strip_markdown import strip_markdown
-@@ -58,48 +76,23 @@
+@@ -58,62 +76,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -151,17 +151,18 @@ hearing.
 -
 -# OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
 -TTS_BYTES_PER_SECOND = 24_000 * 2
+-LOCAL_OUTPUT_FRAME_MS = 20
 -
 -
 -@dataclass
 -class TurnLedger:
--    """Per-turn record of what the bot tried to say vs. what played.
+-    """Per-turn record of what the bot tried to say vs. what was accepted.
 -
 -    ``sentences_sent`` accumulates the text of each sentence dispatched
--    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
--    reached ``transport.send_audio``. At cancel time we combine them
--    to estimate where, in the concatenated text, the user's ear fell
--    silent.
+-    to TTS in order. ``bytes_accepted`` tracks audio bytes for which
+-    ``transport.send_audio`` returned ``True``. At cancel time we combine
+-    them to estimate where, in the concatenated text, the user's ear
+-    fell silent.
 +
 +
 +class _Passthrough:
@@ -172,7 +173,7 @@ hearing.
      """
  
 -    sentences_sent: list[str] = field(default_factory=list)
--    bytes_sent: int = 0
+-    bytes_accepted: int = 0
 -
 -    def heard_text(self) -> str:
 -        """Estimate the text prefix the user's ear actually reached.
@@ -186,7 +187,7 @@ hearing.
 -            return ""
 -        full_text = " ".join(self.sentences_sent)
 -        expected = max(1, _expected_bytes(full_text))
--        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+-        estimated_chars = int(len(full_text) * self.bytes_accepted / expected)
 -        estimated_chars = max(0, min(estimated_chars, len(full_text)))
 -        return full_text[:estimated_chars]
 -
@@ -196,6 +197,19 @@ hearing.
 -    chars_per_sec = 15
 -    seconds = len(text) / chars_per_sec
 -    return int(seconds * TTS_BYTES_PER_SECOND)
+-
+-
+-def _local_output_frames(chunk: AudioChunk) -> Iterator[AudioChunk]:
+-    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
+-    frame_bytes = (
+-        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
+-    )
+-    for offset in range(0, len(chunk.data), frame_bytes):
+-        yield AudioChunk(
+-            data=chunk.data[offset : offset + frame_bytes],
+-            format=chunk.format,
+-            timestamp=chunk.timestamp,
+-        )
 +    async def process(self, chunk):
 +        return chunk
 +
@@ -207,7 +221,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -128,13 +121,33 @@
+@@ -142,13 +121,33 @@
                  self._preroll.append(chunk)
  
  
@@ -245,13 +259,13 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -155,119 +168,81 @@
+@@ -169,128 +168,81 @@
      await sentence_queue.put(None)
  
  
 -async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journal):
 +async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_id, journal):
-+    """Emit TTS audio to the speaker AND feed it to AEC as the far-end reference."""
++    """Emit TTS audio and feed accepted chunks to AEC as the far-end reference."""
      while True:
          sentence = await sentence_queue.get()
          if sentence is None or cancel.is_cancelled:
@@ -262,12 +276,22 @@ hearing.
                  await tts.cancel()
                  break
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-                 await transport.send_audio(event.audio)
--                ledger.bytes_sent += len(event.audio.data)
-+                # The crucial dual-input line: AEC needs to know what we
-+                # asked the speaker to play, so it can subtract that
-+                # pattern from the mic.
-+                aec.feed_reference(event.audio)
+-                # LocalTransport reports False for a partial fit. Sending one
+-                # callback-sized frame at a time makes acceptance atomic, so
+-                # the ledger can still credit an accepted head accurately.
+-                for frame in _local_output_frames(event.audio):
+-                    if cancel.is_cancelled:
+-                        await tts.cancel()
+-                        break
+-                    if await transport.send_audio(frame):
+-                        ledger.bytes_accepted += len(frame.data)
+-                if cancel.is_cancelled:
+-                    break
++                if await transport.send_audio(event.audio):
++                    # The crucial dual-input line: AEC needs to know what
++                    # the speaker accepted, so it can subtract that pattern
++                    # from the mic. Rejected or partial writes return False.
++                    aec.feed_reference(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -275,7 +299,7 @@ hearing.
 -            data={
 -                "stage": "tts",
 -                "text": sentence,
--                "bytes_sent_so_far": ledger.bytes_sent,
+-                "bytes_accepted_so_far": ledger.bytes_accepted,
 -                "cancelled": cancel.is_cancelled,
 -            },
 -        )
@@ -377,10 +401,10 @@ hearing.
 -                    "stage": "interruption",
 -                    "full_text": full,
 -                    "heard_text": heard,
--                    "bytes_heard": active_ledger.bytes_sent,
+-                    "bytes_accepted": active_ledger.bytes_accepted,
 -                },
 -            )
--            # Rewrite history: the bot said *only* what the user heard.
+-            # Rewrite history to the best prefix this toy can estimate.
 -            history.append({"role": "assistant", "content": heard})
 -            print(f"  bot (cut): {heard!r}")
 +            bot_task = None
@@ -392,7 +416,7 @@ hearing.
  
          if tag == "speech_started":
              if stt is None:
-@@ -285,33 +260,56 @@
+@@ -308,39 +260,57 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -433,6 +457,11 @@ hearing.
  
 +    session_id = f"ch10-nr{args.nr}-aec{args.aec}-{int(time.time())}"
      journal = InMemoryRingBuffer(capacity=10_000)
+-    transport = LocalTransport(
+-        LocalTransportConfig(
+-            audio_format=PCM16_MONO_24K,
+-            frame_duration_ms=LOCAL_OUTPUT_FRAME_MS,
+-        )
 +
 +    # Factory-wired stages. NR/AEC both fall back to passthrough if the
 +    # optional deps aren't installed; the journal records which one is live.
@@ -456,12 +485,13 @@ hearing.
 +        name="audio.config",
 +        session_id=session_id,
 +        data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
-+    )
+     )
 +
-     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
++    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -330,13 +328,14 @@
+     client = AsyncOpenAI()
+@@ -358,13 +328,14 @@
          )
  
      await transport.connect()
@@ -479,7 +509,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -344,7 +343,7 @@
+@@ -372,7 +343,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

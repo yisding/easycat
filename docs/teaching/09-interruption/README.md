@@ -34,10 +34,10 @@
 
 - **Added:** three separate scripts (`ignore.py`, `cancel.py`,
   `estimate.py`); `CancelToken` from `easycat.cancel`;
-  `transport.clear_audio()` calls; a `bytes_sent` / sentence
+  `transport.clear_audio()` calls; a `bytes_accepted` / sentence
   ledger in `estimate.py` plus an interruption-estimate formula
-  that rewrites conversation history to match what the user
-  actually heard.
+  that rewrites conversation history toward what the user could
+  actually have heard.
 - **Modified:** the pipeline splits into two coroutines
   (mic-producer + coordinator) connected by a queue, so the mic
   side never pauses while TTS runs.
@@ -156,8 +156,9 @@ mentioned before" — but the user never heard it.
 Track two things per turn:
 
 - `sentences_sent` — the text dispatched to TTS, in order.
-- `bytes_sent` — the audio bytes that reached
-  `transport.send_audio`.
+- `bytes_accepted` — audio bytes for which
+  `transport.send_audio` returned `True`. Rejected/dropped chunks
+  never enter the estimate.
 
 OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 B/s. We estimate
 chars-per-byte with a deliberately crude assumption (~15 chars/s
@@ -168,23 +169,23 @@ character index. Then we rewrite the conversation history:
 history.append({"role": "assistant", "content": heard_text})
 ```
 
-Next turn, the LLM's memory matches the user's.
+Next turn, the LLM's memory is closer to the user's.
 
 <!-- BEGIN auto:snippet src=estimate.py symbol=TurnLedger -->
 ```python
 @dataclass
 class TurnLedger:
-    """Per-turn record of what the bot tried to say vs. what played.
+    """Per-turn record of what the bot tried to say vs. what was accepted.
 
     ``sentences_sent`` accumulates the text of each sentence dispatched
-    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
-    reached ``transport.send_audio``. At cancel time we combine them
-    to estimate where, in the concatenated text, the user's ear fell
-    silent.
+    to TTS in order. ``bytes_accepted`` tracks audio bytes for which
+    ``transport.send_audio`` returned ``True``. At cancel time we combine
+    them to estimate where, in the concatenated text, the user's ear
+    fell silent.
     """
 
     sentences_sent: list[str] = field(default_factory=list)
-    bytes_sent: int = 0
+    bytes_accepted: int = 0
 
     def heard_text(self) -> str:
         """Estimate the text prefix the user's ear actually reached.
@@ -198,7 +199,7 @@ class TurnLedger:
             return ""
         full_text = " ".join(self.sentences_sent)
         expected = max(1, _expected_bytes(full_text))
-        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+        estimated_chars = int(len(full_text) * self.bytes_accepted / expected)
         estimated_chars = max(0, min(estimated_chars, len(full_text)))
         return full_text[:estimated_chars]
 ```
@@ -215,14 +216,15 @@ away. On every real barge-in, the first ~200 ms of what you said
 is lost. The second mic event after bot-done picks things up
 normally. Exercise 1 nudges you to notice this.
 
-## Why "bytes sent" ≠ "bytes heard"
+## Why "bytes accepted" ≠ "bytes heard"
 
 Three reasons, all real:
 
-1. **OS playback buffer.** `transport.send_audio` enqueues chunks
-   on PortAudio. PortAudio holds ~10-100 ms before the speaker
-   driver. `clear_audio()` drops those — so "bytes sent" overcounts
-   by however much was in the PA buffer.
+1. **Playback queues.** A `True` return from `transport.send_audio`
+   means the transport accepted the chunk; it does not mean the user
+   heard it. `LocalTransport` and PortAudio can still hold queued
+   audio that `clear_audio()` drops, so `bytes_accepted` overcounts
+   by the unplayed backlog.
 2. **Markdown + SSML.** `strip_markdown(text)` is shorter than the
    raw LLM output. TTS synthesises the stripped version. Character
    counts drift.
@@ -231,9 +233,10 @@ Three reasons, all real:
 
 Production `easycat.session.interruption` has a 200-line estimator
 that handles all three plus playback-ack marks. The toy here is a
-single-line formula — accurate enough that the bot's next turn
-doesn't claim it said things the user didn't hear. Read the
-production version once you understand why each correction exists.
+single-line formula: excluding rejected chunks prevents invented
+audio, while the remaining queue/rate errors are kept visible for
+the exercise. Read the production version once you understand why
+each correction exists.
 
 ## Read the bundles
 
@@ -254,7 +257,7 @@ Expect:
 - `ignore.py` bundle: only `user.barge_in.ignored` records.
 - `cancel.py` bundle: `interruption.start` at barge-in time.
 - `estimate.py` bundle: `interruption.estimate` with
-  `{full_text, heard_text, bytes_heard}`.
+  `{full_text, heard_text, bytes_accepted}`.
 
 ## Try breaking it
 
