@@ -35,7 +35,7 @@ dependencies = [
     "httpx>=0.28.1",
     "rich>=15.0.0",
     "sentencesplit>=0.1.0",
-    "typing-extensions>=4.6",
+    "typing-extensions>=4.16.0",
     "typer>=0.26.8",
     "websockets>=15.0.1,<17",
 ]
@@ -52,11 +52,11 @@ Repository = "https://github.com/yisding/easycat"
 easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
-openai-agents = ["openai-agents>=0.17.7"]
+openai-agents = ["openai-agents>=0.18.0"]
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
-pydantic-ai-v2 = ["pydantic-ai>=2.0.0,<3.0.0"]
+pydantic-ai-v2 = ["pydantic-ai>=2.5.1,<3.0.0"]
 langchain = ["langchain-core>=1.3.3"]
-langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.7"]
+langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.8"]
 llama-agents = ["llama-index-workflows>=2.22.2,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
 openai = ["openai>=2.44.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
@@ -71,10 +71,10 @@ cartesia = []
 telephony = [
     "aiohttp>=3.14.0",
     "fastapi>=0.139.0",
-    "phonenumberslite>=9.0.33",
+    "phonenumberslite>=9.0.34",
     "python-multipart>=0.0.29",
     "twilio>=9.0.0",
-    "uvicorn>=0.29.0",
+    "uvicorn>=0.50.2",
 ]
 aec = ["livekit>=1.1.13"]
 local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
@@ -98,7 +98,7 @@ webtransport = ["aioquic>=1.3.0,<2"]
 quickstart = [
     "sounddevice>=0.4.6",
     "openai>=2.44.0",
-    "openai-agents>=0.17.7",
+    "openai-agents>=0.18.0",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "numpy>=1.24.0",
@@ -117,25 +117,25 @@ all = [
     "aiohttp>=3.14.0",
     "fastapi>=0.139.0",
     "openai>=2.44.0",
-    "openai-agents>=0.17.7",
+    "openai-agents>=0.18.0",
     "langchain-core>=1.3.3",
-    "langgraph>=1.2.7",
+    "langgraph>=1.2.8",
     "llama-index-workflows>=2.22.2,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
-    "phonenumberslite>=9.0.33",
+    "phonenumberslite>=9.0.34",
     "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "twilio>=9.0.0",
-    "uvicorn>=0.29.0",
+    "uvicorn>=0.50.2",
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
     "onnxruntime>=1.27.0",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.26,<0.12.0"]
+requires = ["uv_build>=0.11.28,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -211,7 +211,7 @@ conflicts = [
 [dependency-groups]
 dev = [
     "diff-cover>=10.3.0",
-    "hypothesis>=6.155.7",
+    "hypothesis>=6.156.2",
     "import-linter>=2",
     "mutmut>=3.2.3",
     "mypy>=1.18",
@@ -265,14 +265,11 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "scripts/extras_smoke.py" = ["C901", "PLR0912"]
 "src/easycat/cli/debug/diff.py" = ["B904"]
 "src/easycat/cli/diagnose/explain.py" = ["PLR0912"]
-"src/easycat/cli/scaffold/_schema.py" = ["C901"]
 "src/easycat/cli/scaffold/init.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/config/_factory.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/config/easy.py" = ["C901", "PLR0912"]
 # Landed in a concurrent wave-4 item, grandfathered at integration time.
 "src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915", "B007"]
-"src/easycat/debug/bundle.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/debug/export.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debug/bundle.py" = ["C901"]
 "src/easycat/debugger/_audio.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_records.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_sources.py" = ["C901"]
@@ -285,7 +282,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/integrations/agents/openai_agents.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/pydantic_ai.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/responses_api.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/push_to_talk.py" = ["C901", "PLR0915"]
 "src/easycat/session/_audio_router.py" = ["C901"]
 "src/easycat/session/_session.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/session/_stt_committer.py" = ["C901", "PLR0912"]
@@ -294,11 +290,8 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/stages/agent.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/stages/tts.py" = ["C901"]
 "src/easycat/stt/openai_realtime_provider.py" = ["C901", "PLR0912"]
-"src/easycat/telephony/voicemail.py" = ["C901", "PLR0912"]
 "src/easycat/transports/webrtc.py" = ["C901", "PLR0912", "PLR0915", "ASYNC110", "ASYNC240"]
 "src/easycat/transports/webtransport.py" = ["C901"]
-"src/easycat/tts/deepgram_tts.py" = ["C901"]
-"src/easycat/validation/runner.py" = ["C901", "PLR0912", "PLR0915"]
 "tests/_command_hints.py" = ["C901"]
 "tests/cli/test_app.py" = ["PLR0915"]
 "tests/cli/test_explain.py" = ["PLR0915"]
@@ -421,9 +414,11 @@ module = [
     "easycat.session.*",
     "easycat.integrations.*",
     "easycat.validation._lane_harness.*",
+    "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",
+    "easycat.debugger._core_routes.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
@@ -564,4 +559,54 @@ type = "layers"
 layers = [
     "easycat.session_manager",
     "easycat.transports",
+]
+
+[[tool.importlinter.contracts]]
+name = "Bundle archive loader does not import the bundle facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debug._bundle_loader",
+]
+forbidden_modules = [
+    "easycat.debug.bundle",
+]
+
+# `validation.latency` is the documented outward-facing facade. Internal
+# validation code imports focused domain leaves directly so the facade cannot
+# regress into a god module or create cycles between policy and orchestration.
+[[tool.importlinter.contracts]]
+name = "Validation internals do not depend on the public latency facade"
+type = "forbidden"
+source_modules = [
+    "easycat.validation._environment",
+    "easycat.validation._failure_classification",
+    "easycat.validation._lane_harness",
+    "easycat.validation._latency_artifacts",
+    "easycat.validation._latency_baseline",
+    "easycat.validation._latency_budgets",
+    "easycat.validation._latency_models",
+    "easycat.validation._latency_runner",
+    "easycat.validation._latency_selectors",
+    "easycat.validation._live_runner",
+    "easycat.validation._release_runner",
+    "easycat.validation._reliability_policy",
+    "easycat.validation._runner_support",
+    "easycat.validation._slice_runner",
+    "easycat.validation.reliability",
+]
+forbidden_modules = [
+    "easycat.validation.latency",
+]
+
+# The app composer owns optional-dependency loading and route assembly. Route
+# leaves depend on source/domain helpers directly and must not reach back into
+# the server facade, which would recreate the monolithic dependency direction.
+[[tool.importlinter.contracts]]
+name = "Debugger route leaves do not import the server facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debugger._core_routes",
+]
+forbidden_modules = [
+    "easycat.debugger.server",
 ]

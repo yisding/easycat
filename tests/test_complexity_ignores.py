@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -28,6 +29,8 @@ def test_complexity_grandfather_entries_match_current_violations() -> None:
     paths = sorted({path for path, _code in expected})
     result = subprocess.run(
         [
+            sys.executable,
+            "-m",
             "ruff",
             "check",
             "--isolated",

@@ -16,9 +16,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -33,6 +33,7 @@ from easycat.integrations.agents.base import (
     ExecutionCursor,
     ExternalAgentBridge,
     FrameworkStateSnapshot,
+    NullAgentRecorder,
     UnitKind,
 )
 from easycat.timeouts import AgentTimeoutError
@@ -40,6 +41,28 @@ from easycat.timeouts import AgentTimeoutError
 logger = logging.getLogger(__name__)
 
 _POST_DONE_STREAM_DRAIN_TIMEOUT_S = 0.01
+_T = TypeVar("_T")
+
+
+async def _await_with_timeout(awaitable: Awaitable[_T], timeout: float | None) -> _T:
+    """Await in the caller task while enforcing an optional deadline.
+
+    ``asyncio.wait_for`` schedules a coroutine as a child task even when it
+    completes immediately. Agent streaming invokes this guard for every
+    provider event, so that task hand-off becomes framework-owned latency on
+    the path to first text. ``asyncio.timeout`` enforces the same cancellation
+    deadline on the current task without adding a scheduler round trip.
+    """
+    if timeout is None:
+        return await awaitable
+    if timeout <= 0:
+        # Preserve ``wait_for``'s established zero/negative-timeout behavior:
+        # a newly-created coroutine is cancelled before it gets a loop turn.
+        # ``asyncio.timeout(0)`` instead lets a coroutine that never suspends
+        # complete successfully, which changes the public timeout contract.
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+    async with asyncio.timeout(timeout):
+        return await awaitable
 
 
 async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
@@ -80,6 +103,24 @@ class AgentRunnerConfig:
     """Configuration for AgentRunner."""
 
     timeout: float | None = 30.0
+    # Start simple ``run(text) -> str`` agents as soon as STT produces a
+    # final segment, overlapping model latency with endpoint confirmation.
+    # Stateful ExternalAgentBridge implementations are excluded because the
+    # bridge contract does not provide transactional rollback.
+    preemptive_generation: bool = False
+    # Bound restarts when a paused user resumes and produces a longer final
+    # transcript before the endpoint is confirmed.
+    preemptive_max_retries: int = 3
+
+
+@dataclass
+class PreparedAgentResponse:
+    """A simple-agent response held outside conversation history until commit."""
+
+    input_text: str
+    response: str
+    started_at_ns: int = 0
+    committed: bool = False
 
 
 # ── AgentRunner ─────────────────────────────────────────────────────
@@ -132,6 +173,74 @@ class AgentRunner:
         """Whether the wrapped agent explicitly marks itself as passthrough."""
         return bool(getattr(self._agent, "is_passthrough_provider", False))
 
+    @property
+    def supports_preemptive_generation(self) -> bool:
+        """Whether this runner can prepare a response without mutating history."""
+        return self._config.preemptive_generation and not self._is_bridge
+
+    @property
+    def preemptive_max_retries(self) -> int:
+        """Maximum speculative attempts allowed for one voice turn."""
+        return max(1, self._config.preemptive_max_retries)
+
+    async def prepare_response(self, turn_input: AgentTurnInput) -> PreparedAgentResponse:
+        """Run a simple agent without committing its response to chat history.
+
+        The prepared response is safe to discard when speech resumes.  Wrapped
+        framework bridges are deliberately rejected: they own durable state
+        that EasyCat cannot roll back through the current bridge protocol.
+        """
+        if not self.supports_preemptive_generation:
+            raise RuntimeError("agent does not support preemptive generation")
+
+        started_at_ns = time.monotonic_ns()
+        try:
+            if self._config.timeout is not None:
+                response = await asyncio.wait_for(
+                    self._agent.run(turn_input.text),
+                    timeout=self._config.timeout,
+                )
+            else:
+                response = await self._agent.run(turn_input.text)
+        except TimeoutError:
+            raise AgentTimeoutError(self._config.timeout or 0) from None
+
+        return PreparedAgentResponse(
+            input_text=turn_input.text,
+            response=response,
+            started_at_ns=started_at_ns,
+        )
+
+    async def invoke_prepared(
+        self,
+        prepared: PreparedAgentResponse,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Commit and emit a response previously produced by :meth:`prepare_response`."""
+        if not self.supports_preemptive_generation:
+            raise RuntimeError("agent does not support preemptive generation")
+        if prepared.committed:
+            raise RuntimeError("prepared agent response has already been committed")
+        if cancel_token and cancel_token.is_cancelled:
+            return
+
+        cursor = ExecutionCursor(
+            unit_id=f"runner-{uuid4().hex[:8]}",
+            unit_kind=UnitKind.AGENT,
+            display_name=type(self._agent).__name__,
+            entered_at=prepared.started_at_ns or time.monotonic_ns(),
+            committable=False,
+        )
+        recorder.record_unit_entered(cursor)
+        prepared.committed = True
+        self._history.append({"role": "user", "content": prepared.input_text})
+        self._history.append({"role": "assistant", "content": prepared.response})
+        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+
+        yield AgentBridgeEvent(kind="text_delta", text=prepared.response)
+        yield AgentBridgeEvent(kind="done", text=prepared.response)
+
     # ── ExternalAgentBridge interface ────────────────────────────
 
     async def invoke(
@@ -176,9 +285,7 @@ class AgentRunner:
                             if remaining <= 0:
                                 timed_out = True
                                 break
-                            event = await asyncio.wait_for(
-                                inner_iter.__anext__(), timeout=remaining
-                            )
+                            event = await _await_with_timeout(inner_iter.__anext__(), remaining)
                         else:
                             event = await inner_iter.__anext__()
                     except StopAsyncIteration:
@@ -223,32 +330,35 @@ class AgentRunner:
                 # already drained, so this is a harmless no-op.
                 await aclose_quietly(inner_iter)
 
-        cursor = ExecutionCursor(
-            unit_id=f"runner-{uuid4().hex[:8]}",
-            unit_kind=UnitKind.AGENT,
-            display_name=type(self._agent).__name__,
-            entered_at=time.monotonic_ns(),
-            committable=False,
-        )
-        recorder.record_unit_entered(cursor)
+        if cancel_token and cancel_token.is_cancelled:
+            return
+
+        cursor: ExecutionCursor | None = None
+        if not isinstance(recorder, NullAgentRecorder):
+            cursor = ExecutionCursor(
+                unit_id=f"runner-{uuid4().hex[:8]}",
+                unit_kind=UnitKind.AGENT,
+                display_name=type(self._agent).__name__,
+                entered_at=time.monotonic_ns(),
+                committable=False,
+            )
+            recorder.record_unit_entered(cursor)
 
         self._history.append({"role": "user", "content": turn_input.text})
 
         try:
-            if self._config.timeout is not None:
-                response = await asyncio.wait_for(
-                    self._agent.run(turn_input.text),
-                    timeout=self._config.timeout,
-                )
-            else:
-                response = await self._agent.run(turn_input.text)
+            response = await _await_with_timeout(
+                self._agent.run(turn_input.text), self._config.timeout
+            )
         except TimeoutError:
             self._history.pop()
-            recorder.record_unit_exited(cursor, reason="timeout")
+            if cursor is not None:
+                recorder.record_unit_exited(cursor, reason="timeout")
             raise AgentTimeoutError(self._config.timeout or 0)
         except Exception:
             self._history.pop()
-            recorder.record_unit_exited(cursor, reason="error")
+            if cursor is not None:
+                recorder.record_unit_exited(cursor, reason="error")
             raise
         except BaseException:
             # A parent ``aclose()`` (barge-in) injects ``GeneratorExit`` /
@@ -259,11 +369,13 @@ class AgentRunner:
             # invariant for the postmortem journal.  Close it defensively
             # before re-raising.
             self._history.pop()
-            recorder.safe_exit_cursor(cursor)
+            if cursor is not None:
+                recorder.safe_exit_cursor(cursor)
             raise
 
         self._history.append({"role": "assistant", "content": response})
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        if cursor is not None:
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
         if cancel_token and cancel_token.is_cancelled:
             # User barged in while run() was executing — history already
