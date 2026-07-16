@@ -28,7 +28,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from easycat._bounded_queue import BoundedAudioQueue
-from easycat._tts_synthesizer import TTSSynthesizer
+from easycat._tts_synthesizer import TTSSynthesizer, TTSSynthResult
 from easycat.cancel import CancelToken
 from easycat.events import EventBus
 from easycat.llm_output_processing import (
@@ -96,6 +96,7 @@ class TTSScheduler:
             timeout_config=timeout_config,
             correlation_ids=wiring.correlation_ids,
             audio_gate=audio_gate,
+            direct_first_audio=audio_router.try_send_first_audio_inline,
         )
         self._synth.bind_stage(
             tts_stage,
@@ -233,6 +234,55 @@ class TTSScheduler:
         transport even while the gate is closed.
         """
         await self._synth.synthesize(text, token=None, bypass_gate=True)
+
+    async def begin_synthesis_with_bot_start(
+        self,
+        payload: TTSInput,
+        token: CancelToken | None,
+        *,
+        is_active: Callable[[], bool] | None,
+        lifecycle_ready: asyncio.Future[bool] | None = None,
+    ) -> asyncio.Task[TTSSynthResult]:
+        """Start provider work while dispatching ``BotStartedSpeaking``.
+
+        The provider request starts first and may receive its first event while
+        agent-delta and lifecycle handlers run. A synthesizer barrier keeps
+        that event private until the optional first-payload admission future
+        succeeds and every ``BotStartedSpeaking`` handler completes. If either
+        dispatch fails or is cancelled, speculative synthesis is drained.
+        """
+        barrier = asyncio.Event()
+        task = asyncio.create_task(
+            self._synth.synthesize(
+                payload,
+                token,
+                is_active=is_active,
+                start_barrier=barrier,
+            )
+        )
+
+        try:
+            # Give the provider task one loop turn to issue its network request
+            # and settle on either network I/O or the first-event barrier. Keep
+            # the yield inside the cleanup guard because cancellation can land
+            # at this first suspension point.
+            await asyncio.sleep(0)
+            if lifecycle_ready is not None:
+                allowed = await asyncio.shield(lifecycle_ready)
+                if not allowed:
+                    task.cancel()
+                    barrier.set()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return task
+            await self._turn_manager.bot_started_speaking()
+        except BaseException:
+            task.cancel()
+            barrier.set()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+
+        barrier.set()
+        return task
 
     async def _synthesize_sentences(
         self,

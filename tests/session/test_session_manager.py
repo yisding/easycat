@@ -90,6 +90,41 @@ async def test_session_manager_releases_key_when_start_is_cancelled() -> None:
     assert replacement.stopped == 1
 
 
+@pytest.mark.parametrize("release_method", ["remove", "stop_all"])
+@pytest.mark.asyncio
+async def test_cancelled_add_does_not_remove_replacement_session(
+    release_method: str,
+) -> None:
+    manager: SessionManager[str] = SessionManager()
+    start_entered = asyncio.Event()
+
+    class BlockingSession(_DummySession):
+        async def start(self) -> None:
+            self.started += 1
+            start_entered.set()
+            await asyncio.Event().wait()
+
+    original = BlockingSession()
+    add_task = asyncio.create_task(manager.add("reused", original))  # type: ignore[arg-type]
+    await start_entered.wait()
+
+    if release_method == "remove":
+        await manager.remove("reused")
+    else:
+        await manager.stop_all()
+
+    replacement = _DummySession()
+    await manager.add("reused", replacement)  # type: ignore[arg-type]
+    add_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await add_task
+
+    assert manager.get("reused") is replacement
+    assert original.stopped == 1
+    await manager.remove("reused")
+    assert replacement.stopped == 1
+
+
 @pytest.mark.asyncio
 async def test_cancelled_real_session_start_rolls_back_before_manager_untracks() -> None:
     manager: SessionManager[str] = SessionManager()
@@ -98,10 +133,17 @@ async def test_cancelled_real_session_start_rolls_back_before_manager_untracks()
         def __init__(self) -> None:
             super().__init__()
             self.warmup_entered = asyncio.Event()
+            self.disconnect_entered = asyncio.Event()
+            self.allow_disconnect = asyncio.Event()
 
         async def warmup(self) -> None:
             self.warmup_entered.set()
             await asyncio.Event().wait()
+
+        async def disconnect(self) -> None:
+            self.disconnect_entered.set()
+            await self.allow_disconnect.wait()
+            await super().disconnect()
 
     transport = BlockingWarmupTransport()
     session = Session(_full_config(transport=transport))
@@ -110,6 +152,17 @@ async def test_cancelled_real_session_start_rolls_back_before_manager_untracks()
     await transport.warmup_entered.wait()
     assert transport.connected
     add_task.cancel()
+
+    await transport.disconnect_entered.wait()
+    assert manager.get("cancelled") is session
+
+    # Repeated cancellation must not interrupt the rollback already in
+    # progress or let the manager untrack the session before disconnect.
+    add_task.cancel()
+    await asyncio.sleep(0)
+    assert not add_task.done()
+    assert manager.get("cancelled") is session
+    transport.allow_disconnect.set()
 
     with pytest.raises(asyncio.CancelledError):
         await add_task
