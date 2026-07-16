@@ -751,6 +751,64 @@ def test_telephony_checkpoint_runs_without_credentials_or_twilio_sdk() -> None:
     assert "PASS actions: DTMF, transfer, and hangup mapped to Twilio updates" in result.stdout
 
 
+def test_production_ops_chapter_uses_public_health_metrics_and_durability_surfaces() -> None:
+    chapter = FEATURE_LADDER / "11-production-ops"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "VoiceServerConfig",
+        "VoiceServerHealth",
+        "record_request",
+        "observe_connections_active",
+        "observe_draining",
+        "SqliteJournal",
+        "ReadonlySqliteJournal",
+        "sweep_crashed_journals",
+        "JournalRecordKind",
+        '"/health/ready?token=secret"',
+    ):
+        assert surface in script
+    for concept in (
+        "Treat operations as a contract",
+        "Validation is a ladder, not one command",
+        "Build once and run the installed artifact",
+        "Liveness and readiness answer different questions",
+        "Metrics are bounded; journals are forensic",
+        "Durability includes crash recovery and retention",
+        "Shutdown order is part of correctness",
+        "Practice failure before production does it for you",
+        "Ladder complete",
+    ):
+        assert concept in readme
+
+
+def test_production_ops_checkpoint_runs_and_can_persist_a_clean_journal(tmp_path: Path) -> None:
+    script = FEATURE_LADDER / "11-production-ops" / "main.py"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    result = subprocess.run(
+        [sys.executable, str(script), "--data-dir", str(tmp_path)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+
+    assert (
+        "PASS policy: public bind has auth, capacity, and bounded drain windows" in result.stdout
+    )
+    assert (
+        "PASS health: draining fails readiness and raw metric paths are rejected" in result.stdout
+    )
+    assert (
+        "PASS durability: clean SQLite journal reopened as a read-only postmortem" in result.stdout
+    )
+    journal = tmp_path / "journals" / "chapter-11-ops-checkpoint.sqlite"
+    assert journal.is_file()
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -838,3 +896,7 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]
     telephony = entries["docs/using-easycat/10-telephony/"]
     assert "uv run python docs/using-easycat/10-telephony/main.py" in telephony["commands"]
+    production_ops = entries["docs/using-easycat/11-production-ops/"]
+    assert (
+        "uv run python docs/using-easycat/11-production-ops/main.py" in production_ops["commands"]
+    )

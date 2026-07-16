@@ -560,6 +560,28 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature production operations",
+        "path": "docs/using-easycat/11-production-ops/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Validate, deploy, observe, preserve, and drain production services.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/11-production-ops/main.py",
+            (
+                "uv run python docs/using-easycat/11-production-ops/main.py "
+                "--data-dir .easycat/tutorial/ch11"
+            ),
+            (
+                "uv run easycat inspect .easycat/tutorial/ch11/journals/"
+                "chapter-11-ops-checkpoint.sqlite --json"
+            ),
+            "uv run easycat validate quick --json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
+            "uv run easycat validate release --json",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",
