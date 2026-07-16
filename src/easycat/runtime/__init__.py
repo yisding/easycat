@@ -22,10 +22,11 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
 
 __all__ = [
     "ArtifactStore",
+    "BackgroundTaskScope",
     "ErrorInfo",
     "ExecutionJournal",
     "FilesystemArtifactStore",

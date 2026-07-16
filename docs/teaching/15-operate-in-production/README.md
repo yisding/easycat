@@ -1,5 +1,9 @@
 # Chapter 15 — Operate in production
 
+<!-- BEGIN auto:navigation -->
+**Progress: 16 of 16** · [← Chapter 14](../14-bring-your-own-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md)
+<!-- END auto:navigation -->
+
 > Chapters 0-14 built and generalised a single session. Production
 > means running N of them at once, tearing them down cleanly, and
 > being able to debug the one that misbehaved yesterday. This
@@ -11,6 +15,11 @@
 - [Chapter 14.](../14-bring-your-own-agent/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -69,14 +78,13 @@
 
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,28 +18,19 @@
- import asyncio
+@@ -33,30 +19,19 @@
  import os
+ import shlex
  import time
 -from collections.abc import AsyncIterator
  from pathlib import Path
--
--from openai import AsyncOpenAI
+-from typing import TYPE_CHECKING
 
  from easycat import (
      EasyConfig,
@@ -96,20 +104,38 @@
 -from easycat.llm_output_processing import LLMOutputProcessor
 -from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
+-if TYPE_CHECKING:
+-    from openai import AsyncOpenAI
+-
 -MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -73,144 +50,85 @@
+@@ -76,164 +51,96 @@
      )
 
 
 -def pronunciation_command(path: Path) -> str:
 -    """Inspect the scheduler's provider-ready pronunciation payloads."""
--    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
 +def debugger_command(path: Path, *, port: int = 8765) -> str:
 +    """Open the maintained debugger CLI on this captured bundle."""
-+    return f"uv run easycat debugger serve {_display_path(path)} --port {port}"
+     return shlex.join(
+         [
+             "uv",
+             "run",
+             "easycat",
+-            "journal",
+-            "grep",
++            "debugger",
++            "serve",
+             str(_display_path(path)),
+-            "--query",
+-            "tts_payload_prepared",
+-            "--json",
++            "--port",
++            str(port),
+         ]
+     )
 
 
 -def build_output_processors() -> list[LLMOutputProcessor]:
@@ -177,16 +203,22 @@
 -            model=MODEL, messages=self._history, stream=True
 -        )
 -        full = ""
--        async for chunk in stream:
--            if cancel_token is not None and cancel_token.is_cancelled:
--                break
--            delta = chunk.choices[0].delta.content or ""
--            if not delta:
--                continue
--            full += delta
--            yield delta  # the bridge wraps each chunk as a text_delta event
--        if full:
--            self._history.append({"role": "assistant", "content": full})
+-        try:
+-            async with stream as response_stream:
+-                async for chunk in response_stream:
+-                    if cancel_token is not None and cancel_token.is_cancelled:
+-                        break
+-                    delta = chunk.choices[0].delta.content or ""
+-                    if not delta:
+-                        continue
+-                    full += delta
+-                    yield delta  # the bridge wraps each chunk as a text_delta event
+-        finally:
+-            # BridgeTemplate closes this generator on barge-in. Commit the
+-            # delivered prefix before apply_interruption rewrites it to what
+-            # the caller actually heard.
+-            if full:
+-                self._history.append({"role": "assistant", "content": full})
 -
 -    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
 -        """Rewrite private history to the portion the caller actually heard."""
@@ -220,6 +252,8 @@
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
 
+-    from openai import AsyncOpenAI
+-
 -    client = AsyncOpenAI()
 -    actions = SessionActions()  # shared: workflow enqueues, session drains
 -    workflow = MyWorkflow(client, actions)
@@ -391,9 +425,9 @@ async def handle_connection(ws):
 Key properties:
 
 - `add(key, session)` reserves a unique key, then awaits
-  `session.start()`. If start fails, the slot is released before the
-  exception is re-raised; the session's own start path owns rollback of
-  resources it opened before failing.
+  `session.start()`. If start raises an ordinary `Exception`, the slot is
+  released before the exception is re-raised; the session's own start path
+  owns rollback of resources it opened before failing.
 - `stop_all()` gathers all sessions' `stop()` calls concurrently and
   logs exceptions per session without raising.
 - `connection(key, session)` is the context-manager sugar for
@@ -648,9 +682,13 @@ uv run python docs/teaching/13-swap-providers-and-transports/main.py \
 
 # 2. Translate the resulting bundle.
 uv run python docs/teaching/15-operate-in-production/translate.py \
-    docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle \
-    runs/translated.ndjson
+    'docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle' \
+    docs/teaching/15-operate-in-production/runs/translated.ndjson
 ```
+
+Keep the glob quoted so the translator receives one pattern instead of an
+arbitrary number of shell arguments. If earlier chapter 13 runs also match,
+it selects the newest bundle. The output parent is created automatically.
 
 `translate.py` is ~50 lines of state machine. Read it top to
 bottom — it's the smallest possible thing that explains why
