@@ -340,6 +340,52 @@ def test_tools_actions_pronunciation_preview_runs_without_credentials() -> None:
     assert "1 ... 5 ... 5 ... 5" in completed.stdout
 
 
+def test_agent_bridges_chapter_maps_supported_frameworks_and_custom_boundaries() -> None:
+    chapter = FEATURE_LADDER / "05-agent-bridges"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for adapter in (
+        "OpenAIAgentsBridge",
+        "PydanticAIBridge",
+        "LangChainBridge",
+        "LangGraphBridge",
+        "LlamaAgentsBridge",
+        "RemoteResponsesAPIBridge",
+        "GenericWorkflowBridge",
+        "AgentRunner",
+    ):
+        assert adapter in script
+        assert adapter in readme
+    for surface in ("auto_adapt_agent", "EasyConfig.mic", "VoiceApp"):
+        assert surface in script
+    for concept in (
+        "Auto-detection is the default path",
+        "Construct a bridge when you need bridge options",
+        "Custom workflows have shallow and deep modes",
+        "fresh one inside `config_factory` for each connection",
+        "subclass public `BridgeTemplate`",
+    ):
+        assert concept in readme
+
+
+def test_agent_bridges_matrix_runs_without_framework_sdks_or_credentials() -> None:
+    script = FEATURE_LADDER / "05-agent-bridges" / "main.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "matrix"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")},
+    )
+
+    assert "agents.Agent -> OpenAIAgentsBridge" in completed.stdout
+    assert "compiled LangGraph -> LangGraphBridge" in completed.stdout
+    assert "SupportWorkflow -> GenericWorkflowBridge (deep_mode=False)" in completed.stdout
+    assert "PlainAgent -> unchanged; Session adds AgentRunner" in completed.stdout
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -407,3 +453,7 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     )
     tools = entries["docs/using-easycat/04-tools-actions/"]
     assert "uv run python docs/using-easycat/04-tools-actions/main.py preview" in tools["commands"]
+    bridges = entries["docs/using-easycat/05-agent-bridges/"]
+    assert (
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix" in bridges["commands"]
+    )

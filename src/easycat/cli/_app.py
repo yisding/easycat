@@ -460,6 +460,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature agent bridges",
+        "path": "docs/using-easycat/05-agent-bridges/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Choose a framework adapter or bring a custom workflow.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+            "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

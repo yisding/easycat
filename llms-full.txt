@@ -296,6 +296,26 @@ uv run python docs/using-easycat/04-tools-actions/main.py run
 uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run
 ```
 
+## Feature agent bridges
+
+- Path: docs/using-easycat/05-agent-bridges/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/05-agent-bridges
+- Audience: learners
+- Choose a framework adapter or bring a custom workflow.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/05-agent-bridges/main.py matrix
+uv run python docs/using-easycat/05-agent-bridges/main.py run
+uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run
+```
+
 ## Examples
 
 - Path: examples/README.md
