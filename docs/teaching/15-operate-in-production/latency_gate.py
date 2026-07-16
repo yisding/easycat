@@ -28,6 +28,8 @@ def evaluate(
     min_samples: int,
 ) -> dict[str, Any]:
     """Return a stable pass/fail result for one captured-bundle metric."""
+    if not isinstance(report, Mapping):
+        raise ValueError("stdin is not a JSON object")
     if report.get("command") != "latency":
         raise ValueError("stdin is not an easycat latency JSON report")
     percentiles = report.get("percentiles")
