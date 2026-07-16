@@ -95,6 +95,12 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 
 ## Testing Guidelines
 - Framework: `pytest` with `pytest-asyncio` (`asyncio_mode = auto`).
+- In the workspace sandbox, async tests that call `asyncio.to_thread` can pass
+  their assertions and then hang during pytest teardown in
+  `asyncio.Runner.close()` while the default executor shuts down. When that
+  exact stack appears with an idle executor worker, rerun the focused suite
+  with the prescribed isolated `uv run` command outside the sandbox
+  (escalated) before treating it as a product failure.
 - Test files use `test_*.py`; test functions use `test_*`.
 - Put tests near related domain folders (audio, session, turns, transports, providers, agents, websocket, telephony, VAD, validation, CLI, debugger).
 - For live API tests, use `@pytest.mark.integration_live`, pair it with provider

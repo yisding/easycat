@@ -836,3 +836,5 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     assert "uv run python docs/using-easycat/08-testing-evals/main.py" in testing_evals["commands"]
     multi_caller = entries["docs/using-easycat/09-multi-caller/"]
     assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]
+    telephony = entries["docs/using-easycat/10-telephony/"]
+    assert "uv run python docs/using-easycat/10-telephony/main.py" in telephony["commands"]

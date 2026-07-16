@@ -543,6 +543,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature telephony",
+        "path": "docs/using-easycat/10-telephony/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Secure Twilio webhooks, media streams, callbacks, and call control.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/10-telephony/main.py",
+            "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+            "uv run easycat doctor --env-file .env --json",
+            (
+                "uv run --env-file .env uvicorn examples.twilio_app:create_app "
+                "--factory --host 0.0.0.0"
+            ),
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",
