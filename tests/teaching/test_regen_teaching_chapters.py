@@ -170,6 +170,10 @@ def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:
         "> uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py\n"
         "> ```\n"
         ">\n"
+        "> **Evidence to find:** no chunks, all rejected, and first accepted audio "
+        "produce three distinct\n"
+        "> outcomes.\n"
+        ">\n"
         "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )
 

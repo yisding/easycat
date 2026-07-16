@@ -18,6 +18,9 @@
 > uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
 > ```
 >
+> **Evidence to find:** aligned reference audio changes RMS by -12.041 dB; missing or short
+> references fail.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

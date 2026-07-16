@@ -15,6 +15,9 @@
 > uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
 > ```
 >
+> **Evidence to find:** no chunks, all rejected, and first accepted audio produce three distinct
+> outcomes.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -18,6 +18,9 @@
 > uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
 > ```
 >
+> **Evidence to find:** one read-only view preserves 15 records and exports a matching bundle
+> after stop.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

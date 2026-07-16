@@ -15,6 +15,9 @@
 > uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
 > ```
 >
+> **Evidence to find:** triggering speech remains unconsumed while bot cancellation precedes the
+> next STT stream.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -15,6 +15,9 @@
 > uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
 > ```
 >
+> **Evidence to find:** smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three
+> components.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

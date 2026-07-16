@@ -15,6 +15,9 @@
 > uv run python docs/teaching/01-echo/transport_contract_probe.py
 > ```
 >
+> **Evidence to find:** two chunks are accepted, one is rejected, and `version_info()` changes
+> full conformance.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 
