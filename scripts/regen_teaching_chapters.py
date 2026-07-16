@@ -215,6 +215,7 @@ PHASE_REVIEWS = {
         "and the measurement that decides the tradeoff",
     ),
 }
+SHIP_PHASE_REVIEW_TITLE = "Ship phase review and finish the ladder"
 
 SNIPPET_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:snippet (?P<attrs>[^>]*?) -->)"
@@ -483,6 +484,14 @@ def render_exercise_completion(chapter: Chapter) -> str:
         "[Review the chapter narrative](./README.md)",
         "[Update the progress worksheet](../PROGRESS.md)",
     ]
+    phase_review_title = None
+    if phase_review := PHASE_REVIEWS.get(checkpoint["chapter"]):
+        phase_review_title = phase_review[0]
+    elif index + 1 == len(chapters):
+        phase_review_title = SHIP_PHASE_REVIEW_TITLE
+    if phase_review_title:
+        anchor = re.sub(r"[^a-z0-9]+", "-", phase_review_title.lower()).strip("-")
+        links.append(f"[Complete the {phase_review_title}](../PROGRESS.md#{anchor})")
     if index + 1 < len(chapters):
         following = chapters[index + 1]
         links.append(f"[Continue to {_chapter_title(following)} →](../{following.slug}/)")
@@ -647,7 +656,7 @@ def render_progress_worksheet() -> str:
     sections.extend(
         [
             "",
-            "## Ship phase review and finish the ladder",
+            f"## {SHIP_PHASE_REVIEW_TITLE}",
             "",
             _progress_command_item(
                 "Replay everything",

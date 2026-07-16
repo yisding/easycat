@@ -215,5 +215,6 @@ uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-e
 
 - [Review the chapter narrative](./README.md)
 - [Update the progress worksheet](../PROGRESS.md)
+- [Complete the Build phase review](../PROGRESS.md#build-phase-review)
 - [Continue to Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
 <!-- END auto:exercise-completion -->

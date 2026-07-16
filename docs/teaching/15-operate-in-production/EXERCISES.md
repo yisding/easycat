@@ -244,5 +244,6 @@ uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-
 
 - [Review the chapter narrative](./README.md)
 - [Update the progress worksheet](../PROGRESS.md)
+- [Complete the Ship phase review and finish the ladder](../PROGRESS.md#ship-phase-review-and-finish-the-ladder)
 - [Return to the teaching ladder](../)
 <!-- END auto:exercise-completion -->

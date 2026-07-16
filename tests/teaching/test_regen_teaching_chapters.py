@@ -27,6 +27,7 @@ from scripts.regen_teaching_chapters import (
     PROGRESS_WORKSHEET,
     ROOT,
     SELF_CHECK_PROTOCOL_RE,
+    SHIP_PHASE_REVIEW_TITLE,
     TEACHING,
     Chapter,
     _ensure_exercise_completion,
@@ -366,8 +367,32 @@ def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> 
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
         "- [Update the progress worksheet](../PROGRESS.md)\n"
+        "- [Complete the Ship phase review and finish the ladder]"
+        "(../PROGRESS.md#ship-phase-review-and-finish-the-ladder)\n"
         "- [Return to the teaching ladder](../)"
     )
+
+
+def test_phase_ending_exercises_hand_off_to_their_integration_reviews() -> None:
+    chapters = discover_chapters()
+    expected = {
+        9: ("Build phase review", "build-phase-review"),
+        12: ("Operate phase review", "operate-phase-review"),
+        14: ("Generalise phase review", "generalise-phase-review"),
+        15: (SHIP_PHASE_REVIEW_TITLE, "ship-phase-review-and-finish-the-ladder"),
+    }
+
+    for chapter_number, chapter in enumerate(chapters):
+        completion = render_exercise_completion(chapter)
+        if review := expected.get(chapter_number):
+            title, anchor = review
+            review_link = f"[Complete the {title}](../PROGRESS.md#{anchor})"
+            onward_label = "[Continue to " if chapter_number < 15 else "[Return to "
+
+            assert review_link in completion
+            assert completion.index(review_link) < completion.index(onward_label)
+        else:
+            assert "[Complete the " not in completion
 
 
 def test_each_exercise_page_has_one_current_generated_navigation_block() -> None:
@@ -382,12 +407,15 @@ def test_each_exercise_page_has_one_current_generated_navigation_block() -> None
 
 
 def test_each_chapter_workflow_links_the_progress_worksheet() -> None:
-    for chapter in discover_chapters():
+    chapters = discover_chapters()
+    phase_endings = {*PHASE_REVIEWS, len(chapters) - 1}
+    for chapter_number, chapter in enumerate(chapters):
         readme = (chapter.path / "README.md").read_text(encoding="utf-8")
         exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
 
         assert readme.count("../PROGRESS.md") == 1, chapter.slug
-        assert exercises.count("../PROGRESS.md") == 2, chapter.slug
+        expected_links = 3 if chapter_number in phase_endings else 2
+        assert exercises.count("../PROGRESS.md") == expected_links, chapter.slug
         assert "[Update the progress worksheet](../PROGRESS.md)" in exercises
 
 
