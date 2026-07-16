@@ -54,11 +54,24 @@ seconds × samples/second × bytes/sample × channels = total bytes
 
 ## Why 16 kHz?
 
-Human speech energy stops around 8 kHz. By the Nyquist theorem,
-sampling twice that — 16 kHz — is enough to reconstruct speech
-perfectly. Music, which reaches 20 kHz, needs 44.1 kHz. For a
-voice pipeline, doubling the sample rate doubles your bandwidth
-for no intelligibility gain.
+Nyquist is a statement about an **ideally band-limited signal**:
+sampling above twice its highest frequency makes reconstruction
+possible under those assumptions. It does not say that speech energy
+stops at 8 kHz or that a 16 kHz recording is “perfect.” A 16 kHz sample
+rate gives a theoretical upper boundary of 8 kHz; real capture devices,
+anti-alias filters, codecs, and resamplers use a narrower passband.
+
+Telephony standards make the distinction concrete. Narrowband
+[ITU-T P.342's G.711 profile](https://handle.itu.int/11.1002/1000/3633)
+filters speech to roughly 300–3400 Hz and samples at 8 kHz. Wideband
+[ITU-T G.722](https://www.itu.int/rec/T-REC-G.722/en) uses 16 kHz
+sampling for audio up to 7 kHz. The sample rate sets a ceiling; the
+front end and codec decide what useful spectrum survives below it.
+
+Higher rates cost proportionally more raw PCM bytes and may preserve
+upper harmonics and speech cues. Whether that improves recognition or
+perceived quality depends on the source, model, codec, and playback
+path—sample rate alone is not a quality guarantee.
 
 A few common sample rates you will meet later in the ladder:
 

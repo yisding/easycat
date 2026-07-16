@@ -78,7 +78,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 | # | Folder | What you add |
 |---|---|---|
-| 10 | [`10-cleaning-signal`](./10-cleaning-signal/) | Noise reduction, AEC, half-duplex. |
+| 10 | [`10-cleaning-signal`](./10-cleaning-signal/) | Noise reduction, AEC, duplex behavior. |
 | 11 | [`11-journal`](./11-journal/) | The journal as mental model. Pre-recorded bundles. |
 | 12 | [`12-evals-and-latency`](./12-evals-and-latency/) | Percentiles, WER, barge-in F1, LLM-as-judge. |
 

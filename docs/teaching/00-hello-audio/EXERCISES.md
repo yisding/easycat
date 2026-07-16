@@ -14,25 +14,28 @@ music? (Try humming a song while the recording window is open.)
 
 **Hints**
 
-1. Nyquist says you can reconstruct any frequency below
-   `SAMPLE_RATE / 2`. At 8 kHz sample rate, that's a 4 kHz ceiling.
-2. Human-speech *intelligibility* energy stops around 4 kHz —
-   telephony has used 8 kHz sampling for decades for exactly this
-   reason. Music goes much higher (cymbals, violins).
-3. Listen for what's *missing* in the music recording. The
-   missing energy is everything above 4 kHz: brightness, "air",
-   sibilance.
+1. For an ideally band-limited signal, an 8 kHz sample rate can represent
+   frequencies below the 4 kHz Nyquist boundary. A real anti-alias filter
+   must attenuate frequencies before that boundary; it is not a brick wall.
+2. Narrowband G.711 telephony intentionally filters speech to roughly
+   300–3400 Hz before sampling at 8 kHz. Speech can remain intelligible
+   while losing high-frequency detail and cues; “intelligible” does not
+   mean “unchanged” or “optimal for every STT model.”
+3. Listen for lost brightness, “air,” consonant detail, and sibilance.
+   Content the front end removes cannot be recovered by later upsampling.
 4. The byte math also changed: `3 s × 8000 × 2 × 1 = 48_000 B`.
-   You just cut your bandwidth in half and your speech is still
-   fine.
+   You cut the raw PCM byte rate in half; only listening and downstream
+   measurements can tell you whether the quality tradeoff is acceptable.
 
 **Wider points to check yourself on**
 
 - Why does this matter for a voice pipeline? Phones still use
   8 kHz. Twilio gives you μ-law 8 kHz. Knowing the ceiling helps
   you debug "my STT is fine on my laptop but worse on the phone."
-- A higher sample rate is not always better — it's pure bandwidth
-  cost for no intelligibility gain on speech.
+- A higher sample rate is not automatically better. It raises raw byte
+  rate and the theoretical frequency ceiling, but the microphone,
+  filters, codec, provider, and model determine whether extra samples
+  preserve useful information.
 - Why does the script call the first timing
   `time-to-first-write-return`, not `time-to-first-sound`? Returning
   from `OutputStream.write()` proves that the host accepted the buffer,
