@@ -7,8 +7,8 @@ frame-by-frame into ``nr.process(chunk)`` and
 ``aec.feed_reference(ref_chunk)`` in matched time.
 
     uv run python docs/teaching/10-cleaning-signal/replay.py \\
-        --mic recordings/speakerphone_loop.mic.wav \\
-        --ref recordings/speakerphone_loop.ref.wav \\
+        --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \\
+        --ref docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav \\
         --nr on --aec on
 
 Produces a bundle in ``runs/`` with per-frame NR/AEC output stats

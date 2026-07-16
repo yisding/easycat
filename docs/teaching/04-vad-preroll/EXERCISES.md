@@ -1,5 +1,7 @@
 # Chapter 4 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Diff your breakers across preroll on/off
 
 **Task.** First run the provider-free frame probe:

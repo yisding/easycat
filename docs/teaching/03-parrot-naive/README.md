@@ -1,5 +1,9 @@
 # Chapter 3 — Parrot, the Naive Way
 
+<!-- BEGIN auto:navigation -->
+**Progress: 4 of 16** · [← Chapter 2](../02-transcribe/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 4 →](../04-vad-preroll/)
+<!-- END auto:navigation -->
+
 > A bot that repeats what you said. Except it breaks the instant
 > you say "um."
 
@@ -14,6 +18,11 @@ personally heard this fail on your own voice.
 - `OPENAI_API_KEY` (for TTS) and **`DEEPGRAM_API_KEY`** (the
   parrot needs mid-speech partials, which the OpenAI STT default
   does not produce).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
