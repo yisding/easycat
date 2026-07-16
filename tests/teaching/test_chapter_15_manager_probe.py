@@ -30,7 +30,16 @@ def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
         "failed_start_error": "failed start failed",
         "start_calls": {"alpha": 1, "beta": 1, "failed": 1},
         "stop_calls": {"alpha": 1, "beta": 1, "failed": 0},
+        "stop_all": {
+            "all_slots_released": True,
+            "start_calls": {"sweep-failing": 1, "sweep-healthy": 1},
+            "stop_calls": {"sweep-failing": 1, "sweep-healthy": 1},
+        },
     }
+    assert (
+        "ERROR easycat.session_manager: Failed to stop session "
+        "sweep-failing: sweep-failing stop failed"
+    ) in result.stderr
 
 
 def test_manager_exercise_does_not_invent_journal_events() -> None:
@@ -41,3 +50,5 @@ def test_manager_exercise_does_not_invent_journal_events() -> None:
     assert "not runtime record names" in normalized
     assert "manager_probe.py" in exercises
     assert "PortAudio device sharing varies" in normalized
+    assert "`stop_all()` clears the registry" in exercises
+    assert "does not prevent the other stop" in normalized

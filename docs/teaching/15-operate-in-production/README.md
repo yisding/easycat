@@ -438,7 +438,9 @@ Key properties:
 
 Run the provider-free [manager probe](manager_probe.py) to see two
 active slots, duplicate-key rejection, start-failure rollback, and
-context-managed removal without opening a microphone.
+context-managed removal without opening a microphone. Its final
+`stop_all()` sweep also proves that every captured session is asked to
+stop and one stop failure does not abort the rest of the sweep.
 
 A real Twilio server using exactly this shape lives in
 `examples/twilio_app.py`. Crack it open after this chapter.
@@ -697,7 +699,9 @@ the same `Session` you've run since chapter 5.
 ## Try breaking it
 
 1. Run `manager_probe.py`. Why is the failed-start slot reusable even
-   though the manager never calls `stop()` on that failed object?
+   though the manager never calls `stop()` on that failed object, and
+   why does the failing `stop_all()` session not prevent its peer from
+   stopping?
 2. Compare scoped production JSON reports from
    `uv run easycat doctor --provider openai --environment production --json`
    with `OPENAI_API_KEY` unset and set. Which rows appear or change?

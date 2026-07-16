@@ -12,8 +12,9 @@ uv run python docs/teaching/15-operate-in-production/manager_probe.py
 
 It keeps two fake connection sessions active together, attempts a
 duplicate key, injects a `RuntimeError` from a third session's start,
-and then exits both connection contexts. Which guarantees belong to
-the manager, and which cleanup remains the session's responsibility?
+and then exits both connection contexts. It finishes with a two-session
+`stop_all()` sweep where one `stop()` raises. Which guarantees belong
+to the manager, and which cleanup remains the session's responsibility?
 
 **Hints**
 
@@ -33,7 +34,12 @@ the manager, and which cleanup remains the session's responsibility?
    `remove()` or `stop_all()` against code still running inside an
    overlapping connection block—cancel/finish those handler tasks first,
    then use `stop_all()` as the final sweep.
-4. The right shape for a real multi-session demo is a *server*
+4. `stop_all()` clears the registry before awaiting every captured
+   session's `stop()` concurrently. One stop failure is logged but does
+   not prevent the other stop or escape from `stop_all()`. This isolates
+   shutdown failures; it does not make a failed session's own cleanup
+   successful.
+5. The right shape for a real multi-session demo is a *server*
    transport: `WebSocketTransport`, `WebRTCTransport`, or
    `TwilioConnectionTransport`. Each connection gets its own
    transport instance backed by its own socket. That's why
