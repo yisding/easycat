@@ -1,27 +1,66 @@
 # Chapter 12 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Back to chapter](./README.md) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
+
 ## 1. Find the budget-blower, propose a fix without coding it
 
-**Task.** Run `latency_budget.py` over each of the five turn
+**Task.** Run `latency_budget.py` over each of the six primary
 bundles. Identify the slowest. Which stage blew its budget?
 Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is
 diagnosis.
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. `turn_02_slow_agent.bundle` is the obvious one — `agent` is at
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+`turn_02_slow_agent.bundle` is the obvious one — `agent` is at
    2100 ms vs 600 ms budget. Possible fixes: smaller model
    (gpt-4o-mini → gpt-4o-nano), prompt caching for the system
    prompt, agent warm-pool (keep one open connection per session
    to avoid TLS handshake).
-2. Don't conflate "stage blew its budget" with "stage is the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Don't conflate "stage blew its budget" with "stage is the
    biggest absolute cost." A stage at 400 ms vs a 200 ms budget
    is more interesting than a stage at 600 ms vs a 1000 ms
    budget — the first is *drift*, the second is *normal*.
-3. The point of a budget isn't to be a timeout. It's a drift
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+The point of a budget isn't to be a timeout. It's a drift
    detector — you set a threshold based on your historical P50
    and alarm when the live number consistently breaks past it.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Add a `filler_appropriate` rubric dimension
 
@@ -29,70 +68,292 @@ diagnosis.
 rubric. Re-run on the chapter-7 tool-bearing bundles. Does the
 judge agree with your ears?
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. The rubric lives in `llm_judge.py`. Extend the system prompt's
-   JSON schema with a `filler_appropriate: 1-5` field. The
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The rubric lives in `llm_judge.py`. Extend the prompt and
+   `SCORE_KEYS` with a `filler_appropriate: 1-5` field. The
    judge's evaluation prompt should ask whether filler utterances
    landed at appropriate moments and matched the tool that was
    running.
-2. The interesting failure mode is when the bundle is *technically
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+The interesting failure mode is when the bundle is *technically
    correct* (filler played at the right time) but the rubric
    marks it 3/5 because the *text* of the filler is wrong for the
    tool ("Let me check the weather for you" before a *timer* tool
    call).
-3. LLM-as-judge is most useful when the rubric dimension is
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+LLM-as-judge is most useful when the rubric dimension is
    text-only — anything that requires audio judgement (prosody,
    pacing, naturalness) is invisible to it.
-4. Copy a `tools_*.bundle` from chapter 7's runs/ into chapter
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Copy a `tools_*.bundle` from chapter 7's runs/ into chapter
    12's bundles/ for the judge to consume.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 3. Wire a latency regression test
 
-**Task.** Write a pytest test that fails if any bundle's P95
-exceeds 1200 ms. That's the seed of a latency regression suite.
+**Task.** Write a pytest test that fails if the fixture set's P95 exceeds
+1200 ms. That's the seed of a latency regression suite.
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. Start in `tests/teaching/` with a focused test file, for
-   example `test_latency_budget.py`. Use
-   `easycat.debug.testing.load_bundle` to load each fixture and
-   the same `turn.gap` extraction as `evals.py`.
-2. Hard-coded thresholds are fine for the teaching version. For
-   production, you'd compare against a baseline file checked into
-   the repo and require N standard deviations of regression
-   before failing.
-3. The five chapter-12 fixtures include `turn_02_slow_agent`
-   which is *deliberately* 2900 ms — your test should flag it.
-   That's the right behavior: the test catches the slowdown the
-   fixture was built to represent.
-4. Bonus: also test that the golden WER bundles produce the
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+Start in `tests/teaching/` with a focused test file, for example
+   `test_latency_budget.py`. Use `easycat.debug.testing.load_bundle` to load
+   each fixture, the same `turn.gap` extraction as `evals.py`, and
+   `easycat.validation.latency.LatencyPercentileStats.from_values` for the
+   percentile. Reusing the maintained helper keeps the test aligned with the
+   debug CLI.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Hard-coded thresholds are fine for the teaching version. For
+   production, compare representative baseline and candidate turns
+   under matched conditions, predeclare an absolute/relative tolerance,
+   and quantify uncertainty before failing.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The six chapter-12 fixtures include `turn_02_slow_agent`, which is
+   *deliberately* 2420 ms to first audio. With this small sample, the maintained
+   clamped-exclusive P95 is the observed maximum, so your test should flag it.
+   That's the right behavior: the test catches the slowdown the fixture was
+   built to represent.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Bonus: also test that the golden WER bundles produce the
    numbers their filenames advertise. That's a regression test
    for the WER pipeline itself.
 
-## 4. (Bonus) Build a real eval set
+</details>
+<!-- END auto:exercise-hints -->
+
+## 4. Break coverage before calculating a score
+
+**Task.** Run the provider-free coverage probe, then remove one row
+from a copy of `ground_truth.csv` and run `evals.py` against it:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/coverage_probe.py
+```
+
+Why is a hard failure better than computing latency from the remaining
+bundles?
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+Missing labels change WER and F1 denominators. Missing `turn.gap`
+   records selectively remove failed/no-audio turns from latency.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+A warning is easy to miss in CI; a non-zero exit prevents an
+   incomplete manifest from becoming the new baseline.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Put two `stt.final` records in one fixture. The evaluator asks you
+   to split and label the turns instead of guessing which transcript
+   belongs to the bundle-level CSV row.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Coverage is not a fifth quality metric. It is the precondition that
+   makes the other four interpretable.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 5. Find the turn that controls P95
+
+**Task.** Run the provider-free sensitivity probe:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+```
+
+Before reading the output, predict the P95 after omitting each fixture.
+Then explain what the 1,160–2,420 ms range proves—and what it cannot
+prove.
+
+<!-- BEGIN auto:exercise-hints -->
+**Hints**
+
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+With this maintained small-sample percentile rule, the slowest
+   observed turn owns P95. Removing any non-maximum turn leaves 2,420 ms.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Removing `turn_02_slow_agent.bundle` exposes the next-slowest tool
+   turn at 1,160 ms, a -1,260 ms change.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Leave-one-out sensitivity identifies influential observed samples.
+   It is not a confidence interval and says nothing about unobserved
+   production turns or whether the fixture mix is representative.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+A candidate comparison needs repeated, representative measurements.
+   Pair baseline/candidate observations by prompt, environment, and
+   provider conditions when possible so traffic-mix changes do not
+   masquerade as a latency win.
+
+</details>
+<!-- END auto:exercise-hints -->
+
+## 6. (Bonus) Build a real eval set
 
 **Task.** Record 20 of your own chapter-6 or chapter-10 turns,
 hand-type the reference transcripts into a CSV, and run
 `evals.py` against the directory.
 
+<!-- BEGIN auto:exercise-hints -->
 **Hints**
 
-1. Real numbers feel different. P95 over 5 bundles is noisy; over
-   20+ it stabilizes. WER over 20 utterances will produce a
-   number you can actually trust to ±2%.
-2. Use a mix of clean and adversarial inputs (whisper, fast
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Real numbers feel different. P95 over 6 bundles is too unstable to
+   generalize; twenty turns are better than six, but no fixed sample count
+   guarantees precision. Report the number of turns and reference words,
+   then estimate uncertainty—for example by bootstrapping turns—before
+   claiming a small regression.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Use a mix of clean and adversarial inputs (whisper, fast
    speech, accented speech, background TV) to stress different
    stages.
-3. This is the unglamorous part of voice eval: building a
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+This is the unglamorous part of voice eval: building a
    ground-truth set. Production teams maintain hundreds to
-   thousands of these. The five fixtures here are training
+   thousands of these. The six fixtures here are training
    wheels.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 
-You should be able to: (a) read a bundle and within 30 seconds
-say "this turn's bottleneck was X", (b) explain why F1 over
-TP/FP/FN/TN is the right shape for barge-in (rather than raw
-accuracy), and (c) describe one regression each of the four
-metrics catches that the others miss.
+<!-- BEGIN auto:self-check-protocol -->
+> **Closed-book retrieval gate**
+>
+> 1. Close the chapter narrative and every hint disclosure.
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
+>    from your attempt record.
+> 4. Mark each answer **pass** or **retry** in your progress record.
+>
+> If an answer needs notes, reopen only the section that owns the weak concept,
+> correct your explanation, close it, and retry. Continue only when every answer
+> passes without looking.
+<!-- END auto:self-check-protocol -->
+
+1. Which span proves an unfamiliar turn's dominant bottleneck within 30
+   seconds?
+2. Why is F1 over TP/FP/FN the right barge-in shape rather than raw accuracy,
+   and which confusion-matrix case exposes the difference?
+3. Which distinct regression does each maintained metric catch?
+4. Why must coverage be validated before reporting a point estimate, and which
+   missing record invalidates one metric in your fixtures?
+5. How does leave-one-out sensitivity identify an influential observed sample
+   without quantifying uncertainty in a production percentile?
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete? Prepare the cumulative spine, then replay it through this chapter:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-evidence
+```
+
+- [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
+- [Complete the Operate phase review](../PROGRESS.md#operate-phase-review)
+- [Continue to Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:exercise-completion -->

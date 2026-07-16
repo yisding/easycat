@@ -6,7 +6,7 @@ This chapter has two scripts:
                         if the bundles/ directory already exists)
 
 Run with no arguments to inspect the first planted-bug bundle. Pass a
-bundle path (and optional --stage/--name/--limit filters) to point
+bundle path (and optional stage/name/turn/sequence/context filters) to point
 investigate.py at a different fixture.
 """
 

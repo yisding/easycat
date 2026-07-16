@@ -1,7 +1,57 @@
 # Chapter 5 — The Blocking Agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 6 of 16** · [← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
+
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 3 — Parrot, the Naive Way**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and added commit
+> latency?
+>
+> After recording your answer, explain one way `silence-timeout tradeoff` changes how you
+> reason about `blocking first-audio gap`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `blocking first-audio gap` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** Which sub-gap dominates first-audio latency, and does full TTS enqueue
+> define when the user first hears audio?
+>
+> ```bash
+> uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
+> ```
+>
+> **Evidence to find:** 1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes
+> 800 ms.
+>
+> **Explain the result:** Point to the milestone that defines first audio and explain why full
+> enqueue is not it.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 **Wrong-version-first chapter.** Do not skip. The rest of the
 build movement (chapters 6-9) exists to close this gap.
@@ -11,6 +61,11 @@ build movement (chapters 6-9) exists to close this gap.
 - [Chapter 4](../04-vad-preroll/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -23,7 +78,11 @@ build movement (chapters 6-9) exists to close this gap.
 
 - **Added:** an `AsyncOpenAI` client + `blocking_agent` function
   between STT and TTS; three `turn.gap` sub-spans
-  (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn.
+  (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn;
+  `gap_decomposition_probe.py` for deterministic gap arithmetic;
+  `tts_outcome_probe.py` for first-audio failure attribution.
+- **Preserved:** TTS accepted/rejected chunk counts from chapter 4 now appear
+  in both `stage.tts.execute` and `turn.gap`.
 - **Removed:** the parrot — the bot now answers, instead of
   repeating.
 
@@ -41,8 +100,8 @@ build movement (chapters 6-9) exists to close this gap.
 -detector plus a pre-roll ring buffer. The same parrot loop, now gated
 -on VAD turn boundaries instead of "500 ms since the last STT event."
 -
--Run with ``--no-preroll`` to hear the start-of-utterance truncation
--this chapter was designed to fix.
+-Run with ``--no-preroll`` to compare a stream that omits cached audio
+-received before VAD-on.
 +"""Chapter 5 — The blocking agent.
 +
 +Same pipeline as chapter 4, but instead of parroting the transcript
@@ -67,8 +126,8 @@ build movement (chapters 6-9) exists to close this gap.
  import asyncio
  import collections
  import os
-@@ -27,10 +24,17 @@
- import types
+@@ -28,10 +25,17 @@
+ from contextlib import AsyncExitStack
  from pathlib import Path
  
 +from openai import AsyncOpenAI
@@ -85,8 +144,8 @@ build movement (chapters 6-9) exists to close this gap.
 +)
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
- from easycat.stt.factory import STTProviderConfig, create_stt_provider
-@@ -38,25 +42,14 @@
+ from easycat.runtime.capabilities import close_if_supported
+@@ -40,24 +44,14 @@
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
  
@@ -102,10 +161,9 @@ build movement (chapters 6-9) exists to close this gap.
 -
 -    Consumes raw audio chunks, yields tagged events:
 -
--        ("speech_started", first_chunk)  - once per turn, at VAD-on.
--                                           Emits pre-roll chunks too.
--        ("frame",          chunk)         - while VAD says "speech."
--        ("speech_ended",   None)          - once per turn, at VAD-off.
+-        ("speech_started", None)   - once per turn, at VAD-on.
+-        ("frame",          chunk)  - cached pre-roll first, then live speech.
+-        ("speech_ended",   None)   - once per turn, at VAD-off.
 -
 -    About 40 lines of real logic. EasyCat's production ``TurnManager``
 -    (``src/easycat/turn_manager.py``) is a 5-state FSM with far more
@@ -116,18 +174,24 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -66,122 +59,157 @@
+@@ -67,121 +61,171 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
 -
              for ev in vad_events:
                  if isinstance(ev, VADStartSpeaking):
--                    # Flush the pre-roll buffer so STT sees the sounds
--                    # that arrived *before* the VAD decided to fire.
-                     while self._preroll:
-                         yield "speech_started", self._preroll.popleft()
                      self._speaking = True
+-                    # Starting the turn is a state event, independent of
+-                    # whether any pre-roll frames exist. This matters when
+-                    # ``preroll_frames=0``: STT must still start before the
+-                    # current live frame is emitted below.
+                     yield "speech_started", None
+-
+-                    # Flush cached frames in their original order so STT
+-                    # sees the sounds that arrived before VAD fired.
+                     while self._preroll:
+                         yield "frame", self._preroll.popleft()
                  elif isinstance(ev, VADStopSpeaking):
                      self._speaking = False
                      yield "speech_ended", None
@@ -138,63 +202,37 @@ build movement (chapters 6-9) exists to close this gap.
                  self._preroll.append(chunk)
  
  
--async def parrot(
--    transport,
--    stt_factory,
--    detector: MiniTurnDetector,
+-def record_delivery(
 -    journal: InMemoryRingBuffer,
+-    *,
 -    session_id: str,
+-    text: str,
+-    accepted_chunks: int,
+-    rejected_chunks: int,
 -) -> None:
--    """On each VAD turn, stream audio into STT, wait for final, speak it."""
--    stt = None
--    collected_final = ""
--
--    async for tag, chunk in detector.frames(transport.receive_audio()):
--        if tag == "speech_started":
--            if stt is None:
--                stt = stt_factory()
--                await stt.start_stream()
--                collected_final = ""
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="turn.started",
--                    session_id=session_id,
--                    data={"stage": "turn", "t_ms": time.monotonic() * 1000},
--                )
--            await stt.send_audio(chunk)
--
--        elif tag == "frame" and stt is not None:
--            await stt.send_audio(chunk)
--
--        elif tag == "speech_ended" and stt is not None:
--            # Drain the event queue until the sentinel from end_stream().
--            # A VADStop before STT saw any speech is harmless — we just
--            # close an empty stream and get no FINAL back.
--            await stt.end_stream()
--            async for event in stt.events():
--                if event.type == STTEventType.FINAL:
--                    collected_final = event.text
--            stt = None
--
--            journal.append(
--                kind=JournalRecordKind.EVENT,
--                name="turn.ended",
--                session_id=session_id,
--                data={
--                    "stage": "turn",
--                    "t_ms": time.monotonic() * 1000,
--                    "text": collected_final,
--                },
--            )
--
--            if collected_final.strip():
--                print(f"  → parrot: {collected_final!r}")
--                await speak(transport, collected_final)
+-    """Preserve transport acceptance without claiming speaker playback."""
++class FirstAudioProbe:
++    """Forward audio while recording when the first chunk is accepted."""
++
++    def __init__(self, transport) -> None:
++        self._transport = transport
++        self.first_audio_at: float | None = None
++
++    async def send_audio(self, chunk: AudioChunk) -> bool:
++        accepted = await self._transport.send_audio(chunk)
++        normalized = accepted is None or bool(accepted)
++        if normalized and self.first_audio_at is None:
++            self.first_audio_at = time.monotonic()
++        return normalized
++
++
 +def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
 +    """Record a closed span with start→end wall time in ms."""
 +    elapsed_ms = (time.monotonic() - t0) * 1000
-+    journal.append(
-+        kind=JournalRecordKind.EVENT,
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+-        name="parrot.delivery",
+-        session_id=session_id,
 +        name=name,
 +        session_id=SESSION_ID,
 +        data={"stage": name.split(".")[1], "elapsed_ms": elapsed_ms, **extra},
@@ -254,30 +292,140 @@ build movement (chapters 6-9) exists to close this gap.
 +        reply=reply,
 +    )
 +
-+    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
-+    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
-+    # until the whole file is enqueued on the transport. For teaching
-+    # purposes we report the full synth-and-enqueue duration.
++    # Sub-gap 3: agent response → the first TTS audio chunk the transport
++    # accepts. ``speak`` returns after every produced chunk has been offered,
++    # so a forwarding probe captures the earlier first-accepted milestone.
 +    tts_start = time.monotonic()
 +    print(f"  bot:  {reply!r}")
-+    await speak(transport, reply)
-+    span(journal, "stage.tts.execute", tts_start, text=reply)
++    audio_probe = FirstAudioProbe(transport)
++    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
++    tts_end = time.monotonic()
++    first_audio_t = audio_probe.first_audio_at
++    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
++    tts_enqueue_ms = (tts_end - tts_start) * 1000
++    span(
++        journal,
++        "stage.tts.execute",
++        tts_start,
++        text=reply,
++        first_audio_ms=tts_first_audio_ms,
++        enqueue_ms=tts_enqueue_ms,
++        accepted_chunks=accepted_chunks,
++        rejected_chunks=rejected_chunks,
++    )
 +
-+    total_gap = (time.monotonic() - stt_final_t) * 1000
++    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
 +    journal.append(
 +        kind=JournalRecordKind.EVENT,
 +        name="turn.gap",
 +        session_id=SESSION_ID,
-+        data={
+         data={
+-            "stage": "parrot",
+-            "committed_text": text,
+-            "accepted_chunks": accepted_chunks,
+-            "rejected_chunks": rejected_chunks,
+-            "t_ms": time.monotonic() * 1000,
 +            "stage": "turn",
 +            "total_gap_ms": total_gap,
 +            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
 +            "agent_ms": (agent_end - agent_start) * 1000,
-+            "tts_ms": (time.monotonic() - tts_start) * 1000,
++            "tts_ms": tts_first_audio_ms,
++            "tts_enqueue_ms": tts_enqueue_ms,
++            "tts_accepted_chunks": accepted_chunks,
++            "tts_rejected_chunks": rejected_chunks,
 +            "text": reply,
-+        },
-+    )
-+    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+         },
+     )
+-    if rejected_chunks:
+-        print(
+-            "  transport rejected "
+-            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+-        )
+-
+-
+-async def parrot(
+-    transport,
+-    stt_factory,
+-    detector: MiniTurnDetector,
+-    journal: InMemoryRingBuffer,
+-    session_id: str,
+-) -> None:
+-    """On each VAD turn, stream audio into STT, wait for final, speak it."""
++    if total_gap is None:
++        if accepted_chunks:
++            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
++        elif rejected_chunks:
++            print(
++                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
++            )
++        else:
++            print("  (turn gap unavailable — TTS produced no audio)")
++    else:
++        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
++
++
++async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
++    """Stream turns and close every per-turn STT, including on cancellation."""
+     stt = None
+-    collected_final = ""
+-
+     try:
+         async for tag, chunk in detector.frames(transport.receive_audio()):
+             if tag == "speech_started":
+                 if stt is None:
+                     stt = stt_factory()
+                     await stt.start_stream()
+-                    collected_final = ""
+-                    journal.append(
+-                        kind=JournalRecordKind.EVENT,
+-                        name="turn.started",
+-                        session_id=session_id,
+-                        data={"stage": "turn", "t_ms": time.monotonic() * 1000},
+-                    )
+-
+             elif tag == "frame" and stt is not None:
+                 await stt.send_audio(chunk)
+-
+             elif tag == "speech_ended" and stt is not None:
+-                # Drain the event queue until the sentinel from end_stream().
+-                # A VADStop before STT saw any speech is harmless — we just
+-                # close an empty stream and get no FINAL back.
+                 active_stt = stt
+                 try:
+                     await active_stt.end_stream()
+-                    async for event in active_stt.events():
+-                        if event.type == STTEventType.FINAL:
+-                            collected_final = event.text
++                    await run_turn(transport, active_stt, client, journal)
+                 finally:
+                     stt = None
+                     await close_if_supported(active_stt)
+-
+-                journal.append(
+-                    kind=JournalRecordKind.EVENT,
+-                    name="turn.ended",
+-                    session_id=session_id,
+-                    data={
+-                        "stage": "turn",
+-                        "t_ms": time.monotonic() * 1000,
+-                        "text": collected_final,
+-                    },
+-                )
+-
+-                if collected_final.strip():
+-                    print(f"  → parrot: {collected_final!r}")
+-                    accepted_chunks, rejected_chunks = await speak(transport, collected_final)
+-                    record_delivery(
+-                        journal,
+-                        session_id=session_id,
+-                        text=collected_final,
+-                        accepted_chunks=accepted_chunks,
+-                        rejected_chunks=rejected_chunks,
+-                    )
+     finally:
+         if stt is not None:
+             try:
+@@ -191,22 +235,8 @@
  
  
  async def main() -> None:
@@ -285,7 +433,7 @@ build movement (chapters 6-9) exists to close this gap.
 -    parser.add_argument(
 -        "--no-preroll",
 -        action="store_true",
--        help="Disable pre-roll; start-of-utterance will be clipped.",
+-        help="Disable pre-roll; omit cached frames received before VAD-on.",
 -    )
 -    args = parser.parse_args()
 -
@@ -302,12 +450,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-     vad = create_vad(VADConfig())
--    detector = MiniTurnDetector(vad, preroll_frames=preroll)
-+    detector = MiniTurnDetector(vad)
-+    client = AsyncOpenAI()
- 
-     def stt_factory():
+@@ -215,7 +245,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -316,34 +459,24 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
+@@ -226,16 +256,19 @@
  
-     await transport.connect()
--    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
-+    print("Talk. Each turn will feel slow. That is the lesson.\n")
+         vad = create_vad(VADConfig())
+         resources.push_async_callback(close_if_supported, vad)
+-        detector = MiniTurnDetector(vad, preroll_frames=preroll)
+-
+-        print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
++        detector = MiniTurnDetector(vad)
 +
-+    async def collect_turns():
-+        """Same shape as chapter 4: stream live into STT per turn."""
-+        stt = None
-+        async for tag, chunk in detector.frames(transport.receive_audio()):
-+            if tag == "speech_started":
-+                if stt is None:
-+                    stt = stt_factory()
-+                    await stt.start_stream()
-+                await stt.send_audio(chunk)
-+            elif tag == "frame" and stt is not None:
-+                await stt.send_audio(chunk)
-+            elif tag == "speech_ended" and stt is not None:
-+                await stt.end_stream()
-+                await run_turn(transport, stt, client, journal)
-+                stt = None
- 
-     try:
--        await parrot(transport, stt_factory, detector, journal, session_id)
-+        await collect_turns()
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-     finally:
-         await transport.disconnect()
++        client = AsyncOpenAI()
++        resources.push_async_callback(close_if_supported, client)
++
++        print("Talk. Each turn will feel slow. That is the lesson.\n")
+         try:
+-            await parrot(transport, stt_factory, detector, journal, session_id)
++            await collect_turns(transport, detector, stt_factory, client, journal)
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
  
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{session_id}.bundle"
@@ -375,7 +508,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L87-L96)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L105-L114)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->
@@ -404,21 +537,41 @@ It is also unshippable. This is what most naïve voice demos do.
 
 ## Decompose the gap
 
-The journal records three sub-spans between STT-final and the bot
-speaking. Open the bundle and list them:
+Run the provider-free decomposition first:
+
+```bash
+uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
+```
+
+Its scripted clock makes the arithmetic inspectable: 1,200 ms in the agent
+plus 450 ms to first TTS audio produces a 1,650 ms total gap, while full TTS
+enqueue finishes later.
+
+The journal records three sub-spans between STT-final and the first
+bot-audio chunk, plus the time required to enqueue the complete reply.
+Open the bundle and list them:
 
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:6.1f} ms"
+
 for r in bundle.records():
     if r["name"] == "turn.gap":
         d = r["data"]
-        print(f"  STT final → agent dispatch  {d['stt_to_agent_ms']:6.1f} ms")
-        print(f"  agent (LLM call)            {d['agent_ms']:6.1f} ms")
-        print(f"  TTS synth + first audio     {d['tts_ms']:6.1f} ms")
-        print(f"  TOTAL                       {d['total_gap_ms']:6.1f} ms")
+        print(f"  STT final → agent dispatch  {format_ms(d['stt_to_agent_ms'])}")
+        print(f"  agent (LLM call)            {format_ms(d['agent_ms'])}")
+        print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
+        print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
+        print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
+        print(
+            f"  chunks accepted / rejected  {d['tts_accepted_chunks']} / "
+            f"{d['tts_rejected_chunks']}"
+        )
 ```
 
 You will see something like:
@@ -426,8 +579,9 @@ You will see something like:
 ```
   STT final → agent dispatch     0.4 ms
   agent (LLM call)            2134.0 ms
-  TTS synth + first audio      812.0 ms
-  TOTAL                       2946.4 ms
+  TTS → first audio            312.0 ms
+  TOTAL → first audio         2446.4 ms
+  full TTS synth + enqueue     812.0 ms
 ```
 
 Three sub-gaps, in order:
@@ -436,12 +590,47 @@ Three sub-gaps, in order:
    overhead. You can't optimise this; it doesn't matter.
 2. **Agent / LLM call** (~1-4 s): most of the silence. The
    dominant term. Model choice dominates.
-3. **Agent response → first TTS audio** (~300-800 ms): not
-   trivial either. Synth + network + first-chunk playback.
+3. **Agent response → first TTS audio** (~100-400 ms): not
+   trivial either. Synth + network + the first transport send.
 
-Total `turn.gap` is what the user *feels*. Humans turn-take in
-100-300 ms. We are an order of magnitude worse. That is why
-voice LLM products feel off when they do.
+`turn.gap` stops when the first audio chunk is accepted by the
+transport. That is the software milestone closest to what the user
+feels, not an acoustic measurement: `LocalTransport` still has a
+small speaker buffer, and measuring sound at the ear requires a
+loopback. `tts_enqueue_ms` ends later, after the complete reply has
+been synthesized and queued; it is useful for throughput and memory
+diagnosis but is not part of the silence before the bot starts.
+
+### A missing first-audio timestamp has multiple causes
+
+`total_gap_ms=null` means no chunk was accepted, not necessarily that TTS
+produced nothing. Chapter 5 preserves accepted/rejected totals in both the TTS
+span and turn-gap record so postmortem analysis can distinguish:
+
+| Counts | Interpretation |
+|---|---|
+| accepted > 0 | A first-acceptance timestamp should exist; if it does not, the instrumentation contract failed. |
+| accepted = 0, rejected > 0 | TTS produced chunks, but the transport rejected all of them. |
+| accepted = 0, rejected = 0 | TTS produced no chunks. |
+
+Run every branch without credentials:
+
+```bash
+uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+```
+
+The probe reports `first_audio_accepted`, `all_chunks_rejected`, and
+`no_chunks_produced` separately. The earlier message “TTS produced no audio”
+for every missing timestamp collapsed the last two causes and could send an
+operator toward the wrong provider.
+
+Acceptance still means scheduled for delivery, not rendered or heard. These
+counts improve failure attribution; they do not turn `turn.gap` into an
+acoustic measurement.
+
+Humans turn-take in 100-300 ms. Even before device buffering, we are
+an order of magnitude worse. That is why voice LLM products feel off
+when they do.
 
 ## The two axes we'll attack
 
@@ -473,6 +662,14 @@ version. If you don't yet: try the "uh, what was I going to say"
 flow where a user asks a 3-second question and waits 3 seconds
 for an answer. Six seconds of one human standing in the room
 holding their breath.
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

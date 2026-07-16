@@ -17,6 +17,6 @@ Self-check:
 - Neither change requires you to construct STT, TTS, VAD, a transport, or a
   `Session` by hand.
 
-For a small stretch, add `stt="openai/realtime"` to `VoiceApp`. The app should
+For a small stretch, add `stt="openai-realtime"` to `VoiceApp`. The app should
 behave the same because you have made the current default explicit. Remove the
 argument again before the next chapter; provider selection gets its own rung.
