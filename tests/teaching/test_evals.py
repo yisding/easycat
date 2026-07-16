@@ -11,19 +11,19 @@ bundle_stats = EVALS["_bundle_stats"]
 
 
 def test_nearest_rank_p95_keeps_the_observed_tail() -> None:
-    values = [2200.0, 1150.0, 2900.0, 900.0, 1250.0, 1700.0]
+    values = [650.0, 670.0, 710.0, 910.0, 1160.0, 2420.0]
 
-    assert nearest_rank_percentile(values, 0.95) == 2900.0
-    assert values == [2200.0, 1150.0, 2900.0, 900.0, 1250.0, 1700.0]
+    assert nearest_rank_percentile(values, 0.95) == 2420.0
+    assert values == [650.0, 670.0, 710.0, 910.0, 1160.0, 2420.0]
 
 
-def test_chapter_12_fixture_set_has_six_bundles_and_a_2900_ms_p95() -> None:
+def test_chapter_12_fixture_set_has_six_bundles_and_a_2420_ms_p95() -> None:
     bundles = sorted((CHAPTER / "bundles").glob("*.bundle"))
     latencies = [bundle_stats(path)["total_gap_ms"] for path in bundles]
 
     assert len(bundles) == 6
     assert all(latency is not None for latency in latencies)
-    assert nearest_rank_percentile(latencies, 0.95) == 2900.0
+    assert nearest_rank_percentile(latencies, 0.95) == 2420.0
 
 
 def test_chapter_12_docs_track_the_six_fixture_inventory() -> None:

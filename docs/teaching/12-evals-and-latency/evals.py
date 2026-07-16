@@ -11,7 +11,7 @@ Inputs:
     had_real_barge_in     — "1" if the interruption was intentional
 
 Outputs (stdout):
-- Per-bundle turn.gap ms, sorted.
+- Per-bundle first-audio ``turn.gap`` ms, sorted.
 - P50 and P95 across the set.
 - WER aggregated across bundles with a reference transcript.
 - Barge-in F1 over the {had_real_barge_in, observed_interruption} matrix.
@@ -88,6 +88,13 @@ def _bundle_stats(path: Path) -> dict:
     }
 
 
+def _latency_percentiles(values: list[float]) -> tuple[float, float]:
+    """Return median P50 and nearest-rank P95 for observed eval turns."""
+    if not values:
+        raise ValueError("at least one latency value is required")
+    return statistics.median(values), _nearest_rank_percentile(values, 0.95)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("bundles_dir", type=Path)
@@ -105,7 +112,7 @@ def main() -> None:
         sys.exit("No bundles found.")
 
     # Latency per-bundle.
-    print("=== Per-bundle latency (turn.gap ms) ===")
+    print("=== Per-bundle first-audio latency (turn.gap ms) ===")
     lat_ms = []
     for b in bundles:
         s = _bundle_stats(b)
@@ -114,8 +121,7 @@ def main() -> None:
             lat_ms.append(val)
             print(f"  {b.name:38}  {val:>6.0f} ms")
     if lat_ms:
-        p50 = statistics.median(lat_ms)
-        p95 = _nearest_rank_percentile(lat_ms, 0.95)
+        p50, p95 = _latency_percentiles(lat_ms)
         print(f"  {'P50':38}  {p50:>6.0f} ms")
         print(f"  {'P95':38}  {p95:>6.0f} ms")
         print(f"  {'P95 / P50 ratio':38}  {p95 / p50:>6.2f}")

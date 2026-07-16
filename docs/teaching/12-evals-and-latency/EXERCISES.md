@@ -4,7 +4,7 @@
 
 ## 1. Find the budget-blower, propose a fix without coding it
 
-**Task.** Run `latency_budget.py` over each of the five turn
+**Task.** Run `latency_budget.py` over each of the six turn
 bundles. Identify the slowest. Which stage blew its budget?
 Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is
@@ -65,7 +65,8 @@ exceeds 1200 ms. That's the seed of a latency regression suite.
    the repo and require N standard deviations of regression
    before failing.
 3. The six chapter-12 fixtures include `turn_02_slow_agent`
-   which is *deliberately* 2900 ms — your test should flag it.
+   which is *deliberately* 2420 ms to first audio — your test
+   should flag it.
    That's the right behavior: the test catches the slowdown the
    fixture was built to represent.
 4. Bonus: also test that the golden WER bundles produce the
