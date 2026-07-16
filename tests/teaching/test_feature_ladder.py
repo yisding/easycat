@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from easycat import EasyConfig
 from easycat.cli._app import _docs_entries
+from easycat.stt import OpenAIRealtimeSTTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURE_LADDER = REPO_ROOT / "docs" / "using-easycat"
@@ -154,6 +156,19 @@ def test_first_feature_chapter_uses_only_the_public_easycat_app_surface() -> Non
     assert easycat_imports[0].module == "easycat"
     assert {alias.name for alias in easycat_imports[0].names} == {"VoiceApp", "require_env"}
     assert 'app.run("local")' in script.read_text(encoding="utf-8")
+
+
+def test_first_feature_chapter_names_the_registered_realtime_stt() -> None:
+    exercises = (FEATURE_LADDER / "00-first-voice-app" / "EXERCISES.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'stt="openai-realtime"' in exercises
+    assert 'stt="openai/realtime"' not in exercises
+    default_config = EasyConfig(openai_api_key="test-key")
+    explicit_config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
+    assert isinstance(default_config.stt, OpenAIRealtimeSTTConfig)
+    assert explicit_config.stt == default_config.stt
 
 
 def test_runtime_modes_chapter_covers_every_voice_app_mode_and_boundary() -> None:
@@ -622,7 +637,6 @@ def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> Non
     assert "PASS bind guard: public unauthenticated endpoint failed closed" in result.stdout
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
 async def test_multi_caller_start_failure_releases_capacity(failure_type) -> None:
     script = FEATURE_LADDER / "09-multi-caller" / "main.py"
@@ -641,6 +655,38 @@ async def test_multi_caller_start_failure_releases_capacity(failure_type) -> Non
 
     with pytest.raises(failure_type, match="startup failed"):
         await supervisor.connect("failed", authorized)
+
+    assert supervisor.sessions == {}
+    assert supervisor.gate.active_count == 0
+    assert supervisor.gate.reserved_count == 0
+
+    module_globals["DemoSession"] = demo_session
+    outcome, replacement = await supervisor.connect("replacement", authorized)
+    assert outcome == "accepted"
+    assert replacement is not None
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+async def test_multi_caller_stop_failure_releases_capacity(failure_type) -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    namespace = runpy.run_path(str(script))
+    demo_session = namespace["DemoSession"]
+
+    class FailingStopSession(demo_session):
+        async def stop(self, *, force: bool = False) -> None:
+            raise failure_type("shutdown failed")
+
+    supervisor_type = namespace["LocalSupervisor"]
+    module_globals = supervisor_type.connect.__globals__
+    module_globals["DemoSession"] = FailingStopSession
+    supervisor = supervisor_type(max_sessions=1, events=[])
+    authorized = namespace["Request"](authorization_header=f"Bearer {namespace['TOKEN']}")
+
+    outcome, session = await supervisor.connect("failed", authorized)
+    assert outcome == "accepted"
+    assert session is not None
+    with pytest.raises(failure_type, match="shutdown failed"):
+        await supervisor.disconnect("failed")
 
     assert supervisor.sessions == {}
     assert supervisor.gate.active_count == 0
@@ -746,4 +792,47 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/00-first-voice-app/main.py"
         in entries["docs/using-easycat/"]["commands"]
     )
+    for chapter in _chapter_dirs():
+        route = entries[f"docs/using-easycat/{chapter.name}/"]
+        assert route["diataxis"] == "tutorial", chapter.name
+        assert route["audience"] == "learners", chapter.name
     assert entries["docs/using-easycat/00-first-voice-app/"]["diataxis"] == "tutorial"
+    runtime_modes = entries["docs/using-easycat/01-runtime-modes/"]
+    assert runtime_modes["diataxis"] == "tutorial"
+    assert runtime_modes["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/01-runtime-modes/main.py browser"
+        in runtime_modes["commands"]
+    )
+    providers = entries["docs/using-easycat/02-providers-and-voices/"]
+    assert providers["diataxis"] == "tutorial"
+    assert providers["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py list"
+        in providers["commands"]
+    )
+    conversation = entries["docs/using-easycat/03-conversation-controls/"]
+    assert (
+        "uv run python docs/using-easycat/03-conversation-controls/main.py balanced"
+        in conversation["commands"]
+    )
+    tools = entries["docs/using-easycat/04-tools-actions/"]
+    assert "uv run python docs/using-easycat/04-tools-actions/main.py preview" in tools["commands"]
+    bridges = entries["docs/using-easycat/05-agent-bridges/"]
+    assert (
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix" in bridges["commands"]
+    )
+    session_control = entries["docs/using-easycat/06-session-control/"]
+    assert (
+        "uv run python docs/using-easycat/06-session-control/main.py text"
+        in session_control["commands"]
+    )
+    observability = entries["docs/using-easycat/07-observability/"]
+    assert (
+        "uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07"
+        in observability["commands"]
+    )
+    testing_evals = entries["docs/using-easycat/08-testing-evals/"]
+    assert "uv run python docs/using-easycat/08-testing-evals/main.py" in testing_evals["commands"]
+    multi_caller = entries["docs/using-easycat/09-multi-caller/"]
+    assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]

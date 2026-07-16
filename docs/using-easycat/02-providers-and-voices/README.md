@@ -28,7 +28,7 @@ The offline `list` command below needs no credentials and no audio hardware.
 
 ## Run it
 
-First ask EasyCat's registries what is installed:
+First ask EasyCat's registries which provider names are registered:
 
 ```bash
 uv run python docs/using-easycat/02-providers-and-voices/main.py list

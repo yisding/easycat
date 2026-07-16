@@ -1,15 +1,65 @@
 # Chapter 13 — Swap Providers AND Transports
 
+<!-- BEGIN auto:navigation -->
+**Progress: 14 of 16** · [← Chapter 12 — Evals + the Latency Budget](../12-evals-and-latency/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+<!-- END auto:navigation -->
+
 > The same `Session`, run with **two orthogonal axes of choice**:
 > the providers (STT/agent/TTS) *and* the transport (Local /
 > WebRTC / Twilio). With eval numbers from chapter 12 in hand,
 > every swap is a measured decision.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 11 — The Journal as Mental Model**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How can marginal query counts distinguish an empty filter intersection from a misspelled
+> turn?
+>
+> After recording your answer, explain one way `journal query coverage` changes how you reason
+> about `provider × transport matrix`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/11-journal/query_coverage_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `provider × transport matrix` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** How many cells result from two provider mixes × three transports, and which
+> values stay fixed along each axis?
+>
+> ```bash
+> uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
+> ```
+>
+> **Evidence to find:** two provider mixes cross three transport configs into six cells without
+> changing axes.
+>
+> **Explain the result:** Pick one row and column; name what changes on each axis and what must
+> remain constant.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 This is the first chapter on the production wiring
 (`create_session()` + `EasyConfig`). For the app-builder version of
 the same graduation — lifecycle, event subscriptions, text turns, and
 debug bundles — see the
-[from-EasyConfig-to-Session guide](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md).
+[from-EasyConfig-to-Session guide](../../from-easyconfig-to-session.md).
 
 ## Prerequisites
 
@@ -21,6 +71,11 @@ debug bundles — see the
 - `--extra telephony` for the Twilio transport.
 - `OPENAI_API_KEY` always; `DEEPGRAM_API_KEY` + `ELEVENLABS_API_KEY`
   for the `deepgram-eleven` mix.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -36,8 +91,9 @@ debug bundles — see the
   first chapter that uses the production wiring); WebRTC and
   Twilio transport options; `--provider-mix
   {openai,deepgram-eleven}` and `--transport {local,webrtc,twilio}`
-  CLI matrix; bundle-shape note explaining the teaching → production
-  journal-shape transition.
+  CLI matrix; `matrix_probe.py` for all six provider-free config cells;
+  `event_bus_probe.py` for the provider observability contract; bundle-shape
+  note explaining the teaching → production journal-shape transition.
 - **Removed:** every hand-rolled coroutine from chapters 6-10.
   `Session` orchestrates the pipeline now.
 
@@ -47,6 +103,17 @@ debug bundles — see the
 |------------------|:-----------:|:----------------:|:--------------:|
 | **`openai`**         | ✓ runnable  | needs browser    | needs a call   |
 | **`deepgram-eleven`**| ✓ runnable  | needs browser    | needs a call   |
+
+Materialize all six configuration cells without keys, clients, or provider
+calls:
+
+```bash
+uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
+```
+
+The output keeps the provider mapping constant across three transports and
+the transport config constant across two provider mixes—the Protocol payoff
+in data rather than a live demo.
 
 ## Run two axes
 
@@ -67,17 +134,72 @@ uv run python docs/teaching/13-swap-providers-and-transports/main.py \
 
 Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
+The script prints the exact follow-up commands for that path. You
+can also replace `PATH` below yourself:
+
+```bash
+uv run easycat latency PATH
+uv run easycat latency PATH --json
+```
+
 > **Bundle shape note.** Ch 13 uses `create_session()`, so its
-> bundles carry the **production** journal shape (`stage_start` +
-> `stage_complete` pairs, per chapter 11's teaching-vs-production
-> sidebar). Chapter 12's scripts key on the *teaching* shape
-> (`stage.tts.execute`, `turn.gap`, `stt.final` with a `t_ms`
-> field). To run ch 12's evals on a ch 13 bundle, you will need a
-> small translator — pair each `stage_start` with its matching
-> `stage_complete` by their span correlation id and synthesise the
-> composite records
-> ch 12 expects. Writing that translator is a productive exercise
-> and the natural first task of `peripheral-eval-and-debugger-ui.md`.
+> bundles carry the **production** journal shape (`stage_start` /
+> `stage_complete`, plus turn-scoped `stt_final`, `agent_delta`, and
+> `tts_frame` records). The `easycat latency` command reads that shape
+> directly and reports per-turn critical paths plus p50/p90/p95/p99;
+> no translator is required. Chapter 12's small `evals.py` still keys
+> on its denser *teaching* fixture shape, so use it for that chapter's
+> WER and barge-in exercise rather than as the production-bundle reader.
+
+`easycat latency` ends at the first synthesized TTS byte on the
+server. That is the right provider-pipeline comparison, but it does
+**not** include browser/PSTN delivery, jitter, device buffering, or
+speaker playback. Pair it with WebRTC client stats or telephony
+provider metrics before claiming one transport is faster end to end.
+
+## The production session boundary
+
+This chapter replaces the manual resource stacks with the public
+session scope:
+
+```python
+async with session:
+    await wait_for_shutdown_signal(session)
+
+export_debug_bundle(session, path, overwrite=True)
+```
+
+Entering starts the session. On a normal SIGINT/SIGTERM path,
+`wait_for_shutdown_signal` first calls graceful `session.stop()`;
+context exit then calls `stop(force=True)`, which is an idempotent
+no-op because the session is already closed. If an outer coroutine
+cancels the block instead, context exit supplies the force-cancel path
+that the signal helper cannot.
+
+The export intentionally happens after the block. A clean stop closes
+providers, transport, and writable backends but preserves a read-only
+postmortem journal view, so bundle inspection does not require keeping
+runtime resources alive.
+
+Run the provider-free ordering probe:
+
+```bash
+uv run python \
+  docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
+```
+
+The two traces make the distinction observable. On the graceful path,
+the signal helper's `stop(force=False)` closes the session and context
+exit's `stop(force=True)` reports an idempotent no-op. On the cancelled
+path, the graceful call never happens, so context exit's force-stop does
+the cleanup. Both traces export only after the session scope has exited
+and before the caller-owned client closes.
+
+The probe also previews Chapter 14's second boundary: a dependency
+created by your custom workflow remains caller-owned and gets its own
+outer scope. In a real application, either complete postmortem work
+before re-raising cancellation or shield/bound that work according to
+the owner's shutdown policy.
 
 ## Architecture
 
@@ -117,36 +239,51 @@ Provider choice and transport choice optimise **different axes**:
 
 | Axis you care about         | Choose this |
 |-----------------------------|-------------|
-| First-audio latency         | Provider mix — Deepgram STT cuts partial-latency by ~150 ms |
+| First-audio latency         | Provider mix — compare `easycat latency` on repeated, matched turns |
 | Jitter + packet loss        | Transport — WebRTC preserves UDP end-to-end |
 | Codec quality               | Transport — Local / WebRTC (24 kHz) vs Twilio (μ-law 8 kHz) |
 | Cost per turn               | Provider mix — usually the dominant cost driver |
 | Offline / on-device         | Provider mix — (future: Cartesia / local models) |
 | Reach a regular phone       | Transport — Twilio only |
 
-Measure with chapter 12's scripts; choose with those numbers.
+Measure the production bundles with `easycat latency`; choose with
+those numbers. Treat the transport claims as hypotheses until you
+also have client/PSTN delivery measurements.
 
 ## Why some providers need an `EventBus`
 
-Inspect `src/easycat/stt/factory.py::create_stt_provider_from_config`
-(wired from `easycat.config.create_session`). The WebSocket-based
-providers (Deepgram, ElevenLabs, OpenAI Realtime, Cartesia)
-receive an `EventBus` at construction. The
-HTTP batch OpenAI provider does not. The bus isn't used for
-`STTEvent` or `TTSEvent` — those flow out of every provider's
-async iterator regardless. It's for **reconnect telemetry**: the
-WebSocket providers wrap `ReconnectingWebSocket`, which emits
-`ReconnectAttempt` / `ReconnectSuccess` / `ReconnectFailure`
-events whenever the long-lived socket drops. HTTP providers have
-no socket to drop, so no telemetry to emit.
+Inspect `create_stt_provider_from_config` and
+`create_tts_provider_from_config` in the two provider factories. They do not
+keep a hand-written list of WebSocket providers. Instead, a provider config
+opts into the session `EventBus` by declaring an `event_bus` dataclass field;
+the factory detects that field and injects the bus when it is still `None`.
 
-When your journal shows a mysterious latency spike, those three
-events are the record that usually explains it — the same pattern
-you saw in chapter 11's bug 2.
+Run the provider-free catalog probe to see that structural contract:
+
+```bash
+uv run python \
+    docs/teaching/13-swap-providers-and-transports/event_bus_probe.py
+```
+
+The interesting asymmetry is OpenAI: batch STT prints `no`, while HTTP TTS
+prints `yes`. The bus is therefore not synonymous with WebSockets. It carries
+**provider observability**:
+
+- WebSocket providers use it for provider errors and reconnect lifecycle
+  (`ReconnectAttempt`, `ReconnectSuccess`, `ReconnectFailure`).
+- HTTP OpenAI TTS uses it for provider `Error` events, but cannot emit
+  reconnect lifecycle because it has no persistent socket.
+- `STTEvent` and `TTSEvent` data still flow from provider async iterators; the
+  session bus is not the audio/transcript stream.
+
+When a journal shows a mysterious latency spike, reconnect records can explain
+it—the same pattern as chapter 11's bug 2. When an HTTP TTS request fails, its
+provider `Error` record supplies a different but equally important trail.
 
 ## A decision matrix
 
-Pick any three columns, defend with numbers:
+Pick any three columns, then replace these starting hypotheses with
+numbers from your own environment:
 
 | Use case                      | Latency | Quality | Reach | Cost | Suggested cell |
 |-------------------------------|:-------:|:-------:|:-----:|:----:|----------------|
@@ -166,11 +303,21 @@ promotes it to a measured column.
 1. Add a `--provider-mix cartesia` preset (both STT and TTS via
    Cartesia's WebSocket API). What's the minimum diff from
    `deepgram-eleven`?
-2. Run all six cells on the same short prompt. Which cell has the
-   tightest P95/P50 ratio in chapter 12's eval output? Why?
+2. Run the expanded nine-cell matrix on the same short prompt.
+   Which cell has the tightest server-side P95/P50 ratio in
+   `easycat latency`? What client or provider evidence would you
+   need to rank transports?
 3. Wire `SendDTMFAction` from chapter 7 into the agent (the user
    asks for "press 1 to continue"). What does the journal show
    on the Twilio preset? What does a user on the phone hear?
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

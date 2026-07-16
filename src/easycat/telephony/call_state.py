@@ -32,6 +32,7 @@ from easycat.events import (
     TTSAudio,
     VoicemailDetected,
 )
+from easycat.runtime.scope import BackgroundTaskScope
 
 if TYPE_CHECKING:
     from easycat.telephony.screening import ScreeningPatternSet
@@ -85,6 +86,12 @@ _VOICEMAIL_ACCEPT_STATES = frozenset(
 # attacker-controlled inputs once a call is classified as VOICEMAIL.
 _INBOUND_STT_TRACKS = frozenset({"inbound", "inbound_track", "caller"})
 
+_GATE_TIMEOUT_TASK = "classification_gate_timeout"
+_CLASSIFICATION_TIMEOUT_TASK = "call_classification_timeout"
+_MAX_DURATION_TASK = "call_max_duration"
+_LATE_VOICEMAIL_TASK = "late_voicemail_window"
+_VOICEMAIL_PICKUP_TASK = "voicemail_pickup_window"
+
 
 class ClassificationGate:
     """Buffers TTS audio during the CLASSIFYING state.
@@ -122,6 +129,12 @@ class ClassificationGate:
         self._buffer: deque[TTSAudio] = deque()
         self._buffer_warned = False
         self._dropped_frames = 0
+        self._tasks = BackgroundTaskScope()
+        self._generation = 0
+        # Keep a direct handle after the timeout detaches from the scope so a
+        # hard lifecycle reset (stop/new call/discard) can still cancel stale
+        # replay work. Ordinary release intentionally uses only the scope and
+        # therefore preserves an in-progress replay.
         self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
@@ -164,7 +177,9 @@ class ClassificationGate:
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+        self._generation += 1
         self._cancel_timeout()
+        self._cancel_detached_timeout()
         self._buffer.clear()
         self._closed = False
         self._started = False
@@ -174,6 +189,8 @@ class ClassificationGate:
         """Close the gate — start buffering TTS audio."""
         if not self._enabled:
             return
+        self._generation += 1
+        self._cancel_detached_timeout()
         self._closed = True
         self._buffer.clear()
         self._buffer_warned = False
@@ -242,7 +259,9 @@ class ClassificationGate:
         list) so that hold audio is cancelled even when no opener audio was
         buffered.
         """
+        self._generation += 1
         self._cancel_timeout()
+        self._cancel_detached_timeout()
         self._hold_audio_playing = False
         self._buffer.clear()
         self._closed = False
@@ -273,41 +292,59 @@ class ClassificationGate:
 
     def _start_timeout(self) -> None:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._timeout_task = loop.create_task(self._timeout_coro())
+        generation = self._generation
+        self._timeout_task = self._tasks.create_task(
+            _GATE_TIMEOUT_TASK,
+            self._timeout_coro(generation),
+            replace=True,
+        )
 
     def _cancel_timeout(self) -> None:
-        if self._timeout_task and not self._timeout_task.done():
-            self._timeout_task.cancel()
-        self._timeout_task = None
+        self._tasks.cancel(_GATE_TIMEOUT_TASK)
 
-    async def _timeout_coro(self) -> None:
+    def _cancel_detached_timeout(self) -> None:
+        task = self._timeout_task
+        self._timeout_task = None
+        if task is None or task.done():
+            return
         try:
-            await asyncio.sleep(self._timeout_s)
-            if self._closed:
-                # Inline the release logic instead of calling self.release(),
-                # because release() cancels _timeout_task — which is *this* task.
-                # That would inject CancelledError on the next await and drop
-                # the buffered audio before _on_flush_async can re-enqueue it.
-                self._hold_audio_playing = False
-                self._timeout_task = None
-                buffered = list(self._buffer)
-                self._buffer.clear()
-                if self._on_flush and buffered:
-                    self._on_flush(buffered)
-                if self._on_flush_async:
-                    await self._on_flush_async(buffered)
-                # Open the gate after flushing so late TTS chunks cannot
-                # slip past the buffer during the async replay — matching
-                # the ordering in flush_and_release().
-                self._closed = False
-                if self._started:
-                    self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
-                    self._started = False
-        except asyncio.CancelledError:
-            pass
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current:
+            task.cancel()
+
+    async def _timeout_coro(self, generation: int) -> None:
+        await asyncio.sleep(self._timeout_s)
+        if generation != self._generation:
+            return
+        # Once replay begins, detach this task from cancellation ownership.
+        # The buffer is about to be dequeued, so a concurrent classification
+        # signal must not cancel the flush and permanently drop its remainder.
+        # BackgroundTaskScope recognizes the current task and only detaches it.
+        self._tasks.cancel(_GATE_TIMEOUT_TASK)
+        if generation != self._generation:
+            return
+        if self._closed:
+            self._hold_audio_playing = False
+            buffered = list(self._buffer)
+            self._buffer.clear()
+            if self._on_flush and buffered:
+                self._on_flush(buffered)
+            if self._on_flush_async:
+                await self._on_flush_async(buffered)
+            if generation != self._generation:
+                return
+            # Open the gate after flushing so late TTS chunks cannot
+            # slip past the buffer during the async replay — matching
+            # the ordering in flush_and_release().
+            self._closed = False
+            if self._started:
+                self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+                self._started = False
 
 
 class OutboundCallStateMachine:
@@ -347,11 +384,7 @@ class OutboundCallStateMachine:
 
         self._state = OutboundCallState.INITIATING
         self._started = False
-        self._classification_timer: asyncio.TimerHandle | None = None
-        self._classification_task: asyncio.Task[None] | None = None
-        self._max_duration_task: asyncio.Task[None] | None = None
-        self._late_voicemail_task: asyncio.Task[None] | None = None
-        self._voicemail_pickup_task: asyncio.Task[None] | None = None
+        self._timers = BackgroundTaskScope()
 
         # Classification gate.
         self._gate = ClassificationGate(
@@ -432,14 +465,7 @@ class OutboundCallStateMachine:
         self._started = False
 
     def _cancel_timers(self) -> None:
-        if self._classification_task and not self._classification_task.done():
-            self._classification_task.cancel()
-            self._classification_task = None
-        if self._max_duration_task and not self._max_duration_task.done():
-            self._max_duration_task.cancel()
-            self._max_duration_task = None
-        self._cancel_late_voicemail_window()
-        self._cancel_voicemail_pickup_window()
+        self._timers.cancel()
 
     # ── New-call reset ─────────────────────────────────────────────
 
@@ -602,8 +628,7 @@ class OutboundCallStateMachine:
         elif (
             event.result == "machine"
             and self._state == OutboundCallState.HUMAN
-            and self._late_voicemail_task is not None
-            and not self._late_voicemail_task.done()
+            and self._timers.active(_LATE_VOICEMAIL_TASK)
         ):
             # Late voicemail detection: beep or long monologue after HUMAN.
             self._cancel_late_voicemail_window()
@@ -612,8 +637,7 @@ class OutboundCallStateMachine:
         elif (
             event.result == "human"
             and self._state == OutboundCallState.VOICEMAIL
-            and self._voicemail_pickup_task is not None
-            and not self._voicemail_pickup_task.done()
+            and self._timers.active(_VOICEMAIL_PICKUP_TASK)
         ):
             # Voicemail pickup: human answered during voicemail (e.g. iOS Live Voicemail).
             self._cancel_voicemail_pickup_window()
@@ -679,10 +703,8 @@ class OutboundCallStateMachine:
             if self._is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
 
-        if (
-            self._state == OutboundCallState.VOICEMAIL
-            and self._voicemail_pickup_task is not None
-            and not self._voicemail_pickup_task.done()
+        if self._state == OutboundCallState.VOICEMAIL and self._timers.active(
+            _VOICEMAIL_PICKUP_TASK
         ):
             if not self._is_trusted_inbound_stt(event):
                 return
@@ -703,86 +725,78 @@ class OutboundCallStateMachine:
 
     def _start_classification_timeout(self) -> None:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._classification_task = loop.create_task(self._classification_timeout_coro())
+        self._timers.create_task(
+            _CLASSIFICATION_TIMEOUT_TASK,
+            self._classification_timeout_coro(),
+            replace=True,
+        )
 
     def _cancel_classification_timeout(self) -> None:
-        if self._classification_task and not self._classification_task.done():
-            self._classification_task.cancel()
-            self._classification_task = None
+        self._timers.cancel(_CLASSIFICATION_TIMEOUT_TASK)
 
     async def _classification_timeout_coro(self) -> None:
-        try:
-            await asyncio.sleep(self._classification_timeout_s)
-            if self._state == OutboundCallState.CLASSIFYING:
-                await self._transition(OutboundCallState.UNKNOWN)
-        except asyncio.CancelledError:
-            pass
+        await asyncio.sleep(self._classification_timeout_s)
+        if self._state == OutboundCallState.CLASSIFYING:
+            await self._transition(OutboundCallState.UNKNOWN)
 
     def _start_max_duration_timer(self) -> None:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._max_duration_task = loop.create_task(self._max_duration_coro())
+        self._timers.create_task(
+            _MAX_DURATION_TASK,
+            self._max_duration_coro(),
+            replace=True,
+        )
 
     async def _max_duration_coro(self) -> None:
-        try:
-            await asyncio.sleep(self._max_call_duration_s)
-            if self._state != OutboundCallState.ENDED:
-                await self._transition(OutboundCallState.ENDED)
-                await self._event_bus.emit(
-                    CallEnded(call_sid=self._call_sid, disposition="max_duration")
-                )
-        except asyncio.CancelledError:
-            pass
+        await asyncio.sleep(self._max_call_duration_s)
+        if self._state != OutboundCallState.ENDED:
+            await self._transition(OutboundCallState.ENDED)
+            await self._event_bus.emit(
+                CallEnded(call_sid=self._call_sid, disposition="max_duration")
+            )
 
     # ── Late voicemail window ────────────────────────────────────
 
     def _start_late_voicemail_window(self) -> None:
-        self._cancel_late_voicemail_window()
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._late_voicemail_task = loop.create_task(self._late_voicemail_coro())
+        self._timers.create_task(
+            _LATE_VOICEMAIL_TASK,
+            self._late_voicemail_coro(),
+            replace=True,
+        )
 
     def _cancel_late_voicemail_window(self) -> None:
-        if self._late_voicemail_task and not self._late_voicemail_task.done():
-            self._late_voicemail_task.cancel()
-        self._late_voicemail_task = None
+        self._timers.cancel(_LATE_VOICEMAIL_TASK)
 
     async def _late_voicemail_coro(self) -> None:
         """After the window expires, stop accepting late voicemail signals."""
-        try:
-            await asyncio.sleep(self._late_voicemail_window_s)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._late_voicemail_task = None
+        await asyncio.sleep(self._late_voicemail_window_s)
 
     # ── Voicemail pickup window ─────────────────────────────────
 
     def _start_voicemail_pickup_window(self) -> None:
-        self._cancel_voicemail_pickup_window()
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._voicemail_pickup_task = loop.create_task(self._voicemail_pickup_coro())
+        self._timers.create_task(
+            _VOICEMAIL_PICKUP_TASK,
+            self._voicemail_pickup_coro(),
+            replace=True,
+        )
 
     def _cancel_voicemail_pickup_window(self) -> None:
-        if self._voicemail_pickup_task and not self._voicemail_pickup_task.done():
-            self._voicemail_pickup_task.cancel()
-        self._voicemail_pickup_task = None
+        self._timers.cancel(_VOICEMAIL_PICKUP_TASK)
 
     async def _voicemail_pickup_coro(self) -> None:
         """After the window expires, stop accepting voicemail pickup signals."""
-        try:
-            await asyncio.sleep(self._voicemail_pickup_window_s)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._voicemail_pickup_task = None
+        await asyncio.sleep(self._voicemail_pickup_window_s)

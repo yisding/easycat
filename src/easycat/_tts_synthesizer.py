@@ -6,14 +6,16 @@ audio queueing — into one reusable helper.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, TTSAudio, TTSEventType, TTSMarkers
 from easycat.timeouts import TimeoutConfig, resolve_provider_name, with_tts_timeout
 from easycat.tts.input import TTSInput, coerce_tts_input
@@ -31,6 +33,32 @@ class TTSSynthResult:
     completed: bool = True
 
 
+async def _iter_after_start_barrier(
+    stream: AsyncIterator[Any],
+    barrier: asyncio.Event | None,
+) -> AsyncGenerator[Any, None]:
+    """Prefetch one provider event, hold it if requested, then stream directly."""
+    try:
+        first_event = await anext(stream)
+    except StopAsyncIteration:
+        return
+    if barrier is not None:
+        await barrier.wait()
+    yield first_event
+    async for event in stream:
+        yield event
+
+
+def _with_start_barrier(
+    stream: AsyncIterator[Any],
+    barrier: asyncio.Event | None,
+) -> AsyncIterator[Any]:
+    """Keep the established direct iterator path when no barrier is needed."""
+    if barrier is None:
+        return stream
+    return _iter_after_start_barrier(stream, barrier)
+
+
 class TTSSynthesizer:
     """Encapsulates the TTS iteration loop shared by both agent paths.
 
@@ -46,6 +74,7 @@ class TTSSynthesizer:
         timeout_config: TimeoutConfig | None = None,
         correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
         audio_gate: Callable[[], bool] | None = None,
+        direct_first_audio: Callable[[AudioChunk], Awaitable[bool]] | None = None,
     ) -> None:
         self._tts = tts
         self._event_bus = event_bus
@@ -53,6 +82,7 @@ class TTSSynthesizer:
         self._timeout_config = timeout_config
         self._audio_gate = audio_gate
         self._correlation_ids = correlation_ids
+        self._direct_first_audio = direct_first_audio
         # Optional TTSStage wrapper.  When bound, ``synthesize`` calls
         # ``stage.execute(payload, ctx, turn)`` instead of the raw
         # provider so the stage can journal start/complete/frame records
@@ -87,6 +117,15 @@ class TTSSynthesizer:
         self._run_ctx_getter = run_ctx_getter
         self._turn_getter = turn_getter
 
+    async def _send_or_queue_audio(self, chunk: AudioChunk, *, first_audio: bool) -> None:
+        if (
+            first_audio
+            and self._direct_first_audio is not None
+            and await self._direct_first_audio(chunk)
+        ):
+            return
+        await self._outbound_queue.put(chunk)
+
     async def synthesize(
         self,
         payload: TTSInput | str,
@@ -94,6 +133,7 @@ class TTSSynthesizer:
         *,
         is_active: Callable[[], bool] | None = None,
         bypass_gate: bool = False,
+        start_barrier: asyncio.Event | None = None,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
 
@@ -105,6 +145,10 @@ class TTSSynthesizer:
             token: CancelToken to check between chunks.
             is_active: Optional predicate; iteration stops when it returns False.
             bypass_gate: Whether to bypass the audio gate.
+            start_barrier: Optional one-shot barrier held before the first
+                provider event is processed. The provider request and first
+                receive can run while the barrier is closed, but no EasyCat
+                event or outbound audio is released until it opens.
 
         Returns:
             TTSSynthResult indicating whether audio was produced.
@@ -141,7 +185,7 @@ class TTSSynthesizer:
         # wrapper and the underlying provider stream instead of deferring
         # their cleanup to non-deterministic GC.
         async with contextlib.aclosing(tts_iter) as tts_stream:
-            async for tts_event in tts_stream:
+            async for tts_event in _with_start_barrier(tts_stream, start_barrier):
                 if token and token.is_cancelled:
                     result.completed = False
                     break
@@ -150,6 +194,7 @@ class TTSSynthesizer:
                     break
 
                 if tts_event.type == TTSEventType.AUDIO and tts_event.audio:
+                    first_audio = not result.audio_produced
                     result.audio_bytes += len(tts_event.audio.data)
                     session_id, turn_id = (
                         self._correlation_ids() if self._correlation_ids else (None, None)
@@ -168,7 +213,10 @@ class TTSSynthesizer:
                     if not gated_at_start and (
                         bypass_gate or not (self._audio_gate and self._audio_gate())
                     ):
-                        await self._outbound_queue.put(tts_event.audio)
+                        await self._send_or_queue_audio(
+                            tts_event.audio,
+                            first_audio=first_audio,
+                        )
 
                 elif tts_event.type == TTSEventType.MARKERS and tts_event.markers:
                     session_id, turn_id = (
