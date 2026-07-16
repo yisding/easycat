@@ -314,9 +314,9 @@
 -        session = create_session(config)
 -        attach_runtime_feedback(session)
 +    # ── 2. Post-stop: journal still works, bundle still exports ───
-+    # The lifecycle invariant: after stop(), the
-+    # journal is in a read-only postmortem state. .read() works,
-+    # export_debug_bundle() works, .append() does not.
++    # The lifecycle invariant: Session.journal is always a read-only
++    # JournalView. After stop(), that same view reads a preserved
++    # postmortem backend, and export_debug_bundle() still works.
 +    assert session.journal is not None
 +    records = session.journal.read()
 +    counts: dict[str, int] = {}
@@ -394,8 +394,8 @@ Talk for a few seconds, Ctrl-C. You should see:
            │ await session.start()
            ▼
   ┌─────────────────┐
-  │   Session live  │ ──► journal.append() writes records
-  └────────┬────────┘
+  │   Session live  │ ──► runtime backend appends records
+  └────────┬────────┘ ──► session.journal reads through JournalView
            │ await session.stop()           (graceful drain)
            │ await session.stop(force=True) (force-cancel)
            ▼
@@ -417,9 +417,23 @@ Talk for a few seconds, Ctrl-C. You should see:
 
 The invariant worth memorising: **after `stop()`,
 `session.journal.read()` and `session.export_debug_bundle()` must
-still work.** The journal backend is swapped for a read-only
-snapshot during private teardown, so the postmortem shape is stable
-no matter when you poke at it.
+still work.** `session.journal` is a stable, read-only `JournalView`
+for the entire session lifetime; application code never appends through
+it. During private teardown, EasyCat replaces the live backend behind
+that same view with a read-only SQLite wrapper or frozen in-memory
+snapshot. A caller that cached the view before stop can keep using it.
+
+Run the provider-free full-SQLite proof:
+
+```bash
+uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
+```
+
+It executes a real text turn with the built-in echo agent, then shows
+the same public `JournalView` observing a `SqliteJournal` before stop and
+a `ReadonlySqliteJournal` afterward. It also exports and reloads a bundle
+after stop and verifies that its record sequence matches the postmortem
+view. The temporary data directory is removed when the probe exits.
 
 ## `SessionManager`
 
@@ -732,6 +746,9 @@ the same `Session` you've run since chapter 5.
 3. Pipe a production bundle's `easycat latency --json` report into
    `latency_gate.py`. Trigger both `over_budget` and
    `insufficient_samples`; why should CI distinguish them?
+4. Run `postmortem_probe.py`. Why is `append` absent both before and
+   after stop even though the backend type changes? Which object keeps
+   its identity, and which object is replaced?
 
 ## The ladder, complete (really)
 

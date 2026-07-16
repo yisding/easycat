@@ -115,9 +115,9 @@ async def main() -> None:
     print("Session stopped; manager released the slot.")
 
     # ── 2. Post-stop: journal still works, bundle still exports ───
-    # The lifecycle invariant: after stop(), the
-    # journal is in a read-only postmortem state. .read() works,
-    # export_debug_bundle() works, .append() does not.
+    # The lifecycle invariant: Session.journal is always a read-only
+    # JournalView. After stop(), that same view reads a preserved
+    # postmortem backend, and export_debug_bundle() still works.
     assert session.journal is not None
     records = session.journal.read()
     counts: dict[str, int] = {}
