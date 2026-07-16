@@ -96,6 +96,7 @@ class TTSScheduler:
             timeout_config=timeout_config,
             correlation_ids=wiring.correlation_ids,
             audio_gate=audio_gate,
+            direct_first_audio=audio_router.try_send_first_audio_inline,
         )
         self._synth.bind_stage(
             tts_stage,
