@@ -6,26 +6,35 @@
 
 **Task.** Change `on_user_turn` to `async def on_user_turn(self,
 text)` — drop `recorder` and `cancel_token`. You've just demoted
-to shallow mode. Run the script and try to interrupt the bot
-mid-sentence. What do you see in the journal?
+to shallow mode. Temporarily comment out `apply_interruption` too;
+that method is an explicit shallow-mode opt-in. Run the script and
+try to interrupt the bot mid-sentence. What stops, and what can no
+longer be reconciled?
 
 **Hints**
 
-1. Shallow mode means the bridge can't see your workflow's
-   internals, so it has no way to apply cooperative cancellation
-   mid-turn. Your generator runs to completion, *then* the next
-   user turn begins.
-2. Look for `ControlSignalRecord` with
-   `cause="shallow_mode_downgrade"` in the journal. The runtime
-   writes this exactly when the bridge would have cancelled but
-   couldn't.
-3. The audible symptom: you start talking, the bot finishes its
-   sentence anyway, *then* hears you. End-of-turn cancellation
-   is the fallback — better than nothing, much worse than deep
-   mode.
-4. The fix is to add back the `recorder` parameter. The bridge
-   inspects your function signature with `inspect.signature` to
-   decide which mode to use.
+1. The bridge still receives the session's cancel token in shallow
+   mode. For a streaming workflow it stops forwarding chunks once it
+   observes cancellation, and the session cancels queued TTS audio.
+   Your workflow cannot see that token itself, though, so a blocking or
+   non-cooperative operation may keep doing work until the runtime task
+   is cancelled.
+2. Look for `assistant_interruption_notified` with `notified: false`.
+   That means audio cancellation happened, but the bridge could not
+   reconcile the opaque workflow's state. The original barge-in remains
+   visible as `control_signal_cause` with `cause: barge_in`; there is no
+   separate shallow-mode control signal.
+3. Inspect `MyWorkflow._history` after the interruption. Without an
+   interruption hook it can retain generated text the caller did not
+   hear, even though playback stopped. That state mismatch — not a
+   promise that the full sentence stays audible — is shallow mode's
+   important limitation.
+4. Add `recorder` back to select deep mode and keep `cancel_token` so
+   the workflow can stop its upstream LLM stream. A stateful workflow
+   should also implement `apply_interruption(...)` (as this chapter's
+   `MyWorkflow` does) to rewrite private history to the delivered text.
+   Alternatively, a shallow workflow may keep that hook as an explicit
+   promise that it knows how to reconcile its own opaque state.
 
 ## 2. Custom action with a custom executor
 

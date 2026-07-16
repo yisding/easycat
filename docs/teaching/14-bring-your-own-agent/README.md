@@ -54,20 +54,13 @@
 +++ docs/teaching/14-bring-your-own-agent/main.py
 @@ -1,37 +1,26 @@
 -"""Chapter 13 — swap providers AND transports.
-+"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
-
+-
 -One driver. Two orthogonal axes. Six combinations:
-+Chapter 13 handed ``agents.Agent(...)`` to ``EasyConfig(agent=...)``.
-+Under the hood, ``create_session`` wrapped it in an
-+``OpenAIAgentsBridge`` so the runtime could drive it. This chapter
-+drops the OpenAI Agents SDK and plugs in a plain async class — the
-+same Session code, a different brain.
-
+-
 -                Local     WebRTC     Twilio
 -  openai         ✓          ✓         ✓
 -  deepgram-eleven ✓         ✓         ✓
-+Three things this script demonstrates:
-
+-
 -Only the **two Local cells** run out of the box — WebRTC and
 -Twilio need a connected client (browser or phone call) and are
 -covered by the respective examples. The *code shape* is the
@@ -85,6 +78,16 @@
 -        --provider-mix openai --transport webrtc
 -    uv run python docs/teaching/13-swap-providers-and-transports/main.py \\
 -        --provider-mix openai --transport twilio
++"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
++
++Chapter 13 handed ``agents.Agent(...)`` to ``EasyConfig(agent=...)``.
++Under the hood, ``create_session`` wrapped it in an
++``OpenAIAgentsBridge`` so the runtime could drive it. This chapter
++drops the OpenAI Agents SDK and plugs in a plain async class — the
++same Session code, a different brain.
++
++Three things this script demonstrates:
++
 +1. A ``GenericWorkflowBridge`` in *deep mode* — our workflow gets a
 +   ``cancel_token`` alongside the user text, so we can stop the LLM
 +   stream the instant the user barges in.
@@ -107,7 +110,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,22 +29,31 @@
+@@ -40,22 +29,32 @@
 
  from __future__ import annotations
 
@@ -132,15 +135,17 @@
      export_debug_bundle,
      wait_for_shutdown_signal,
  )
+-
 +from easycat.cancel import CancelToken
 +from easycat.integrations.agents import GenericWorkflowBridge
++from easycat.integrations.agents.base import AgentRecorder, CancellationMode
 +from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
-
++
 +MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,85 +73,105 @@
+@@ -75,85 +74,128 @@
      )
 
 
@@ -148,20 +153,56 @@
 -    """Simple OpenAI-Agents-SDK agent. Provider-agnostic — the agent
 -    doesn't know or care which STT/TTS/transport is wired."""
 -    from agents import Agent  # type: ignore[import-untyped]
-+class MyWorkflow:
-+    """Our brain. No framework — just async + OpenAI chat completions.
-
+-
 -    return Agent(
 -        name="assistant",
 -        instructions="You are a helpful voice assistant. Keep replies brief.",
 -    )
+-
+-
+-def transport_config(name: str):
+-    if name == "local":
+-        return LocalTransportConfig()
+-    if name == "webrtc":
+-        # Requires `uv sync --extra webrtc --group dev`. The browser client connects via
+-        # SDP offer/answer; see `examples/webrtc_server.py` for the HTTP
+-        # signalling endpoint that pairs with WebRTCTransport.
+-        from easycat import WebRTCTransportConfig
+-
+-        return WebRTCTransportConfig()
+-    if name == "twilio":
+-        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
+-        # via Twilio Media Streams over WebSocket; see
+-        # `examples/twilio_app.py` for the Flask app that wires this up.
+-        from easycat.transports.twilio_media import TwilioTransportConfig
+-
+-        return TwilioTransportConfig()
+-    raise SystemExit(f"Unknown transport: {name}")
+-
+-
+-def provider_mix(name: str) -> dict:
+-    """Return the STT/TTS strings for the named mix.
+-
+-    All values are string shortcuts — ``EasyConfig.__post_init__``
+-    parses them into concrete config objects via the factory.
++class MyWorkflow:
++    """Our brain. No framework — just async + OpenAI chat completions.
++
 +    Deep mode is opted into by the signature: as long as
 +    ``on_user_turn`` names a ``recorder`` parameter, the bridge runs
 +    us in deep mode and wires ``cancel_token`` through. We don't
 +    actually need the recorder here (we aren't journalling tool
-+    calls), but naming it is the switch.
-+    """
-
++    calls), but naming it is the switch. The history hooks below
++    keep our private message list aligned with what the caller heard.
+     """
+-    if name == "openai":
+-        return {"stt": "openai", "tts": "openai"}
+-    if name == "deepgram-eleven":
+-        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
+-            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
+-        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
+-    raise SystemExit(f"Unknown provider mix: {name}")
++
 +    def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
 +        self._client = client
 +        self._actions = actions
@@ -175,30 +216,16 @@
 +                ),
 +            }
 +        ]
-
--def transport_config(name: str):
--    if name == "local":
--        return LocalTransportConfig()
--    if name == "webrtc":
--        # Requires `uv sync --extra webrtc --group dev`. The browser client connects via
--        # SDP offer/answer; see `examples/webrtc_server.py` for the HTTP
--        # signalling endpoint that pairs with WebRTCTransport.
--        from easycat import WebRTCTransportConfig
++
 +    async def on_user_turn(
 +        self,
 +        text: str,
 +        *,
-+        recorder,  # AgentRecorder — unused here, but names the deep mode switch
++        recorder: AgentRecorder,  # unused here, but names the deep mode switch
 +        cancel_token: CancelToken | None,
 +    ) -> AsyncIterator[str]:
 +        self._history.append({"role": "user", "content": text})
-
--        return WebRTCTransportConfig()
--    if name == "twilio":
--        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
--        # via Twilio Media Streams over WebSocket; see
--        # `examples/twilio_app.py` for the Flask app that wires this up.
--        from easycat.transports.twilio_media import TwilioTransportConfig
++
 +        # Toy intent check; a real app would route via tool calls.
 +        if any(w in text.lower() for w in ("bye", "hang up", "goodbye")):
 +            # Ask the session to stop after this turn finishes speaking.
@@ -207,38 +234,43 @@
 +            self._history.append({"role": "assistant", "content": reply})
 +            yield reply
 +            return
-
--        return TwilioTransportConfig()
--    raise SystemExit(f"Unknown transport: {name}")
--
--
--def provider_mix(name: str) -> dict:
--    """Return the STT/TTS strings for the named mix.
--
--    All values are string shortcuts — ``EasyConfig.__post_init__``
--    parses them into concrete config objects via the factory.
--    """
--    if name == "openai":
--        return {"stt": "openai", "tts": "openai"}
--    if name == "deepgram-eleven":
--        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
--            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
--        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
--    raise SystemExit(f"Unknown provider mix: {name}")
++
 +        stream = await self._client.chat.completions.create(
 +            model=MODEL, messages=self._history, stream=True
 +        )
 +        full = ""
-+        async for chunk in stream:
-+            if cancel_token is not None and cancel_token.is_cancelled:
-+                break
-+            delta = chunk.choices[0].delta.content or ""
-+            if not delta:
-+                continue
-+            full += delta
-+            yield delta  # the bridge wraps each chunk as a text_delta event
-+        if full:
-+            self._history.append({"role": "assistant", "content": full})
++        try:
++            async with stream as response_stream:
++                async for chunk in response_stream:
++                    if cancel_token is not None and cancel_token.is_cancelled:
++                        break
++                    delta = chunk.choices[0].delta.content or ""
++                    if not delta:
++                        continue
++                    full += delta
++                    yield delta  # the bridge wraps each chunk as a text_delta event
++        finally:
++            # BridgeTemplate closes this generator on barge-in. Commit the
++            # delivered prefix before apply_interruption rewrites it to what
++            # the caller actually heard.
++            if full:
++                self._history.append({"role": "assistant", "content": full})
++
++    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
++        """Rewrite private history to the portion the caller actually heard."""
++        suffix = "..." if delivered_text and mode is CancellationMode.IMMEDIATE_STOP else ""
++        self.replace_last_assistant_text(f"{delivered_text}{suffix}")
++
++    def replace_last_assistant_text(self, text: str) -> None:
++        """Let interruption and Markdown cleanup update private history."""
++        for message in reversed(self._history):
++            if message["role"] == "assistant":
++                message["content"] = text
++                return
++            if message["role"] == "user":
++                # No assistant output was generated for this turn. Do not
++                # rewrite the previous turn's already-committed response.
++                return
 
 
  async def main() -> None:
@@ -252,13 +284,14 @@
 
 -    tag = f"{args.provider_mix}-{args.transport}"
 -    print(f"=== {tag} ===")
+-
+-    mix = provider_mix(args.provider_mix)
 +    client = AsyncOpenAI()
 +    actions = SessionActions()  # shared: workflow enqueues, session drains
 +    workflow = MyWorkflow(client, actions)
 +    bridge = GenericWorkflowBridge(workflow)
 +    assert bridge.deep_mode, "deep mode required for mid-turn interruption"
-
--    mix = provider_mix(args.provider_mix)
++
 +    # A tiny pronunciation pipeline. Processors run serially on every
 +    # committed assistant utterance before the text reaches TTS; a
 +    # raise in one is logged and the next runs (fail-open).
@@ -302,7 +335,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -166,4 +184,7 @@
+@@ -166,4 +208,7 @@
 
 
  if __name__ == "__main__":
@@ -372,14 +405,18 @@ class MyWorkflow:
             yield chunk.choices[0].delta.content or ""
 ```
 
-Deep mode matters because it is the only way mid-turn barge-in
-Just Works. Shallow mode (`on_user_turn(text) -> str`) has no
-visibility into the workflow's internals, so when the user
-interrupts, the bridge can only apply end-of-turn cancellation —
-the current turn runs to completion before the next user turn
-begins. When this happens the runtime writes a `ControlSignalRecord`
-with `cause="shallow_mode_downgrade"` so you know why the bot
-didn't stop.
+Deep mode passes the session's `cancel_token` into your workflow, so
+you can stop upstream work as soon as the caller barges in. Shallow
+mode (`on_user_turn(text)`) does not expose that token or the recorder
+to your code. The bridge still stops forwarding streamed chunks after
+it observes cancellation, and the session cancels queued TTS audio,
+but an opaque workflow cannot safely reconcile its own history unless
+it implements an explicit `apply_interruption(...)` hook.
+
+When that state notification is unsupported, the session writes
+`assistant_interruption_notified` with `notified: false`. The barge-in
+itself is recorded separately as `control_signal_cause` with
+`cause: barge_in`. There is no shallow-mode-specific control signal.
 
 The teaching block above is the essence. The real `MyWorkflow`
 in `main.py` adds history, the system prompt, and the action
@@ -394,7 +431,8 @@ class MyWorkflow:
     ``on_user_turn`` names a ``recorder`` parameter, the bridge runs
     us in deep mode and wires ``cancel_token`` through. We don't
     actually need the recorder here (we aren't journalling tool
-    calls), but naming it is the switch.
+    calls), but naming it is the switch. The history hooks below
+    keep our private message list aligned with what the caller heard.
     """
 
     def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
@@ -415,7 +453,7 @@ class MyWorkflow:
         self,
         text: str,
         *,
-        recorder,  # AgentRecorder — unused here, but names the deep mode switch
+        recorder: AgentRecorder,  # unused here, but names the deep mode switch
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[str]:
         self._history.append({"role": "user", "content": text})
@@ -433,16 +471,38 @@ class MyWorkflow:
             model=MODEL, messages=self._history, stream=True
         )
         full = ""
-        async for chunk in stream:
-            if cancel_token is not None and cancel_token.is_cancelled:
-                break
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            full += delta
-            yield delta  # the bridge wraps each chunk as a text_delta event
-        if full:
-            self._history.append({"role": "assistant", "content": full})
+        try:
+            async with stream as response_stream:
+                async for chunk in response_stream:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        break
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full += delta
+                    yield delta  # the bridge wraps each chunk as a text_delta event
+        finally:
+            # BridgeTemplate closes this generator on barge-in. Commit the
+            # delivered prefix before apply_interruption rewrites it to what
+            # the caller actually heard.
+            if full:
+                self._history.append({"role": "assistant", "content": full})
+
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+        """Rewrite private history to the portion the caller actually heard."""
+        suffix = "..." if delivered_text and mode is CancellationMode.IMMEDIATE_STOP else ""
+        self.replace_last_assistant_text(f"{delivered_text}{suffix}")
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Let interruption and Markdown cleanup update private history."""
+        for message in reversed(self._history):
+            if message["role"] == "assistant":
+                message["content"] = text
+                return
+            if message["role"] == "user":
+                # No assistant output was generated for this turn. Do not
+                # rewrite the previous turn's already-committed response.
+                return
 ```
 <!-- END auto:snippet -->
 
@@ -531,8 +591,8 @@ Four rungs, in order of power and effort:
 | Rung | You write | You get |
 |---|---|---|
 | 1. Plain agent | `async run(text) -> str` | `AgentRunner` wraps it: timeout, history, cancellation |
-| 2. Shallow workflow | `on_user_turn(text)` | streaming + session actions; end-of-turn cancellation only |
-| 3. Deep workflow | `on_user_turn(text, *, recorder, cancel_token)` | mid-turn barge-in, journaled tool calls |
+| 2. Shallow workflow | `on_user_turn(text)` | streaming + session actions; session cancels output, state stays opaque unless you add a hook |
+| 3. Deep workflow | `on_user_turn(text, *, recorder, cancel_token)` | cooperative upstream cancellation, journaled internals, state hooks |
 | 4. Full bridge | a `BridgeTemplate` subclass | custom event grammar, framework state snapshots, atomic interruption mutations |
 
 This chapter's script lives on rung 3. The top rung is for when you
@@ -644,9 +704,11 @@ does not leak the prior list.
 
 1. Change `on_user_turn` to `async def on_user_turn(self, text)`
    — drop `recorder` / `cancel_token`. You just demoted to shallow
-   mode. Run the script and try to interrupt the bot mid-sentence.
-   What do you see in the journal? (Hint: grep for
-   `shallow_mode_downgrade`.)
+   mode. Temporarily comment out `apply_interruption` as well so you
+   exercise the default shallow contract, then interrupt the bot
+   mid-sentence. What stops, and what can no longer be reconciled?
+   (Hint: inspect `assistant_interruption_notified` and its `notified`
+   field.)
 2. Add a `CustomAction` and a 10-line executor that prints it.
    Trigger it from the workflow. How does the journal record the
    action's lifecycle?

@@ -51,6 +51,7 @@ from easycat import (
 )
 from easycat.cancel import CancelToken
 from easycat.integrations.agents import GenericWorkflowBridge
+from easycat.integrations.agents.base import AgentRecorder, CancellationMode
 from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
 MODEL = "gpt-4o-mini"
@@ -80,7 +81,8 @@ class MyWorkflow:
     ``on_user_turn`` names a ``recorder`` parameter, the bridge runs
     us in deep mode and wires ``cancel_token`` through. We don't
     actually need the recorder here (we aren't journalling tool
-    calls), but naming it is the switch.
+    calls), but naming it is the switch. The history hooks below
+    keep our private message list aligned with what the caller heard.
     """
 
     def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
@@ -101,7 +103,7 @@ class MyWorkflow:
         self,
         text: str,
         *,
-        recorder,  # AgentRecorder — unused here, but names the deep mode switch
+        recorder: AgentRecorder,  # unused here, but names the deep mode switch
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[str]:
         self._history.append({"role": "user", "content": text})
@@ -119,16 +121,38 @@ class MyWorkflow:
             model=MODEL, messages=self._history, stream=True
         )
         full = ""
-        async for chunk in stream:
-            if cancel_token is not None and cancel_token.is_cancelled:
-                break
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            full += delta
-            yield delta  # the bridge wraps each chunk as a text_delta event
-        if full:
-            self._history.append({"role": "assistant", "content": full})
+        try:
+            async with stream as response_stream:
+                async for chunk in response_stream:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        break
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full += delta
+                    yield delta  # the bridge wraps each chunk as a text_delta event
+        finally:
+            # BridgeTemplate closes this generator on barge-in. Commit the
+            # delivered prefix before apply_interruption rewrites it to what
+            # the caller actually heard.
+            if full:
+                self._history.append({"role": "assistant", "content": full})
+
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
+        """Rewrite private history to the portion the caller actually heard."""
+        suffix = "..." if delivered_text and mode is CancellationMode.IMMEDIATE_STOP else ""
+        self.replace_last_assistant_text(f"{delivered_text}{suffix}")
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        """Let interruption and Markdown cleanup update private history."""
+        for message in reversed(self._history):
+            if message["role"] == "assistant":
+                message["content"] = text
+                return
+            if message["role"] == "user":
+                # No assistant output was generated for this turn. Do not
+                # rewrite the previous turn's already-committed response.
+                return
 
 
 async def main() -> None:
