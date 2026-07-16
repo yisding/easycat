@@ -1,5 +1,9 @@
 # Chapter 7 — Tools, Mid-stream
 
+<!-- BEGIN auto:navigation -->
+**Progress: 8 of 16** · [← Chapter 6](../06-streaming-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 8 →](../08-smart-turn/)
+<!-- END auto:navigation -->
+
 > The agent pauses to fetch something. The user hears silence — or
 > hears "let me check that for you." That choice is the whole
 > chapter.

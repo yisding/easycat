@@ -1,5 +1,9 @@
 # Chapter 10 — Cleaning the Signal
 
+<!-- BEGIN auto:navigation -->
+**Progress: 11 of 16** · [← Chapter 9](../09-interruption/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 11 →](../11-journal/)
+<!-- END auto:navigation -->
+
 > Two problems often confused as one. **Noise reduction** removes
 > uncorrelated background sound (fan, keyboard, baby).
 > **Echo cancellation** removes the bot's own voice coming back
