@@ -64,6 +64,39 @@ class ControlledTTS:
         pass
 
 
+class FirstEventTTS:
+    """Expose when the provider reaches its first event and is finalized."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.finalized = asyncio.Event()
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        try:
+            self.started.set()
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+        finally:
+            self.finalized.set()
+
+    async def cancel(self) -> None:
+        pass
+
+
+class MarkerFirstTTS:
+    """Yield a marker before audio to verify the barrier covers all events."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.started.set()
+        yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": "hello"}])
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+    async def cancel(self) -> None:
+        pass
+
+
 class FailingTTS:
     """TTS that raises mid-stream."""
 
@@ -128,6 +161,30 @@ async def test_synthesize_queues_audio():
 
 
 @pytest.mark.asyncio
+async def test_synthesize_offers_only_first_audio_to_direct_sender():
+    event_bus = EventBus()
+    queue = BoundedAudioQueue(max_size=100, policy=DropPolicy.DROP_OLDEST, name="test")
+    direct: list[AudioChunk] = []
+
+    async def _send_direct(chunk: AudioChunk) -> bool:
+        direct.append(chunk)
+        return True
+
+    synth = TTSSynthesizer(
+        tts=FakeTTS(chunks=3),
+        event_bus=event_bus,
+        outbound_queue=queue,
+        direct_first_audio=_send_direct,
+    )
+
+    result = await synth.synthesize(TTSInput("hello"), None)
+
+    assert result.audio_produced
+    assert len(direct) == 1
+    assert queue.qsize() == 2
+
+
+@pytest.mark.asyncio
 async def test_synthesize_emits_markers():
     synth, event_bus, _ = _make_synth(tts=MarkerTTS())
     markers: list[TTSMarkers] = []
@@ -162,6 +219,73 @@ async def test_synthesize_no_audio_returns_false():
     result = await synth.synthesize(TTSInput("hello"), None)
     assert not result.audio_produced
     assert result.first_audio_time is None
+
+
+@pytest.mark.asyncio
+async def test_start_barrier_starts_provider_without_releasing_audio():
+    tts = FirstEventTTS()
+    synth, event_bus, queue = _make_synth(tts=tts)
+    barrier = asyncio.Event()
+    received: list[TTSAudio] = []
+    event_bus.subscribe(TTSAudio, received.append)
+
+    task = asyncio.create_task(synth.synthesize(TTSInput("hello"), None, start_barrier=barrier))
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+
+    assert received == []
+    assert queue.empty()
+    assert not task.done()
+
+    barrier.set()
+    result = await task
+    assert result.audio_produced is True
+    assert len(received) == 1
+    assert not queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_start_barrier_holds_marker_events_too():
+    tts = MarkerFirstTTS()
+    synth, event_bus, _ = _make_synth(tts=tts)
+    barrier = asyncio.Event()
+    markers: list[TTSMarkers] = []
+    audio: list[TTSAudio] = []
+    event_bus.subscribe(TTSMarkers, markers.append)
+    event_bus.subscribe(TTSAudio, audio.append)
+
+    task = asyncio.create_task(synth.synthesize(TTSInput("hello"), None, start_barrier=barrier))
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+    assert markers == []
+    assert audio == []
+
+    barrier.set()
+    await task
+    assert len(markers) == 1
+    assert len(audio) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_barrier_rechecks_cancel_before_releasing_first_event():
+    token = CancelToken()
+    tts = FirstEventTTS()
+    synth, event_bus, queue = _make_synth(tts=tts)
+    barrier = asyncio.Event()
+    received: list[TTSAudio] = []
+    event_bus.subscribe(TTSAudio, received.append)
+
+    task = asyncio.create_task(synth.synthesize(TTSInput("hello"), token, start_barrier=barrier))
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    token.cancel()
+    barrier.set()
+
+    result = await task
+    assert result.completed is False
+    assert result.audio_produced is False
+    assert received == []
+    assert queue.empty()
+    assert tts.finalized.is_set()
 
 
 # ── Cancellation tests ────────────────────────────────────────────

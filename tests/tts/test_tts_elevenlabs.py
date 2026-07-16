@@ -130,6 +130,14 @@ class TestElevenLabsTTSConfig:
         assert config.similarity_boost == 0.75
         assert config.output_format == "pcm_24000"
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
+        assert config.auto_mode is True
+        assert config.warmup_timeout_s == 5.0
+
+    @pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
+    def test_rejects_invalid_warmup_timeout(self, timeout):
+        with pytest.raises(ValueError, match="warmup_timeout_s"):
+            ElevenLabsTTSConfig(api_key="key", warmup_timeout_s=timeout)
 
     def test_websocket_mode(self):
         config = ElevenLabsTTSConfig(
@@ -137,6 +145,22 @@ class TestElevenLabsTTSConfig:
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
         )
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
+
+    def test_http_mode_disables_persistence_by_default(self):
+        config = ElevenLabsTTSConfig(
+            api_key="key",
+            stream_mode=ElevenLabsStreamMode.HTTP,
+        )
+        assert config.persistent_ws is False
+
+    def test_websocket_one_shot_can_be_requested_explicitly(self):
+        config = ElevenLabsTTSConfig(
+            api_key="key",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
+        )
+        assert config.persistent_ws is False
 
     def test_custom_values(self):
         config = ElevenLabsTTSConfig(
@@ -163,6 +187,7 @@ class TestElevenLabsTTSConfig:
             ElevenLabsTTSConfig(api_key="key", stream_mode=ElevenLabsStreamMode.HTTP)
         )
         assert http.version_info()["sdk_version"] == get_package_version("httpx")
+        assert http._config.persistent_ws is False
 
 
 class TestElevenLabsTTSValidation:
@@ -197,6 +222,50 @@ class TestElevenLabsTTSHTTP:
             **kwargs,
         )
         return ElevenLabsTTS(config)
+
+    async def test_warmup_primes_configured_voice_endpoint(self):
+        provider = self._make_provider(voice_id="voice-latency")
+        client = provider._get_http_client()
+        response = MagicMock()
+        response.aclose = AsyncMock()
+
+        with patch.object(
+            client,
+            "get",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as get:
+            await provider.warmup()
+
+        get.assert_awaited_once_with("/voices/voice-latency")
+        response.aclose.assert_awaited_once()
+        await provider.close()
+
+    async def test_http_warmup_failure_is_best_effort(self):
+        provider = self._make_provider()
+        client = provider._get_http_client()
+
+        with patch.object(
+            client,
+            "get",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connect boom"),
+        ):
+            await provider.warmup()
+
+        await provider.close()
+
+    async def test_http_warmup_timeout_is_best_effort(self):
+        provider = self._make_provider(warmup_timeout_s=0.01)
+        client = provider._get_http_client()
+
+        async def _hang(_url: str):
+            await asyncio.Event().wait()
+
+        with patch.object(client, "get", new_callable=AsyncMock, side_effect=_hang):
+            await asyncio.wait_for(provider.warmup(), timeout=0.1)
+
+        await provider.close()
 
     async def test_synthesize_http_yields_audio(self):
         provider = self._make_provider()
@@ -313,6 +382,7 @@ class TestElevenLabsTTSHTTP:
 
 class TestElevenLabsTTSWebSocket:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
+        kwargs.setdefault("persistent_ws", False)
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
@@ -368,6 +438,7 @@ class TestElevenLabsTTSWebSocket:
 
         url = mock_ctor.call_args.kwargs["url"]
         assert "apply_text_normalization=on" in url
+        assert "auto_mode=true" in url
 
     async def test_synthesize_ws_sends_init_text_and_eos(self):
         provider = self._make_provider()
@@ -608,12 +679,12 @@ class FakePersistentWS:
             raise RuntimeError("send failed")
         self.sent.append(message)
         msg = json.loads(message)
-        # Respond to the EOS frame (empty text) with audio + isFinal for ctx.
+        # The multi-context endpoint uses snake_case ``is_final``.
         if msg.get("text") == "" and "context_id" in msg:
             ctx_id = msg["context_id"]
             audio = base64.b64encode(_pcm16_bytes(120)).decode()
             await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
-            await self._queue.put(json.dumps({"isFinal": True, "contextId": ctx_id}))
+            await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
 
     async def recv_iter(self):
         while True:
@@ -632,7 +703,6 @@ class TestElevenLabsPersistent:
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
-            persistent_ws=True,
             **kwargs,
         )
         return ElevenLabsTTS(config)
@@ -650,6 +720,7 @@ class TestElevenLabsPersistent:
         url = provider._multi_stream_url()
         assert "/multi-stream-input?" in url
         assert "inactivity_timeout=25" in url
+        assert "auto_mode=true" in url
 
     def test_persistent_rejects_out_of_range_inactivity_timeout(self):
         with pytest.raises(ValueError, match=r"inactivity_timeout must be in \[1, 180\]"):
@@ -670,6 +741,88 @@ class TestElevenLabsPersistent:
                     pass
 
         assert not provider.is_active
+        await provider.close()
+
+    async def test_warmup_connects_once_and_first_synthesis_reuses_socket(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_multi_ws", factory):
+            await provider.warmup()
+            assert factory.call_count == 1
+            assert provider._mgr is not None and provider._mgr._contexts == {}
+            async for _ in provider.synthesize("first"):
+                pass
+
+        assert factory.call_count == 1
+        await provider.close()
+
+    async def test_persistent_terminates_on_snake_case_is_final(self):
+        # The /multi-stream-input endpoint marks completion with ``is_final``
+        # (snake_case), unlike the one-shot ``isFinal``. The shared decoder must
+        # accept it so the persistent turn completes instead of hanging until
+        # the socket closes.
+        provider = self._make_provider()
+
+        class SnakeCaseFinalWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") == "" and "context_id" in msg:
+                    ctx_id = msg["context_id"]
+                    audio = base64.b64encode(_pcm16_bytes(120)).decode()
+                    await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
+                    await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
+
+        events = []
+
+        async def _collect(agen):
+            async for event in agen:
+                events.append(event)
+
+        with patch.object(provider, "_build_multi_ws", return_value=SnakeCaseFinalWS()):
+            await asyncio.wait_for(_collect(provider.synthesize("hi")), timeout=2.0)
+
+        assert events  # audio decoded and the turn completed without hanging
+        await provider.close()
+
+    async def test_warmup_failure_is_retried_by_synthesis(self):
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        failed = FailingConnectWS()
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[failed, working])
+        with patch.object(provider, "_build_multi_ws", factory):
+            await provider.warmup()
+            async for _ in provider.synthesize("retry"):
+                pass
+
+        assert factory.call_count == 2
+        assert failed.closed
+        await provider.close()
+
+    async def test_unlimited_retry_warmup_times_out_before_synthesis_retry(self):
+        provider = self._make_provider(reconnect_max_retries=-1, warmup_timeout_s=0.01)
+
+        class HangingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                await asyncio.Event().wait()
+
+        hanging = HangingConnectWS()
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[hanging, working])
+
+        with patch.object(provider, "_build_multi_ws", factory):
+            await asyncio.wait_for(provider.warmup(), timeout=0.1)
+            await _drain(provider.synthesize("retry after warmup timeout"))
+
+        assert factory.call_count == 2
+        assert hanging.closed
         await provider.close()
 
     async def test_persistent_context_error_frame_surfaced(self):
@@ -765,6 +918,10 @@ class TestElevenLabsPersistent:
         }
         # Two distinct contexts across the two utterances.
         assert len(ctx_ids) == 2
+        close_frames = [
+            json.loads(s) for s in fake.sent if json.loads(s).get("close_context") is True
+        ]
+        assert len(close_frames) == 2
         await provider.close()
 
     async def test_synthesize_yields_audio(self):
@@ -828,14 +985,14 @@ class TestElevenLabsTTSGeneral:
         assert not provider.is_active
 
     async def test_stop_closes_websocket(self):
-        """A graceful stop closes the synthesis WS (default mode).
+        """A graceful stop closes an explicitly one-shot synthesis WS.
 
-        Matches Cartesia/Deepgram ``stop()`` so a graceful stop between turns
-        does not leave the socket lingering until the next cancel()/close().
+        Persistent mode keeps its manager-owned socket warm instead.
         """
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
         )
         provider = ElevenLabsTTS(config)
         provider._active = True

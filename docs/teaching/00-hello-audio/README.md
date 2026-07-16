@@ -1,5 +1,9 @@
 # Chapter 0 — Hello, Audio
 
+<!-- BEGIN auto:navigation -->
+**Progress: 1 of 16** · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 1 →](../01-echo/)
+<!-- END auto:navigation -->
+
 > Record, play, and *understand* raw PCM. No framework. Just bytes
 > and sample rates.
 
