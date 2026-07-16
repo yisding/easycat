@@ -140,6 +140,10 @@ blocks still release ownership. On process shutdown, the helper closes the
 listener, waits for connection handlers, and calls `stop_all()` for anything
 still registered.
 
+The offline supervisor mirrors that guarantee: startup rollback restores its
+bookkeeping before best-effort forced teardown, and disconnect accounting runs
+in `finally` even when session shutdown raises or is cancelled.
+
 ## Use `VoiceServer` for one production process policy
 
 The standalone helper is a focused WebSocket entry point. `VoiceServer`

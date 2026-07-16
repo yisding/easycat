@@ -64,14 +64,31 @@ class LocalSupervisor:
         session = DemoSession(self.created, self.events)
         self.sessions[key] = session
         self.gate.track(key)
-        await session.start()
+        try:
+            await session.start()
+        except BaseException:
+            # Startup may have allocated partial resources. Restore admission
+            # bookkeeping synchronously before attempting best-effort teardown,
+            # so even cancellation cannot strand the only capacity slot.
+            self.sessions.pop(key, None)
+            self.gate.untrack(key)
+            self.gate.release()
+            try:
+                await session.stop(force=True)
+            except BaseException:
+                pass
+            raise
         return "accepted", session
 
     async def disconnect(self, key: str) -> None:
         session = self.sessions.pop(key)
-        await session.stop()
-        self.gate.untrack(key)
-        self.gate.release()
+        try:
+            await session.stop()
+        finally:
+            # Admission bookkeeping cannot depend on provider/session teardown
+            # succeeding; cancellation and stop failures must free the slot.
+            self.gate.untrack(key)
+            self.gate.release()
 
     async def shutdown(self) -> None:
         self.gate.start_draining()

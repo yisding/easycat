@@ -79,8 +79,9 @@ user to place an outbound call.
 ## Preserve call identity across callbacks and media
 
 `CallSid` identifies the Twilio call. `StreamSid` identifies one Media Stream
-attached to it. Preserve both in logs and low-cardinality correlation fields,
-but use `CallSid` for call lifecycle and status routing.
+attached to it. Preserve both in structured correlation fields, but never use
+these high-cardinality identifiers as metric labels. Use `CallSid` for call
+lifecycle and status routing.
 
 `twilio_stream_parameters_from_form` copies reviewed caller fields such as
 `From`, `To`, and locale metadata into `<Parameter>` children. Twilio forwards
