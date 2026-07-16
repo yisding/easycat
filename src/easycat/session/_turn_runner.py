@@ -455,7 +455,12 @@ class TurnRunner:
             return
 
         try:
-            await self._emit(AgentRequestStarted())
+            await self._emit(
+                AgentRequestStarted(
+                    session_id=self._session_id,
+                    turn_id=turn.id if turn is not None else None,
+                )
+            )
             prepared_response = await self._take_preemptive_response(transcript, turn)
             # The await above spans the remaining model latency. Speech may resume
             # during it, cancelling/replacing this turn. Never fall through to the

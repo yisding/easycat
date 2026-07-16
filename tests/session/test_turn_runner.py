@@ -23,6 +23,7 @@ from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
     AgentFinal,
+    AgentRequestStarted,
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
@@ -343,7 +344,9 @@ async def test_handle_end_of_speech_empty_transcript_resets() -> None:
 async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
     """A non-empty transcript should produce AgentFinal via the streaming path."""
     session = Session(_config())
+    started: list[AgentRequestStarted] = []
     finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentRequestStarted, lambda e: started.append(e))
     session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
 
     runner = session._turn_runner
@@ -351,6 +354,9 @@ async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
     session._turn.append_stt_segment("hello world")
     await runner.handle_end_of_speech(turn=session._turn)
 
+    assert len(started) == 1
+    assert started[0].session_id == session.session_id
+    assert started[0].turn_id == "turn-x"
     assert len(finals) == 1
     assert finals[0].text == "Reply."
 
