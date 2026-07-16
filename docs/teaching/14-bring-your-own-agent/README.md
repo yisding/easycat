@@ -1,5 +1,9 @@
 # Chapter 14 — Bring your own agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 15 of 16** · [← Chapter 13](../13-swap-providers-and-transports/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 15 →](../15-operate-in-production/)
+<!-- END auto:navigation -->
+
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
 > the OpenAI Agents SDK. `create_session` silently wrapped it in an
 > `OpenAIAgentsBridge`. In this chapter we drop the framework
@@ -11,6 +15,11 @@
 - [Chapter 13.](../13-swap-providers-and-transports/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -101,13 +110,14 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,21 +29,33 @@
+@@ -40,22 +29,34 @@
 
  from __future__ import annotations
 
 -import argparse
  import asyncio
  import os
+ import shlex
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
@@ -137,7 +147,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,85 +75,140 @@
+@@ -75,85 +76,153 @@
      )
 
 
@@ -149,9 +159,23 @@
 -    return Agent(
 -        name="assistant",
 -        instructions="You are a helpful voice assistant. Keep replies brief.",
--    )
--
--
++def pronunciation_command(path: Path) -> str:
++    """Inspect the scheduler's provider-ready pronunciation payloads."""
++    return shlex.join(
++        [
++            "uv",
++            "run",
++            "easycat",
++            "journal",
++            "grep",
++            str(_display_path(path)),
++            "--query",
++            "tts_payload_prepared",
++            "--json",
++        ]
+     )
+
+
 -def transport_config(name: str):
 -    if name == "local":
 -        return LocalTransportConfig()
@@ -177,11 +201,6 @@
 -
 -    All values are string shortcuts — ``EasyConfig.__post_init__``
 -    parses them into concrete config objects via the factory.
-+def pronunciation_command(path: Path) -> str:
-+    """Inspect the scheduler's provider-ready pronunciation payloads."""
-+    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
-+
-+
 +def build_output_processors() -> list[LLMOutputProcessor]:
 +    """Build the chapter's pronunciation stack from the public factory."""
 +    return [
@@ -248,14 +267,15 @@
 +        )
 +        full = ""
 +        try:
-+            async for chunk in stream:
-+                if cancel_token is not None and cancel_token.is_cancelled:
-+                    break
-+                delta = chunk.choices[0].delta.content or ""
-+                if not delta:
-+                    continue
-+                full += delta
-+                yield delta  # the bridge wraps each chunk as a text_delta event
++            async with stream as response_stream:
++                async for chunk in response_stream:
++                    if cancel_token is not None and cancel_token.is_cancelled:
++                        break
++                    delta = chunk.choices[0].delta.content or ""
++                    if not delta:
++                        continue
++                    full += delta
++                    yield delta  # the bridge wraps each chunk as a text_delta event
 +        finally:
 +            # BridgeTemplate closes this generator on barge-in. Commit the
 +            # delivered prefix before apply_interruption rewrites it to what
@@ -339,7 +359,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -160,9 +216,14 @@
+@@ -161,9 +230,14 @@
              print("Measure this production-shaped bundle directly:")
              print(f"  {human_command}")
              print(f"  {json_command}")
@@ -483,14 +503,15 @@ class MyWorkflow:
         )
         full = ""
         try:
-            async for chunk in stream:
-                if cancel_token is not None and cancel_token.is_cancelled:
-                    break
-                delta = chunk.choices[0].delta.content or ""
-                if not delta:
-                    continue
-                full += delta
-                yield delta  # the bridge wraps each chunk as a text_delta event
+            async with stream as response_stream:
+                async for chunk in response_stream:
+                    if cancel_token is not None and cancel_token.is_cancelled:
+                        break
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full += delta
+                    yield delta  # the bridge wraps each chunk as a text_delta event
         finally:
             # BridgeTemplate closes this generator on barge-in. Commit the
             # delivered prefix before apply_interruption rewrites it to what
