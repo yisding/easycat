@@ -477,6 +477,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature session control",
+        "path": "docs/using-easycat/06-session-control/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Own session lifecycle, events, text turns, resets, and teardown.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/06-session-control/main.py text",
+            "uv run python docs/using-easycat/06-session-control/main.py voice",
+            "uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

@@ -386,6 +386,51 @@ def test_agent_bridges_matrix_runs_without_framework_sdks_or_credentials() -> No
     assert "PlainAgent -> unchanged; Session adds AgentRunner" in completed.stdout
 
 
+def test_session_control_chapter_uses_public_lifecycle_and_event_surfaces() -> None:
+    chapter = FEATURE_LADDER / "06-session-control"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "EasyConfig.mic",
+        "create_session",
+        "create_text_session",
+        "session.on(",
+        "session.subscribe_event(",
+        "session.send_text(",
+        "session.reset_state()",
+        "session.wait_closed()",
+        "run_session",
+    ):
+        assert surface in script
+    for concept in (
+        "Use one public teardown verb",
+        "Choose the event subscription surface",
+        "Text turns use the real agent path",
+        "Reset a conversation without replacing the session",
+        "Stopped does not mean uninspectable",
+        "`stop(force=True)`",
+    ):
+        assert concept in readme
+
+
+def test_session_control_text_lifecycle_runs_without_credentials() -> None:
+    script = FEATURE_LADDER / "06-session-control" / "main.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "text"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")},
+    )
+
+    assert "Reply 1: Workflow turn 1: first message" in completed.stdout
+    assert "Reply 2: Workflow turn 2: second message" in completed.stdout
+    assert "Reply after reset: Workflow turn 1: after reset" in completed.stdout
+    assert "Post-stop guard: Session has been stopped" in completed.stdout
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -456,4 +501,9 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     bridges = entries["docs/using-easycat/05-agent-bridges/"]
     assert (
         "uv run python docs/using-easycat/05-agent-bridges/main.py matrix" in bridges["commands"]
+    )
+    session_control = entries["docs/using-easycat/06-session-control/"]
+    assert (
+        "uv run python docs/using-easycat/06-session-control/main.py text"
+        in session_control["commands"]
     )

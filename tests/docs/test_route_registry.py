@@ -37,6 +37,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "using-easycat/03-conversation-controls/",
         "using-easycat/04-tools-actions/",
         "using-easycat/05-agent-bridges/",
+        "using-easycat/06-session-control/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -139,6 +140,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Feature conversation controls",
         "Feature tools and actions",
         "Feature agent bridges",
+        "Feature session control",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -295,6 +297,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     )
     assert entries["docs/using-easycat/05-agent-bridges/"]["url"].endswith(
         "/tree/main/docs/using-easycat/05-agent-bridges"
+    )
+    assert entries["docs/using-easycat/06-session-control/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/06-session-control"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]
