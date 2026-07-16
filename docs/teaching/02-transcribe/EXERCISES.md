@@ -1,7 +1,7 @@
 # Chapter 2 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:navigation -->
 
 ## 1. Find the moment STT committed to the wrong guess
@@ -150,24 +150,28 @@ uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 ```
 
 Before reading the JSON, predict which cleanup events appear after a transport
-connect failure, an STT start failure, and an audio-feed failure. Then replace
-the `TaskGroup` in a scratch copy of `streaming.py` with its old `gather()`
-call. Which ordering guarantee disappears?
+connect failure, a failure after microphone startup, an STT start failure, and
+an audio-feed failure. Then replace the `TaskGroup` in a scratch copy of
+`streaming.py` with its old `gather()` call. Which ordering guarantee
+disappears?
 
 **Hints**
 
 1. The transport and provider objects exist before `connect()` returns, so
    their final cleanup is registered before that fallible await.
-2. `end_stream()` is registered only after `start_stream()` succeeds. A start
+2. In `partial_connect_failure`, the input stream starts before output startup
+   fails. `transport.input.stop` proves the partially acquired device is still
+   released.
+3. `end_stream()` is registered only after `start_stream()` succeeds. A start
    failure must close the provider and disconnect the transport, but it did
    not open a logical stream that needs ending.
-3. In the feed failure, `TaskGroup` cancels and joins the blocked event
+4. In the feed failure, `TaskGroup` cancels and joins the blocked event
    consumer first. `stt.events.cancelled` must therefore precede every
    resource-cleanup event.
-4. The propagated feed error is an `ExceptionGroup` because `TaskGroup`
+5. The propagated feed error is an `ExceptionGroup` because `TaskGroup`
    preserves concurrent failures. The probe unwraps its first root message for
    compact JSON; production code may handle groups with `except*`.
-5. `AsyncExitStack` and `TaskGroup` solve different problems: resource
+6. `AsyncExitStack` and `TaskGroup` solve different problems: resource
    ownership versus task ownership. A correct streaming scope needs both.
 
 ## Self-check

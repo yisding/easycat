@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from easycat.validation import redaction as redaction_module
@@ -109,6 +109,14 @@ def test_secret_key_classification_cache_is_bounded() -> None:
         redaction_module._is_secret_value_key.cache_clear()
 
 
+# Redaction placeholders emitted by the policy (``[REDACTED_SECRET]``,
+# ``[REDACTED_URL]``, ...). A generated secret can be a substring of a
+# placeholder (e.g. the literal ``"REDACTED"``), so "secret not in output"
+# is falsifiable by construction; the real guarantee is that no occurrence
+# of the secret survives *outside* the placeholders themselves.
+_PLACEHOLDER_RE = re.compile(r"\[REDACTED_[A-Z_]+\]")
+
+
 @given(
     prefix=st.text(max_size=20),
     secret=st.text(
@@ -118,11 +126,16 @@ def test_secret_key_classification_cache_is_bounded() -> None:
     ),
     suffix=st.text(max_size=20),
 )
+# Regression: a secret that is a substring of the placeholder must count as
+# removed once it has been replaced by ``[REDACTED_SECRET]``.
+@example(prefix="", secret="REDACTED", suffix="")
 def test_runtime_secret_is_removed(prefix: str, secret: str, suffix: str) -> None:
     haystack = f"{prefix} {secret} {suffix}"
     redacted = redact_runtime_secrets(haystack, [secret])
-    # The explicit secret literal must not survive anywhere in the output.
-    assert secret not in redacted
+    # The explicit secret literal must not survive anywhere in the output;
+    # strip the placeholders first so a secret spelling out a placeholder
+    # fragment does not read its own replacement as a leak.
+    assert secret not in _PLACEHOLDER_RE.sub("", redacted)
 
 
 @given(value=_REDACTION_ALPHABET)
