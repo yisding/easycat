@@ -45,6 +45,15 @@
 
 ## The three scripts
 
+Start with the chapter's canonical entry point. It delegates to version A,
+the deliberately limited baseline:
+
+```bash
+uv run python docs/teaching/09-interruption/main.py
+```
+
+Then run all three named versions in order:
+
 ```bash
 uv run python docs/teaching/09-interruption/ignore.py    # A: answering-machine
 uv run python docs/teaching/09-interruption/cancel.py    # B: cuts off mid-word

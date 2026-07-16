@@ -308,6 +308,23 @@ def test_teaching_chapter_readmes_include_runnable_commands() -> None:
     assert not missing, "Teaching chapter READMEs missing runnable commands: " + ", ".join(missing)
 
 
+def test_teaching_main_entrypoints_are_documented_in_chapter_readmes() -> None:
+    missing: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        entrypoint = chapter_dir / "main.py"
+        if not entrypoint.exists():
+            continue
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        command = f"uv run python docs/teaching/{chapter_dir.name}/main.py"
+        if command not in readme:
+            missing.append(chapter_dir.name)
+
+    assert not missing, "Teaching main.py commands missing from chapter READMEs: " + ", ".join(
+        missing
+    )
+
+
 def test_teaching_script_run_commands_are_documented_in_chapter_docs() -> None:
     stale: list[str] = []
 
