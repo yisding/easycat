@@ -63,8 +63,9 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
 2. WebRTC receives and sends 48 kHz media frames, but its default pipeline
    target is 16 kHz. Those are two boundaries of one transport, not a
    contradiction.
-3. OpenAI TTS defaults to 24 kHz. A WebRTC session resamples that output to
-   48 kHz for media; a Local session already has a matching 24 kHz target.
+3. OpenAI returns provider-native 24 kHz PCM. A default WebRTC session first
+   normalizes that to its resolved 16 kHz TTS output, then resamples to 48 kHz
+   media; a Local session already has a matching 24 kHz target.
 4. Twilio's wire is 8 kHz μ-law while EasyCat's default internal pipeline
    target is 16 kHz PCM. Decoding and upsampling make the representation
    compatible but do not restore telephone-band frequencies.

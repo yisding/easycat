@@ -92,7 +92,8 @@ resample, and a single turn can cross several rates in each direction:
 
 ```text
 WebRTC peer 48 kHz ──resample──► pipeline 16 kHz ──► Deepgram STT 16 kHz
-OpenAI TTS 24 kHz  ──resample──► WebRTC media 48 kHz ──Opus──► peer
+OpenAI provider-native 24 kHz ──resample──► resolved TTS output 16 kHz
+  ──resample──► WebRTC media 48 kHz ──Opus──► peer
 ```
 
 Run the provider-free catalog to read the maintained runtime defaults

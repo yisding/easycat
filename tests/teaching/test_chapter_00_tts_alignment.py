@@ -80,3 +80,7 @@ def test_lesson_distinguishes_config_default_from_resolved_output() -> None:
     assert "auto_align_tts_output_to_transport=False" in lesson
     assert "24 kHz TTS rows" in lesson and "config defaults" in lesson
     assert "OpenAI returns fixed 24 kHz PCM" in lesson
+    assert "provider-native 24 kHz" in lesson
+    assert "resolved TTS output 16 kHz" in lesson
+    assert "WebRTC media 48 kHz" in lesson
+    assert "OpenAI TTS 24 kHz ──resample──► WebRTC media 48 kHz" not in lesson
