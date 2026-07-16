@@ -136,6 +136,8 @@ def test_preroll_lesson_separates_frame_contract_from_live_observations() -> Non
     assert '"Hello" becomes "ello."' not in readme
     assert 'your STT hears "ello"' not in readme
     assert 'confidently transcribes "Elo."' not in readme
+    assert "to hear the start-of-utterance truncation" not in readme
+    assert "start-of-utterance will be clipped" not in readme
     assert "Pre-roll does not change the stop decision" in readme
     assert "whether that changes a transcript is provider-dependent" in readme
     assert "Transcript and confidence changes are observations" in exercises

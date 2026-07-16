@@ -48,8 +48,8 @@
  
 -Run it and break it — "The capital of France is... uh... Paris" is
 -the canonical killer. Chapter 4 replaces this with a real VAD.
-+Run with ``--no-preroll`` to hear the start-of-utterance truncation
-+this chapter was designed to fix.
++Run with ``--no-preroll`` to compare a stream that omits cached audio
++received before VAD-on.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -195,7 +195,7 @@
 +    parser.add_argument(
 +        "--no-preroll",
 +        action="store_true",
-+        help="Disable pre-roll; start-of-utterance will be clipped.",
++        help="Disable pre-roll; omit cached frames received before VAD-on.",
 +    )
 +    args = parser.parse_args()
 +
