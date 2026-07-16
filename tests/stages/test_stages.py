@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
@@ -658,6 +659,75 @@ class TestStageExecuteRecording:
         stage = AgentStage(_StubAgent())
         result = await stage.execute("hello", ctx, turn)
         assert result == "reply:hello"
+
+    async def test_agent_stage_skips_journal_metadata_without_journal(self, monkeypatch):
+        """The live agent path avoids replay-only work when journaling is disabled."""
+        stage = AgentStage(_StubAgent())
+        monkeypatch.setattr(
+            stage,
+            "snapshot_state",
+            lambda: pytest.fail("snapshot_state should not run without a journal"),
+        )
+        monkeypatch.setattr(
+            "easycat.stages.agent.journal_append_event",
+            lambda *args, **kwargs: pytest.fail("journal_append_event should not run"),
+        )
+
+        result = await stage.execute("hello", _make_ctx(), _make_turn())
+
+        assert result == "reply:hello"
+
+    @pytest.mark.parametrize(
+        ("stage", "input", "expected"),
+        [
+            (TTSStage(_StubTTS()), "hello", "audio:hello"),
+            (TransportStage(_StubTransport()), b"audio", True),
+        ],
+    )
+    async def test_tts_output_stages_skip_snapshots_without_capture(
+        self, monkeypatch, stage, input, expected
+    ):
+        """The live path avoids replay state work when both capture sinks are absent."""
+        monkeypatch.setattr(
+            stage,
+            "snapshot_state",
+            lambda: pytest.fail("snapshot_state should not run without capture"),
+        )
+
+        result = await stage.execute(input, _make_ctx(), _make_turn())
+
+        assert result == expected
+
+    async def test_streaming_tts_skips_frame_inspection_without_capture(self, monkeypatch):
+        class _OpaqueEvent:
+            @property
+            def audio(self):
+                pytest.fail("audio replay metadata should not be inspected without capture")
+
+        class _StreamingTTS:
+            async def synthesize(self, payload):
+                _ = payload
+                yield _OpaqueEvent()
+
+        monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+        monkeypatch.setattr(observability, "_get_meter", lambda: None)
+        monkeypatch.setattr(
+            observability,
+            "span",
+            lambda *args, **kwargs: pytest.fail("unavailable tracing must be skipped"),
+        )
+        monkeypatch.setattr(
+            observability,
+            "record_histogram",
+            lambda *args, **kwargs: pytest.fail("unavailable metrics must be skipped"),
+        )
+
+        stage = TTSStage(_StreamingTTS())
+        stream = await stage.execute("hello", _make_ctx(), _make_turn())
+
+        assert isinstance(await anext(stream), _OpaqueEvent)
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
 
     def test_agent_stage_uses_contextual_null_recorder_without_capture(self):
         stage = AgentStage(

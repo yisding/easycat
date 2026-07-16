@@ -94,6 +94,24 @@ def _make_adapter(ws, **overrides) -> MultiContextAdapter:
 
 
 class TestMultiContextWSManager:
+    async def test_connect_warms_socket_without_opening_context(self):
+        ws = FakeMultiContextWS()
+        connect_calls = 0
+
+        def _connect_factory(_hook):
+            nonlocal connect_calls
+            connect_calls += 1
+            return ws
+
+        mgr = MultiContextWSManager(_make_adapter(ws, connect_factory=_connect_factory))
+        await mgr.connect()
+        await mgr.connect()
+
+        assert connect_calls == 1
+        assert mgr._ws is ws
+        assert mgr._contexts == {}
+        await mgr.aclose()
+
     async def test_fresh_uuid_per_open_context(self):
         ws = FakeMultiContextWS()
         mgr = MultiContextWSManager(_make_adapter(ws))
@@ -195,6 +213,42 @@ class TestMultiContextWSManager:
         assert mgr._ws is good
         await mgr.aclose()
 
+    async def test_concurrent_cold_callers_await_one_initial_connect(self):
+        class SlowConnectWS(FakeMultiContextWS):
+            def __init__(self) -> None:
+                super().__init__()
+                self.connect_calls = 0
+                self.connect_entered = asyncio.Event()
+                self.allow_connect = asyncio.Event()
+
+            async def connect(self) -> None:
+                self.connect_calls += 1
+                self.connect_entered.set()
+                await self.allow_connect.wait()
+
+        ws = SlowConnectWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+
+        warmup = asyncio.create_task(mgr.warmup())
+        await ws.connect_entered.wait()
+        first_context = asyncio.create_task(mgr.open_context())
+        second_context = asyncio.create_task(mgr.open_context())
+        await asyncio.sleep(0)
+
+        assert not first_context.done()
+        assert not second_context.done()
+        assert ws.connect_calls == 1
+
+        ws.allow_connect.set()
+        await warmup
+        ctx1 = await first_context
+        ctx2 = await second_context
+
+        assert ctx1 is not None
+        assert ctx2 is not None
+        assert ws.connect_calls == 1
+        await mgr.aclose()
+
     async def test_backpressure_delivers_done_under_full_queue(self):
         # maxsize=1 forces the reader to block on put when the consumer is slow;
         # every frame (incl. the terminal done) must still be delivered, never
@@ -283,9 +337,48 @@ class TestMultiContextWSManager:
         ws.sent.clear()
         await mgr._on_reconnect()
 
-        assert replayed == [armed.context_id]
+        assert replayed == []
         assert len(ws.sent) == 1
         assert json.loads(ws.sent[0])["context_id"] == armed.context_id
+        await armed.queue.put({"context_id": armed.context_id, "type": "chunk"})
+        frame = await anext(armed.frames())
+        assert frame["type"] == "chunk"
+        assert replayed == [armed.context_id]
+        await mgr.aclose()
+
+    async def test_reconnect_reset_waits_for_buffered_frames_under_backpressure(self):
+        ws = FakeMultiContextWS()
+        trace: list[str] = []
+        mgr = MultiContextWSManager(
+            _make_adapter(
+                ws,
+                on_context_replay=lambda _cid: trace.append("reset"),
+                context_queue_maxsize=1,
+            )
+        )
+        ctx = await mgr.open_context()
+        await mgr.send(ctx, [json.dumps({"context_id": ctx.context_id, "transcript": "hi"})])
+        ctx.queue.put_nowait({"context_id": ctx.context_id, "phase": "pre-drop"})
+
+        replay = asyncio.create_task(mgr._on_reconnect())
+        await asyncio.sleep(0)
+
+        assert not replay.done()
+        assert trace == []
+
+        frames = ctx.frames()
+        pre_drop = await anext(frames)
+        trace.append(pre_drop["phase"])
+        await replay
+
+        replayed_frame = asyncio.create_task(anext(frames))
+        await asyncio.sleep(0)
+        assert trace == ["pre-drop", "reset"]
+        await ctx.queue.put({"context_id": ctx.context_id, "phase": "replayed"})
+        replayed = await replayed_frame
+        trace.append(replayed["phase"])
+
+        assert trace == ["pre-drop", "reset", "replayed"]
         await mgr.aclose()
 
     async def test_cancel_context_sends_cancel_without_socket_close(self):
