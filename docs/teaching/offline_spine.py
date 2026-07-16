@@ -12,6 +12,7 @@ Run every checkpoint (captured output stays quiet unless one fails)::
 
 Replay only the cumulative spine through a completed chapter::
 
+    uv sync --extra quickstart --group dev
     uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
 
 The runner removes every ``*_API_KEY`` variable from child environments and
@@ -50,8 +51,17 @@ class Checkpoint:
     def command(self) -> str:
         return f"uv run python {self.path.as_posix()}"
 
+    @property
+    def setup_command(self) -> str:
+        extra = "local" if self.chapter <= 1 else "quickstart"
+        return f"uv sync --extra {extra} --group dev"
+
     def as_row(self) -> dict[str, object]:
-        return {**asdict(self), "command": self.command}
+        return {
+            **asdict(self),
+            "setup_command": self.setup_command,
+            "command": self.command,
+        }
 
 
 CHECKPOINTS = (
@@ -285,7 +295,8 @@ def main() -> None:
             return
         for row in rows:
             print(f"{row['chapter']:>2}  {row['concept']}")
-            print(f"    {row['command']}")
+            print(f"    Setup: {row['setup_command']}")
+            print(f"    Run: {row['command']}")
             print(f"    Look for: {row['evidence']}")
         return
 

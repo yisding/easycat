@@ -89,9 +89,11 @@ sync with the chapter's source code and ladder order:
 
       <!-- BEGIN auto:exercise-completion -->
       ---
-      Self-check complete? Replay the hardware-free spine through this chapter:
+      Self-check complete? Prepare the cumulative spine, then replay it through
+      this chapter:
 
       ```bash
+      uv sync --extra quickstart --group dev
       uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
       ```
 
@@ -350,8 +352,10 @@ def render_exercise_completion(chapter: Chapter) -> str:
     else:
         links.append("[Return to the teaching ladder](../)")
     return (
-        "---\nSelf-check complete? Replay the hardware-free spine through this chapter:\n\n"
+        "---\nSelf-check complete? Prepare the cumulative spine, then replay it through "
+        "this chapter:\n\n"
         "```bash\n"
+        f"{checkpoint['setup_command']}\n"
         "uv run python docs/teaching/offline_spine.py --run "
         f"--through {checkpoint['chapter']} --jobs 4\n"
         "```\n\n" + "\n".join(f"- {link}" for link in links)

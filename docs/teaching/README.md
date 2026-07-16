@@ -40,7 +40,7 @@ prerequisites below when you continue into provider-backed chapters.
 
 Every chapter now has at least one deterministic checkpoint that needs no
 microphone, speaker, or provider credential. List the curated one-per-chapter
-spine with concepts, evidence cues, and individual commands:
+spine with concepts, setup commands, evidence cues, and individual commands:
 
 ```bash
 uv run python docs/teaching/offline_spine.py
@@ -51,9 +51,14 @@ After finishing a chapter, replay only the cumulative spine you have completed.
 For example, after Chapter 5:
 
 ```bash
+uv sync --extra quickstart --group dev
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --json
 ```
+
+The setup line matters on the otherwise-offline Chapters 11–12: their own
+scripts need only the dev group, but cumulative replay still imports selected
+probes from earlier provider-backed chapters.
 
 After installing the full `quickstart` prerequisites below, execute all 16
 checkpoints as a compact smoke run:
