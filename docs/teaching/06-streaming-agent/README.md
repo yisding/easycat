@@ -21,6 +21,9 @@
 > **Evidence to find:** sentence delivery rows preserve acceptance separately and roll up to one
 > matching turn.
 >
+> **Explain the result:** Trace one sentence row into the turn totals and explain what a rejected
+> chunk changes.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

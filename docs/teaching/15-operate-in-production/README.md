@@ -24,6 +24,9 @@
 > **Evidence to find:** failed starts release slots; stop-all records one error and still
 > attempts both sessions.
 >
+> **Explain the result:** Explain which rollback invariant prevents one failed session from
+> blocking another.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

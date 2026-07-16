@@ -73,6 +73,9 @@ sync with the chapter's source code and ladder order:
       > **Evidence to find:** no chunks, all rejected, and first accepted audio
       > produce three distinct outcomes.
       >
+      > **Explain the result:** connect each outcome to its accepted/rejected
+      > counts and first-audio milestone.
+      >
       > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
       <!-- END auto:offline-checkpoint -->
 
@@ -405,6 +408,12 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         break_long_words=False,
         break_on_hyphens=False,
     )
+    reflection_lines = textwrap.wrap(
+        f"**Explain the result:** {checkpoint['reflection']}.",
+        width=95,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
     return (
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
@@ -413,6 +422,8 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         "> ```\n"
         ">\n"
         + "".join(f"> {line}\n" for line in evidence_lines)
+        + ">\n"
+        + "".join(f"> {line}\n" for line in reflection_lines)
         + ">\n"
         + "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )

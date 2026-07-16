@@ -22,6 +22,9 @@
 > **Evidence to find:** fast tools skip filler; rejected filler has zero accepted chunks and
 > reply audio comes first.
 >
+> **Explain the result:** Explain why filler production alone cannot establish what the caller
+> heard first.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

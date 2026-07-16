@@ -21,6 +21,9 @@
 > **Evidence to find:** pre-roll restores both cached frames before trigger/live; disabling it
 > starts at trigger.
 >
+> **Explain the result:** Use the frame order to explain which part of an utterance pre-roll
+> protects.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

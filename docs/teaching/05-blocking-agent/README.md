@@ -21,6 +21,9 @@
 > **Evidence to find:** 1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes
 > 800 ms.
 >
+> **Explain the result:** Point to the milestone that defines first audio and explain why full
+> enqueue is not it.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -24,6 +24,9 @@
 > **Evidence to find:** aligned reference audio changes RMS by -12.041 dB; missing or short
 > references fail.
 >
+> **Explain the result:** Tie each failure to the missing replay input and explain what aligned
+> reference changes.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

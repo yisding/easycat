@@ -21,6 +21,9 @@
 > **Evidence to find:** triggering speech remains unconsumed while bot cancellation precedes the
 > next STT stream.
 >
+> **Explain the result:** Use the event order to explain how the next utterance survives
+> interruption cleanup.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

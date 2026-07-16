@@ -45,6 +45,7 @@ class Checkpoint:
     concept: str
     prediction: str
     evidence: str
+    reflection: str
 
     @property
     def path(self) -> Path:
@@ -76,6 +77,7 @@ CHECKPOINTS = (
         "Which rates belong to the wire, pipeline/provider input, provider defaults, and "
         "WebRTC media boundaries?",
         "wire, provider-input, pipeline, config-default, and media roles use different rates",
+        "If any rate surprised you, name the boundary and the conversion its neighbor requires",
     ),
     Checkpoint(
         1,
@@ -85,6 +87,7 @@ CHECKPOINTS = (
         "How many chunks will be accepted or rejected, and does matching `TransportLike` "
         "imply full `Transport` conformance?",
         "two chunks are accepted, one is rejected, and `version_info()` changes full conformance",
+        "Explain why structural compatibility can pass while full runtime conformance fails",
     ),
     Checkpoint(
         2,
@@ -94,6 +97,8 @@ CHECKPOINTS = (
         "When a partial revises `fifteen` to `fifty`, which effects may happen before `FINAL`, "
         "and which must wait?",
         "revised partials cancel speculation; only the final `fifty` commits the safe action",
+        "Identify the irreversible side effect that would be wrong if it fired on a revised "
+        "partial",
     ),
     Checkpoint(
         3,
@@ -103,6 +108,7 @@ CHECKPOINTS = (
         "Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and added "
         "commit latency?",
         "500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit wait",
+        "State which timeout failure you would accept for a target conversation and why",
     ),
     Checkpoint(
         4,
@@ -112,6 +118,7 @@ CHECKPOINTS = (
         "Which frames disappear when pre-roll is disabled, and does the trigger frame itself "
         "remain?",
         "pre-roll restores both cached frames before trigger/live; disabling it starts at trigger",
+        "Use the frame order to explain which part of an utterance pre-roll protects",
     ),
     Checkpoint(
         5,
@@ -121,6 +128,7 @@ CHECKPOINTS = (
         "Which sub-gap dominates first-audio latency, and does full TTS enqueue define when "
         "the user first hears audio?",
         "1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes 800 ms",
+        "Point to the milestone that defines first audio and explain why full enqueue is not it",
     ),
     Checkpoint(
         6,
@@ -130,6 +138,7 @@ CHECKPOINTS = (
         "Do per-sentence acceptance counts stay independent, and do they add up to the turn "
         "totals?",
         "sentence delivery rows preserve acceptance separately and roll up to one matching turn",
+        "Trace one sentence row into the turn totals and explain what a rejected chunk changes",
     ),
     Checkpoint(
         7,
@@ -139,6 +148,7 @@ CHECKPOINTS = (
         "Does a fast tool need filler; when slow filler is rejected, which audio becomes first?",
         "fast tools skip filler; rejected filler has zero accepted chunks and reply audio "
         "comes first",
+        "Explain why filler production alone cannot establish what the caller heard first",
     ),
     Checkpoint(
         8,
@@ -148,6 +158,7 @@ CHECKPOINTS = (
         "How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with the "
         "800 ms VAD baseline?",
         "smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three components",
+        "Name the component each path adds or skips and which path wins against the baseline",
     ),
     Checkpoint(
         9,
@@ -157,6 +168,7 @@ CHECKPOINTS = (
         "Does the triggering speech event belong to the interrupted turn, and what must finish "
         "before the next STT stream?",
         "triggering speech remains unconsumed while bot cancellation precedes the next STT stream",
+        "Use the event order to explain how the next utterance survives interruption cleanup",
     ),
     Checkpoint(
         10,
@@ -166,6 +178,7 @@ CHECKPOINTS = (
         "What changes with aligned AEC reference audio, and what should fail when reference "
         "audio is missing or short?",
         "aligned reference audio changes RMS by -12.041 dB; missing or short references fail",
+        "Tie each failure to the missing replay input and explain what aligned reference changes",
     ),
     Checkpoint(
         11,
@@ -175,6 +188,7 @@ CHECKPOINTS = (
         "How can marginal query counts distinguish an empty filter intersection from a "
         "misspelled turn?",
         "a zero-result intersection has marginal matches, while a misspelled turn has none",
+        "Use the marginal counts to decide whether to loosen a filter or fix an identifier",
     ),
     Checkpoint(
         12,
@@ -183,6 +197,8 @@ CHECKPOINTS = (
         "small-sample P95 sensitivity",
         "Which bundle controls P95, and how far should P95 move when that bundle is removed?",
         "removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms",
+        "Explain why one slow bundle controls a small-sample percentile and what not to "
+        "generalize",
     ),
     Checkpoint(
         13,
@@ -192,6 +208,7 @@ CHECKPOINTS = (
         "How many cells result from two provider mixes × three transports, and which values "
         "stay fixed along each axis?",
         "two provider mixes cross three transport configs into six cells without changing axes",
+        "Pick one row and column; name what changes on each axis and what must remain constant",
     ),
     Checkpoint(
         14,
@@ -201,6 +218,7 @@ CHECKPOINTS = (
         "Can a plain workflow yield both reply text and a session action, and which bridge mode "
         "should it report?",
         "`MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep mode",
+        "Trace the workflow yield into both reply and action without framework-specific state",
     ),
     Checkpoint(
         15,
@@ -209,6 +227,7 @@ CHECKPOINTS = (
         "multi-session manager rollback",
         "Which failures release manager slots, and does one stop failure prevent the peer stop?",
         "failed starts release slots; stop-all records one error and still attempts both sessions",
+        "Explain which rollback invariant prevents one failed session from blocking another",
     ),
 )
 
@@ -351,6 +370,7 @@ def main() -> None:
             print(f"    Setup: {row['setup_command']}")
             print(f"    Run: {row['command']}")
             print(f"    Look for: {row['evidence']}")
+            print(f"    Explain after: {row['reflection']}")
         return
 
     rows = run_all(jobs=args.jobs, timeout_s=args.timeout_s, checkpoints=checkpoints)
@@ -377,6 +397,8 @@ def main() -> None:
                     print(f"             {line}")
             if row["detail"]:
                 print(f"           {row['detail']}")
+            else:
+                print(f"           Reflect: {row['reflection']}")
         print(f"{passed}/{len(rows)} checkpoints passed")
     if passed != len(rows):
         raise SystemExit(1)
