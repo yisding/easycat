@@ -12,10 +12,21 @@ from easycat.events import EventBus, TransportAudioDelivered
 from easycat.transports._webrtc_audio import OutboundAudioSource
 from easycat.transports.webrtc import WebRTCTransport
 
-from ._webrtc_fakes import _HAS_WEBRTC_DEPS
+from ._webrtc_fakes import (
+    _HAS_WEBRTC_DEPS,
+    _FakeMediaStreamTrack,
+    _install_fake_webrtc_modules,
+)
 
 
 class TestOutboundAudioSource:
+    def test_create_track_uses_shared_fake_dependency_seam(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+
+        track = OutboundAudioSource().create_track()
+
+        assert isinstance(track, _FakeMediaStreamTrack)
+
     def test_enqueue_and_drain(self):
         source = OutboundAudioSource()
         data = bytes(960 * 2)  # 20ms at 48kHz mono s16
