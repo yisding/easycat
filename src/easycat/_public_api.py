@@ -133,11 +133,7 @@ _register(
 _register("easycat.transports.local", "LocalTransportConfig")
 _register("easycat.transports.twilio_media", "TwilioConnectionTransport")
 _register("easycat.telephony.session_actions", "TwilioSessionActionConfig")
-_register(
-    "easycat.transports.webrtc",
-    "ICEServer",
-    "WebRTCTransportConfig",
-)
+_register("easycat.transports._webrtc_config", "ICEServer", "WebRTCTransportConfig")
 _register(
     "easycat.server.webrtc_routes",
     "run_webrtc_config_server",

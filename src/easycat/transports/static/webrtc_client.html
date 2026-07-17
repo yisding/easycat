@@ -178,7 +178,7 @@ var authToken = new URLSearchParams(location.search).get("token") || "";
 // Allowlist: accept ONLY a clean same-origin absolute-path prefix. It must
 // start with "/" and carry no scheme/host, backslash, query/fragment marker,
 // protocol-relative or empty "//" segment, or ".." traversal segment. This
-// mirrors the server-side _sanitize_webrtc_base so both agree on what survives.
+// Mirrors the server-side sanitize_webrtc_base so both agree on what survives.
 function safeWebRTCBase(rawBase) {
   if (!rawBase) return "";
   if (rawBase.charAt(0) !== "/") return "";

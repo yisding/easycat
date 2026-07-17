@@ -29,7 +29,7 @@ genuinely per-peer):
   ``AuthPolicy.authorize``), so WebSocket and WebRTC share one auth layer and the
   ``allow_query_token`` default-off posture applies here. The stats rate-limit /
   record window stays PER-SERVER: :class:`WebRTCRoutes` owns a
-  :class:`~easycat.transports.webrtc.WebRTCStatsState` (``_stats_state``) passed
+  :class:`~easycat.transports._webrtc_stats.WebRTCStatsState` (``_stats_state``) passed
   into the shared handlers, so the quota semantics are per-server (identical to
   the pre-M7 shim's per-process deque, one instance per routes unit).
 
@@ -45,7 +45,7 @@ genuinely per-peer):
 
 Import weight: aiohttp/aiortc are gated lazily inside :meth:`register` and the
 handlers (via the per-offer transport's own ``require_module``), and
-:class:`WebRTCTransport` is imported lazily inside the handlers too, so
+:class:`WebRTCTransport` is imported lazily inside the offer handler, so
 ``import easycat.server`` stays light and pulls no planner/aiohttp at module
 load.
 """
@@ -61,11 +61,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
-from easycat.transports.webrtc import (
-    WebRTCStatsState,
-    WebRTCTransport,
-    WebRTCTransportConfig,
-)
+from easycat.transports._webrtc_config import WebRTCTransportConfig
+from easycat.transports._webrtc_stats import WebRTCStatsState
 
 if TYPE_CHECKING:
     from easycat.config import EasyConfig
@@ -73,12 +70,13 @@ if TYPE_CHECKING:
     from easycat.server.transports import CapacityGate
     from easycat.session import Session
     from easycat.session_manager import SessionManager
+    from easycat.transports.webrtc import WebRTCTransport
 
 logger = logging.getLogger(__name__)
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
-WebRTCConfigFactory = Callable[[WebRTCTransport], "EasyConfig | Session"]
+WebRTCConfigFactory = Callable[["WebRTCTransport"], "EasyConfig | Session"]
 
 
 class WebRTCRoutes:
@@ -329,6 +327,8 @@ class WebRTCRoutes:
         tracked on the gate + manager (and the shared active-session map, if
         provided) so the drain step can force-stop it.
         """
+        from easycat.transports.webrtc import WebRTCTransport
+
         web = self._web
         auth_reason = self._auth_reason(request)
         if auth_reason != "allowed":

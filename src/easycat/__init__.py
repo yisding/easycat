@@ -126,12 +126,12 @@ if TYPE_CHECKING:
     )
     from easycat.supervisor import SessionAudioBroadcaster
     from easycat.telephony.session_actions import TwilioSessionActionConfig
-    from easycat.transports.local import LocalTransportConfig
-    from easycat.transports.twilio_media import TwilioConnectionTransport
-    from easycat.transports.webrtc import (
+    from easycat.transports._webrtc_config import (
         ICEServer,
         WebRTCTransportConfig,
     )
+    from easycat.transports.local import LocalTransportConfig
+    from easycat.transports.twilio_media import TwilioConnectionTransport
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
         WebSocketTransportConfig,
