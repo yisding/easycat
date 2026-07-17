@@ -99,6 +99,13 @@ class OutboundAudioSource:
     """Queue-backed source that produces paced 20 ms Opus-compatible frames."""
 
     _AEC_REF_QUEUE_MAX: ClassVar[int] = 100
+    # Backlog cap for not-yet-emitted delivery events: a slow EventBus
+    # subscriber must not grow memory without bound during sustained playback.
+    # Overflow drops the oldest events; the retained ones stay FIFO.
+    _EMIT_QUEUE_MAX: ClassVar[int] = 256
+    # Teardown budget for draining in-flight delivery events before the drain
+    # worker is cancelled outright.
+    _ACLOSE_TIMEOUT_S: ClassVar[float] = 5.0
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
@@ -107,8 +114,9 @@ class OutboundAudioSource:
         self._start: float | None = None
         self._event_bus: EventBus | None = None
         # Delivery events must not block RTP pacing. A single tracked worker
-        # drains them FIFO and ``aclose`` awaits it during transport teardown.
-        self._emit_queue: deque[TransportAudioDelivered] = deque()
+        # drains them FIFO and ``aclose`` awaits it (bounded) during transport
+        # teardown.
+        self._emit_queue: deque[TransportAudioDelivered] = deque(maxlen=self._EMIT_QUEUE_MAX)
         self._emit_worker: asyncio.Task[None] | None = None
         self._emit_tasks: set[asyncio.Task[None]] = set()
         self._AudioFrame: type | None = None
@@ -161,8 +169,8 @@ class OutboundAudioSource:
         self._load_audio_frame_type()
         await self._pace()
 
-        pcm_data, delivered_chunks = self._build_pcm_frame(_FRAME_SAMPLES * 2)
-        self._record_silence_reference(delivered_chunks)
+        pcm_data, delivered_chunks, padded_bytes = self._build_pcm_frame(_FRAME_SAMPLES * 2)
+        self._record_silence_reference(padded_bytes)
         frame = self._make_audio_frame(pcm_data)
         self._queue_delivery_events(delivered_chunks)
         return frame
@@ -180,7 +188,7 @@ class OutboundAudioSource:
         if wait > 0:
             await asyncio.sleep(wait)
 
-    def _build_pcm_frame(self, frame_bytes: int) -> tuple[bytes, list[_DeliveredChunk]]:
+    def _build_pcm_frame(self, frame_bytes: int) -> tuple[bytes, list[_DeliveredChunk], int]:
         buf = bytearray()
         delivered_chunks: list[_DeliveredChunk] = []
         while len(buf) < frame_bytes:
@@ -192,9 +200,10 @@ class OutboundAudioSource:
             if delivered_chunk is not None:
                 delivered_chunks.append(delivered_chunk)
 
-        if len(buf) < frame_bytes:
-            buf.extend(bytes(frame_bytes - len(buf)))
-        return bytes(buf), delivered_chunks
+        padded_bytes = frame_bytes - len(buf)
+        if padded_bytes:
+            buf.extend(bytes(padded_bytes))
+        return bytes(buf), delivered_chunks, padded_bytes
 
     def _take_audio_slice(self, max_bytes: int) -> tuple[bytes, _DeliveredChunk | None] | None:
         queued = self._next_pending_chunk()
@@ -251,11 +260,19 @@ class OutboundAudioSource:
             queued.turn_ref,
         )
 
-    def _record_silence_reference(self, delivered_chunks: list[_DeliveredChunk]) -> None:
-        if not self._aec_reference_enabled or delivered_chunks or self._ref_format is None:
+    def _record_silence_reference(self, padded_bytes: int) -> None:
+        """Mirror playout padding into the AEC reference as session-rate silence.
+
+        Padding is silence the far end actually hears — both fully silent
+        frames and the tail of a partial final chunk — so it must be recorded
+        or the reference stream permanently lags real playout.
+        """
+        if padded_bytes <= 0 or not self._aec_reference_enabled or self._ref_format is None:
             return
-        silence_samples = self._ref_format.sample_rate * _FRAME_SAMPLES // WEBRTC_SAMPLE_RATE
-        self._aec_ref_queue.append(bytes(silence_samples * self._ref_format.frame_size))
+        padded_samples = padded_bytes // 2  # transport frames are PCM16 mono
+        silence_samples = self._ref_format.sample_rate * padded_samples // WEBRTC_SAMPLE_RATE
+        if silence_samples > 0:
+            self._aec_ref_queue.append(bytes(silence_samples * self._ref_format.frame_size))
 
     def _make_audio_frame(self, pcm_data: bytes) -> Any:
         assert self._AudioFrame is not None
@@ -272,6 +289,8 @@ class OutboundAudioSource:
             return
         for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
             if delivered_chunk.data:
+                if len(self._emit_queue) == self._EMIT_QUEUE_MAX:
+                    logger.debug("Delivery-event backlog full — dropping oldest event")
                 self._emit_queue.append(
                     TransportAudioDelivered(
                         chunk=delivered_chunk,
@@ -316,8 +335,22 @@ class OutboundAudioSource:
         """No-op; peer teardown owns the outbound track lifecycle."""
 
     async def aclose(self) -> None:
-        """Await in-flight delivery event work during transport teardown."""
+        """Await in-flight delivery event work during transport teardown.
+
+        Bounded: a subscriber that never returns cannot hang teardown — after
+        ``_ACLOSE_TIMEOUT_S`` the drain worker is cancelled instead of awaited.
+        """
         if not self._emit_tasks:
             return
-        await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
+        tasks = list(self._emit_tasks)
+        _, pending = await asyncio.wait(tasks, timeout=self._ACLOSE_TIMEOUT_S)
+        if pending:
+            logger.warning(
+                "Delivery-event drain exceeded %.1fs during teardown — cancelling",
+                self._ACLOSE_TIMEOUT_S,
+            )
+            for task in pending:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._emit_queue.clear()
         self._emit_tasks.clear()

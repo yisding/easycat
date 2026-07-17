@@ -579,6 +579,12 @@ class WebRTCTransport(AudioQueueMixin):
         if self._pc is not None:
             await self._pc.close()
 
+        # Retire the previous outbound source before it is overwritten below:
+        # ``disconnect()`` only closes the *current* source, so its delivery
+        # worker would otherwise survive the peer swap. ``aclose`` is bounded,
+        # so a hung subscriber cannot stall the replacement offer.
+        await self._outbound.aclose()
+
         # Clear stale audio from the previous peer so it doesn't leak into
         # the new session's receive_audio() iterator. Do not replace the queue:
         # Session.receive_audio() may already be blocked on this object.

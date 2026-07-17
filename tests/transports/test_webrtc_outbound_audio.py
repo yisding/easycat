@@ -171,8 +171,10 @@ class TestOutboundAudioAecReference:
         ref_frames = source.drain_aec_reference_frames()
         assert isinstance(ref_frames, list)
         assert all(isinstance(f, bytes) for f in ref_frames)
-        # Same order and content as the delivered session-rate audio.
-        assert b"".join(ref_frames) == delivered_bytes
+        # Same order and content as the delivered session-rate audio, plus the
+        # final frame's half-frame padding recorded as session-rate silence
+        # (960 transport bytes -> 160 samples at 16 kHz).
+        assert b"".join(ref_frames) == delivered_bytes + bytes(160 * 2)
         assert delivered_bytes == chunk_a + chunk_b
 
         # Draining clears the queue.
@@ -286,6 +288,53 @@ class TestOutboundAudioAecReference:
         assert not source._emit_tasks
 
     @pytest.mark.asyncio
+    async def test_delivery_backlog_is_bounded_drop_oldest(self):
+        """The delivery-event backlog is bounded: overflow drops the oldest
+        events while the retained ones keep FIFO order, so a slow subscriber
+        cannot grow memory without limit during sustained playback."""
+        source = OutboundAudioSource()
+        bus = EventBus()
+        delivered: list[bytes] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: delivered.append(e.chunk.data))
+        source._event_bus = bus
+
+        total = source._EMIT_QUEUE_MAX + 5
+        chunks: list[tuple[AudioChunk, str | None, str | None, object | None]] = [
+            (AudioChunk(data=i.to_bytes(2, "big"), format=PCM16_MONO_16K), None, None, None)
+            for i in range(total)
+        ]
+        # All events are appended before the drain worker gets to run, so the
+        # first five must be dropped to honour the bound.
+        source._queue_delivery_events(chunks)
+        assert len(source._emit_queue) == source._EMIT_QUEUE_MAX
+
+        await source.aclose()
+        assert delivered == [i.to_bytes(2, "big") for i in range(5, total)]
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_hung_delivery_worker(self, monkeypatch):
+        """A subscriber that never returns must not hang transport teardown:
+        aclose() waits ``_ACLOSE_TIMEOUT_S`` then cancels the drain worker."""
+        monkeypatch.setattr(OutboundAudioSource, "_ACLOSE_TIMEOUT_S", 0.05)
+        source = OutboundAudioSource()
+        bus = EventBus()
+        entered = asyncio.Event()
+
+        async def _handler(e):
+            entered.set()
+            await asyncio.Event().wait()  # never returns
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+        chunk = AudioChunk(data=b"\x01\x02", format=PCM16_MONO_16K)
+        source._queue_delivery_events([(chunk, None, None, None)])
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        await asyncio.wait_for(source.aclose(), timeout=1.0)
+        assert not source._emit_tasks
+        assert not source._emit_queue
+
+    @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_disconnect_drains_outbound_emit_tasks(self):
         """WebRTCTransport.disconnect() must drain the outbound source's own
@@ -375,6 +424,31 @@ class TestOutboundAudioAecReference:
         assert frames[0] == session_data
         # 20 ms of 16 kHz mono silence = 320 samples * 2 bytes.
         assert frames[-1] == bytes(320 * 2)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_partial_final_frame_pads_silence_reference(self):
+        """A rendered frame that is part audio, part padding must record the
+        padded tail as session-rate silence: a final 10 ms chunk plays as a
+        20 ms frame, and without the matching silence the reference stream
+        would permanently lag real playout."""
+        source = OutboundAudioSource()
+        _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
+        # 30 ms of transport audio (1.5 frames at 48 kHz); the session-rate
+        # original is 30 ms at 16 kHz (480 samples).
+        session_data = bytes([0x22]) * (480 * 2)
+        transport_data = bytes([0x22]) * (1440 * 2)
+        source.enqueue(
+            transport_data,
+            original_chunk=AudioChunk(data=session_data, format=PCM16_MONO_16K),
+        )
+        await source._recv()  # full frame of audio, no padding
+        await source._recv()  # half audio + half padding
+
+        frames = source.drain_aec_reference_frames()
+        # Reference = 30 ms of audio + 10 ms of silence = 40 ms at 16 kHz.
+        assert b"".join(frames) == session_data + bytes(160 * 2)
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")

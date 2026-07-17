@@ -136,6 +136,9 @@ class TestWebRTCTransportConfig:
 
         assert len(servers) == 1
         assert servers[0].urls == ["turn:example.com:3478"]
+        # Unset optional credentials stay None, matching the ICEServer hints.
+        assert servers[0].username is None
+        assert servers[0].credential is None
 
     def test_env_ice_server_helper_ignores_blank_turn_url(self, monkeypatch):
         monkeypatch.setenv("TURN_SERVER_URL", "   ")

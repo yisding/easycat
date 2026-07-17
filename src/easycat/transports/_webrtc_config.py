@@ -126,8 +126,8 @@ def webrtc_ice_servers_from_env(
         servers.append(
             ICEServer(
                 urls=turn_url,
-                username=os.getenv(turn_username_env, ""),
-                credential=os.getenv(turn_credential_env, ""),
+                username=os.getenv(turn_username_env),
+                credential=os.getenv(turn_credential_env),
             )
         )
     return servers
