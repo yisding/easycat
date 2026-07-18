@@ -19,11 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-_phonenumbers: Any
 try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
-    import phonenumbers as _phonenumbers
+    import phonenumbers
 except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
-    _phonenumbers = None
+    _phonenumbers: Any = None
+else:
+    _phonenumbers = phonenumbers
 
 logger = logging.getLogger(__name__)
 
