@@ -31,11 +31,11 @@ _LAZY_ATTR: dict[str, str] = {
     "TwilioConnectionTransport": "easycat.transports.twilio_media",
     "TwilioStreamTokenStore": "easycat.transports.twilio_media",
     "TWILIO_STREAM_TOKEN_PARAMETER": "easycat.transports.twilio_media",
-    "ICEServer": "easycat.transports.webrtc",
+    "ICEServer": "easycat.transports._webrtc_config",
     "WebRTCTransport": "easycat.transports.webrtc",
-    "WebRTCTransportConfig": "easycat.transports.webrtc",
-    "webrtc_ice_servers_from_env": "easycat.transports.webrtc",
-    "webrtc_transport_config_from_env": "easycat.transports.webrtc",
+    "WebRTCTransportConfig": "easycat.transports._webrtc_config",
+    "webrtc_ice_servers_from_env": "easycat.transports._webrtc_config",
+    "webrtc_transport_config_from_env": "easycat.transports._webrtc_config",
     "WebSocketTransport": "easycat.transports.websocket",
     "WebSocketTransportConfig": "easycat.transports.websocket",
     "WebSocketConnectionTransport": "easycat.transports.websocket",
@@ -53,6 +53,12 @@ __all__ = sorted(_LAZY_ATTR)
 if TYPE_CHECKING:
     from easycat.events import TransportDegraded
     from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+    from easycat.transports._webrtc_config import (
+        ICEServer,
+        WebRTCTransportConfig,
+        webrtc_ice_servers_from_env,
+        webrtc_transport_config_from_env,
+    )
     from easycat.transports.local import LocalTransport, LocalTransportConfig
     from easycat.transports.twilio_media import (
         TWILIO_STREAM_TOKEN_PARAMETER,
@@ -61,13 +67,7 @@ if TYPE_CHECKING:
         TwilioTransport,
         TwilioTransportConfig,
     )
-    from easycat.transports.webrtc import (
-        ICEServer,
-        WebRTCTransport,
-        WebRTCTransportConfig,
-        webrtc_ice_servers_from_env,
-        webrtc_transport_config_from_env,
-    )
+    from easycat.transports.webrtc import WebRTCTransport
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
         WebSocketSessionServerConfig,

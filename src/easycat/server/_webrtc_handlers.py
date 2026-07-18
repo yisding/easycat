@@ -21,12 +21,11 @@ diverged ``_stats_write_permitted`` (transport read ``config.auth_token``; route
 read the policy): both now derive it from the injected policy.
 
 Import weight: this module imports only stdlib, the leaf ``is_loopback_host``,
-and the stateless helpers / constants reused from
-:mod:`easycat.transports.webrtc`. aiohttp is NEVER imported here — the ``web``
-module is passed in by the caller (the transport resolves it in ``connect``; the
-routes resolve it in ``register``), so ``import easycat.server`` stays light and
-the ``webrtc`` extra stays optional. The transport imports this module LAZILY so
-``import easycat.transports.webrtc`` pulls no server package at load.
+and the focused WebRTC config/stats modules. aiohttp is NEVER imported here —
+the ``web`` module is passed in by the caller (the transport resolves it in
+``connect``; the routes resolve it in ``register``), so ``import easycat.server``
+stays light and the ``webrtc`` extra stays optional. The transport imports this
+module LAZILY so importing the transport pulls no server package at load.
 """
 
 from __future__ import annotations
@@ -40,14 +39,16 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode
 
 from easycat._net import is_loopback_host
-from easycat.transports.webrtc import (
+from easycat.transports._webrtc_config import (
     _CORS_ALLOW_HEADERS,
     _CORS_ALLOW_METHODS,
-    WebRTCStatsState,
     WebRTCTransportConfig,
-    _append_webrtc_stats_record,
-    _sanitize_webrtc_base,
-    _sanitize_webrtc_stats_snapshot,
+    sanitize_webrtc_base,
+)
+from easycat.transports._webrtc_stats import (
+    WebRTCStatsState,
+    append_webrtc_stats_record,
+    sanitize_webrtc_stats_snapshot,
 )
 
 if TYPE_CHECKING:
@@ -267,7 +268,7 @@ class WebRTCSignalingHandlers:
             return self.unauthorized_response(request)
         try:
             payload = await request.json()
-            snapshot = _sanitize_webrtc_stats_snapshot(payload)
+            snapshot = sanitize_webrtc_stats_snapshot(payload)
         except Exception as exc:
             return web.Response(
                 status=400,
@@ -288,7 +289,7 @@ class WebRTCSignalingHandlers:
                 quota_error = self.stats_quota_error(stats_path, snapshot)
                 if quota_error is not None:
                     return self.stats_quota_response(request, quota_error)
-                await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
+                await asyncio.to_thread(append_webrtc_stats_record, stats_path, snapshot)
                 self.record_stats_write()
 
         return web.Response(
@@ -327,7 +328,7 @@ class WebRTCSignalingHandlers:
                         user_base = value
                     continue
                 params.append((key, value))
-            base = self._client_base or _sanitize_webrtc_base(user_base)
+            base = self._client_base or sanitize_webrtc_base(user_base)
             if base:
                 params.append(("webrtc", base))
             if params:

@@ -115,20 +115,31 @@ class TestWebRTCIngressQueueOwnership:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Peer replacement must retire the old outbound source via aclose():
+        ``disconnect()`` only closes the *current* source, so a delivery worker
+        owned by the replaced source would otherwise survive indefinitely."""
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
         transport._web = _FakeWeb
         transport._connected = True
 
-        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
-        previous_outbound = transport._outbound
-        previous_outbound.aclose = AsyncMock(  # type: ignore[method-assign]
-            wraps=previous_outbound.aclose
-        )
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+        first_outbound = transport._outbound
 
-        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        closed = asyncio.Event()
+        original_aclose = first_outbound.aclose
 
-        previous_outbound.aclose.assert_awaited_once()
+        async def _tracking_aclose() -> None:
+            closed.set()
+            await original_aclose()
+
+        monkeypatch.setattr(first_outbound, "aclose", _tracking_aclose)
+
+        second_response = await transport._handle_offer(_FakeOfferRequest())
+        assert second_response.status == 200
+        assert transport._outbound is not first_outbound
+        assert closed.is_set()
 
     @pytest.mark.asyncio
     async def test_disconnected_then_failed_counts_one_peer_drop(

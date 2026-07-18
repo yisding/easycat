@@ -44,9 +44,9 @@ from easycat.session.actions import SessionActionExecutor
 from easycat.smart_turn import create_smart_turn
 from easycat.stt.factory import create_stt_provider_from_config
 from easycat.stubs import NoopAgent
+from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
-from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import create_tts_provider_from_config
