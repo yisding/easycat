@@ -422,7 +422,7 @@ class VoiceApp:
         own non-loopback guard would otherwise re-reject an intentionally
         unauthenticated bind.
         """
-        from easycat.transports.webrtc import WebRTCTransportConfig
+        from easycat.transports._webrtc_config import WebRTCTransportConfig
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8080))

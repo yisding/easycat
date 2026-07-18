@@ -12,6 +12,7 @@ from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
+    BotStoppedSpeaking,
     Event,
     ToolCallResult,
     ToolCallStarted,
@@ -719,6 +720,21 @@ async def test_session_barge_in_drain_records_timeline_strings(monkeypatch: pyte
     assert captured["called"]
 
 
+def _arm_playback_finished(session: Session) -> asyncio.Event:
+    """Arm a ``BotStoppedSpeaking`` waiter; call before ``session.start()``.
+
+    The late-cancel tests below must cancel only after playback has fully
+    completed. A fixed sleep can elapse while playback is still in flight on a
+    slow runner, turning the intended *late* cancel into a mid-playback
+    interruption. ``BotStoppedSpeaking`` is emitted after the turn's
+    ``playback_cut_short`` flag is decided, so a cancel issued after this
+    event can never be attributed to playback.
+    """
+    done = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _e: done.set())
+    return done
+
+
 @pytest.mark.asyncio
 async def test_session_barge_in_after_full_playback_does_not_notify_interruption():
     """If all synthesized audio is already delivered, interruption should not rewrite history."""
@@ -766,8 +782,9 @@ async def test_session_barge_in_after_full_playback_does_not_notify_interruption
         )
     )
 
+    playback_finished = _arm_playback_finished(session)
     await session.start()
-    await asyncio.sleep(0.25)
+    await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
     # Cancel after playback has already completed; this should not be treated
     # as an interruption that mutates agent history.
@@ -822,8 +839,9 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
         )
     )
 
+    playback_finished = _arm_playback_finished(session)
     await session.start()
-    await asyncio.sleep(0.25)
+    await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
     if session.cancel_token:
         session.cancel_token.cancel()
@@ -871,8 +889,9 @@ async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
         )
     )
 
+    playback_finished = _arm_playback_finished(session)
     await session.start()
-    await asyncio.sleep(0.3)
+    await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
     if session.cancel_token:
         session.cancel_token.cancel()

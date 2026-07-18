@@ -9,20 +9,32 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports.webrtc import WebRTCTransport, _OutboundAudioSource
+from easycat.transports._webrtc_audio import OutboundAudioSource
+from easycat.transports.webrtc import WebRTCTransport
 
-from ._webrtc_fakes import _HAS_WEBRTC_DEPS
+from ._webrtc_fakes import (
+    _HAS_WEBRTC_DEPS,
+    _FakeMediaStreamTrack,
+    _install_fake_webrtc_modules,
+)
 
 
 class TestOutboundAudioSource:
+    def test_create_track_uses_shared_fake_dependency_seam(self, monkeypatch):
+        _install_fake_webrtc_modules(monkeypatch)
+
+        track = OutboundAudioSource().create_track()
+
+        assert isinstance(track, _FakeMediaStreamTrack)
+
     def test_enqueue_and_drain(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         data = bytes(960 * 2)  # 20ms at 48kHz mono s16
         source.enqueue(data, original_chunk=AudioChunk(data=data, format=PCM16_MONO_16K))
         assert not source._queue.empty()
 
     def test_enqueue_overflow(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         source._queue = asyncio.Queue(maxsize=2)
         chunk = AudioChunk(data=bytes(100), format=PCM16_MONO_16K)
         # Fill queue.
@@ -34,7 +46,7 @@ class TestOutboundAudioSource:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_produces_silence_when_empty(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         frame = await source._recv()
         assert frame.sample_rate == 48000
         assert frame.samples == 960
@@ -45,7 +57,7 @@ class TestOutboundAudioSource:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_returns_enqueued_data(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         # Enqueue one frame of non-silent data.
         test_data = bytes(range(256)) * (960 * 2 // 256 + 1)
         test_data = test_data[: 960 * 2]
@@ -59,7 +71,7 @@ class TestOutboundAudioSource:
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_recv_preserves_audio_order_with_remainder(self):
         """Verify that audio chunks larger than one frame don't reorder."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         frame_bytes = 960 * 2  # one 20ms frame at 48kHz mono s16
 
         # Create chunk A (1.5 frames) and chunk B (1 frame).
@@ -86,7 +98,7 @@ class TestOutboundAudioSource:
         assert data3 == expected3
 
     def test_clear_discards_queued_data(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         chunk = AudioChunk(data=bytes(200), format=PCM16_MONO_16K)
         source.enqueue(bytes(100), original_chunk=chunk)
         source.enqueue(bytes(200), original_chunk=chunk)
@@ -100,7 +112,7 @@ class TestOutboundAudioSource:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_then_recv_produces_silence(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         test_data = bytes([0xFF]) * 960 * 2
         source.enqueue(
             test_data,
@@ -113,7 +125,7 @@ class TestOutboundAudioSource:
         assert data == bytes(960 * 2)  # silence
 
 
-def _disable_pacing(source: _OutboundAudioSource) -> None:
+def _disable_pacing(source: OutboundAudioSource) -> None:
     """Backdate the pacing clock so ``_recv`` never sleeps for real time."""
     source._start = time.monotonic() - 1000.0
 
@@ -130,7 +142,7 @@ class TestOutboundAudioAecReference:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_drain_matches_delivered_chunks_and_clears(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         source.drain_aec_reference_frames()  # arm capture: a consumer has attached
         bus = EventBus()
@@ -159,8 +171,10 @@ class TestOutboundAudioAecReference:
         ref_frames = source.drain_aec_reference_frames()
         assert isinstance(ref_frames, list)
         assert all(isinstance(f, bytes) for f in ref_frames)
-        # Same order and content as the delivered session-rate audio.
-        assert b"".join(ref_frames) == delivered_bytes
+        # Same order and content as the delivered session-rate audio, plus the
+        # final frame's half-frame padding recorded as session-rate silence
+        # (960 transport bytes -> 160 samples at 16 kHz).
+        assert b"".join(ref_frames) == delivered_bytes + bytes(160 * 2)
         assert delivered_bytes == chunk_a + chunk_b
 
         # Draining clears the queue.
@@ -172,7 +186,7 @@ class TestOutboundAudioAecReference:
         """_recv must not await EventBus.emit on the RTP pacing path: the
         TransportAudioDelivered event is scheduled as a tracked task and is not
         delivered until the loop yields after _recv returns."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         bus = EventBus()
         delivered: list[TransportAudioDelivered] = []
@@ -205,7 +219,7 @@ class TestOutboundAudioAecReference:
         mid-handler must never observe chunk N+1 before chunk N (the single
         drain worker guarantees this; per-chunk fire-and-forget tasks did
         not)."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         bus = EventBus()
         delivered: list[bytes] = []
@@ -239,7 +253,7 @@ class TestOutboundAudioAecReference:
         """Teardown must drain the source's off-RTP-path emit tasks so in-flight
         TransportAudioDelivered events are awaited, not cancelled-and-lost at
         loop teardown (mirrors LocalTransport.stop() -> _drain_emit_tasks())."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         bus = EventBus()
         delivered: list[TransportAudioDelivered] = []
@@ -268,10 +282,57 @@ class TestOutboundAudioAecReference:
     @pytest.mark.asyncio
     async def test_aclose_is_noop_without_pending_tasks(self):
         """aclose() on a source that never scheduled an emit is a safe no-op."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         assert not source._emit_tasks
         await source.aclose()
         assert not source._emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_delivery_backlog_is_bounded_drop_oldest(self):
+        """The delivery-event backlog is bounded: overflow drops the oldest
+        events while the retained ones keep FIFO order, so a slow subscriber
+        cannot grow memory without limit during sustained playback."""
+        source = OutboundAudioSource()
+        bus = EventBus()
+        delivered: list[bytes] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: delivered.append(e.chunk.data))
+        source._event_bus = bus
+
+        total = source._EMIT_QUEUE_MAX + 5
+        chunks: list[tuple[AudioChunk, str | None, str | None, object | None]] = [
+            (AudioChunk(data=i.to_bytes(2, "big"), format=PCM16_MONO_16K), None, None, None)
+            for i in range(total)
+        ]
+        # All events are appended before the drain worker gets to run, so the
+        # first five must be dropped to honour the bound.
+        source._queue_delivery_events(chunks)
+        assert len(source._emit_queue) == source._EMIT_QUEUE_MAX
+
+        await source.aclose()
+        assert delivered == [i.to_bytes(2, "big") for i in range(5, total)]
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_hung_delivery_worker(self, monkeypatch):
+        """A subscriber that never returns must not hang transport teardown:
+        aclose() waits ``_ACLOSE_TIMEOUT_S`` then cancels the drain worker."""
+        monkeypatch.setattr(OutboundAudioSource, "_ACLOSE_TIMEOUT_S", 0.05)
+        source = OutboundAudioSource()
+        bus = EventBus()
+        entered = asyncio.Event()
+
+        async def _handler(e):
+            entered.set()
+            await asyncio.Event().wait()  # never returns
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+        chunk = AudioChunk(data=b"\x01\x02", format=PCM16_MONO_16K)
+        source._queue_delivery_events([(chunk, None, None, None)])
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+        await asyncio.wait_for(source.aclose(), timeout=1.0)
+        assert not source._emit_tasks
+        assert not source._emit_queue
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
@@ -311,7 +372,7 @@ class TestOutboundAudioAecReference:
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_keeps_reference_but_drops_pending_audio(self):
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         source._aec_reference_enabled = True  # arm capture: a consumer has attached
         frame_bytes = 960 * 2
@@ -344,7 +405,7 @@ class TestOutboundAudioAecReference:
         """A fully-silent render frame still appends a session-rate silence
         reference so the far/near streams stay 1:1 during pauses (matching the
         LocalTransport per-callback reference)."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         source._aec_reference_enabled = True  # arm capture: a consumer has attached
         # Transport (48k) frame is 1920 bytes; the session-rate (16k) chunk is
@@ -366,10 +427,35 @@ class TestOutboundAudioAecReference:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_partial_final_frame_pads_silence_reference(self):
+        """A rendered frame that is part audio, part padding must record the
+        padded tail as session-rate silence: a final 10 ms chunk plays as a
+        20 ms frame, and without the matching silence the reference stream
+        would permanently lag real playout."""
+        source = OutboundAudioSource()
+        _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
+        # 30 ms of transport audio (1.5 frames at 48 kHz); the session-rate
+        # original is 30 ms at 16 kHz (480 samples).
+        session_data = bytes([0x22]) * (480 * 2)
+        transport_data = bytes([0x22]) * (1440 * 2)
+        source.enqueue(
+            transport_data,
+            original_chunk=AudioChunk(data=session_data, format=PCM16_MONO_16K),
+        )
+        await source._recv()  # full frame of audio, no padding
+        await source._recv()  # half audio + half padding
+
+        frames = source.drain_aec_reference_frames()
+        # Reference = 30 ms of audio + 10 ms of silence = 40 ms at 16 kHz.
+        assert b"".join(frames) == session_data + bytes(160 * 2)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_silent_recv_before_any_audio_appends_nothing(self):
         """Before any audio has played there is no echo and no known session
         rate, so silent render frames append no reference."""
-        source = _OutboundAudioSource()
+        source = OutboundAudioSource()
         _disable_pacing(source)
         source._aec_reference_enabled = True  # arm capture: a consumer has attached
         await source._recv()

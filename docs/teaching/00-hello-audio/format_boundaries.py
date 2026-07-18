@@ -19,11 +19,12 @@ from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 
 # These two rates are fixed protocol boundaries rather than configurable
 # fields. This repo-local drift probe intentionally reads their runtime
-# constants; application code should not import underscore-prefixed names.
+# constants; application code should configure transport formats instead.
 from easycat.stt.openai_realtime_provider import _REALTIME_SAMPLE_RATE
+from easycat.transports._webrtc_audio import WEBRTC_SAMPLE_RATE
+from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import MULAW_8K, TwilioTransportConfig
-from easycat.transports.webrtc import _WEBRTC_SAMPLE_RATE, WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
@@ -92,7 +93,7 @@ def catalog() -> list[dict[str, object]]:
             "provider_config_default",
             ElevenLabsTTSConfig().audio_format,
         ),
-        _row("webrtc_media_frames", "media", _WEBRTC_SAMPLE_RATE),
+        _row("webrtc_media_frames", "media", WEBRTC_SAMPLE_RATE),
     ]
 
 

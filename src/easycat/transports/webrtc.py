@@ -22,21 +22,36 @@ EasyCat repo, use ``uv sync --extra webrtc --group dev``.
 from __future__ import annotations
 
 import asyncio
-import fractions
 import json
 import logging
-import os
 import time
-from collections import deque
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.events import EventBus, TransportAudioDelivered
+from easycat.audio_format import AudioChunk
 from easycat.transports._base import AudioQueueMixin, make_version_info
+from easycat.transports._webrtc_audio import (
+    WEBRTC_SAMPLE_RATE,
+    OutboundAudioSource,
+    audio_frame_pcm16_bytes,
+)
+from easycat.transports._webrtc_config import (
+    ICEServer,
+    WebRTCTransportConfig,
+    webrtc_ice_servers_from_env,
+    webrtc_transport_config_from_env,
+)
+from easycat.transports._webrtc_stats import WebRTCStatsState
+
+__all__ = [
+    "ICEServer",
+    "WebRTCTransport",
+    "WebRTCTransportConfig",
+    "webrtc_ice_servers_from_env",
+    "webrtc_transport_config_from_env",
+]
 
 if TYPE_CHECKING:
     from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
@@ -44,700 +59,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_WEBRTC_SAMPLE_RATE = 48000  # Opus standard
-_FRAME_DURATION_MS = 20
-_FRAME_SAMPLES = (_WEBRTC_SAMPLE_RATE * _FRAME_DURATION_MS) // 1000  # 960
-
-# WebRTC-specific ``TransportDegraded.reason`` codes emitted on the session
-# event bus (via the inherited ``AudioQueueMixin._emit_degraded``).  These
-# mirror conditions that previously only reached ``logger.warning``; emitting
-# them keeps the journal the single source of truth for observability.  The
-# cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
-# in ``_base`` and needs no wiring here.  ``outbound_queue_full`` mirrors
-# WebTransport: emitted from ``send_audio`` when the outbound TTS queue is full.
+# WebRTC-specific degraded reason codes emitted on the session event bus.
 _DEGRADED_NEGOTIATION_FAILED = "negotiation_failed"
 _DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
 _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
-_CORS_ALLOW_METHODS = "POST, GET, OPTIONS"
-_CORS_ALLOW_HEADERS = "Content-Type, Authorization"
-
-# Label of the browser-created data channel that carries session events
-# (transcripts, interruptions, per-turn latency) to the playground page.
+# Browser-created data channel carrying session events to the playground.
 _EVENTS_CHANNEL_LABEL = "events"
-
-_WEBRTC_STATS_TOP_LEVEL_FIELDS = frozenset(
-    {
-        "kind",
-        "schema_version",
-        "sample_id",
-        "sequence",
-        "label",
-        "captured_at",
-        "connection_state",
-        "ice_connection_state",
-        "ice_gathering_state",
-        "signaling_state",
-    }
-)
-_WEBRTC_STATS_NESTED_FIELDS: dict[str, frozenset[str]] = {
-    "candidate_pair": frozenset(
-        {
-            "available_incoming_bitrate",
-            "available_outgoing_bitrate",
-            "bytes_received",
-            "bytes_sent",
-            "consent_requests_sent",
-            "current_round_trip_time_ms",
-            "nominated",
-            "packets_received",
-            "packets_sent",
-            "requests_received",
-            "requests_sent",
-            "responses_received",
-            "responses_sent",
-            "state",
-        }
-    ),
-    "inbound_audio": frozenset(
-        {
-            "bytes_received",
-            "concealed_samples",
-            "concealment_events",
-            "jitter_buffer_delay_ms",
-            "jitter_ms",
-            "packets_lost",
-            "packets_received",
-            "total_samples_received",
-        }
-    ),
-    "outbound_audio": frozenset(
-        {
-            "bytes_sent",
-            "packets_sent",
-            "retransmitted_bytes_sent",
-            "retransmitted_packets_sent",
-            "target_bitrate",
-            "total_packet_send_delay_ms",
-        }
-    ),
-}
-
-
-def _default_webrtc_stats_path() -> str | None:
-    return os.environ.get("EASYCAT_WEBRTC_STATS_PATH") or None
-
-
-def _safe_stats_scalar(value: object) -> object | None:
-    if isinstance(value, bool | int | float) or value is None:
-        return value
-    if isinstance(value, str):
-        return value.replace("\r", " ").replace("\n", " ")[:200]
-    return None
-
-
-def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
-    """Keep only non-identifying browser WebRTC stats fields.
-
-    Raw ``RTCPeerConnection.getStats()`` reports can include local/remote
-    candidate addresses and implementation-specific IDs. The bundled browser
-    client already summarizes safe fields, and this server-side filter keeps
-    the validation artifact constrained even if a custom client posts more.
-    """
-    if not isinstance(payload, dict):
-        raise ValueError("expected JSON object")
-
-    snapshot: dict[str, object] = {}
-    for field_name in _WEBRTC_STATS_TOP_LEVEL_FIELDS:
-        safe_value = _safe_stats_scalar(payload.get(field_name))
-        if safe_value is not None:
-            snapshot[field_name] = safe_value
-
-    for group_name, allowed_fields in _WEBRTC_STATS_NESTED_FIELDS.items():
-        group = payload.get(group_name)
-        if not isinstance(group, dict):
-            continue
-        safe_group: dict[str, object] = {}
-        for field_name in allowed_fields:
-            safe_value = _safe_stats_scalar(group.get(field_name))
-            if safe_value is not None:
-                safe_group[field_name] = safe_value
-        if safe_group:
-            snapshot[group_name] = safe_group
-
-    snapshot.setdefault("kind", "webrtc_client_stats")
-    snapshot.setdefault("schema_version", 1)
-    return snapshot
-
-
-def _append_webrtc_stats_record(stats_path: Path, snapshot: dict[str, object]) -> None:
-    """Append one sanitized stats record to ``stats_path`` (blocking file I/O).
-
-    Runs off the event loop via ``asyncio.to_thread`` from the stats handlers.
-    """
-    stats_path.parent.mkdir(parents=True, exist_ok=True)
-    with stats_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
-
-
-@dataclass
-class WebRTCStatsState:
-    """Per-server stats rate-limit window + record counter.
-
-    Owned by each signaling surface (the singleton :class:`WebRTCTransport`, or
-    one per multi-session ``WebRTCRoutes`` unit) and passed to the shared
-    :class:`easycat.server._webrtc_handlers.WebRTCSignalingHandlers` so the
-    rate-limit / quota semantics stay per-server, matching the pre-convergence
-    behavior exactly. Defined here (not in the server package) so the transport
-    can own it without importing ``easycat.server`` at module load.
-    """
-
-    request_times: deque[float] = field(default_factory=deque)
-    record_count: int | None = None
-    # Serializes quota check + append + counter update in ``handle_stats``:
-    # the append is offloaded to a thread, and that await would otherwise let
-    # concurrent posts observe the same pre-write counters and exceed the
-    # configured record / byte / rate quotas.
-    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
-def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
-    """Extract valid interleaved PCM16 bytes from an ``av.AudioFrame``.
-
-    ``bytes(frame.planes[0])`` can include PyAV line padding.  For decoded
-    aiortc frames that padding can be several times larger than the actual
-    samples, which makes the downstream pipeline see too much audio per RTP
-    frame.  Slice by frame metadata instead of ``to_ndarray()`` so
-    ``easycat[webrtc]`` does not need a NumPy dependency.
-    """
-    frame_rate = int(getattr(frame, "sample_rate", None) or _WEBRTC_SAMPLE_RATE)
-    layout = getattr(frame, "layout", None)
-    channels = len(getattr(layout, "channels", ()) or ()) or 1
-    frame_format = getattr(frame, "format", None)
-    sample_width = int(getattr(frame_format, "bytes", 2) or 2)
-    samples = int(getattr(frame, "samples", 0) or 0)
-    planes = list(getattr(frame, "planes", ()))
-    if not planes:
-        return b"", frame_rate, channels
-
-    is_planar = bool(getattr(frame_format, "is_planar", False))
-    if is_planar and channels > 1 and len(planes) >= channels and samples > 0:
-        raw = _interleave_audio_planes(
-            planes,
-            samples=samples,
-            channels=channels,
-            sample_width=sample_width,
-        )
-    else:
-        raw = bytes(planes[0])
-        valid_bytes = samples * channels * sample_width
-        if valid_bytes > 0:
-            raw = raw[:valid_bytes]
-    return raw, frame_rate, channels
-
-
-def _interleave_audio_planes(
-    planes: list[Any],
-    *,
-    samples: int,
-    channels: int,
-    sample_width: int,
-) -> bytes:
-    """Return interleaved bytes for planar PCM frames."""
-    plane_bytes = []
-    valid_plane_bytes = samples * sample_width
-    for plane in planes[:channels]:
-        data = bytes(plane)[:valid_plane_bytes]
-        if len(data) < valid_plane_bytes:
-            data += bytes(valid_plane_bytes - len(data))
-        plane_bytes.append(data)
-
-    interleaved = bytearray(samples * channels * sample_width)
-    offset = 0
-    for sample in range(samples):
-        start = sample * sample_width
-        end = start + sample_width
-        for channel in plane_bytes:
-            interleaved[offset : offset + sample_width] = channel[start:end]
-            offset += sample_width
-    return bytes(interleaved)
-
-
-# ── Configuration ────────────────────────────────────────────────
-
-
-@dataclass
-class ICEServer:
-    """STUN or TURN server descriptor."""
-
-    urls: str | list[str]
-    username: str | None = None
-    credential: str | None = None
-
-    def __post_init__(self) -> None:
-        if isinstance(self.urls, str):
-            self.urls = [self.urls]
-
-
-@dataclass
-class WebRTCTransportConfig:
-    """Configuration for :class:`WebRTCTransport`.
-
-    Parameters
-    ----------
-    host:
-        Bind address for the HTTP signaling server.
-    port:
-        Listen port for the HTTP signaling server.
-    ice_servers:
-        STUN/TURN servers for ICE negotiation.  Defaults to Google's public
-        STUN server which works when both peers are on the public internet.
-        For NAT traversal add a TURN server (e.g. coturn).
-    audio_format:
-        Target audio format for the pipeline side (default 16 kHz PCM16 mono).
-    max_pending_chunks:
-        Maximum number of inbound audio chunks to buffer before dropping.
-    static_dir:
-        Directory to serve static files from (e.g. the HTML client).  When set,
-        static files are served from the same HTTP server as the signaling
-        endpoint, eliminating the need for a separate file server.
-
-        Defaults to a bundled demo client shipped with the package.  Set to
-        ``None`` to disable static file serving entirely.
-    expose_ice_credentials:
-        Include ICE ``username`` and ``credential`` fields in the public
-        ``/config`` response.  Leave this disabled for long-lived TURN
-        credentials; enable it only for trusted/internal demos, authenticated
-        config endpoints, or short-lived TURN credentials.
-    cors_allowed_origins:
-        Cross-origin browser origins allowed to call the signaling API.  The
-        bundled browser client is same-origin and needs no CORS opt-in.  Use
-        exact origins such as ``"https://voice.example.com"`` for custom
-        hosted clients, or ``"*"`` only for controlled demos.
-    stats_path:
-        Optional JSONL file where browser clients can POST sanitized
-        ``RTCPeerConnection.getStats()`` snapshots via ``/stats``.  Defaults to
-        ``EASYCAT_WEBRTC_STATS_PATH`` when set so validation runs can advertise
-        the artifact path without custom app wiring.
-    auth_token:
-        Optional shared secret required by ``/config``, ``/offer``, and
-        ``/stats``.  Clients present it as ``Authorization: Bearer <token>``.
-        A ``?token=`` query parameter is accepted only when
-        ``allow_query_token=True`` (default off).  The bundled WebRTC client
-        sends the ``Authorization`` header, so it is UNAFFECTED.  Mirrors the
-        WebSocket/docker ``EASYCAT_WS_TOKEN`` security default — pair it with
-        a non-loopback ``host``.
-    allow_query_token:
-        Whether a ``?token=`` query parameter is accepted in addition to the
-        ``Authorization: Bearer`` header.  Default ``False`` (the secure
-        posture): query tokens are a browser/dev opt-in only.
-    max_sessions:
-        Maximum concurrent browser offers accepted by
-        :func:`easycat.server.serve_webrtc_config_sessions`. The single-client
-        :class:`WebRTCTransport` compatibility wrapper ignores this value.
-    stats_max_records:
-        Maximum JSONL records written to ``stats_path`` by this process.
-    stats_max_file_bytes:
-        Maximum size of the stats artifact before new snapshots are rejected.
-    stats_max_requests_per_minute:
-        In-memory rate limit for accepted ``/stats`` snapshots.
-    """
-
-    _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
-    _USE_BUNDLED: ClassVar[str] = "__USE_BUNDLED__"
-
-    host: str = "127.0.0.1"
-    port: int = 8080
-    ice_servers: list[ICEServer] = field(
-        default_factory=lambda: [ICEServer(urls="stun:stun.l.google.com:19302")]
-    )
-    audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
-    max_pending_chunks: int = 200
-    static_dir: str | None = _USE_BUNDLED
-    expose_ice_credentials: bool = False
-    cors_allowed_origins: tuple[str, ...] = ()
-    stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
-    auth_token: str | None = None
-    allow_query_token: bool = False
-    max_sessions: int = 64
-    stats_max_records: int = 1_000
-    stats_max_file_bytes: int = 1_048_576
-    stats_max_requests_per_minute: int = 120
-
-
-def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _sanitize_webrtc_base(raw: str) -> str:
-    """Return a safe same-origin path prefix from an untrusted ``?webrtc=`` value.
-
-    The bundled client prepends ``?webrtc=<prefix>`` to its credentialed
-    ``/offer`` / ``/stats`` POSTs, so an attacker-supplied value could
-    misdirect them. Accept ONLY a clean same-origin absolute path prefix
-    (allowlist): it must start with ``/`` and contain no scheme/host,
-    backslash, query/fragment marker, protocol-relative or empty ``//``
-    segment, or ``..`` traversal segment. Anything else collapses to ``""``
-    (flat mode). Mirrors the ``safeWebRTCBase`` allowlist in
-    ``static/webrtc_client.html`` so the server and client agree.
-    """
-    if not raw or not raw.startswith("/"):
-        return ""
-    if "//" in raw or "\\" in raw or ":" in raw or "?" in raw or "#" in raw:
-        return ""
-    if ".." in raw.split("/"):
-        return ""
-    return raw.rstrip("/")
-
-
-def webrtc_ice_servers_from_env(
-    *,
-    turn_url_env: str = "TURN_SERVER_URL",
-    turn_username_env: str = "TURN_USERNAME",
-    turn_credential_env: str = "TURN_CREDENTIAL",
-    include_public_stun: bool = True,
-) -> list[ICEServer]:
-    """Build STUN/TURN servers from the standard WebRTC demo environment."""
-    servers: list[ICEServer] = []
-    if include_public_stun:
-        servers.append(ICEServer(urls="stun:stun.l.google.com:19302"))
-
-    turn_url = os.getenv(turn_url_env, "").strip()
-    if turn_url:
-        servers.append(
-            ICEServer(
-                urls=turn_url,
-                username=os.getenv(turn_username_env, ""),
-                credential=os.getenv(turn_credential_env, ""),
-            )
-        )
-    return servers
-
-
-def webrtc_transport_config_from_env(
-    *,
-    host_env: str = "SIGNALING_HOST",
-    port_env: str = "SIGNALING_PORT",
-    auth_token_env: str = "WEBRTC_SIGNALING_TOKEN",
-    max_sessions_env: str = "WEBRTC_MAX_SESSIONS",
-    expose_ice_credentials_env: str = "WEBRTC_EXPOSE_ICE_CREDENTIALS",
-    static_dir: str | None = WebRTCTransportConfig._USE_BUNDLED,
-) -> WebRTCTransportConfig:
-    """Build a browser WebRTC transport config from example/deployment env vars."""
-    return WebRTCTransportConfig(
-        host=os.getenv(host_env, "127.0.0.1"),
-        port=int(os.getenv(port_env, "8080")),
-        ice_servers=webrtc_ice_servers_from_env(),
-        static_dir=static_dir,
-        auth_token=normalize_auth_token(os.getenv(auth_token_env)),
-        max_sessions=int(os.getenv(max_sessions_env, "64")),
-        expose_ice_credentials=_env_flag(expose_ice_credentials_env),
-    )
-
-
-# ── Outbound audio track ─────────────────────────────────────────
-
-
-@dataclass
-class _QueuedOutboundChunk:
-    transport_data: bytes
-    original_chunk: AudioChunk
-    session_id: str | None = None
-    turn_id: str | None = None
-    turn_ref: object | None = None
-    transport_offset: int = 0
-    original_reported: int = 0
-
-
-class _OutboundAudioSource:
-    """Custom audio source that reads PCM16 data from a queue.
-
-    Produces 20 ms Opus-compatible frames at 48 kHz.  When the queue is
-    empty, silence frames are emitted so the RTP stream stays alive.
-
-    This is *not* a ``MediaStreamTrack`` itself — call :meth:`create_track`
-    to obtain an aiortc track that delegates ``recv()`` back to this source.
-    """
-
-    # Maximum number of AEC far-end reference frames buffered between mic
-    # frames.  ``_recv`` runs on the event loop (no thread crossing), so the
-    # ``deque(maxlen=...)`` drops the OLDEST entry on overflow for free, which
-    # keeps the freshest reference available for cancellation.
-    _AEC_REF_QUEUE_MAX: ClassVar[int] = 100
-
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
-        self._pending: deque[_QueuedOutboundChunk] = deque()
-        self._pts = 0
-        self._start: float | None = None
-        self._event_bus: EventBus | None = None
-        # Deferred bus.emit work (TransportAudioDelivered).  Observability must
-        # never block the RTP pacing hot path, so ``_recv`` enqueues events and
-        # a single worker task drains them FIFO — off-loop like the previous
-        # per-chunk fire-and-forget tasks, but delivery-ordered (a subscriber
-        # that suspends mid-handler can no longer observe chunk N+1 before
-        # chunk N) and one task instead of ~50/sec.  The worker is tracked in
-        # ``_emit_tasks`` so it is not GC'd mid-flight and ``aclose`` drains it
-        # (mirrors LocalTransport / AudioQueueMixin._emit_tasks).
-        self._emit_queue: deque[TransportAudioDelivered] = deque()
-        self._emit_worker: asyncio.Task[None] | None = None
-        self._emit_tasks: set[asyncio.Task[None]] = set()
-        # Cache the av.AudioFrame class to avoid per-frame import overhead.
-        self._AudioFrame: type | None = None
-        # AEC far-end reference drain queue.  ``_recv`` appends each delivered
-        # (session-rate) chunk at playback time; AudioRouter drains it via
-        # ``drain_aec_reference_frames`` before AudioStage.execute() so the AEC
-        # far-end reference is always fed before the corresponding near-end mic
-        # frame is processed.  Fully-silent render frames append a session-rate
-        # silence frame too, so the far/near streams stay 1:1 during pauses.
-        self._aec_ref_queue: deque[bytes] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
-        # Session-rate format of the most recently delivered far-end frame, used
-        # to size silence reference frames during fully-silent ``_recv`` calls.
-        # ``None`` until audio has played (no echo to cancel before then).
-        self._ref_format: AudioFormat | None = None
-        # Reference capture is armed only once a consumer (the AudioRouter)
-        # first drains via ``drain_aec_reference_frames()``.  Until then ``_recv``
-        # skips appending references entirely, so a session without AEC does no
-        # per-frame reference allocation or deque churn.
-        self._aec_reference_enabled: bool = False
-
-    def create_track(self) -> Any:
-        """Return an aiortc MediaStreamTrack wrapping this source."""
-        transport_src = self
-        aiortc: Any = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
-
-        class _Track(aiortc.MediaStreamTrack):
-            kind = "audio"
-
-            async def recv(self_track) -> Any:  # noqa: N805
-                return await transport_src._recv()
-
-        return _Track()
-
-    def enqueue(
-        self,
-        pcm_s16_48k: bytes,
-        *,
-        original_chunk: AudioChunk,
-        session_id: str | None = None,
-        turn_id: str | None = None,
-        turn_ref: object | None = None,
-    ) -> bool:
-        """Enqueue a chunk of 48 kHz PCM16 mono data for sending.
-
-        Returns ``True`` when the chunk was accepted and ``False`` when
-        the outbound queue was full and the frame was dropped.
-        """
-        if not pcm_s16_48k:
-            return True
-        try:
-            self._queue.put_nowait(
-                _QueuedOutboundChunk(
-                    transport_data=pcm_s16_48k,
-                    original_chunk=original_chunk,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    turn_ref=turn_ref,
-                )
-            )
-        except asyncio.QueueFull:
-            logger.debug("Outbound WebRTC audio queue full — dropping frame")
-            return False
-        return True
-
-    async def _recv(self) -> Any:
-        """Produce the next 20 ms audio frame for aiortc."""
-        if self._AudioFrame is None:
-            av = require_module("av", extra="webrtc", purpose="WebRTC audio frames")
-            self._AudioFrame = av.AudioFrame
-
-        if self._start is None:
-            self._start = time.monotonic()
-
-        # Pace frames to real-time so RTP timing is correct.
-        # Use monotonic clock so pacing is not affected by wall-clock jumps.
-        expected = self._start + (self._pts / _WEBRTC_SAMPLE_RATE)
-        wait = expected - time.monotonic()
-        if wait > 0:
-            await asyncio.sleep(wait)
-
-        frame_bytes = _FRAME_SAMPLES * 2  # 16-bit mono
-
-        buf = bytearray()
-        delivered_chunks: list[tuple[AudioChunk, str | None, str | None, object | None]] = []
-
-        while len(buf) < frame_bytes:
-            if not self._pending:
-                try:
-                    self._pending.append(self._queue.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-
-            queued = self._pending[0]
-            remaining = queued.transport_data[queued.transport_offset :]
-            if not remaining:
-                self._pending.popleft()
-                continue
-
-            take = min(frame_bytes - len(buf), len(remaining))
-            if take <= 0:
-                break
-
-            buf.extend(remaining[:take])
-            queued.transport_offset += take
-
-            original_size = len(queued.original_chunk.data)
-            if queued.transport_offset >= len(queued.transport_data):
-                reported = original_size
-            else:
-                reported = min(
-                    original_size,
-                    int((queued.transport_offset / len(queued.transport_data)) * original_size),
-                )
-            if reported > queued.original_reported:
-                delivered_data = queued.original_chunk.data[queued.original_reported : reported]
-                delivered_chunks.append(
-                    (
-                        AudioChunk(
-                            data=delivered_data,
-                            format=queued.original_chunk.format,
-                            timestamp=queued.original_chunk.timestamp,
-                        ),
-                        queued.session_id,
-                        queued.turn_id,
-                        queued.turn_ref,
-                    )
-                )
-                # Capture the far-end reference at playback time in the same
-                # session-rate format/order previously fed via the router's
-                # _handle_audio_delivery path.  Drained before the near-end
-                # frame by AudioRouter (shared AEC reference capability).
-                #
-                # KNOWN LIMITATION (server-side AEC is best-effort): this
-                # captures the reference at the server's RTP *send* time, not at
-                # the remote peer's actual speaker playout.  For a remote WebRTC
-                # peer the true echo path adds the peer's jitter buffer, speaker,
-                # room acoustics, and return-network latency, so this reference
-                # may not align with the echo arriving back at the near end and
-                # server-side AEC may not converge.  It is primarily effective
-                # for local-mic / co-located setups where send time ≈ playout
-                # time; remote-peer echo alignment is not guaranteed.  Most
-                # browsers already run their own near-end AEC, so this is a
-                # best-effort supplement rather than a guarantee.
-                if delivered_data and self._aec_reference_enabled:
-                    self._aec_ref_queue.append(delivered_data)
-                    self._ref_format = queued.original_chunk.format
-                queued.original_reported = reported
-
-            if queued.transport_offset >= len(queued.transport_data):
-                self._pending.popleft()
-
-        if len(buf) < frame_bytes:
-            # Pad with silence.
-            buf.extend(bytes(frame_bytes - len(buf)))
-
-        pcm_data = bytes(buf)
-
-        # Silence-frame alignment: a render frame that carried no real audio
-        # (queue empty) still played 20 ms of silence into the speaker, so
-        # append a matching session-rate silence reference.  This keeps the
-        # far-end stream 1:1 with the near-end mic stream during pauses,
-        # mirroring LocalTransport's per-callback reference.  Skipped until a
-        # session rate is known (nothing has played yet -> no echo to cancel).
-        if self._aec_reference_enabled and not delivered_chunks and self._ref_format is not None:
-            fmt = self._ref_format
-            silence_samples = fmt.sample_rate * _FRAME_SAMPLES // _WEBRTC_SAMPLE_RATE
-            self._aec_ref_queue.append(bytes(silence_samples * fmt.frame_size))
-
-        frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
-        frame.sample_rate = _WEBRTC_SAMPLE_RATE
-        frame.pts = self._pts
-        frame.time_base = fractions.Fraction(1, _WEBRTC_SAMPLE_RATE)
-        frame.planes[0].update(pcm_data)
-
-        self._pts += _FRAME_SAMPLES
-        if self._event_bus is not None:
-            for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
-                if delivered_chunk.data:
-                    self._emit_queue.append(
-                        TransportAudioDelivered(
-                            chunk=delivered_chunk,
-                            session_id=session_id,
-                            turn_id=turn_id,
-                            turn_ref=turn_ref,
-                        )
-                    )
-            if self._emit_queue and (self._emit_worker is None or self._emit_worker.done()):
-                worker = asyncio.create_task(self._drain_emit_queue())
-                self._emit_worker = worker
-                self._emit_tasks.add(worker)
-                worker.add_done_callback(self._emit_tasks.discard)
-        return frame
-
-    async def _drain_emit_queue(self) -> None:
-        """Emit queued ``TransportAudioDelivered`` events in delivery order."""
-        assert self._event_bus is not None
-        while self._emit_queue:
-            event = self._emit_queue.popleft()
-            try:
-                await self._event_bus.emit(event)
-            except Exception:
-                logger.exception("TransportAudioDelivered emit failed")
-
-    def drain_aec_reference_frames(self) -> list[bytes]:
-        """Return all pending AEC far-end reference frames, draining the queue.
-
-        Each element is session-rate PCM16 captured at playback time, oldest
-        first.  The LiveKitAEC reframes internally, so variable-size elements
-        are fine.
-
-        Calling this also *arms* reference capture: ``_recv`` only buffers
-        far-end frames once a consumer has started draining, so a session
-        without AEC never pays the per-frame reference cost.
-        """
-        self._aec_reference_enabled = True
-        frames = list(self._aec_ref_queue)
-        self._aec_ref_queue.clear()
-        return frames
-
-    def clear(self) -> None:
-        """Discard all queued audio data (used for barge-in / interruption).
-
-        The AEC reference deque is intentionally *not* cleared: residual echo
-        of already-played audio is still arriving at the mic, so those refs
-        must remain available for cancellation.  The deque is bounded, so it
-        cannot grow without limit.
-        """
-        while not self._queue.empty():
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        self._pending.clear()
-
-    def stop(self) -> None:
-        """Signal that no more data will be enqueued.
-
-        No-op: the track is discarded along with the peer connection on
-        disconnect, so there is nothing to clean up here.  In-flight
-        observability emits are drained separately via :meth:`aclose`.
-        """
-
-    async def aclose(self) -> None:
-        """Await any in-flight ``TransportAudioDelivered`` emit tasks.
-
-        ``_recv`` schedules these off the RTP pacing hot path (fire-and-forget
-        so observability never blocks pacing), tracking them in
-        ``self._emit_tasks``.  Teardown must drain that set so pending delivery
-        emits are awaited rather than cancelled-and-lost at loop teardown
-        ("Task was destroyed but it is pending").  Mirrors
-        ``AudioQueueMixin._drain_emit_tasks`` / ``LocalTransport.stop()``.
-        """
-        if not self._emit_tasks:
-            return
-        # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
-        await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
-        self._emit_tasks.clear()
 
 
 # ── WebRTC Transport ─────────────────────────────────────────────
@@ -788,7 +116,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         # Peer connection state.
         self._pc: Any | None = None
-        self._outbound: _OutboundAudioSource = _OutboundAudioSource()
+        self._outbound = OutboundAudioSource()
         self._outbound_track: Any | None = None
         # Browser-created "events" data channel for the playground UI.
         self._events_channel: Any | None = None
@@ -1014,8 +342,8 @@ class WebRTCTransport(AudioQueueMixin):
         from easycat._audio_utils import resample
 
         # Resample to 48 kHz for Opus encoding.
-        if chunk.format.sample_rate != _WEBRTC_SAMPLE_RATE:
-            pcm_data = resample(chunk.data, chunk.format.sample_rate, _WEBRTC_SAMPLE_RATE)
+        if chunk.format.sample_rate != WEBRTC_SAMPLE_RATE:
+            pcm_data = resample(chunk.data, chunk.format.sample_rate, WEBRTC_SAMPLE_RATE)
         else:
             pcm_data = chunk.data
 
@@ -1157,7 +485,7 @@ class WebRTCTransport(AudioQueueMixin):
 
             # Prepare an outbound track for the new connection, but keep the
             # existing peer's source active until negotiation succeeds.
-            outbound = _OutboundAudioSource()
+            outbound = OutboundAudioSource()
             outbound_track = outbound.create_track()
             pc.addTrack(outbound_track)
 
@@ -1262,13 +590,11 @@ class WebRTCTransport(AudioQueueMixin):
         if self._pc is not None:
             await self._pc.close()
 
-        # The source belongs to the old peer and owns delivery-event tasks that
-        # may still be finishing off the RTP path. Drain it before replacing the
-        # reference so repeated offers cannot orphan those tasks or lose their
-        # final TransportAudioDelivered events.
-        old_outbound = self._outbound
-        old_outbound.stop()
-        await old_outbound.aclose()
+        # Retire the previous outbound source before it is overwritten below:
+        # ``disconnect()`` only closes the *current* source, so its delivery
+        # worker would otherwise survive the peer swap. ``aclose`` is bounded,
+        # so a hung subscriber cannot stall the replacement offer.
+        await self._outbound.aclose()
 
         # Clear stale audio from the previous peer so it doesn't leak into
         # the new session's receive_audio() iterator. Do not replace the queue:
@@ -1350,7 +676,7 @@ class WebRTCTransport(AudioQueueMixin):
                 # Extract raw PCM from the av.AudioFrame. aiortc decodes Opus
                 # to s16 at 48 kHz by default, but PyAV plane buffers can
                 # include padding; the helper returns only valid samples.
-                raw, frame_rate, channels = _audio_frame_pcm16_bytes(frame)
+                raw, frame_rate, channels = audio_frame_pcm16_bytes(frame)
 
                 # Downmix to mono if needed.
                 if channels > 1:

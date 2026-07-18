@@ -299,7 +299,7 @@ def test_public_api_symbols_resolve() -> None:
 
 def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     """Cold-start guard: ``import easycat; easycat.EasyConfig`` must not drag
-    in the telephony runtime stack or heavy transport SDKs.
+    in the telephony runtime stack or WebRTC peer/audio runtime.
 
     Runs in a fresh interpreter so the test process's own imports don't
     pollute ``sys.modules``. ``easycat.config`` may load the two telephony
@@ -320,6 +320,8 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
         "print(json.dumps({\n"
         "    'telephony_modules': tele,\n"
         "    'outbound_builder_loaded': 'easycat.config._outbound_helpers' in sys.modules,\n"
+        "    'webrtc_transport_loaded': 'easycat.transports.webrtc' in sys.modules,\n"
+        "    'webrtc_audio_loaded': 'easycat.transports._webrtc_audio' in sys.modules,\n"
         "}))\n"
     )
     result = subprocess.run(
@@ -331,6 +333,8 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     import_state = json.loads(result.stdout)
     loaded = set(import_state["telephony_modules"])
     assert import_state["outbound_builder_loaded"] is False
+    assert import_state["webrtc_transport_loaded"] is False
+    assert import_state["webrtc_audio_loaded"] is False
     # Only the package and the two config-only submodules are allowed.
     allowed = {
         "easycat.telephony",
