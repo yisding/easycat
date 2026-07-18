@@ -77,20 +77,22 @@ _JOURNAL_INSERT_SQL = (
 )
 
 
-def _stage_of(data: dict[str, Any] | None) -> str | None:
-    """Return the primary indexable ``stage`` token from record data."""
+def _indexable_token(data: dict[str, Any] | None, key: str) -> str | None:
+    """Return a non-empty string token from record data, else ``None``."""
     if not isinstance(data, dict):
         return None
-    candidate = data.get("stage")
+    candidate = data.get(key)
     return candidate if isinstance(candidate, str) and candidate else None
+
+
+def _stage_of(data: dict[str, Any] | None) -> str | None:
+    """Return the primary indexable ``stage`` token from record data."""
+    return _indexable_token(data, "stage")
 
 
 def _observed_stage_of(data: dict[str, Any] | None) -> str | None:
     """Return the indexable ``observed_stage`` token from record data."""
-    if not isinstance(data, dict):
-        return None
-    candidate = data.get("observed_stage")
-    return candidate if isinstance(candidate, str) and candidate else None
+    return _indexable_token(data, "observed_stage")
 
 
 def _insert_tag_index_rows(conn: Any, sequence: int, tags: frozenset[str]) -> None:
@@ -256,10 +258,10 @@ def _ensure_journal_schema(conn: Any) -> None:
     EXISTS`` here.  All operations are additive — no data is dropped — so
     crash-dump promotion and the recovered-session marker flow keep working.
 
-    Stage/tag indexing is tracked by ``schema_version``. The idempotent
-    backfill records its completion only after every historical row has been
-    processed, so a process failure after additive DDL can safely resume on
-    the next open.
+    This applies only additive DDL. The stage/tag-index *backfill* is a
+    separate step (:func:`_ensure_index_backfill`) that callers run after
+    prior-session reconciliation, so rows that are about to be truncated
+    (crash-dump promotion, clean reuse) are never rewritten first.
     """
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
     if "error_children" not in columns:
@@ -279,6 +281,18 @@ def _ensure_journal_schema(conn: Any) -> None:
         "CREATE TABLE IF NOT EXISTS journal_tags ("
         "tag TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (tag, sequence))"
     )
+
+
+def _ensure_index_backfill(conn: Any) -> None:
+    """Backfill derived stage columns and tag-index rows for pre-v2 files.
+
+    Tracked by ``schema_version``: completion is recorded only after every
+    historical row has been processed, so a process failure mid-backfill
+    safely resumes on the next open. Run this *after* prior-session
+    reconciliation — for the SQLite backend the live table is empty by then
+    (prior rows were promoted/truncated), so the scan is O(0); for libSQL's
+    retained-rows unclean reuse it keeps stage/tag queries correct.
+    """
     version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     version = int(version_row[0]) if version_row and version_row[0] is not None else 0
     if version < _INDEX_MIGRATION_VERSION:

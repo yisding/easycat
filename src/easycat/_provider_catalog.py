@@ -33,11 +33,26 @@ import importlib.metadata
 import logging
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from difflib import get_close_matches
 from typing import Any
 
 logger = logging.getLogger("easycat")
+
+
+def inject_event_bus(config: Any, event_bus: Any) -> Any:
+    """Return *config* with ``event_bus`` structurally injected when possible.
+
+    "Needs an event bus" is derived from the config dataclass itself (it
+    declares an ``event_bus`` field) rather than from a hand-maintained
+    isinstance tuple, so any future event-bus-aware provider is included
+    automatically. An ``event_bus`` already set on the config wins.
+    """
+    if event_bus is None:
+        return config
+    if any(f.name == "event_bus" for f in fields(config)) and config.event_bus is None:
+        return replace(config, event_bus=event_bus)
+    return config
 
 
 @dataclass(frozen=True)

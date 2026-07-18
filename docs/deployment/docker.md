@@ -325,6 +325,13 @@ as environment variables. Keep the WebSocket token gate, session cap, and
 loopback bind (or equivalent ingress controls) when deploying modified
 server scripts.
 
+The entrypoint fails fast when `EASYCAT_WS_HOST` is non-loopback and
+`EASYCAT_WS_TOKEN` is unset. If your mounted script deliberately serves
+without a token because authentication terminates at an ingress proxy
+(the `unsafe_allow_no_auth=True` pattern), set
+`EASYCAT_UNSAFE_ALLOW_NO_AUTH=1` so the container starts; the entrypoint
+logs a loud warning instead of exiting.
+
 ## Latency notes
 
 Bridge networking is fine for this example: one TCP connection per

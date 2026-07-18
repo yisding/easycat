@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, replace
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any
 
-from easycat._provider_catalog import ProviderCatalog
+from easycat._provider_catalog import ProviderCatalog, inject_event_bus
 from easycat.events import EventBus
 from easycat.stt.base import STTBase
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
@@ -205,10 +205,7 @@ def create_stt_provider(config: STTProviderConfig, event_bus: EventBus | None = 
     if not provider_config.api_key:
         raise ValueError(f"API key is required for STT provider '{config.provider}'")
 
-    if event_bus is not None:
-        has_event_bus_field = any(f.name == "event_bus" for f in fields(provider_config))
-        if has_event_bus_field and cast(Any, provider_config).event_bus is None:
-            provider_config = replace(cast(Any, provider_config), event_bus=event_bus)
+    provider_config = inject_event_bus(provider_config, event_bus)
 
     return provider_cls(provider_config)
 
@@ -220,15 +217,7 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     provider registry in the codebase.
     """
     provider_cls = _provider_for_config(type(config))
-    provider_config = config
-    # Derive "needs an event bus" structurally from the dataclass itself
-    # (it declares an ``event_bus`` field) rather than from a hand-maintained
-    # isinstance tuple — so any future event-bus-aware provider is included
-    # automatically.
-    has_event_bus_field = any(f.name == "event_bus" for f in fields(config))
-    if has_event_bus_field and cast(Any, config).event_bus is None:
-        provider_config = replace(cast(Any, config), event_bus=event_bus)
-    return provider_cls(provider_config)
+    return provider_cls(inject_event_bus(config, event_bus))
 
 
 def _provider_for_config(config_type: STTConfigType) -> Callable[..., STTBase]:

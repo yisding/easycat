@@ -492,7 +492,13 @@ class AudioRouter:
                 # decremented by *any* chunk sharing the outbound queue
                 # (e.g. interleaved synthesis or hold audio), which could
                 # leave BOT_SPEAKING early and truncate the replayed tail.
-                chunk._easycat_replay_chunk = True
+                # Guarded: providers are duck-typed, so a foreign chunk class
+                # (slots/frozen/NamedTuple) may reject the tag; it then simply
+                # doesn't count against the replay tally.
+                try:
+                    chunk._easycat_replay_chunk = True
+                except Exception:
+                    logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
@@ -808,7 +814,11 @@ class AudioRouter:
             # merely because replay chunks are pending.  This keeps the
             # tally correct even if a non-replay chunk shares the outbound
             # queue while replay audio is still draining.
-            replayed_chunk = self._replay_chunks_pending > 0 and chunk._easycat_replay_chunk
+            # ``getattr`` keeps foreign chunk objects (duck-typed providers,
+            # app-injected hold audio) from killing the drain task here.
+            replayed_chunk = self._replay_chunks_pending > 0 and getattr(
+                chunk, "_easycat_replay_chunk", False
+            )
             turn = self._current_turn()
             # Claim before waiting for the send lock. Otherwise a contended
             # dequeued chunk disappears from both queue depth and in-flight
@@ -880,9 +890,14 @@ class AudioRouter:
     def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
         """Attach session/turn ownership so buffered transports can report later delivery."""
         session_id, _ = self._correlation_ids()
-        chunk._easycat_session_id = session_id
-        chunk._easycat_turn_id = turn.id if turn is not None else None
-        chunk._easycat_turn_ref = turn
+        # Guarded: a foreign chunk class that rejects the stamp must still be
+        # sent (unstamped delivery loses attribution, not audio).
+        try:
+            chunk._easycat_session_id = session_id
+            chunk._easycat_turn_id = turn.id if turn is not None else None
+            chunk._easycat_turn_ref = turn
+        except Exception:
+            logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
 
     async def _handle_audio_delivery(
         self,

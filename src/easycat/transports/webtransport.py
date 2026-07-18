@@ -562,7 +562,7 @@ class _WebTransportSession:
         rather than silently dropping tracking and reopening that misroute.
         """
         self._rejected_stream_ids.add(stream_id)
-        if len(self._rejected_stream_ids) > _MAX_REJECTED_STREAMS:
+        if len(self._rejected_stream_ids) > _MAX_REJECTED_STREAMS and not self._on_close.is_set():
             logger.warning(
                 "WebTransport session %d exceeded %d rejected streams — closing",
                 self._session_id,
@@ -621,10 +621,12 @@ class _WebTransportSession:
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
             self._handle_control_message(msg)
-        if self._control_codec.poisoned:
+        if self._control_codec.poisoned and not self._on_close.is_set():
             # An oversized length prefix is a malicious-peer signal.  Honor
             # the codec's documented contract: tear the session down rather
-            # than silently swallowing all further control frames.
+            # than silently swallowing all further control frames. The
+            # ``_on_close`` guard keeps queued QUIC events dispatched after
+            # the close from re-counting the same incident.
             logger.warning(
                 "WebTransport control codec poisoned (oversized frame) — closing session %d",
                 self._session_id,

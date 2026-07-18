@@ -27,7 +27,14 @@ ArtifactClass = Literal["replay_critical", "debug_verbose"]
 
 @runtime_checkable
 class ArtifactStore(Protocol):
-    """Content-addressable store for large payloads."""
+    """Content-addressable store for large payloads.
+
+    Implementations whose ``put`` blocks on I/O (disk, network) should set a
+    truthy ``writes_block`` attribute; the capture pipeline then offloads
+    their writes to a worker thread instead of running them inline on the
+    live audio loop. Stores without the attribute are assumed in-memory,
+    except ``FilesystemArtifactStore`` which is offloaded automatically.
+    """
 
     def put(
         self,

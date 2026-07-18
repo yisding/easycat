@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
+from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
@@ -212,20 +213,23 @@ async def put_artifact_async(
     store = ctx.artifact_store
     if _writes_block(store):
         ref = await asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
-    else:
-        ref = store.put(payload, artifact_class=artifact_class)
-    return ref or None
+        return ref or None
+    return put_artifact(ctx, payload, artifact_class=artifact_class)
 
 
 def _writes_block(store: Any) -> bool:
     """Whether ``store.put`` blocks on a syscall and should run off-loop.
 
-    Only disk-backed stores (``FilesystemArtifactStore``) do fsync-class
+    A store can declare this itself via a ``writes_block`` attribute — the
+    escape hatch for custom ``ArtifactStore`` implementations (S3/NFS-backed,
+    wrappers around the filesystem store) whose ``put`` does I/O. Otherwise
+    only disk-backed stores (``FilesystemArtifactStore``) do fsync-class
     I/O; in-memory backends insert into a dict and must run inline to avoid
     a per-frame thread hop on the live audio loop.
     """
-    from easycat.runtime.artifacts import FilesystemArtifactStore
-
+    declared = getattr(store, "writes_block", None)
+    if declared is not None:
+        return bool(declared)
     return isinstance(store, FilesystemArtifactStore)
 
 

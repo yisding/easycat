@@ -1797,7 +1797,7 @@ class TestIndexedStageTurnTagQueries:
 
 class TestOldSchemaJournalMigration:
     def test_ensure_schema_migrates_pre_stage_file_additively(self, tmp_path: Path) -> None:
-        from easycat.runtime._journal_codec import _ensure_journal_schema
+        from easycat.runtime._journal_codec import _ensure_index_backfill, _ensure_journal_schema
 
         db_path = tmp_path / "old.sqlite"
         _write_pre_stage_journal(
@@ -1811,6 +1811,7 @@ class TestOldSchemaJournalMigration:
 
         conn = sqlite3.connect(db_path)
         _ensure_journal_schema(conn)
+        _ensure_index_backfill(conn)
 
         # Column, indexes, and junction table were added additively.
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(journal)").fetchall()}
@@ -1844,6 +1845,7 @@ class TestOldSchemaJournalMigration:
         # Running migration again is a no-op (completion marker already present).
         conn2 = sqlite3.connect(db_path)
         _ensure_journal_schema(conn2)
+        _ensure_index_backfill(conn2)
         again = {
             (r[0], r[1])
             for r in conn2.execute("SELECT tag, sequence FROM journal_tags").fetchall()
@@ -1853,7 +1855,7 @@ class TestOldSchemaJournalMigration:
         conn2.close()
 
     def test_interrupted_index_migration_resumes(self, tmp_path: Path) -> None:
-        from easycat.runtime._journal_codec import _ensure_journal_schema
+        from easycat.runtime._journal_codec import _ensure_index_backfill, _ensure_journal_schema
 
         db_path = tmp_path / "interrupted.sqlite"
         _write_pre_stage_journal(
@@ -1877,6 +1879,7 @@ class TestOldSchemaJournalMigration:
 
         resumed = sqlite3.connect(db_path)
         _ensure_journal_schema(resumed)
+        _ensure_index_backfill(resumed)
 
         assert resumed.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 2
         assert resumed.execute(
