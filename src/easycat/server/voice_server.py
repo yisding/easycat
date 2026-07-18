@@ -268,7 +268,7 @@ class VoiceServer:
         WebRTC offers and ``/ws`` connections drain through one collaborator.
         """
         from easycat.server.webrtc_routes import WebRTCRoutes
-        from easycat.transports.webrtc import WebRTCTransportConfig
+        from easycat.transports._webrtc_config import WebRTCTransportConfig
 
         # ``max_sessions`` keeps the gate cap consistent in the ``/webrtc/health``
         # JSON; the actual reservation is the shared gate's. A non-loopback host

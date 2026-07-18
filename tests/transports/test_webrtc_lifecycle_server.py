@@ -111,6 +111,34 @@ class TestWebRTCIngressQueueOwnership:
         await audio_iter.aclose()
 
     @pytest.mark.asyncio
+    async def test_repeated_offer_closes_previous_outbound_source(self, monkeypatch):
+        """Peer replacement must retire the old outbound source via aclose():
+        ``disconnect()`` only closes the *current* source, so a delivery worker
+        owned by the replaced source would otherwise survive indefinitely."""
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        first_response = await transport._handle_offer(_FakeOfferRequest())
+        assert first_response.status == 200
+        first_outbound = transport._outbound
+
+        closed = asyncio.Event()
+        original_aclose = first_outbound.aclose
+
+        async def _tracking_aclose() -> None:
+            closed.set()
+            await original_aclose()
+
+        monkeypatch.setattr(first_outbound, "aclose", _tracking_aclose)
+
+        second_response = await transport._handle_offer(_FakeOfferRequest())
+        assert second_response.status == 200
+        assert transport._outbound is not first_outbound
+        assert closed.is_set()
+
+    @pytest.mark.asyncio
     async def test_disconnect_does_not_hold_offer_lock_during_http_cleanup(self):
         transport = WebRTCTransport()
         transport._web = _FakeWeb

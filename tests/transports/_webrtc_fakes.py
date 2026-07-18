@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 import pytest
 
+import easycat.transports._webrtc_audio as webrtc_audio_mod
 import easycat.transports.webrtc as webrtc_mod
 
 _HAS_AIORTC = importlib.util.find_spec("aiortc") is not None
@@ -206,6 +207,7 @@ def _install_fake_webrtc_modules(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError(f"unexpected module request: {name}")
 
     monkeypatch.setattr(webrtc_mod, "require_module", fake_require_module)
+    monkeypatch.setattr(webrtc_audio_mod, "require_module", fake_require_module)
 
 
 class _FakeEventsChannel:

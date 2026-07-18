@@ -50,9 +50,9 @@ from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.telephony.dtmf import DTMFAggregatorConfig
 from easycat.telephony.voicemail import VoicemailDetectorConfig
 from easycat.timeouts import TimeoutConfig
+from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
-from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
