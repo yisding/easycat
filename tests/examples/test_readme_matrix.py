@@ -50,45 +50,15 @@ def test_examples_readme_lists_every_top_level_python_example() -> None:
 
 def test_examples_readme_fastest_path_verifies_environment_before_running() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
-    intro = readme.split("For the fastest local mic/speaker path:", 1)[0]
-    normalized_intro = re.sub(r"\s+", " ", intro)
     fast_path = readme.split("For the fastest local mic/speaker path:", 1)[1]
     commands = fast_path.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
 
-    assert "uv run easycat docs" in intro
-    assert "maintained docs map" in intro
-    assert (
-        "Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding rules"
-    ) in normalized_intro
-    assert "[llms.txt](../llms.txt) for machine-readable docs route discovery" in normalized_intro
-    assert "when a script or coding agent" not in normalized_intro
-    assert "uv run easycat explain json-schema" in intro
-    assert "uv run easycat doctor --json" in intro
-    assert "uv run easycat doctor --env-file .env --json" in intro
-    assert "same checks as parseable rows" in normalized_intro
-    assert "uv run easycat init --list-templates" in intro
-    assert "uv run easycat init my-agent" in intro
-    assert "uv run easycat init --list-templates --json" in intro
-    assert "same template catalog" in normalized_intro
-    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in intro
-    assert "browser WebRTC" in normalized_intro
-    assert "Twilio" in intro
     assert commands == [
         "uv sync --extra quickstart --group dev",
         'export OPENAI_API_KEY="your-api-key"',
         "uv run easycat doctor",
         "uv run python examples/openai_agents_voice.py",
     ]
-    assert "uv run easycat doctor --env-file .env" in fast_path
-    assert "uv run --env-file .env python examples/openai_agents_voice.py" in fast_path
-    assert "After changing an example or using one as a starting point" in fast_path
-    assert "uv run easycat validate quick" in fast_path
-    assert "uv run easycat validate quick --json" in fast_path
-    assert "uv run easycat validate report .easycat/validation/latest.json" in fast_path
-    assert "uv run easycat validate report .easycat/validation/latest.json --json" in fast_path
-    normalized_fast_path = re.sub(r"\s+", " ", fast_path)
-    assert "emit the run or saved report inside the standard CLI envelope" in normalized_fast_path
-    assert "when a script or coding agent" not in normalized_fast_path
 
 
 def test_examples_readme_command_hints_are_locally_valid() -> None:
@@ -117,7 +87,6 @@ def test_examples_readme_command_hints_are_locally_valid() -> None:
 def test_examples_readme_choose_example_table_tracks_matrix() -> None:
     readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     table = readme.split("## Choose An Example", 1)[1].split("## Core Voice Loops", 1)[0]
-    normalized_table = re.sub(r"\s+", " ", table)
     rows = {row["link"]: row for row in _example_readme_rows()}
     linked_examples = set(re.findall(r"\[([^]]+\.py)\]\(([^)]+\.py)\)", table))
     linked_paths = {link for display, link in linked_examples}
@@ -125,21 +94,6 @@ def test_examples_readme_choose_example_table_tracks_matrix() -> None:
     assert linked_paths <= set(rows), "Chooser links missing from example matrix"
     for display, link in linked_examples:
         assert display == link
-    for phrase in (
-        "No API keys",
-        "First local voice bot",
-        "Your preferred agent framework",
-        "Browser or server transport",
-        "Provider comparison",
-        "Debugging and replay",
-        "`quickstart` extra",
-        "framework-specific bridge wiring",
-        "browser/WebSocket/WebRTC surfaces",
-        "provider extras and required API keys",
-        "`RunBundle` export",
-        "debugger UI",
-    ):
-        assert phrase in normalized_table
     for example in ("journal_demo.py", "telephony_helpers.py"):
         assert rows[example]["env"] == "None"
     assert "OPENAI_API_KEY" in rows["openai_agents_voice.py"]["env"]

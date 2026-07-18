@@ -5,6 +5,8 @@ import sys
 import types
 from pathlib import Path
 
+from tests.teaching._source_guards import assert_sources_match
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "06-streaming-agent"
 TURN_GAP_SCRIPTS = [
@@ -114,15 +116,12 @@ async def test_streaming_turn_gap_is_unavailable_without_accepted_audio(
 
 
 def test_streaming_chapter_copies_keep_first_audio_turn_gap_contract() -> None:
-    stale = []
-    for path in TURN_GAP_SCRIPTS:
-        source = path.read_text(encoding="utf-8")
-        if (
-            '"reply_enqueue_gap_ms"' not in source
-            or "first_audio_t" not in source
-            or "total_gap = (time.monotonic() - stt_final_t)" in source
-            or "bot done speaking" in source
-        ):
-            stale.append(path.relative_to(ROOT).as_posix())
-
-    assert not stale, "Streaming turn-gap copies drifted in: " + ", ".join(stale)
+    assert_sources_match(
+        TURN_GAP_SCRIPTS,
+        required=('"reply_enqueue_gap_ms"', "first_audio_t"),
+        forbidden=(
+            "total_gap = (time.monotonic() - stt_final_t)",
+            "bot done speaking",
+        ),
+        label="Streaming turn-gap copies",
+    )

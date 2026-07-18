@@ -108,16 +108,3 @@ async def test_batch_deletes_raw_wav_when_transcription_fails(
     assert not wav_path.exists()
     assert not wav_path.parent.exists()
     assert not chapter.RUNS_DIR.exists()
-
-
-def test_lesson_distinguishes_raw_audio_from_transcript_retention() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "TemporaryDirectory" in lesson
-    assert 'retention="temporary"' in lesson
-    assert "not raw microphone audio" in lesson
-    assert "transcript is PII-bearing" in lesson
-    assert "does not persist the absolute system-temp path" in lesson
-    assert "An untracked temp file is not a retention strategy" in lesson

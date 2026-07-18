@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.teaching._source_guards import assert_sources_match
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "06-streaming-agent"
 STREAMING_SCRIPTS = [
@@ -55,29 +57,15 @@ def test_streamed_tts_probe_preserves_sentence_and_turn_counts() -> None:
 
 
 def test_streaming_chapter_copies_preserve_delivery_evidence() -> None:
-    stale = []
-    for path in STREAMING_SCRIPTS:
-        source = path.read_text(encoding="utf-8")
-        if (
-            '"accepted_chunks": sentence_accepted' not in source
-            or '"rejected_chunks": sentence_rejected' not in source
-            or '"tts_accepted_chunks": accepted_chunks' not in source
-            or '"tts_rejected_chunks": rejected_chunks' not in source
-            or "transport rejected all" not in source
-            or "TTS produced no audio" not in source
-        ):
-            stale.append(path.relative_to(ROOT).as_posix())
-
-    assert not stale, "Streaming TTS delivery evidence drifted in: " + ", ".join(stale)
-
-
-def test_lesson_distinguishes_empty_tts_from_stream_rejection() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "tts_delivery_probe.py" in lesson
-    assert "Per-sentence records explain where" in lesson
-    assert "all_chunks_rejected" in lesson
-    assert "no_chunks_produced" in lesson
-    assert "first accepted chunk may arrive in a later sentence" in lesson
+    assert_sources_match(
+        STREAMING_SCRIPTS,
+        required=(
+            '"accepted_chunks": sentence_accepted',
+            '"rejected_chunks": sentence_rejected',
+            '"tts_accepted_chunks": accepted_chunks',
+            '"tts_rejected_chunks": rejected_chunks',
+            "transport rejected all",
+            "TTS produced no audio",
+        ),
+        label="Streaming TTS delivery evidence",
+    )

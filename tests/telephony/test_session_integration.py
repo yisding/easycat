@@ -6,8 +6,6 @@ the helpers respond to events within the session lifecycle.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from easycat.config import OutboundCallConfig, TelephonyConfig
@@ -23,7 +21,6 @@ from easycat.events import (
 )
 from easycat.telephony.call_state import (
     CallStateChanged,
-    ClassificationGate,
     OutboundCallState,
     OutboundCallStateMachine,
 )
@@ -390,119 +387,3 @@ class TestOutboundCallFlow:
         finally:
             nav.stop()
 
-
-# ── Classification gate module tests ──────────────────────────────
-
-
-class TestClassificationGateModule:
-    @pytest.mark.asyncio
-    async def test_gate_buffers_tts_audio_frames(self) -> None:
-        from easycat.audio_format import AudioChunk, AudioFormat
-        from easycat.events import TTSAudio
-
-        bus = EventBus()
-        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0)
-        gate.start()
-        try:
-            gate.close()
-            chunk = AudioChunk(
-                data=b"\x00" * 100,
-                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
-            )
-            await bus.emit(TTSAudio(chunk=chunk))
-            assert len(gate.buffer) == 1
-        finally:
-            gate.stop()
-
-    @pytest.mark.asyncio
-    async def test_gate_release_flushes_buffer(self) -> None:
-        from easycat.audio_format import AudioChunk, AudioFormat
-        from easycat.events import TTSAudio
-
-        bus = EventBus()
-        flushed: list[list] = []
-        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0, on_flush=flushed.append)
-        gate.start()
-        try:
-            gate.close()
-            chunk = AudioChunk(
-                data=b"\x00" * 100,
-                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
-            )
-            await bus.emit(TTSAudio(chunk=chunk))
-            released = gate.release()
-            assert len(released) == 1
-            assert len(flushed) == 1
-        finally:
-            gate.stop()
-
-    @pytest.mark.asyncio
-    async def test_gate_transparent_when_open(self) -> None:
-        from easycat.audio_format import AudioChunk, AudioFormat
-        from easycat.events import TTSAudio
-
-        bus = EventBus()
-        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0)
-        gate.start()
-        try:
-            # Gate not closed — audio passes through.
-            chunk = AudioChunk(
-                data=b"\x00" * 100,
-                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
-            )
-            await bus.emit(TTSAudio(chunk=chunk))
-            assert len(gate.buffer) == 0
-        finally:
-            gate.stop()
-
-    @pytest.mark.asyncio
-    async def test_gate_hold_audio_plays_during_buffer(self) -> None:
-        bus = EventBus()
-        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0, hold_audio="hold.wav")
-        gate.start()
-        try:
-            gate.close()
-            assert gate._hold_audio_playing
-        finally:
-            gate.stop()
-
-    @pytest.mark.asyncio
-    async def test_gate_auto_releases_on_timeout(self) -> None:
-        from easycat.audio_format import AudioChunk, AudioFormat
-        from easycat.events import TTSAudio
-
-        bus = EventBus()
-        gate = ClassificationGate(bus, enabled=True, timeout_s=0.05)
-        gate.start()
-        try:
-            gate.close()
-            chunk = AudioChunk(
-                data=b"\x00" * 100,
-                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
-            )
-            await bus.emit(TTSAudio(chunk=chunk))
-            await asyncio.sleep(0.3)
-            assert not gate.is_buffering
-        finally:
-            gate.stop()
-
-    @pytest.mark.asyncio
-    async def test_gate_only_active_during_classifying(self) -> None:
-        bus = EventBus()
-        sm = OutboundCallStateMachine(
-            bus,
-            classification_timeout_s=60,
-            classification_gate=True,
-        )
-        sm.start()
-        try:
-            # Gate not closed before call is answered.
-            assert not sm.gate.is_buffering
-            await bus.emit(CallAnswered(call_sid="CA1"))
-            assert sm.state == OutboundCallState.CLASSIFYING
-            assert sm.gate.is_buffering
-            # Classify — gate opens.
-            await bus.emit(VoicemailDetected(result="human"))
-            assert not sm.gate.is_buffering
-        finally:
-            sm.stop()

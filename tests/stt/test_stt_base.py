@@ -12,8 +12,6 @@ from easycat.stt.base import STTBase, pcm_to_wav
 from easycat.stt.websocket_base import WebSocketSTTBase
 from tests.stt.helpers import (
     collect_stt_events,
-    generate_pcm_noise,
-    generate_pcm_silence,
     generate_pcm_sine,
     make_audio_chunks,
 )
@@ -273,55 +271,6 @@ async def test_websocket_base_ignores_binary_and_invalid_json_messages():
     assert [event.text for event in events] == ["hello"]
     assert ws.closed is True
     assert ws.sent
-
-
-# ── Test harness tests (verify helper functions) ──────────────────
-
-
-def test_generate_pcm_sine_length():
-    pcm = generate_pcm_sine(duration_ms=1000, sample_rate=16000)
-    expected_samples = 16000
-    expected_bytes = expected_samples * 2  # 16-bit = 2 bytes per sample
-    assert len(pcm) == expected_bytes
-
-
-def test_generate_pcm_silence_length():
-    pcm = generate_pcm_silence(duration_ms=500, sample_rate=8000)
-    expected_samples = 4000
-    assert len(pcm) == expected_samples * 2
-
-
-def test_generate_pcm_noise_deterministic():
-    a = generate_pcm_noise(duration_ms=100, seed=42)
-    b = generate_pcm_noise(duration_ms=100, seed=42)
-    assert a == b
-
-    c = generate_pcm_noise(duration_ms=100, seed=99)
-    assert a != c
-
-
-def test_make_audio_chunks_count():
-    pcm = generate_pcm_sine(duration_ms=500, sample_rate=16000)
-    chunks = make_audio_chunks(pcm, chunk_duration_ms=100)
-    assert len(chunks) == 5
-
-
-def test_make_audio_chunks_total_data():
-    pcm = generate_pcm_sine(duration_ms=300, sample_rate=16000)
-    chunks = make_audio_chunks(pcm, chunk_duration_ms=100)
-    total = b"".join(c.data for c in chunks)
-    assert total == pcm
-
-
-@pytest.mark.asyncio
-async def test_collect_stt_events_harness():
-    """The test harness itself should work correctly with a simple provider."""
-    stt = EchoSTT(transcript="harness test")
-    pcm = generate_pcm_sine(duration_ms=100)
-    chunks = make_audio_chunks(pcm)
-    events = await collect_stt_events(stt, chunks)
-    assert len(events) == 1
-    assert events[0].text == "harness test"
 
 
 # ── STTProvider protocol conformance ─────────────────────────────

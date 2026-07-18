@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Callable
 
 import pytest
 import websockets
@@ -22,6 +21,7 @@ from easycat.transports.twilio_media import (
 )
 from easycat.transports.websocket import WebSocketConnectionTransport
 
+from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
 
 pytestmark = pytest.mark.integration_socket
@@ -68,20 +68,6 @@ class _DummyTwilioWebSocket:
 
     async def close(self) -> None:
         return None
-
-
-class _UsesPytestTcpPortFactory:
-    _unused_tcp_port_factory: Callable[[], int]
-
-    @pytest.fixture(autouse=True)
-    def _set_unused_tcp_port_factory(
-        self,
-        unused_tcp_port_factory: Callable[[], int],
-    ) -> None:
-        self._unused_tcp_port_factory = unused_tcp_port_factory
-
-    def _unused_port(self) -> int:
-        return self._unused_tcp_port_factory()
 
 
 # ── WebSocketConnectionTransport tests ────────────────────────────

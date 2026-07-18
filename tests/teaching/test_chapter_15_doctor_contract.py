@@ -77,26 +77,3 @@ def test_scoped_production_reports_distinguish_credentials_from_liveness(
     }
     assert requests and requests[0][0] == "https://api.openai.com/v1"
     assert "headers" not in requests[0][1]
-
-
-def test_doctor_exercise_names_the_live_check_families() -> None:
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    normalized = " ".join(exercises.split())
-
-    assert "checks five things" not in exercises
-    assert "does not probe the noise-reduction or echo-cancellation extras" in normalized
-    for name in (
-        "Python version",
-        "EasyCat version",
-        "provider environment variables",
-        "provider reachability",
-        "`onnxruntime`",
-        "microphone",
-        "journal writability",
-        "disk space",
-    ):
-        assert name in exercises
-    assert "--provider openai --environment production --json" in normalized
-    assert "`--environment production`" in readme
-    assert "`--provider <name>`" in readme

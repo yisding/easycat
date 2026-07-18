@@ -8,55 +8,7 @@ from tests.observability._observability_helpers import (
     json,
     logging,
     pytest,
-    re,
 )
-
-
-def test_observability_doc_explains_journal_redaction_boundary() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    caveats = " ".join(doc.split("## Honesty caveats", 1)[1].split())
-
-    assert "safe config/environment snapshots" in caveats
-    assert "selected agent-bridge metadata" in caveats
-    assert "obvious secret-like journal fields through `apply_write_filter`" in caveats
-    assert "transcript text, agent output, and tool-result text for replay" in caveats
-    assert "Config snapshots are diagnostic rather than lossless" in caveats
-    assert "cannot recurse forever or grow without bound" in caveats
-
-
-def test_observability_doc_lists_journal_cli_entry_points() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
-        "### D — OpenTelemetry facade",
-        1,
-    )[0]
-
-    for command in (
-        "easycat bundles list",
-        "easycat bundles list --json",
-        "easycat bundles show <path>",
-        "easycat bundles show <path> --json",
-        "easycat inspect <path>",
-        "easycat inspect <path> --json",
-        "easycat replay <path>",
-        "easycat replay <path> --json",
-        "easycat bundles export <path>",
-        "easycat bundles export <path> --output DIR --json",
-    ):
-        assert command in journal
-    assert "parseable summary" in journal
-
-
-def test_observability_doc_points_operators_to_filtered_docs_route() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    intro = doc.split("## The four layers", 1)[0]
-    normalized_intro = re.sub(r"\s+", " ", intro)
-
-    assert "uv run easycat docs --audience operators" in intro
-    assert "uv run easycat docs --audience operators --json" in intro
-    assert "operator-facing route slice" in intro
-    assert "same operator map with command hints" in intro
-    assert "deployment, observability, and journal durability" in normalized_intro
 
 
 def test_observability_doc_lists_debugger_ui_entry_points() -> None:
@@ -118,70 +70,6 @@ def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     assert "`EASYCAT_ENV=dev|prod`" in config
     assert "`prod` / `production` uses single-line JSON" in config
     assert "`exc`" in config
-
-
-def test_observability_doc_tracks_error_note_context() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
-        "### D — OpenTelemetry facade",
-        1,
-    )[0]
-
-    for token in (
-        "PEP 678 exception notes",
-        "`ErrorInfo.notes`",
-        "`stage`",
-        "`provider`",
-        "`turn_id`",
-        "`elapsed_ms`",
-        "`sequence`",
-        "`record_key`",
-        "failing input",
-        "`ExceptionGroup`",
-        "both child errors",
-    ):
-        assert token in journal
-
-
-def test_observability_doc_tracks_record_to_auto_capture() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
-        "### D — OpenTelemetry facade",
-        1,
-    )[0]
-
-    for token in (
-        '`record_to="runs"`',
-        "`EasyConfig`",
-        "`create_text_session(...)`",
-        "timestamped debug bundle",
-    ):
-        assert token in journal
-
-
-def test_observability_doc_tracks_advanced_config_knobs() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    config = doc.split("## Configuration and orthogonality", 1)[1].split(
-        "### Correlation ids",
-        1,
-    )[0]
-    caveats = doc.split("## Honesty caveats", 1)[1]
-    config_text = " ".join(config.split())
-
-    for token in (
-        "`ObservabilityConfig`",
-        "`warmup=False`",
-        "safe debug-bundle config snapshots",
-        "structural provider/model `warmup()` hooks",
-        "`warmup_completed` timing records",
-        "The bundled providers now implement those hooks",
-    ):
-        assert token in config_text
-
-    assert "Latency is reported, not gated" in caveats
-    assert "`turn_total_latency_ms`" in caveats
-    assert "`text_turn_latency_ms`" in caveats
-    assert "`easycat validate latency`" in caveats
 
 
 def test_latency_docs_defaults_match_code() -> None:

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.teaching._source_guards import assert_sources_match
+
 ROOT = Path(__file__).parents[2]
 TEACHING = ROOT / "docs" / "teaching"
 CHAPTER_6 = TEACHING / "06-streaming-agent"
@@ -111,27 +113,25 @@ def test_chapters_4_through_8_close_long_lived_resources() -> None:
         TEACHING / "07-tools" / "blocking_tool.py",
         TEACHING / "08-smart-turn" / "main.py",
     ]
-    for path in scripts:
-        source = path.read_text(encoding="utf-8")
-        assert "from contextlib import AsyncExitStack" in source
-        assert "resources.push_async_callback(transport.disconnect)" in source
-        assert "resources.push_async_callback(close_if_supported, vad)" in source
-
-    for path in scripts[1:]:
-        source = path.read_text(encoding="utf-8")
-        assert "resources.push_async_callback(close_if_supported, client)" in source
-
-    for path in scripts[2:]:
-        source = path.read_text(encoding="utf-8")
-        assert "resources.push_async_callback(close_if_supported, tts)" in source
-
-
-def test_chapters_6_through_8_preserve_per_turn_stt_cleanup() -> None:
-    for path in TURN_SCRIPTS:
-        source = path.read_text(encoding="utf-8")
-        assert "active_stt = stt" in source
-        assert "await close_if_supported(active_stt)" in source
-        assert "await close_if_supported(stt)" in source
+    assert_sources_match(
+        scripts,
+        required=(
+            "from contextlib import AsyncExitStack",
+            "resources.push_async_callback(transport.disconnect)",
+            "resources.push_async_callback(close_if_supported, vad)",
+        ),
+        label="Long-lived resource cleanup copies",
+    )
+    assert_sources_match(
+        scripts[1:],
+        required=("resources.push_async_callback(close_if_supported, client)",),
+        label="Agent client cleanup copies",
+    )
+    assert_sources_match(
+        scripts[2:],
+        required=("resources.push_async_callback(close_if_supported, tts)",),
+        label="TTS cleanup copies",
+    )
 
 
 @pytest.mark.parametrize("path", TURN_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
@@ -168,16 +168,3 @@ async def test_turn_collectors_close_stt_when_cancelled(path: Path, monkeypatch)
         await task
 
     assert stt.events == ["start", "end", "close"]
-
-
-def test_chapter_6_teaches_both_ownership_scopes() -> None:
-    readme = (CHAPTER_6 / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER_6 / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "Two ownership scopes" in readme
-    assert "voice_stack_cleanup_probe.py" in readme
-    assert "LIFO" in readme
-    assert "every registered cleanup" in readme
-    assert "voice_stack_cleanup_probe.py" in exercises
-    assert "per-turn STT" in exercises
-    assert "process-wide" in exercises

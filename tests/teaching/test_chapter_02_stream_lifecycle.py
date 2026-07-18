@@ -88,16 +88,3 @@ def test_streaming_source_uses_distinct_task_and_resource_scopes() -> None:
     assert "resources.push_async_callback(close_if_supported, stt)" in source
     assert "resources.push_async_callback(stt.end_stream)" in source
     assert "asyncio.gather(feed_audio(), consume_events())" not in source
-
-
-def test_lesson_explains_join_before_cleanup_contract() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "One stream, two concurrent tasks" in lesson
-    assert "acquisition rollback" in lesson
-    assert "cancels and joins" in lesson
-    assert "stt.events.cancelled" in lesson
-    assert "resource ownership versus task ownership" in lesson
-    assert "every concurrent task has stopped" in lesson

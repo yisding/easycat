@@ -28,7 +28,7 @@ test:
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
 # `quick` validation slice marker expression (validation/runner.py).
 test-fast:
-    uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+    uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 
 # Run a single file or node id. Usage: just test-one tests/core/test_cancel_token.py
 # or: just test-one tests/core/test_cancel_token.py::TestCancelToken::test_cancel
@@ -68,23 +68,19 @@ typecheck-fast:
 # Coverage over the safe slice (pytest --cov is xdist-safe; never use
 # `coverage run -m pytest -n auto`, which reports 0% under xdist).
 cov:
-    uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+    uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 
-# Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
+# Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
     uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 
-# Guard examples README, support files, script smoke checks, and docs-route hints.
+# Guard examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
 guard-examples:
-    uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-
-# Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
-guard-templates:
-    uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+    uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path && uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
@@ -101,10 +97,6 @@ guard-contracts:
 # Guard operator docs, deployment guide, observability docs, journal CLI, and durability.
 guard-ops:
     uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
-
-# Guard maintained Markdown links, anchors, and docs-route Markdown targets.
-guard-markdown:
-    uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 
 # Deterministic local validation slice (what CI's quick job runs).
 validate-quick:

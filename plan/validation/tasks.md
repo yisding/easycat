@@ -368,8 +368,8 @@ Current verified state:
   validation docs, validation reference docs, provider contract docs, operator
   docs, maintained Markdown links, or docs-route Markdown targets; the named
   `just` recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
-  `guard-templates`, `guard-contributing`, `guard-validation`,
-  `guard-contracts`, `guard-ops`, and `guard-markdown`.
+  `guard-contributing`, `guard-validation`, `guard-contracts`, and
+  `guard-ops`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,
   provider/surface pairing, flaky quarantine metadata, and the rule that
   validation slices deselect `flaky`.

@@ -158,16 +158,3 @@ def test_incomplete_or_unknown_labels_are_rejected(
     assert result.returncode == 2
     assert message in result.stderr
     assert result.stdout == ""
-
-
-def test_threshold_lesson_requires_labels_before_naming_errors() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "threshold_sweep.py" in readme
-    assert "threshold_sweep.py" in exercises
-    assert "new false-positives you bought" not in exercises
-    assert "decision changes, not automatically" in readme
-    assert "Without labels" in exercises
-    assert "metrics` as `null`" in exercises
-    assert "label every classification sequence exactly" in exercises

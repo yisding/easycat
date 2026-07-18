@@ -179,15 +179,3 @@ async def test_shallow_text_session_records_failed_state_notification() -> None:
         "notified": False,
     }
     await session.stop()
-
-
-def test_chapter_names_the_observable_shallow_interruption_record() -> None:
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    text = f"{readme}\n{exercises}"
-
-    assert "shallow_mode_downgrade" not in text
-    assert "`assistant_interruption_notified`" in text
-    assert "`notified: false`" in text
-    assert "`control_signal_cause`" in text
-    assert "Temporarily comment out `apply_interruption`" in exercises

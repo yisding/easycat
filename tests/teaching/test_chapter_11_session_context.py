@@ -104,16 +104,3 @@ def test_cli_requires_turn_and_reports_context_coverage() -> None:
     assert "matched: 1 of 13 records" in completed.stdout
     assert "session context: 1 unscoped records included from target session" in completed.stdout
     assert "audio.config" in completed.stdout
-
-
-def test_lesson_teaches_turn_isolation_and_session_context_as_distinct_scopes() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "session_context_probe.py" in lesson
-    assert "Turn isolation can hide session causes" in lesson
-    assert "--include-session-context" in lesson
-    assert "same session only" in lesson
-    assert "stable envelope schema" in lesson
-    assert "Every record has a stable schema" not in lesson

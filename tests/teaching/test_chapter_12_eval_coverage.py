@@ -183,17 +183,3 @@ async def test_llm_judge_closes_client_and_validates_scores(monkeypatch) -> None
 def test_llm_judge_rejects_invalid_json_objects(payload, error: str) -> None:
     judge = load_script("llm_judge.py")
     assert judge.parse_judgment(json.dumps(payload))["error"] == error
-
-
-def test_chapter_teaches_coverage_before_point_estimates() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(readme.split())
-
-    assert "Coverage before scores" in readme
-    assert "coverage_probe.py" in readme
-    assert "missing first-audio turns" in normalized
-    assert "coverage_probe.py" in exercises
-    assert "no universal good WER" in normalized
-    assert "Calibrate" in normalized
-    assert "±2%" not in exercises

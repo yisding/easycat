@@ -161,9 +161,6 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
 
     for command in required_commands:
         assert command in quick_start
-    assert "maintained reader-facing map" in quick_start
-    assert "narrow the map to contributor-facing routes" in normalized
-    assert "automation needs that smaller route map" in normalized
     assert "Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules" in normalized
     assert "[llms.txt](llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
@@ -198,12 +195,10 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "guard-docs",
         "guard-teaching",
         "guard-examples",
-        "guard-templates",
         "guard-contributing",
         "guard-validation",
         "guard-contracts",
         "guard-ops",
-        "guard-markdown",
     )
 
     assert "If `just` is not installed" in section

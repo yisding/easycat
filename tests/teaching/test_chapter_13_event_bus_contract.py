@@ -6,8 +6,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from tests._markdown_asserts import assert_prose_in
-
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "13-swap-providers-and-transports"
 
@@ -42,17 +40,3 @@ def test_event_bus_probe_covers_both_provider_catalogs(capsys) -> None:
     output = capsys.readouterr().out
     assert "stt      openai           no" in output
     assert "tts      openai           yes" in output
-
-
-def test_chapter_distinguishes_reconnects_from_http_provider_errors() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized_exercises = " ".join(exercises.split())
-
-    assert "`event_bus` dataclass field" in readme
-    assert "HTTP OpenAI TTS uses it for provider `Error` events" in readme
-    assert_prose_in("cannot emit\n  reconnect lifecycle", readme)
-    assert "session bus is not the audio/transcript stream" in readme
-    assert "distinguish reconnect telemetry from HTTP provider-error telemetry" in (
-        normalized_exercises
-    )

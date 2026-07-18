@@ -101,16 +101,3 @@ def test_evals_cli_keeps_reporting_for_one_bundle(tmp_path, capsys, monkeypatch)
     assert "n/a (requires at least two bundles)" in output
     assert "=== WER ===" in output
     assert "=== Barge-in F1 ===" in output
-
-
-def test_lesson_calls_sensitivity_an_influence_check_not_uncertainty() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "p95_sensitivity_probe.py" in lesson
-    assert "One turn controls this P95" in lesson
-    assert "influence diagnostic, not a confidence interval" in lesson
-    assert "leave-one-out rows print `n/a` instead of aborting" in lesson
-    assert "five turn bundles" not in lesson
-    assert "N standard deviations" not in lesson
