@@ -22,6 +22,7 @@ from easycat.runtime._journal_codec import (
     _build_slice_where,
     _encode_journal_row,
     _ensure_journal_schema,
+    _insert_tag_index_rows,
     _journal_record_for_append,
     _persist_degraded_marker,
     _row_to_record,
@@ -138,11 +139,33 @@ class _SqlJournalBase:
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         where, params = _build_slice_where(
-            kind=kind, session_id=session_id, turn_id=turn_id, name=name, tags=tags
+            kind=kind,
+            session_id=session_id,
+            turn_id=turn_id,
+            name=name,
+            tags=tags,
+            # A live backend always has the ``journal_tags`` junction (created +
+            # backfilled on open), so tag filters use the index rather than a
+            # comma-string LIKE scan.
+            use_tag_index=True,
         )
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT * FROM journal{where} ORDER BY sequence", params
+            ).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        """Return records whose indexed ``stage`` column equals *stage_name*.
+
+        Backs :meth:`JournalView.filter_by_stage`.  ``stage`` is derived at
+        append time from ``data['stage']``/``data['observed_stage']`` and
+        indexed (``idx_journal_stage``), so this is an index lookup rather than
+        a deserialize-every-record scan.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM journal WHERE stage = ? ORDER BY sequence", [stage_name]
             ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
@@ -305,6 +328,7 @@ class SqliteJournal(_SqlJournalBase):
             # Clean reuse — prior session closed normally. Truncate stale
             # records so the new session starts with an empty journal.
             self._conn.execute("DELETE FROM journal")
+            self._conn.execute("DELETE FROM journal_tags")
         return prior_count
 
     def _promote_crash_dump(self, session_id: str, prior_count: int) -> None:
@@ -337,6 +361,7 @@ class SqliteJournal(_SqlJournalBase):
                 # contract) instead of continuing the prior counter and
                 # interleaving prior-session rows under the same id.
                 self._conn.execute("DELETE FROM journal")
+                self._conn.execute("DELETE FROM journal_tags")
                 # Only now — after the crash dump was copied AND the live
                 # journal truncated — is the recovery fully successful.
                 # Setting the flag here (rather than before the copy)
@@ -371,6 +396,7 @@ class SqliteJournal(_SqlJournalBase):
         self._conn = self._open_connection()
         try:
             self._conn.execute("DELETE FROM journal")
+            self._conn.execute("DELETE FROM journal_tags")
         except sqlite3.Error:
             logger.warning(
                 "Failed to truncate live journal after crash-dump failure for session %s",
@@ -551,6 +577,8 @@ class SqliteJournal(_SqlJournalBase):
                         output_ref=record.output_ref,
                     ),
                 )
+                # Same transaction as the row above — no extra COMMIT.
+                _insert_tag_index_rows(self._conn, record.sequence, record.tags)
             except Exception:
                 if clear_clean_close:
                     try:
@@ -867,6 +895,7 @@ class LibsqlJournal(_SqlJournalBase):
             # its persisted ``degraded`` marker would be stale.  Clear both the
             # ``clean_close`` and ``degraded`` keys alongside the truncation.
             self._conn.execute("DELETE FROM journal")
+            self._conn.execute("DELETE FROM journal_tags")
             self._conn.execute(
                 "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
             )
@@ -919,6 +948,10 @@ class LibsqlJournal(_SqlJournalBase):
         try:
             with self._lock:
                 self._conn.sync()
+                # Re-harden at the flush (rotation) boundary: sidecars created
+                # after open pick up private perms here rather than on every
+                # append (see ``_do_append``).
+                harden_sqlite_files(self._db_path)
         except Exception:
             logger.debug("libsql sync failed during flush", exc_info=True)
 
@@ -953,6 +986,7 @@ class LibsqlJournal(_SqlJournalBase):
         # Final sync.
         try:
             self._conn.sync()
+            harden_sqlite_files(self._db_path)
         except Exception:
             logger.debug("libsql final sync failed on close", exc_info=True)
 
@@ -1012,8 +1046,14 @@ class LibsqlJournal(_SqlJournalBase):
                     output_ref=record.output_ref,
                 ),
             )
+            # Populated in the same commit as the row — no extra COMMIT.
+            _insert_tag_index_rows(self._conn, record.sequence, record.tags)
             self._conn.commit()
-            harden_sqlite_files(self._db_path)
+            # NB: file-permission hardening is intentionally NOT done here.  It
+            # is a stat+chmod over the DB and its WAL/SHM sidecars, so running
+            # it on every append wastes syscalls on the hot path.  Hardening
+            # happens once per open (``__init__``) and at each rotation boundary
+            # (``flush``/``finalize``/``close``), mirroring ``SqliteJournal``.
         return seq
 
     def _sync_loop(self) -> None:

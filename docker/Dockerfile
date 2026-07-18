@@ -22,7 +22,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 ARG EXTRAS="--extra openai --extra openai-agents --extra silero-vad --extra rnnoise"
 
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 
 RUN uv sync --frozen --no-dev ${EXTRAS}
@@ -42,7 +42,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder --chown=easycat:easycat /app /app
 COPY --chown=easycat:easycat examples ./examples
 COPY --chown=easycat:easycat docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY --chown=easycat:easycat docker/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.py \
+ # EASYCAT_DATA_DIR (default ".easycat", i.e. /app/.easycat here) holds the
+ # crash-durable SQLite journals, artifacts, crash-dumps, and archives that
+ # `debug="full"` writes on every session (the `EasyConfig` default is the
+ # in-memory `debug="light"`, which writes nothing here). Pre-create it
+ # owned by the runtime user so a bind mount or named volume mounted here
+ # does not need a container-side chown step. See "Persisting the journal"
+ # in docs/deployment/docker.md.
+ && mkdir -p /app/.easycat \
+ && chown easycat:easycat /app/.easycat
 
 USER easycat
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -50,5 +60,18 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8765
+
+# The journal directory is crash-durable ONLY if it survives container
+# restarts/recreation — mount a named volume or bind mount here in
+# production. See "Persisting the journal across restarts" in
+# docs/deployment/docker.md.
+VOLUME ["/app/.easycat"]
+
+# Probes EASYCAT_HEALTH_URL (an HTTP /health/ready endpoint) when set, else
+# falls back to a TCP connect against EASYCAT_WS_HOST/EASYCAT_WS_PORT — see
+# docker/healthcheck.py for why the fallback exists for the default CMD.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["python", "/usr/local/bin/healthcheck.py"]
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "examples/ws_server.py"]

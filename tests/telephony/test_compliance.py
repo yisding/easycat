@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import os
 import stat
@@ -211,3 +212,75 @@ class TestDNCNormalization:
         assert len(store) == 0
         assert not store.is_on_dnc("anonymous")
         store.close()
+
+
+class TestDNCListAsyncAPI:
+    """DNCList's async wrappers should behave identically to the sync methods."""
+
+    async def test_aadd_aremove_ais_on_dnc(self) -> None:
+        dnc = DNCList()
+        assert not await dnc.ais_on_dnc("+15551234567")
+        await dnc.aadd("+15551234567")
+        assert await dnc.ais_on_dnc("+15551234567")
+        assert len(dnc) == 1
+        await dnc.aremove("+15551234567")
+        assert not await dnc.ais_on_dnc("+15551234567")
+        assert len(dnc) == 0
+
+    async def test_async_and_sync_share_state(self) -> None:
+        dnc = DNCList()
+        await dnc.aadd("+15551234567")
+        assert dnc.is_on_dnc("+15551234567")
+        dnc.remove("+15551234567")
+        assert not await dnc.ais_on_dnc("+15551234567")
+
+
+class TestSQLiteDNCListAsyncAPI:
+    """SQLiteDNCList's async wrappers should offload the sync core to a thread."""
+
+    async def test_aadd_aremove_ais_on_dnc(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        assert not await store.ais_on_dnc("+15551234567")
+        await store.aadd("+15551234567")
+        assert await store.ais_on_dnc("+15551234567")
+        assert len(store) == 1
+        await store.aremove("+15551234567")
+        assert not await store.ais_on_dnc("+15551234567")
+        assert len(store) == 0
+        await store.aclose()
+
+    async def test_async_and_sync_share_state(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        await store.aadd("+15551234567")
+        assert store.is_on_dnc("+15551234567")
+        store.remove("+15551234567")
+        assert not await store.ais_on_dnc("+15551234567")
+        store.close()
+
+    async def test_async_does_not_block_event_loop(self) -> None:
+        # A concurrently scheduled coroutine should keep making progress while
+        # the sqlite work runs in a worker thread rather than on the loop.
+        store = SQLiteDNCList(":memory:")
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0)
+                ticks += 1
+
+        await asyncio.gather(store.aadd("+15551234567"), ticker())
+        assert await store.ais_on_dnc("+15551234567")
+        assert ticks == 20
+        await store.aclose()
+
+    async def test_aadd_normalizes_and_rejects_invalid_numbers(self) -> None:
+        store = SQLiteDNCList(":memory:", default_region="US")
+        await store.aadd("+1 (555) 123-4567")
+        await store.aadd("15551234567")
+        assert len(store) == 1
+
+        with pytest.raises(ValueError, match="at least one digit"):
+            await store.aadd("not a phone")
+
+        await store.aclose()

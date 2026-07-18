@@ -1193,6 +1193,11 @@ class WebRTCTransport(AudioQueueMixin):
                 if state == "connected":
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
+                    # ``disconnected``/``failed`` are abnormal peer drops (ICE
+                    # loss, connectivity failure); ``closed`` is the terminal
+                    # state of an application-initiated teardown and is clean.
+                    if state in ("disconnected", "failed"):
+                        self._record_transport_disconnect(f"webrtc peer {state}")
                     self._client_connected.clear()
                     self._peer_closed.set()
                     # Null the outbound track so send_audio() reports the

@@ -223,6 +223,71 @@ def test_available_providers_lists_registered_names():
     assert available_providers() == ["cartesia", "deepgram", "elevenlabs", "openai"]
 
 
+class TestCreateTTSProviderEventBus:
+    """create_tts_provider (string/params path) wires event_bus the same
+    way create_tts_provider_from_config does, so providers built from the
+    public API keep reconnect/error observability."""
+
+    def test_no_event_bus_by_default(self):
+        config = TTSProviderConfig(provider="deepgram", api_key="dg-test")
+        provider = create_tts_provider(config)
+        assert provider._config.event_bus is None
+
+    def test_injects_event_bus_for_deepgram_when_given(self):
+        config = TTSProviderConfig(provider="deepgram", api_key="dg-test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider(config, event_bus=event_bus)
+
+        assert isinstance(provider, DeepgramTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_injects_event_bus_for_elevenlabs_when_given(self):
+        config = TTSProviderConfig(
+            provider="elevenlabs",
+            api_key="el-test",
+            params={"stream_mode": ElevenLabsStreamMode.WEBSOCKET},
+        )
+        event_bus = EventBus()
+
+        provider = create_tts_provider(config, event_bus=event_bus)
+
+        assert isinstance(provider, ElevenLabsTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_injects_event_bus_for_openai_when_given(self):
+        config = TTSProviderConfig(provider="openai", api_key="sk-test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider(config, event_bus=event_bus)
+
+        assert isinstance(provider, OpenAITTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_injects_event_bus_for_cartesia_when_given(self):
+        config = TTSProviderConfig(provider="cartesia", api_key="c-test")
+        event_bus = EventBus()
+
+        provider = create_tts_provider(config, event_bus=event_bus)
+
+        assert isinstance(provider, CartesiaTTS)
+        assert provider._config.event_bus is event_bus
+
+    def test_keeps_existing_event_bus_from_params(self):
+        existing_event_bus = EventBus()
+        config = TTSProviderConfig(
+            provider="cartesia",
+            api_key="c-test",
+            params={"event_bus": existing_event_bus},
+        )
+        session_event_bus = EventBus()
+
+        provider = create_tts_provider(config, event_bus=session_event_bus)
+
+        assert isinstance(provider, CartesiaTTS)
+        assert provider._config.event_bus is existing_event_bus
+
+
 class TestCreateTTSProviderFromConfig:
     def test_injects_event_bus_for_deepgram_when_missing(self):
         config = DeepgramTTSConfig(api_key="test")

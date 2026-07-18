@@ -271,12 +271,15 @@ There are three independent knobs, and they control different things:
   `EASYCAT_LOG_FORMAT` always wins.
 
 - **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`, default
-  `"full"`) — controls the journal (C) and the optional debugger UI. Durable
-  journaling is on by default so sessions are always recorded; set
-  `debug="off"` to opt out. It is **orthogonal to log level**: `debug=`
-  decides whether and how much is journaled (and, for `"full"`, whether the
-  debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
-  console log is. Turning one up does not turn the other up.
+  `"light"`) — controls the journal (C) and the optional debugger UI.
+  Journaling is on by default so sessions are always recorded, but the
+  default `"light"` keeps it in memory — per-frame capture never touches the
+  disk on the live audio loop. Opt into `"full"` for a crash-survivable
+  on-disk journal + artifacts and the debugger UI; set `debug="off"` to skip
+  recording entirely. It is **orthogonal to log level**: `debug=` decides
+  whether and how much is journaled (and, for `"full"`, whether the debugger
+  UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human console log
+  is. Turning one up does not turn the other up.
 
 - **Advanced observability knobs** live on `ObservabilityConfig` and keep a
   top-level `EasyConfig` alias for first-run ergonomics: `warmup=False`. The

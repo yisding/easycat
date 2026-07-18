@@ -5,11 +5,13 @@ from __future__ import annotations
 import pytest
 
 from easycat.errors import EasyCatError
+from easycat.events import EventBus
 from easycat.stt.cartesia_provider import CartesiaSTT
 from easycat.stt.deepgram_provider import DeepgramSTT
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT
 from easycat.stt.factory import STTProviderConfig, available_providers, create_stt_provider
 from easycat.stt.openai_provider import OpenAISTT
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT
 
 # ── Factory creates correct provider types ───────────────────────
 
@@ -188,3 +190,83 @@ def test_factory_produced_providers_are_stt_providers():
         config = STTProviderConfig(provider=name, api_key="test-key")
         provider = create_stt_provider(config)
         assert isinstance(provider, STTProvider), f"{name} not an STTProvider"
+
+
+# ── event_bus wiring (string/params path) ─────────────────────────
+#
+# create_stt_provider (the public string/params path) structurally injects
+# event_bus the same way create_stt_provider_from_config does, so providers
+# built via the public API keep reconnect/error observability.
+
+
+def test_factory_no_event_bus_by_default():
+    config = STTProviderConfig(provider="deepgram", api_key="dg-test")
+    provider = create_stt_provider(config)
+    assert provider._config.event_bus is None
+
+
+def test_factory_injects_event_bus_for_deepgram_when_given():
+    config = STTProviderConfig(provider="deepgram", api_key="dg-test")
+    event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=event_bus)
+
+    assert isinstance(provider, DeepgramSTT)
+    assert provider._config.event_bus is event_bus
+
+
+def test_factory_injects_event_bus_for_elevenlabs_when_given():
+    config = STTProviderConfig(provider="elevenlabs", api_key="el-test")
+    event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=event_bus)
+
+    assert isinstance(provider, ElevenLabsSTT)
+    assert provider._config.event_bus is event_bus
+
+
+def test_factory_injects_event_bus_for_cartesia_when_given():
+    config = STTProviderConfig(provider="cartesia", api_key="c-test")
+    event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=event_bus)
+
+    assert isinstance(provider, CartesiaSTT)
+    assert provider._config.event_bus is event_bus
+
+
+def test_factory_injects_event_bus_for_openai_realtime_when_given():
+    config = STTProviderConfig(provider="openai-realtime", api_key="sk-test")
+    event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=event_bus)
+
+    assert isinstance(provider, OpenAIRealtimeSTT)
+    assert provider._config.event_bus is event_bus
+
+
+def test_factory_ignores_event_bus_for_openai_without_field():
+    # Plain OpenAISTTConfig has no event_bus field, so structural detection
+    # is a no-op; the provider is still created successfully.
+    config = STTProviderConfig(provider="openai", api_key="sk-test")
+    event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=event_bus)
+
+    assert isinstance(provider, OpenAISTT)
+    assert not hasattr(provider._config, "event_bus")
+
+
+def test_factory_keeps_existing_event_bus_from_params():
+    existing_event_bus = EventBus()
+    config = STTProviderConfig(
+        provider="cartesia",
+        api_key="c-test",
+        params={"event_bus": existing_event_bus},
+    )
+    session_event_bus = EventBus()
+
+    provider = create_stt_provider(config, event_bus=session_event_bus)
+
+    assert isinstance(provider, CartesiaSTT)
+    assert provider._config.event_bus is existing_event_bus

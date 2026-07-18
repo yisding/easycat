@@ -10,13 +10,15 @@ with automatic fallback from Krisp -> RNNoise -> passthrough.
 from __future__ import annotations
 
 import logging
-import struct
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from easycat._audio_utils import resample_chunk
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_48K, AudioChunk
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,25 @@ def _validate_noise_reducer_fallback_policy(policy: str) -> NoiseReducerFallback
             f"Unknown noise reducer fallback_policy '{policy}'. Expected one of: {allowed}."
         )
     return policy
+
+
+def _clip_round_to_pcm16_bytes(samples: np.ndarray) -> bytes:
+    """Round float samples to the nearest int (banker's rounding), clip to the
+    int16 range, and pack as little-endian PCM16 bytes.
+
+    Vectorized equivalent of:
+        struct.pack(f"<{n}h", *(max(-32768, min(32767, int(round(v)))) for v in samples))
+    ``np.rint`` uses round-half-to-even, matching Python's built-in ``round()``,
+    so the output is byte-identical to the scalar implementation.
+
+    numpy is imported lazily so importing this module does not require numpy
+    to be installed unless a noise-reduction backend that needs it is used.
+    """
+    import numpy as np
+
+    rounded = np.rint(samples)
+    clipped = np.clip(rounded, -32768, 32767).astype(np.int16)
+    return clipped.tobytes()
 
 
 # ── RNNoise integration (open-source fallback) ─────────────────────
@@ -139,16 +160,14 @@ class RNNoiseReducer:
         import numpy as np
 
         frame_bytes = self._frame_samples * 2  # 2 bytes per PCM16 sample
-        output_samples: list[int] = []
+        output_chunks: list[bytes] = []
 
         while len(self._buffer_48k) >= frame_bytes:
             frame_data = self._buffer_48k[:frame_bytes]
             self._buffer_48k = self._buffer_48k[frame_bytes:]
             frame = np.frombuffer(frame_data, dtype=np.int16)
             processed, _ = self._rnnoise.process_mono_frame(self._state, frame.copy())
-            output_samples.extend(
-                max(-32768, min(32767, int(round(v)))) for v in processed[: self._frame_samples]
-            )
+            output_chunks.append(_clip_round_to_pcm16_bytes(processed[: self._frame_samples]))
 
         if flush and self._buffer_48k:
             tail = np.frombuffer(self._buffer_48k, dtype=np.int16)
@@ -156,11 +175,9 @@ class RNNoiseReducer:
             padded = np.pad(tail, (0, self._frame_samples - valid), mode="constant")
             self._buffer_48k = b""
             processed, _ = self._rnnoise.process_mono_frame(self._state, padded.copy())
-            output_samples.extend(
-                max(-32768, min(32767, int(round(v)))) for v in processed[:valid]
-            )
+            output_chunks.append(_clip_round_to_pcm16_bytes(processed[:valid]))
 
-        return struct.pack(f"<{len(output_samples)}h", *output_samples)
+        return b"".join(output_chunks)
 
     def flush(self) -> AudioChunk:
         """Drain any buffered trailing audio, zero-padding the final frame.

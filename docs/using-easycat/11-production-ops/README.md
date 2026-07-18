@@ -196,8 +196,10 @@ runbook-owned conditions, not every individual call failure.
 
 ## Durability includes crash recovery and retention
 
-`debug="full"` uses a crash-survivable SQLite journal by default; `"light"`
-keeps structured records with fewer artifacts, while `"off"` disables the
+The default `"light"` keeps structured records in an in-memory ring with
+in-memory artifacts, so per-frame capture never touches the disk on the live
+audio loop; opt into `debug="full"` for a crash-survivable SQLite journal with
+filesystem-backed artifacts (production capture), while `"off"` disables the
 journal. Choose intentionally because journals contain transcripts, tool data,
 agent output, and often PII.
 

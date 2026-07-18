@@ -11,6 +11,7 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 import threading
@@ -211,6 +212,15 @@ class DNCStore(Protocol):
     in-memory :class:`DNCList` and the durable :class:`SQLiteDNCList` satisfy
     it; apps needing a shared/clustered backend (Redis, Postgres, a DNC
     vendor API) can implement their own.
+
+    These three methods are synchronous by design (the minimal structural
+    surface a custom backend must implement), but calling them directly from
+    an async context can block the event loop — :class:`SQLiteDNCList` in
+    particular does blocking disk I/O.  Both built-in implementations also
+    provide async ``aadd`` / ``aremove`` / ``ais_on_dnc`` counterparts; async
+    callers should prefer those (or wrap a custom store's sync methods in
+    :func:`asyncio.to_thread` themselves) instead of calling the sync methods
+    directly on the event loop.
     """
 
     def add(self, phone: str) -> None: ...
@@ -259,6 +269,23 @@ class DNCList:
         number = self._normalize_lookup(phone)
         return number is not None and number in self._numbers
 
+    async def aadd(self, phone: str) -> None:
+        """Async counterpart to :meth:`add`.
+
+        ``DNCList`` is in-memory (no I/O), so this does not need a thread
+        offload; it exists for API symmetry with :class:`SQLiteDNCList` so
+        callers can treat any :class:`DNCStore` uniformly from async code.
+        """
+        self.add(phone)
+
+    async def aremove(self, phone: str) -> None:
+        """Async counterpart to :meth:`remove`. See :meth:`aadd`."""
+        self.remove(phone)
+
+    async def ais_on_dnc(self, phone: str) -> bool:
+        """Async counterpart to :meth:`is_on_dnc`. See :meth:`aadd`."""
+        return self.is_on_dnc(phone)
+
     def __len__(self) -> int:
         return len(self._numbers)
 
@@ -275,10 +302,13 @@ class SQLiteDNCList:
     Pass the same ``path`` to every session to share one list; pass
     ``":memory:"`` for an ephemeral instance (e.g. in tests).  The single
     WAL-mode connection is guarded by a lock so it is safe to share across
-    threads.  The methods are synchronous and do blocking disk I/O, so async
-    callers (the action executor, the outbound pre-dial check) must offload
-    them with :func:`asyncio.to_thread` rather than call them on the event
-    loop.
+    threads.  :meth:`add`, :meth:`remove`, and :meth:`is_on_dnc` are
+    synchronous and do blocking disk I/O (``sqlite3`` execute + ``commit``),
+    so calling them directly from an event loop blocks it on disk fsync.
+    Async callers (the action executor, the outbound pre-dial check) should
+    use :meth:`aadd`, :meth:`aremove`, and :meth:`ais_on_dnc` instead, which
+    internally wrap the sync core in :func:`asyncio.to_thread`.  The sync
+    methods remain for non-async callers and back-compat.
 
     Phone numbers tied to do-not-call status are PII, so an on-disk database
     (and its WAL/SHM sidecars) is created owner-only (``0o600``), matching the
@@ -371,6 +401,27 @@ class SQLiteDNCList:
             except Exception:
                 logger.debug("DNC store WAL checkpoint on close failed", exc_info=True)
             self._conn.close()
+
+    async def aadd(self, phone: str) -> None:
+        """Async counterpart to :meth:`add`.
+
+        Runs the synchronous SQLite insert + commit in a worker thread via
+        :func:`asyncio.to_thread`, so the event loop is not blocked on disk
+        fsync. Prefer this over :meth:`add` from async code.
+        """
+        await asyncio.to_thread(self.add, phone)
+
+    async def aremove(self, phone: str) -> None:
+        """Async counterpart to :meth:`remove`. See :meth:`aadd`."""
+        await asyncio.to_thread(self.remove, phone)
+
+    async def ais_on_dnc(self, phone: str) -> bool:
+        """Async counterpart to :meth:`is_on_dnc`. See :meth:`aadd`."""
+        return await asyncio.to_thread(self.is_on_dnc, phone)
+
+    async def aclose(self) -> None:
+        """Async counterpart to :meth:`close`. See :meth:`aadd`."""
+        await asyncio.to_thread(self.close)
 
 
 @dataclass

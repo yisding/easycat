@@ -480,9 +480,18 @@ class ObservabilityConfig:
     ``observability=...`` while common shortcuts such as
     ``EasyConfig(debug="full")`` and ``create_text_session(debug="light")``
     keep working through legacy aliases.
+
+    ``debug`` defaults to ``"light"``: an in-memory journal that keeps the
+    live audio loop off the disk. Every mic/VAD/TTS frame is still recorded,
+    but into memory rather than doing a per-frame sha256 + temp-write-and-
+    rename to a durable filesystem artifact store. Opt into ``"full"`` for
+    deep debugging — it persists a crash-survivable journal and artifacts to
+    ``.easycat/`` and enables the debugger UI / bundle export, at the cost of
+    roughly 50 disk writes/sec/session (offloaded off the event loop so it
+    stays loop-friendly). Use ``"off"`` to disable recording entirely.
     """
 
-    debug: Literal["off", "light", "full"] = "full"
+    debug: Literal["off", "light", "full"] = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
@@ -1018,7 +1027,7 @@ class TextSessionConfig(_AgentSessionConfig):
         *,
         agent: Any = None,
         session_id: str | None = None,
-        debug: Literal["off", "light", "full"] = "full",
+        debug: Literal["off", "light", "full"] = "light",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
@@ -1043,7 +1052,7 @@ class TextSessionConfig(_AgentSessionConfig):
             loose = {
                 "agent": (agent, None),
                 "session_id": (session_id, None),
-                "debug": (debug, "full"),
+                "debug": (debug, "light"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),

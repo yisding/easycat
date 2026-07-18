@@ -492,10 +492,7 @@ class AudioRouter:
                 # decremented by *any* chunk sharing the outbound queue
                 # (e.g. interleaved synthesis or hold audio), which could
                 # leave BOT_SPEAKING early and truncate the replayed tail.
-                try:
-                    chunk._easycat_replay_chunk = True  # type: ignore[attr-defined]
-                except Exception:
-                    logger.debug("Failed to tag replay chunk", exc_info=True)
+                chunk._easycat_replay_chunk = True
                 await self._outbound_queue.put(chunk)
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
@@ -573,10 +570,9 @@ class AudioRouter:
         check; a second router means the bus is shared across sessions and bare
         delivery callbacks must be dropped instead of relabeled.
         """
-        handlers = getattr(self._event_bus, "_handlers", {}).get(TransportAudioDelivered, ())
         routers = [
             handler
-            for handler in handlers
+            for handler in self._event_bus.subscribers(TransportAudioDelivered)
             if getattr(handler, "__func__", None) is AudioRouter.on_audio_delivered
             and isinstance(getattr(handler, "__self__", None), AudioRouter)
         ]
@@ -812,10 +808,7 @@ class AudioRouter:
             # merely because replay chunks are pending.  This keeps the
             # tally correct even if a non-replay chunk shares the outbound
             # queue while replay audio is still draining.
-            replayed_chunk = (
-                self._replay_chunks_pending > 0
-                and getattr(chunk, "_easycat_replay_chunk", False) is True
-            )
+            replayed_chunk = self._replay_chunks_pending > 0 and chunk._easycat_replay_chunk
             turn = self._current_turn()
             # Claim before waiting for the send lock. Otherwise a contended
             # dequeued chunk disappears from both queue depth and in-flight
@@ -886,13 +879,10 @@ class AudioRouter:
 
     def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
         """Attach session/turn ownership so buffered transports can report later delivery."""
-        try:
-            session_id, _ = self._correlation_ids()
-            chunk._easycat_session_id = session_id  # type: ignore[attr-defined]
-            chunk._easycat_turn_id = turn.id if turn is not None else None  # type: ignore[attr-defined]
-            chunk._easycat_turn_ref = turn  # type: ignore[attr-defined]
-        except Exception:
-            logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
+        session_id, _ = self._correlation_ids()
+        chunk._easycat_session_id = session_id
+        chunk._easycat_turn_id = turn.id if turn is not None else None
+        chunk._easycat_turn_ref = turn
 
     async def _handle_audio_delivery(
         self,

@@ -915,8 +915,10 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
                         logger.warning("Ignoring non-UTF-8 Twilio message")
                         continue
                 await self._handle_message(raw)
-        except websockets.exceptions.ConnectionClosed:
+        except websockets.exceptions.ConnectionClosed as exc:
             logger.info("Twilio Media Streams disconnected")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("twilio stream closed abnormally")
         finally:
             await self._finalize_after_receive(ws)
 
@@ -1150,8 +1152,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
                         logger.warning("Ignoring non-UTF-8 Twilio message")
                         continue
                 await self._handle_message(raw)
-        except websockets.exceptions.ConnectionClosed:
+        except websockets.exceptions.ConnectionClosed as exc:
             logger.info("Twilio Media Streams disconnected")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("twilio stream closed abnormally")
         finally:
             await self._finalize_after_receive(ws)
 

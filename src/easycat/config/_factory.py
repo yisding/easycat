@@ -876,7 +876,7 @@ def create_text_session(
     *,
     agent: Any = None,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] = "full",
+    debug: Literal["off", "light", "full"] = "light",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     warmup: bool | None = None,

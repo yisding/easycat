@@ -18,6 +18,7 @@ from typing import Any
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
+from easycat import _observability as observability
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
@@ -146,6 +147,25 @@ class AudioQueueMixin:
         # transports that opt in via ``_ensure_browser_event_forwarder``.
         self._browser_event_forwarder = getattr(self, "_browser_event_forwarder", None)
 
+    def _record_transport_disconnect(self, reason: str) -> None:
+        """Count one abnormal transport disconnect (a drop, not a clean close).
+
+        Clean, application-initiated teardown (``disconnect()``, a client's
+        normal WebSocket close, a Twilio ``stop`` frame) is expected and is
+        *not* counted here. Only abnormal drops — a ``ConnectionClosedError``,
+        an ICE ``failed``/``disconnected`` transition, or a fatal protocol
+        violation that forces the session down — increment the counter, so the
+        metric tracks reliability problems rather than ordinary hang-ups. The
+        low-cardinality ``easycat.transport`` label carries the transport kind;
+        ``reason`` stays in logs/journal and is intentionally not a metric
+        attribute (it can be high-cardinality / attacker-influenced).
+        """
+        observability.increment_counter(
+            "easycat.transport.disconnects.total",
+            attributes={"easycat.transport": getattr(self, "transport_kind", "unknown")},
+        )
+        logger.debug("Recorded abnormal transport disconnect: %s", reason)
+
     def _emit_degraded(self, reason: str, detail: str = "", *, fatal: bool = False) -> None:
         """Publish a :class:`TransportDegraded` on the session event bus.
 
@@ -155,7 +175,13 @@ class AudioQueueMixin:
         (:meth:`Session._maybe_attach_event_bus`) and whenever there is no
         running loop (e.g. a unit test driving the transport synchronously) —
         observability is never load-bearing.
+
+        A ``fatal`` degradation forces the session down (protocol violation,
+        rejected-stream flood, poisoned control codec), so it also counts as
+        an abnormal transport disconnect.
         """
+        if fatal:
+            self._record_transport_disconnect(reason)
         bus = self._event_bus
         if bus is None:
             return

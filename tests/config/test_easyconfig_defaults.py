@@ -40,21 +40,23 @@ def test_easycat_config_openai_defaults():
     assert isinstance(config.tts, OpenAITTSConfig)
 
 
-def test_easycat_config_defaults_debug_to_full():
-    # Durable journaling is on by default: the single source of the default
-    # lives on ObservabilityConfig, and EasyConfig inherits it through the
-    # observability alias proxy.
+def test_easycat_config_defaults_debug_to_light():
+    # The default is the in-memory ``"light"`` journal so per-frame capture
+    # stays off the disk and off the live audio loop. The single source of
+    # the default lives on ObservabilityConfig, and EasyConfig inherits it
+    # through the observability alias proxy. ``"full"`` is the opt-in
+    # durable/deep-debugging mode.
     config = EasyConfig(openai_api_key="test-key")
-    assert config.debug == "full"
-    assert config.observability.debug == "full"
-    assert ObservabilityConfig().debug == "full"
+    assert config.debug == "light"
+    assert config.observability.debug == "light"
+    assert ObservabilityConfig().debug == "light"
 
 
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.
     assert ObservabilityConfig().debugger_autolaunch is False
-    config = EasyConfig(openai_api_key="test-key")
+    config = EasyConfig(openai_api_key="test-key", debug="full")
     assert config.observability.debug == "full"
     assert config.observability.debugger_autolaunch is False
     # Reachable through the observability alias proxy.
@@ -74,7 +76,7 @@ def test_capture_aec_reference_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT journal per-frame
     # AEC reference rows on its own — that is strictly opt-in.
     assert ObservabilityConfig().capture_aec_reference is False
-    config = EasyConfig(openai_api_key="test-key")
+    config = EasyConfig(openai_api_key="test-key", debug="full")
     assert config.observability.debug == "full"
     assert config.observability.capture_aec_reference is False
     # Reachable through the observability alias proxy.

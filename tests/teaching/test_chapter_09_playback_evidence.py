@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests._markdown_asserts import assert_prose_not_in
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "09-interruption"
 PROBE = CHAPTER / "playback_evidence.py"
@@ -45,7 +47,7 @@ def test_interruption_lesson_does_not_call_local_delivery_a_playback_mark() -> N
 
     assert "playback_evidence.py" in readme
     assert "playback_evidence.py" in exercises
-    assert "playback-ack\n   marks (from `LocalTransport`)" not in exercises
+    assert_prose_not_in("playback-ack\n   marks (from `LocalTransport`)", exercises)
     assert "`TransportAudioDelivered`" in readme
     assert "`PlaybackMarkAck`" in readme
     assert "none proves sound reached a human ear" in readme

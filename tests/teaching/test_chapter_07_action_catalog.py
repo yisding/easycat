@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests._markdown_asserts import assert_prose_not_in
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER_07 = ROOT / "docs" / "teaching" / "07-tools"
 CHAPTER_14 = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
@@ -71,7 +73,7 @@ def test_action_lessons_name_the_current_inventory() -> None:
 
     assert "action_catalog.py" in exercises
     assert "Five types ship" not in chapter_07
-    assert "the five\n  `SessionAction` types" not in chapter_14
+    assert_prose_not_in("the five\n  `SessionAction` types", chapter_14)
     for action_class in (
         "EndCallAction",
         "TransferCallAction",

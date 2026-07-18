@@ -66,8 +66,8 @@ The three `debug` modes choose storage behavior:
 | Mode | Journal | Artifacts | Use it for |
 |---|---|---|---|
 | `off` | None | None | Explicit opt-out |
-| `light` | Bounded in-memory ring | In memory | Short-lived local inspection/tests |
-| `full` | Persistent configured backend (SQLite by default) | Filesystem-backed | Durable postmortems and production capture |
+| `light` (default) | Bounded in-memory ring | In memory | Default recording that keeps per-frame capture off the disk and off the live audio loop |
+| `full` | Persistent configured backend (SQLite by default) | Filesystem-backed | Durable postmortems and production capture (opt in) |
 
 `debug="full"` does not open a browser by itself. Debugger autolaunch and dev
 mode are separate opt-ins.

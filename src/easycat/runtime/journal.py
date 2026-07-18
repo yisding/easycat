@@ -81,11 +81,11 @@ class ExecutionJournal(Protocol):
         """Return records matching the given filters.
 
         *kind*/*session_id*/*turn_id*/*name* are exact-match (indexed on the
-        SQL backends).  *tags* is a **subset** match — a record matches when
-        every requested tag is present in its tag set.  On the SQL backends
-        tags are stored as a sorted comma-joined string, so the filter is a
-        best-effort substring scan there; the in-memory backends do an exact
-        subset test.
+        SQL backends; ``turn_id`` is backed by ``idx_journal_turn_id``).
+        *tags* is a **subset** match — a record matches when every requested
+        tag is present in its tag set.  The live SQL backends resolve tags
+        through the indexed ``journal_tags`` junction table; the in-memory
+        backends do an exact subset test.
         """
         ...
 
@@ -145,10 +145,16 @@ class JournalView:
         """Return records whose ``data['stage']`` or ``data['observed_stage']``
         matches *stage_name*.  Mirrors :meth:`RunBundle.filter_by_stage`.
 
-        Postmortem convenience: ``stage`` lives in the unindexed JSON ``data``
-        column, so this reads and deserializes every record and its cost scales
-        with persisted session length.
+        The live SQL backends persist a derived ``stage`` column indexed by
+        ``idx_journal_stage`` and expose ``slice_by_stage`` for an index
+        lookup, so this no longer deserializes every record on those backends.
+        Backends without the indexed column (read-only views over older files,
+        frozen in-memory snapshots) fall back to a scan — correct everywhere,
+        fast where the index exists.
         """
+        indexed = getattr(self._journal, "slice_by_stage", None)
+        if indexed is not None:
+            return indexed(stage_name)
         results: list[JournalRecord] = []
         for r in self._journal.read():
             stage = r.data.get("stage")
@@ -159,8 +165,12 @@ class JournalView:
 
     def filter_by_turn(self, turn_id: str) -> list[JournalRecord]:
         """Return records whose ``turn_id`` matches.  Mirrors
-        :meth:`RunBundle.filter_by_turn`."""
-        return [r for r in self._journal.read() if r.turn_id == turn_id]
+        :meth:`RunBundle.filter_by_turn`.
+
+        Delegates to :meth:`slice`, so on the SQL backends this is an indexed
+        ``WHERE turn_id = ?`` lookup (``idx_journal_turn_id``) rather than a
+        deserialize-every-record scan."""
+        return self._journal.slice(turn_id=turn_id)
 
     def lookup_by_sequence(self, seq: int) -> JournalRecord | None:
         """Return the record with the given sequence number, or ``None``.

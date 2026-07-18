@@ -101,8 +101,208 @@ recoverable from image history.
 - Bundled Silero VAD and Smart-Turn v3.2 ONNX models
 - Runs as a non-root `easycat` user (uid 1000)
 - Exposes TCP 8765 (WebSocket PCM16 audio); compose binds it to host loopback by default
+- `HEALTHCHECK` running `docker/healthcheck.py` every 30s (see
+  [Container health checks](#container-health-checks) below)
+- `VOLUME /app/.easycat`, pre-created and owned by the `easycat` user (see
+  [Persisting the journal across restarts](#persisting-the-journal-across-restarts))
 
 Final image size is roughly 450 MB on amd64.
+
+## Container health checks
+
+`docker compose ps` and orchestrator readiness probes should reflect real
+server state, not just "the process is still running". The image ships
+`docker/healthcheck.py` as its `HEALTHCHECK`, copied to
+`/usr/local/bin/healthcheck.py`:
+
+- **Default CMD (`examples/ws_server.py`).** This is a raw `websockets`
+  server — it speaks the WebSocket handshake only and does not serve an HTTP
+  endpoint, so `examples/ws_server.py` cannot be probed with the framework's
+  real `/health/ready` readiness endpoint
+  (`src/easycat/server/health.py`, wired by `src/easycat/server/routes.py`).
+  The healthcheck falls back to a TCP connect against `EASYCAT_WS_HOST`
+  (`0.0.0.0` is treated as loopback for the probe itself) /
+  `EASYCAT_WS_PORT`. This confirms the listener accepts connections; it does
+  **not** confirm draining state, capacity, or (for a manifest-backed
+  server) that the provider plan loaded cleanly.
+- **A `VoiceServer`-based CMD.** If you swap the image's `CMD` for a script
+  built on `easycat.server.VoiceServer` (`run_webrtc_config_server()`, a
+  custom `VoiceServer.from_app(...)`, or the `easycat serve` CLI), that
+  process serves the real three-tier health family: `GET /health/live`
+  (loop responsiveness), `GET /health/ready` (draining / capacity /
+  route-stack / manifest+plan checks — 200 only when all pass), and
+  `GET /health` (the full JSON snapshot). Point the same healthcheck script
+  at it instead of rebuilding the image:
+
+  ```bash
+  docker run ... -e EASYCAT_HEALTH_URL=http://127.0.0.1:8080/health/ready easycat:ws
+  ```
+
+  `EASYCAT_HEALTH_URL` set to anything makes `docker/healthcheck.py` do a
+  plain HTTP GET and require a 2xx response instead of the TCP fallback —
+  no image rebuild needed to switch modes. Compose's `healthcheck:` block
+  in `docker/compose.yaml` only overrides the timing (`interval`/`timeout`/
+  `retries`/`start_period`), so it inherits whichever probe the running
+  container's environment selects.
+
+## Persisting the journal across restarts
+
+EasyCat's crash-durability promise (see
+[`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md))
+only holds if you opt into a durable journal *and* the journal directory
+survives container restarts and recreation. The `EasyConfig` default is
+`debug="light"` — an in-memory journal that writes nothing to disk — and the
+default `examples/ws_server.py` CMD (`EasyConfig(transport=..., agent=...)`,
+no `debug` argument) inherits it, so out of the box the container persists
+nothing and needs no mount.
+
+Set `debug="full"` (edit `examples/ws_server.py`, or point the CMD at your
+own config script) to turn on the crash-survivable journal: it writes every
+session's SQLite journal, artifacts, crash-dumps, and retention archive under
+`EASYCAT_DATA_DIR` (default `.easycat`, i.e. `/app/.easycat` given the image's
+`WORKDIR`). Once `debug="full"` is on, a container filesystem without a mount
+there is ephemeral: `docker compose down` (and any `docker rm`/redeploy)
+silently discards every journal, breaking that promise — mount a named volume
+or bind mount to preserve it.
+
+The Dockerfile declares `VOLUME ["/app/.easycat"]` and pre-creates that
+directory owned by the `easycat` user (uid 1000) so a bind mount or named
+volume dropped on top of it does not need a container-side `chown` step.
+`docker/compose.yaml` mounts a named volume there by default:
+
+```yaml
+volumes:
+  - easycat-journal:/app/.easycat
+```
+
+To use a host bind mount instead (for direct host-side backup tooling),
+override the volume line with a host path and `chown` it to uid 1000 once:
+
+```bash
+sudo mkdir -p /srv/easycat-journal && sudo chown 1000:1000 /srv/easycat-journal
+```
+
+```yaml
+volumes:
+  - /srv/easycat-journal:/app/.easycat
+```
+
+**Inspecting a persisted journal** from the host (no running container
+required — SQLite files are safe to read while the container is stopped, and
+`easycat` CLI commands work against the mounted path directly):
+
+```bash
+uv run easycat bundles show /srv/easycat-journal/journals/<session_id>.sqlite
+uv run easycat journal follow /srv/easycat-journal/journals/<session_id>.sqlite
+```
+
+**Backup.** The simplest approach is periodic filesystem-level backup of the
+volume/bind mount (the SQLite files are WAL-mode; snapshot them with the
+container stopped, or use a filesystem/volume snapshot tool that supports
+consistent snapshots of open files). For continuous off-host replication
+instead of periodic snapshots, see Litestream below.
+
+The default `debug="light"` already keeps journals in memory only (no disk
+writes, no mount needed); set `debug="off"` on `EasyConfig`/`SessionConfig`
+to disable recording entirely (e.g. a stateless demo). The entrypoint's
+writability check is a warning, not a hard failure, so neither mode blocks
+startup when nothing is mounted at `/app/.easycat`.
+
+## Litestream and libSQL replicas in a container
+
+Both replicated backends are selected via `journal_backend=` on
+`EasyConfig`/`SessionConfig` (`"sqlite+litestream"` or `"libsql"`); the
+Dockerfile's example CMD does not set this today, so wire it into your own
+`config()` factory (see "Swapping STT / TTS providers" above for the same
+mount-your-own-script pattern) and configure the replica target through
+environment variables — no code change needed for the target itself.
+
+### Litestream (`journal_backend="sqlite+litestream"`)
+
+Ships WAL segments continuously (about every second) to object storage,
+bounding the kernel-crash loss window to the replication interval instead of
+the OS dirty-page writeback window. Configure the replica target with:
+
+```bash
+EASYCAT_JOURNAL_LITESTREAM_REPLICA=s3://your-bucket/easycat-journals
+```
+
+The `litestream` binary itself is **not** bundled in this image (keeping the
+runtime stage minimal). `LitestreamSqliteJournal` degrades to plain SQLite
+with a log warning if the binary is missing, and the entrypoint now prints
+the same warning at container start so a missing sidecar is caught
+immediately instead of silently losing replication. Two ways to add it:
+
+- **Sidecar container** (recommended — keeps the app image slim): run the
+  official `litestream/litestream` image as a second compose service,
+  pointed at the same `easycat-journal` volume, running
+  `litestream replicate -config /etc/litestream.yml` against
+  `/app/.easycat/journals/*.sqlite`. This also lets you rotate S3/replica
+  credentials without rebuilding the app image.
+- **Bundle the binary**: add `litestream` to the runtime stage in a fork of
+  the Dockerfile (download the static binary in the `runtime` stage before
+  `USER easycat`), then set `EASYCAT_JOURNAL_LITESTREAM_REPLICA` as above —
+  `LitestreamSqliteJournal` starts the sidecar process itself in that case.
+
+Credentials for the replica target (e.g. `LITESTREAM_ACCESS_KEY_ID` /
+`LITESTREAM_SECRET_ACCESS_KEY` for S3) follow Litestream's own environment
+variable contract — pass them the same way you pass `OPENAI_API_KEY`, via
+`-e` or a `.env` file, never baked into the image.
+
+### libSQL (`journal_backend="libsql"`)
+
+Embedded replica with async remote sync instead of a sidecar process —
+requires the `libsql_experimental` SDK (an optional dependency the factory
+falls back from if it's missing) and:
+
+```bash
+EASYCAT_LIBSQL_URL=libsql://your-db.turso.io
+EASYCAT_LIBSQL_AUTH_TOKEN=...
+```
+
+Sync interval defaults to 10s (`EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S`).
+libSQL does **not** implement this framework's crash-recovery/crash-dump
+promotion (see DURABILITY.md's "Backend support" section) — prefer
+`sqlite+litestream` when crash-recovery semantics on reused session ids
+matter, and reach for libSQL when a managed remote-replica target
+outweighs that gap.
+
+## Scraping metrics
+
+The Dockerfile's default `examples/ws_server.py` CMD does not expose HTTP
+metrics — it is a raw WebSocket-only process. Metrics scraping applies to a
+`VoiceServer`-based CMD (see [Container health checks](#container-health-checks)
+above for the same swap):
+
+- **`GET /metrics`** — a read-only, PII-safe JSON snapshot of the in-process
+  server counters/gauges (`VoiceServer.metrics_payload()`); it does not
+  require an OTel SDK and is stable to poll directly (e.g. with a sidecar
+  `curl` + your own metrics pipeline, or a Prometheus `json_exporter`).
+  Requires the same bearer token as `/webrtc/*` when the server has an auth
+  policy configured.
+- **OpenTelemetry (`easycat._observability`)** — for histograms and traces
+  beyond the `/metrics` snapshot, install an OTel SDK and exporter
+  (`opentelemetry-sdk`, `opentelemetry-exporter-otlp`; EasyCat treats OTel as
+  fully optional and never pulls it in as a hard dependency — see
+  [observability.md](../observability.md#d-—-opentelemetry-facade)) and
+  initialize the SDK's `MeterProvider`/`TracerProvider` in your own `config()`
+  factory before creating sessions. Point the standard OTel SDK environment
+  variables at your collector — nothing container-specific:
+
+  ```bash
+  OTEL_SERVICE_NAME=easycat-ws
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+  ```
+
+  A collector receiving OTLP push from the container is the usual pattern
+  for a pull-based Prometheus scrape target — EasyCat itself emits
+  `easycat.server.*` metrics (`requests.total`, `request.duration`,
+  `sessions.rejected.total`, `connections.active`, `draining`) plus the
+  pipeline-stage/turn-latency metrics documented in
+  [observability.md](../observability.md); it does not serve Prometheus text
+  exposition natively, so run the collector's `prometheus` exporter (or
+  `prometheusremotewrite`) alongside your `otlp` receiver to bridge the two.
 
 ## Swapping STT / TTS providers
 

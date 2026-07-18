@@ -150,9 +150,10 @@ This makes text sessions useful for chat UIs and deterministic development,
 not just toy mocks. `send_text()` only works on a text session; voice sessions
 receive user input from their transport.
 
-Text sessions default to durable debugging. This lesson selects `debug="off"`
-so its credential-free guard leaves no artifacts. Chapter 7 turns debugging
-on and inspects the resulting journal and bundle.
+Text sessions default to the in-memory `debug="light"` journal. This lesson
+selects `debug="off"` so its credential-free guard records nothing at all.
+Chapter 7 turns on durable `debug="full"` capture and inspects the resulting
+journal and bundle.
 
 ## Reset a conversation without replacing the session
 

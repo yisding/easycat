@@ -82,11 +82,12 @@ class TurnManagerConfig:
     #
     # NOTE: This field is *not* read by TurnManager itself.  It is consumed by
     # ``Session``, which forwards it to the ``STTCommitter`` as
-    # ``segment_silence_ms`` (see ``session/_session.py`` and
-    # ``session/_stt_committer.py``).  Setting it on a bare ``TurnManager``
-    # (constructed without a Session) therefore has no effect.  It lives here so
-    # the single ``TurnManagerConfig`` object stays the one place callers tune
-    # turn/STT segmentation timing.
+    # ``segment_silence_ms`` (see ``session/_builder.py``, which wires it into
+    # ``STTCommitter``, and ``session/_stt_committer.py``, which reads it).
+    # Setting it on a bare ``TurnManager`` (constructed without a Session)
+    # therefore has no effect.  It lives here so the single
+    # ``TurnManagerConfig`` object stays the one place callers tune turn/STT
+    # segmentation timing.
     stt_segment_silence_ms: int = 0
     # Pre-roll buffer duration in milliseconds
     pre_roll_ms: int = 300

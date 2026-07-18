@@ -163,10 +163,20 @@ class TTSProviderConfig:
             self.settings = None
 
 
-def create_tts_provider(config: TTSProviderConfig) -> TTSProvider:
+def create_tts_provider(
+    config: TTSProviderConfig, event_bus: EventBus | None = None
+) -> TTSProvider:
     """Create a TTS provider instance from a configuration object.
 
     Validates the provider name and params at construction time.
+
+    ``event_bus``, when given, is structurally injected into the resulting
+    provider config the same way :func:`create_tts_provider_from_config`
+    does: only providers whose config dataclass declares an ``event_bus``
+    field (and that don't already have one set via ``params``) receive it.
+    Pass it so providers that emit provider-scoped events (e.g. Deepgram,
+    ElevenLabs) keep reconnect/error observability when constructed through
+    this string/params path.
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider name, with fuzzy-match
@@ -187,6 +197,11 @@ def create_tts_provider(config: TTSProviderConfig) -> TTSProvider:
 
     if not provider_config.api_key:
         raise ValueError(f"API key is required for TTS provider '{config.provider}'")
+
+    if event_bus is not None:
+        has_event_bus_field = any(f.name == "event_bus" for f in fields(provider_config))
+        if has_event_bus_field and provider_config.event_bus is None:
+            provider_config = replace(provider_config, event_bus=event_bus)
 
     return provider_cls(provider_config)
 
