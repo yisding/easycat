@@ -386,4 +386,3 @@ class TestOutboundCallFlow:
             assert actions[0].digits == "2"
         finally:
             nav.stop()
-

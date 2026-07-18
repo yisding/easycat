@@ -11,6 +11,7 @@ REQUIRED_VALIDATION_MARKERS = {
     "agent_bridge",
     "contract",
     "flaky",
+    "guard",
     "integration_external",
     "integration_live",
     "integration_local",

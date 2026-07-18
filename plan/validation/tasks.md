@@ -146,7 +146,7 @@ Verification:
 
 ```bash
 uv run pytest --collect-only -q
-uv run pytest -q -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+uv run pytest -q -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 ```
 
 ### V0.2 Define Validation Report Model
@@ -230,7 +230,7 @@ Current verified state:
   `run_validation_slice(...)`; `VALIDATION_SELECTORS` currently includes
   `quick`, `socket`, `stress`, and `contracts`.
 - The current `quick` selector is
-  `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky`;
+  `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard`;
   the current `socket` selector is
   `integration_socket and not integration_live and not flaky`.
 - `run_validation_slice(...)` creates isolated
@@ -255,7 +255,7 @@ Tasks:
 - Keep `scripts/validate.py` as a thin shim over reusable runner/report code
   so V1 can reuse the implementation instead of creating a parallel codepath.
 - Implement `quick` with:
-  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"`.
+  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"`.
 - Implement `socket` with:
   `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "integration_socket and not integration_live and not flaky"`.
 - Create `.easycat/validation/runs/<run_id>/` automatically. Use a run id
@@ -540,7 +540,7 @@ Acceptance:
 Verification:
 
 ```bash
-uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 uv run pytest -q --junitxml=.easycat/validation/runs/manual-socket/junit.xml -m "integration_socket and not integration_live and not flaky"
 ```
 

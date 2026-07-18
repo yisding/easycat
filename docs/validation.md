@@ -43,12 +43,13 @@ uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_mat
 The quick validation lane runs deterministic local tests only: no live
 credentials, no localhost socket lane, no external binary/service lane, no
 contract lane, no slow tests, no flaky quarantine, and no `guard` tests. The
-`guard` marker tags the docs/onboarding/prose guards (Markdown, routes, and
-generated blocks) that the `guard-*` lanes above own; the fast dev loop
-(`just test-fast`, `just cov`, and `uv run easycat validate quick`) skips them,
-while `just test` and `just check` still run them. Run only the guards with
-`uv run pytest -m guard`, or only the behavioral tests with
-`uv run pytest -m "not guard"`.
+`guard` marker tags the prose-only overlay (Markdown, routes, generated blocks,
+and documentation-to-code drift checks) within the broader `guard-*` lanes;
+the fast dev loop (`just test-fast`, `just cov`, and
+`uv run easycat validate quick`) skips them, while `just test` and `just check`
+still run them. Some named guard lanes also own behavioral CLI and runtime
+tests, so `uv run pytest -m guard` is useful for the prose overlay but is not a
+replacement for the relevant named guard command above.
 Each run writes an isolated report under
 `.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
 logs, and updates `.easycat/validation/latest.json` after the report is

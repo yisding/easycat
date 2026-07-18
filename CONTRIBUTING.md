@@ -193,11 +193,12 @@ collection. The full list lives in `pyproject.toml` under
 - `guard` — docs/onboarding/prose guard test that scans Markdown, docstrings,
   routes, or generated blocks rather than exercising product runtime. Applied
   by path in `tests/conftest.py` (the `tests/docs`, `tests/install`, and
-  `tests/examples` trees plus a short list of root-level guard modules, minus a
+  `tests/examples` trees plus a short list of prose-only guard modules, minus a
   behavioral exempt list). Excluded from the fast dev loop (`just test-fast`,
   `just cov`, and the `quick` validation lane) but always run in `just test`,
-  `just check`, and the `guard-*` lanes. Run only the guards with `-m guard`,
-  or only behavioral tests with `-m "not guard"`.
+  `just check`, and the `guard-*` lanes. The named guard lanes also include
+  behavioral CLI and runtime coverage; use `-m guard` only for the prose
+  overlay, not as a replacement for a relevant `just guard-*` command.
 - `provider_openai` / `provider_deepgram` / `provider_elevenlabs` /
   `provider_cartesia` — provider coverage; `provider("name")` is the generic
   form for custom providers.

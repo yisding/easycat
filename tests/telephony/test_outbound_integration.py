@@ -649,4 +649,3 @@ class TestBotToBotDetection:
             "Can you confirm the time please?",
         ]
         assert not check_coherence(callee_texts, bot_texts)
-

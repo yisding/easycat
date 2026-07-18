@@ -35,6 +35,7 @@ GUARD_DIRS = {"tests/docs", "tests/install", "tests/examples"}
 # Individual root-level guard modules that scan Markdown, routes, or generated
 # blocks rather than exercising product runtime.
 GUARD_FILES = {
+    "tests/observability/test_docs.py",
     "tests/test_markdown_links.py",
     "tests/test_llms_txt.py",
     "tests/test_command_hints.py",
