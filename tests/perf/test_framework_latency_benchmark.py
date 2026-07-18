@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from perf.bench_framework_latency import (
-    LOCK_EXCLUDE_NEWER,
+    LOCK_EXCLUDE_NEWER_BY_FRAMEWORK,
     PINS,
     Worker,
     WorkerSpec,
@@ -91,15 +91,16 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     assert easycat.command == (sys.executable, str(worker), "--framework", "easycat")
     assert "--no-config" in livekit.command
     assert "--no-config" in pipecat.command
-    assert livekit.command[livekit.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
-    assert pipecat.command[pipecat.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
+    for spec in (livekit, pipecat):
+        cutoff = spec.command[spec.command.index("--exclude-newer") + 1]
+        assert cutoff == LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[spec.framework]
     assert "--isolated" in livekit.command
     assert "--locked" in livekit.command
     assert "--locked" in pipecat.command
     assert livekit.command[livekit.command.index("--python") + 1] == sys.executable
     assert pipecat.command[pipecat.command.index("--python") + 1] == sys.executable
     assert PINS == {
-        "livekit": ("livekit-agents==1.6.4",),
+        "livekit": ("livekit-agents==1.6.6",),
         "pipecat": ("pipecat-ai==1.4.0", "websockets==15.0.1"),
     }
 
