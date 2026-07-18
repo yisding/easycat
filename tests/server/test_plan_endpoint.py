@@ -270,7 +270,7 @@ async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
             body = await resp.json()
             assert body["has_blocking_errors"] is True
             assert body["selected"] == {}
-        async with client.get(f"{_base_url(server)}/capabilities") as resp:
+        async with client.get(f"{_base_url(server)}/capabilities", headers=auth_headers) as resp:
             assert resp.status == 200
             caps = await resp.json()
             assert caps["roles"] == {}
