@@ -107,6 +107,7 @@ def _lock_metadata() -> dict[str, dict[str, str]]:
         metadata[framework] = {
             "path": str(lock_path.relative_to(Path(__file__).parents[1])),
             "sha256": digest,
+            "exclude_newer": LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework],
         }
     return metadata
 
