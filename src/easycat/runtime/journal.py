@@ -145,9 +145,9 @@ class JournalView:
         """Return records whose ``data['stage']`` or ``data['observed_stage']``
         matches *stage_name*.  Mirrors :meth:`RunBundle.filter_by_stage`.
 
-        The live SQL backends persist a derived ``stage`` column indexed by
-        ``idx_journal_stage`` and expose ``slice_by_stage`` for an index
-        lookup, so this no longer deserializes every record on those backends.
+        The live SQL backends persist derived ``stage`` and ``observed_stage``
+        columns with indexes and expose ``slice_by_stage`` for an index lookup,
+        so this no longer deserializes every record on those backends.
         Backends without the indexed column (read-only views over older files,
         frozen in-memory snapshots) fall back to a scan — correct everywhere,
         fast where the index exists.

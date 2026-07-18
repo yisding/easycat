@@ -62,7 +62,7 @@ repos:
         # German/French/Portuguese), truncated test transcripts ("hel" for
         # hello), a deliberate template substring, and the valid spelling
         # "unparseable".
-        - --ignore-words-list=crate,nin,assertin,hel,ist,sie,nome,raison,copie,templat,unparseable,re-declaring,implementors,clen,whats
+        - --ignore-words-list=crate,nin,assertin,hel,ist,sie,nome,raison,copie,templat,unparseable,re-declaring,implementors,clen,whats,aadd
 
 - repo: https://github.com/rhysd/actionlint
   rev: v1.7.7

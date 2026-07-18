@@ -210,22 +210,17 @@ startup when nothing is mounted at `/app/.easycat`.
 
 ## Litestream and libSQL replicas in a container
 
-Both replicated backends are selected via `journal_backend=` on
-`EasyConfig`/`SessionConfig` (`"sqlite+litestream"` or `"libsql"`); the
-Dockerfile's example CMD does not set this today, so wire it into your own
-`config()` factory (see "Swapping STT / TTS providers" above for the same
-mount-your-own-script pattern) and configure the replica target through
-environment variables — no code change needed for the target itself.
+The app selects its journal backend through `journal_backend=` on
+`EasyConfig`/`SessionConfig`; the Dockerfile's example CMD does not set one
+today, so wire it into your own `config()` factory (see "Swapping STT / TTS
+providers" above for the same mount-your-own-script pattern). The right value
+depends on whether replication runs outside or inside the app container.
 
-### Litestream (`journal_backend="sqlite+litestream"`)
+### Litestream
 
 Ships WAL segments continuously (about every second) to object storage,
 bounding the kernel-crash loss window to the replication interval instead of
-the OS dirty-page writeback window. Configure the replica target with:
-
-```bash
-EASYCAT_JOURNAL_LITESTREAM_REPLICA=s3://your-bucket/easycat-journals
-```
+the OS dirty-page writeback window.
 
 The `litestream` binary itself is **not** bundled in this image (keeping the
 runtime stage minimal). `LitestreamSqliteJournal` degrades to plain SQLite
@@ -233,16 +228,25 @@ with a log warning if the binary is missing, and the entrypoint now prints
 the same warning at container start so a missing sidecar is caught
 immediately instead of silently losing replication. Two ways to add it:
 
-- **Sidecar container** (recommended — keeps the app image slim): run the
-  official `litestream/litestream` image as a second compose service,
-  pointed at the same `easycat-journal` volume, running
+- **Sidecar container** (recommended — keeps the app image slim): keep the app
+  on plain `journal_backend="sqlite"`. Run the official
+  `litestream/litestream` image as a second compose service, pointed at the
+  same `easycat-journal` volume, running
   `litestream replicate -config /etc/litestream.yml` against
-  `/app/.easycat/journals/*.sqlite`. This also lets you rotate S3/replica
-  credentials without rebuilding the app image.
-- **Bundle the binary**: add `litestream` to the runtime stage in a fork of
-  the Dockerfile (download the static binary in the `runtime` stage before
-  `USER easycat`), then set `EASYCAT_JOURNAL_LITESTREAM_REPLICA` as above —
-  `LitestreamSqliteJournal` starts the sidecar process itself in that case.
+  `/app/.easycat/journals/*.sqlite`. Put the replica URL in the sidecar's
+  Litestream config, not `EASYCAT_JOURNAL_LITESTREAM_REPLICA` on the app. This
+  also lets you rotate S3/replica credentials without rebuilding the app image.
+- **Bundle the binary**: add `litestream` to the runtime stage in a fork of the
+  Dockerfile (download the static binary in the `runtime` stage before `USER
+  easycat`), select `journal_backend="sqlite+litestream"`, and set:
+
+  ```bash
+  EASYCAT_JOURNAL_LITESTREAM_REPLICA=s3://your-bucket/easycat-journals
+  ```
+
+  `LitestreamSqliteJournal` starts the bundled process. If the binary or
+  replica variable is absent, it deliberately falls back to plain SQLite with
+  a warning.
 
 Credentials for the replica target (e.g. `LITESTREAM_ACCESS_KEY_ID` /
 `LITESTREAM_SECRET_ACCESS_KEY` for S3) follow Litestream's own environment
@@ -264,8 +268,8 @@ Sync interval defaults to 10s (`EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S`).
 libSQL does **not** implement this framework's crash-recovery/crash-dump
 promotion (see DURABILITY.md's "Backend support" section) — prefer
 `sqlite+litestream` when crash-recovery semantics on reused session ids
-matter, and reach for libSQL when a managed remote-replica target
-outweighs that gap.
+matter (using either Litestream topology above), and reach for libSQL when a
+managed remote-replica target outweighs that gap.
 
 ## Scraping metrics
 

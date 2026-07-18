@@ -32,8 +32,20 @@ fi
 # when it is not writable: deployments that keep the default `debug="light"`
 # (or set `debug="off"`) write no journal here and never mount anything.
 data_dir="${EASYCAT_DATA_DIR:-.easycat}"
-if [ -e "$data_dir" ] && [ ! -w "$data_dir" ]; then
-    echo "warning: EASYCAT_DATA_DIR=$data_dir exists but is not writable by this user" >&2
+data_dir_ancestor="$data_dir"
+while [ ! -e "$data_dir_ancestor" ]; do
+    parent_dir="$(dirname -- "$data_dir_ancestor")"
+    if [ "$parent_dir" = "$data_dir_ancestor" ]; then
+        break
+    fi
+    data_dir_ancestor="$parent_dir"
+done
+if [ ! -w "$data_dir_ancestor" ] || [ ! -x "$data_dir_ancestor" ]; then
+    if [ -e "$data_dir" ]; then
+        echo "warning: EASYCAT_DATA_DIR=$data_dir exists but is not writable by this user" >&2
+    else
+        echo "warning: EASYCAT_DATA_DIR=$data_dir cannot be created; nearest existing ancestor $data_dir_ancestor is not writable by this user" >&2
+    fi
     echo "         journals will not persist; chown it to uid 1000 (the 'easycat' user) on the host/volume" >&2
 fi
 

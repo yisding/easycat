@@ -5,7 +5,7 @@ Two modes, selected by environment variable — no image rebuild needed to
 switch:
 
 - ``EASYCAT_HEALTH_URL`` set (e.g. ``http://127.0.0.1:8080/health/ready``) —
-  GET that URL and require HTTP 200. Use this for any server built on
+  GET that URL and require an HTTP 2xx response. Use this for any server built on
   :class:`easycat.server.VoiceServer` (``run_webrtc_config_server()``, a
   custom ``VoiceServer.from_app(...)``, etc.) — those processes serve the
   real readiness endpoint documented in ``src/easycat/server/health.py``
@@ -32,6 +32,11 @@ import urllib.error
 import urllib.request
 
 TIMEOUT_S = 2.0
+
+# These bounded blocking calls are intentional. The health check is a one-shot
+# child process with no concurrent work or event loop to protect, and keeping it
+# stdlib-only avoids making container liveness depend on importing the app or
+# its optional async HTTP stack.
 
 
 def _check_http(url: str) -> bool:

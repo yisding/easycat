@@ -17,8 +17,9 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+_phonenumbers: Any
 try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
     import phonenumbers as _phonenumbers
 except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
@@ -213,14 +214,11 @@ class DNCStore(Protocol):
     it; apps needing a shared/clustered backend (Redis, Postgres, a DNC
     vendor API) can implement their own.
 
-    These three methods are synchronous by design (the minimal structural
-    surface a custom backend must implement), but calling them directly from
-    an async context can block the event loop — :class:`SQLiteDNCList` in
-    particular does blocking disk I/O.  Both built-in implementations also
-    provide async ``aadd`` / ``aremove`` / ``ais_on_dnc`` counterparts; async
-    callers should prefer those (or wrap a custom store's sync methods in
-    :func:`asyncio.to_thread` themselves) instead of calling the sync methods
-    directly on the event loop.
+    These three methods remain the minimal, backward-compatible surface a
+    custom backend must implement. Async-capable stores can additionally
+    implement :class:`AsyncDNCStore`; EasyCat uses that native contract when
+    available and otherwise offloads these methods with
+    :func:`asyncio.to_thread`.
     """
 
     def add(self, phone: str) -> None: ...
@@ -228,6 +226,22 @@ class DNCStore(Protocol):
     def remove(self, phone: str) -> None: ...
 
     def is_on_dnc(self, phone: str) -> bool: ...
+
+
+@runtime_checkable
+class AsyncDNCStore(DNCStore, Protocol):
+    """Typed asynchronous extension to :class:`DNCStore`.
+
+    The separate protocol preserves compatibility for existing sync-only
+    third-party stores while allowing async call sites to use native backend
+    operations without guessing at attributes.
+    """
+
+    async def aadd(self, phone: str) -> None: ...
+
+    async def aremove(self, phone: str) -> None: ...
+
+    async def ais_on_dnc(self, phone: str) -> bool: ...
 
 
 class DNCList:

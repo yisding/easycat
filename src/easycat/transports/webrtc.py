@@ -1184,20 +1184,26 @@ class WebRTCTransport(AudioQueueMixin):
                     logger.info("WebRTC events data channel received")
                     self._events_channel = channel
 
+            abnormal_disconnect_recorded = False
+
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
+                nonlocal abnormal_disconnect_recorded
                 if not self._is_current_peer_generation(peer_generation):
                     return
                 state = pc.connectionState
                 logger.info("WebRTC connection state: %s", state)
                 if state == "connected":
+                    # A later drop after a genuine recovery is a new incident.
+                    abnormal_disconnect_recorded = False
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
                     # ``disconnected``/``failed`` are abnormal peer drops (ICE
                     # loss, connectivity failure); ``closed`` is the terminal
                     # state of an application-initiated teardown and is clean.
-                    if state in ("disconnected", "failed"):
+                    if state in ("disconnected", "failed") and not abnormal_disconnect_recorded:
                         self._record_transport_disconnect(f"webrtc peer {state}")
+                        abnormal_disconnect_recorded = True
                     self._client_connected.clear()
                     self._peer_closed.set()
                     # Null the outbound track so send_audio() reports the
@@ -1255,6 +1261,14 @@ class WebRTCTransport(AudioQueueMixin):
 
         if self._pc is not None:
             await self._pc.close()
+
+        # The source belongs to the old peer and owns delivery-event tasks that
+        # may still be finishing off the RTP path. Drain it before replacing the
+        # reference so repeated offers cannot orphan those tasks or lose their
+        # final TransportAudioDelivered events.
+        old_outbound = self._outbound
+        old_outbound.stop()
+        await old_outbound.aclose()
 
         # Clear stale audio from the previous peer so it doesn't leak into
         # the new session's receive_audio() iterator. Do not replace the queue:

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+from pathlib import Path
+
 from tests.examples._examples_helpers import (
     REPO_ROOT,
     Headers,
@@ -244,6 +248,36 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     assert "EASYCAT_WS_TOKEN: ${EASYCAT_WS_TOKEN:?set EASYCAT_WS_TOKEN" in compose
     assert '"127.0.0.1:8765:8765"' in compose
     assert '- "8765:8765"' not in compose
+
+
+def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "read-only"
+    parent.mkdir()
+    parent.chmod(0o500)
+    if os.access(parent, os.W_OK):
+        pytest.skip("current user can write through read-only mode bits")
+
+    env = {
+        **os.environ,
+        "OPENAI_API_KEY": "synthetic-test-key",
+        "EASYCAT_DATA_DIR": str(parent / "missing" / "data"),
+        "EASYCAT_WS_HOST": "127.0.0.1",
+    }
+    try:
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / "docker" / "entrypoint.sh"), "true"],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+    finally:
+        parent.chmod(0o700)
+
+    assert result.returncode == 0
+    assert "cannot be created; nearest existing ancestor" in result.stderr
 
 
 def test_docker_guide_serves_browser_client_from_localhost():

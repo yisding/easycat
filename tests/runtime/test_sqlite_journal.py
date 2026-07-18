@@ -13,6 +13,8 @@ import sys
 import tarfile
 import textwrap
 import time
+from collections.abc import Iterable
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -1267,6 +1269,7 @@ class _LockProbeConn:
         self.journal = None
         self.violations: list[str] = []
         self.sync_threads: set[str] = set()
+        self.rollbacks = 0
 
     def executescript(self, sql):
         return None
@@ -1276,6 +1279,9 @@ class _LockProbeConn:
 
     def commit(self):
         return None
+
+    def rollback(self):
+        self.rollbacks += 1
 
     def close(self):
         return None
@@ -1304,6 +1310,43 @@ class _FakeLibsqlModule:
 
 
 class TestLibsqlJournal:
+    def test_tag_index_failure_rolls_back_and_restores_sequence(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from easycat.runtime import LibsqlJournal
+        from easycat.runtime import journal_sql as journal_sql_module
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        def fail_tag_index(*_args: object) -> None:
+            raise RuntimeError("tag index failed")
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            journal = LibsqlJournal("atomic-libsql", data_dir=tmp_path)
+            probe.journal = journal
+            monkeypatch.setattr(
+                journal_sql_module,
+                "_insert_tag_index_rows",
+                fail_tag_index,
+            )
+
+            assert (
+                journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="partial",
+                    session_id="atomic-libsql",
+                    tags=frozenset({"tagged"}),
+                )
+                == -1
+            )
+            assert journal.latest_sequence == 0
+            assert probe.rollbacks == 1
+            probe.journal = None
+            journal.close()
+
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""
         with mock.patch.dict("sys.modules", {"libsql_experimental": None}):
@@ -1554,7 +1597,12 @@ CREATE TABLE session_state (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
-def _write_pre_stage_journal(db_path, rows, *, clean_close=False):
+def _write_pre_stage_journal(
+    db_path: Path,
+    rows: list[tuple[int, str, str | None, dict[str, object], Iterable[str]]],
+    *,
+    clean_close: bool = False,
+) -> None:
     """Create an old-schema (pre-stage) journal file with *rows*.
 
     Each row is ``(sequence, name, turn_id, data_dict, tags_iterable)``.
@@ -1586,7 +1634,10 @@ def _write_pre_stage_journal(db_path, rows, *, clean_close=False):
 
 
 class TestIndexedStageTurnTagQueries:
-    def test_filter_by_stage_returns_stage_and_observed_stage_records(self, journal):
+    def test_filter_by_stage_returns_stage_and_observed_stage_records(
+        self,
+        journal: SqliteJournal,
+    ) -> None:
         # stage records stamp ``data['stage']``; control-signal records stamp
         # ``observed_stage`` (equal to ``stage``).  Both must match.
         journal.append(
@@ -1607,13 +1658,22 @@ class TestIndexedStageTurnTagQueries:
             session_id="test-session",
             data={"stage": "tts"},
         )
+        journal.append(
+            kind=JournalRecordKind.CONTROL,
+            name="mixed",
+            session_id="test-session",
+            data={"stage": "stt", "observed_stage": "agent"},
+        )
         view = JournalView(journal)
         names = {r.name for r in view.filter_by_stage("stt")}
-        assert names == {"stage_start", "control_signal"}
+        assert names == {"stage_start", "control_signal", "mixed"}
         assert [r.name for r in view.filter_by_stage("tts")] == ["other"]
-        assert view.filter_by_stage("agent") == []
+        assert [r.name for r in view.filter_by_stage("agent")] == ["mixed"]
 
-    def test_filter_by_stage_uses_indexed_column_not_full_scan(self, journal):
+    def test_filter_by_stage_uses_indexed_column_not_full_scan(
+        self,
+        journal: SqliteJournal,
+    ) -> None:
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="s",
@@ -1623,13 +1683,16 @@ class TestIndexedStageTurnTagQueries:
         # The dedicated index exists and the query path is an index lookup.
         assert hasattr(journal, "slice_by_stage")
         names = {row[1] for row in journal._conn.execute("PRAGMA index_list(journal)").fetchall()}
-        assert "idx_journal_stage" in names
+        assert {"idx_journal_stage", "idx_journal_observed_stage"} <= names
         plan = journal._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT * FROM journal WHERE stage = ?", ["vad"]
+            "EXPLAIN QUERY PLAN SELECT * FROM journal WHERE stage = ? OR observed_stage = ?",
+            ["vad", "vad"],
         ).fetchall()
-        assert any("idx_journal_stage" in " ".join(str(c) for c in step) for step in plan)
+        plan_text = " ".join(str(column) for step in plan for column in step)
+        assert "idx_journal_stage" in plan_text
+        assert "idx_journal_observed_stage" in plan_text
 
-    def test_filter_by_turn_uses_indexed_turn_column(self, journal):
+    def test_filter_by_turn_uses_indexed_turn_column(self, journal: SqliteJournal) -> None:
         journal.append(
             kind=JournalRecordKind.EVENT, name="a", session_id="test-session", turn_id="t1"
         )
@@ -1646,7 +1709,7 @@ class TestIndexedStageTurnTagQueries:
         names = {row[1] for row in journal._conn.execute("PRAGMA index_list(journal)").fetchall()}
         assert "idx_journal_turn_id" in names
 
-    def test_slice_by_tags_uses_junction_table(self, journal):
+    def test_slice_by_tags_uses_junction_table(self, journal: SqliteJournal) -> None:
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="hit",
@@ -1687,9 +1750,53 @@ class TestIndexedStageTurnTagQueries:
         )
         assert "journal_tags" in plan_text
 
+    def test_append_rolls_back_row_and_sequence_when_tag_index_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from easycat.runtime import journal_sql as journal_sql_module
+
+        journal = SqliteJournal("atomic", data_dir=tmp_path)
+
+        def fail_after_first_tag(
+            conn: sqlite3.Connection,
+            sequence: int,
+            tags: frozenset[str],
+        ) -> None:
+            conn.execute(
+                "INSERT INTO journal_tags (tag, sequence) VALUES (?, ?)",
+                (next(iter(tags)), sequence),
+            )
+            raise RuntimeError("tag index failed")
+
+        monkeypatch.setattr(journal_sql_module, "_insert_tag_index_rows", fail_after_first_tag)
+
+        assert (
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="partial",
+                session_id="atomic",
+                tags=frozenset({"tagged"}),
+            )
+            == -1
+        )
+        assert journal.latest_sequence == 0
+        assert (
+            journal._conn.execute("SELECT COUNT(*) FROM journal WHERE sequence > 0").fetchone()[0]
+            == 0
+        )
+        assert (
+            journal._conn.execute(
+                "SELECT COUNT(*) FROM journal_tags WHERE sequence > 0"
+            ).fetchone()[0]
+            == 0
+        )
+        journal.close()
+
 
 class TestOldSchemaJournalMigration:
-    def test_ensure_schema_migrates_pre_stage_file_additively(self, tmp_path):
+    def test_ensure_schema_migrates_pre_stage_file_additively(self, tmp_path: Path) -> None:
         from easycat.runtime._journal_codec import _ensure_journal_schema
 
         db_path = tmp_path / "old.sqlite"
@@ -1707,15 +1814,24 @@ class TestOldSchemaJournalMigration:
 
         # Column, indexes, and junction table were added additively.
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(journal)").fetchall()}
-        assert "stage" in cols
+        assert {"stage", "observed_stage"} <= cols
         idx = {r[1] for r in conn.execute("PRAGMA index_list(journal)").fetchall()}
-        assert {"idx_journal_stage", "idx_journal_turn_id"} <= idx
+        assert {
+            "idx_journal_stage",
+            "idx_journal_observed_stage",
+            "idx_journal_turn_id",
+        } <= idx
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "journal_tags" in tables
 
         # Stage column was backfilled from data['stage']/observed_stage.
-        stages = dict(conn.execute("SELECT sequence, stage FROM journal").fetchall())
-        assert stages == {1: "stt", 2: "agent", 3: None}
+        stages = {
+            row[0]: (row[1], row[2])
+            for row in conn.execute(
+                "SELECT sequence, stage, observed_stage FROM journal"
+            ).fetchall()
+        }
+        assert stages == {1: ("stt", None), 2: ("agent", "agent"), 3: (None, None)}
 
         # Tags were backfilled into the junction from the comma string.
         junction = {
@@ -1725,7 +1841,7 @@ class TestOldSchemaJournalMigration:
         conn.commit()
         conn.close()
 
-        # Running migration again is a no-op (stage column already present).
+        # Running migration again is a no-op (completion marker already present).
         conn2 = sqlite3.connect(db_path)
         _ensure_journal_schema(conn2)
         again = {
@@ -1733,9 +1849,47 @@ class TestOldSchemaJournalMigration:
             for r in conn2.execute("SELECT tag, sequence FROM journal_tags").fetchall()
         }
         assert again == junction
+        assert conn2.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 2
         conn2.close()
 
-    def test_readonly_reads_pre_stage_file(self, tmp_path):
+    def test_interrupted_index_migration_resumes(self, tmp_path: Path) -> None:
+        from easycat.runtime._journal_codec import _ensure_journal_schema
+
+        db_path = tmp_path / "interrupted.sqlite"
+        _write_pre_stage_journal(
+            db_path,
+            rows=[
+                (1, "first", "t1", {"stage": "stt"}, {"stt", "slow"}),
+                (2, "second", "t2", {"observed_stage": "agent"}, {"agent"}),
+            ],
+        )
+        interrupted = sqlite3.connect(db_path)
+        interrupted.execute("ALTER TABLE journal ADD COLUMN stage TEXT")
+        interrupted.execute("ALTER TABLE journal ADD COLUMN observed_stage TEXT")
+        interrupted.execute(
+            "CREATE TABLE journal_tags ("
+            "tag TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (tag, sequence))"
+        )
+        interrupted.execute("UPDATE journal SET stage = 'stt' WHERE sequence = 1")
+        interrupted.execute("INSERT INTO journal_tags (tag, sequence) VALUES ('stt', 1)")
+        interrupted.commit()
+        interrupted.close()
+
+        resumed = sqlite3.connect(db_path)
+        _ensure_journal_schema(resumed)
+
+        assert resumed.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 2
+        assert resumed.execute(
+            "SELECT sequence, stage, observed_stage FROM journal ORDER BY sequence"
+        ).fetchall() == [(1, "stt", None), (2, None, "agent")]
+        assert set(resumed.execute("SELECT tag, sequence FROM journal_tags")) == {
+            ("stt", 1),
+            ("slow", 1),
+            ("agent", 2),
+        }
+        resumed.close()
+
+    def test_readonly_reads_pre_stage_file(self, tmp_path: Path) -> None:
         db_path = tmp_path / "old.sqlite"
         _write_pre_stage_journal(
             db_path,
@@ -1758,7 +1912,10 @@ class TestOldSchemaJournalMigration:
         # works on a file that predates the junction table.
         assert [r.name for r in ro.slice(tags=frozenset({"stt"}))] == ["stage_start"]
 
-    def test_unclean_pre_stage_file_promotes_crash_dump_with_recovery_marker(self, tmp_path):
+    def test_unclean_pre_stage_file_promotes_crash_dump_with_recovery_marker(
+        self,
+        tmp_path: Path,
+    ) -> None:
         # An old-schema file left unclean (no clean_close marker) must still be
         # promoted to a crash dump and generate a recovered-session marker when
         # its session id is reopened by the current backend.
@@ -1804,7 +1961,7 @@ class TestOldSchemaJournalMigration:
         dumped = {r.name for r in ReadonlySqliteJournal(crash_dump).read()}
         assert {"ev1", "ev2"} <= dumped
 
-    def test_clean_pre_stage_file_reuse_starts_fresh(self, tmp_path):
+    def test_clean_pre_stage_file_reuse_starts_fresh(self, tmp_path: Path) -> None:
         db_path = tmp_path / "journals" / "sess.sqlite"
         _write_pre_stage_journal(
             db_path,
