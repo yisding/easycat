@@ -10,7 +10,6 @@ from typer.testing import CliRunner
 
 from easycat.cli._app import _register_commands, app
 
-CHAPTER = Path(__file__).resolve().parents[2] / "docs" / "teaching" / "15-operate-in-production"
 PROVIDER_KEYS = (
     "OPENAI_API_KEY",
     "DEEPGRAM_API_KEY",

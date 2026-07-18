@@ -9,7 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER_07 = ROOT / "docs" / "teaching" / "07-tools"
-CHAPTER_14 = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
 
 
 def test_action_catalog_discovers_every_runtime_action() -> None:

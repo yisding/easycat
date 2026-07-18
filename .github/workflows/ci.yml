@@ -101,7 +101,7 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
 
   coverage:
-    name: Coverage (report-only)
+    name: Coverage + guard suite (diff-cover report-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -301,6 +301,7 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
         "release.doctor",
         "release.cli-smoke",
         "release.quick",
+        "release.guard",
         "release.stress",
         "release.contracts",
         "release.live",

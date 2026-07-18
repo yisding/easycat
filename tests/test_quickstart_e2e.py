@@ -392,6 +392,18 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
 
 
+# Retired manual-bridge API shapes that must stay out of the idiomatic
+# EasyConfig auto-adapt README sections.
+_STALE_BRIDGE_API_SHAPES = (
+    'openai_api_key="your-api-key"',
+    "from easycat import Session, SessionConfig",
+    "OpenAIAgentsBridge",
+    "PydanticAIBridge",
+    "Session(SessionConfig(",
+    "bridge =",
+)
+
+
 @pytest.mark.parametrize(
     (
         "heading",
@@ -411,14 +423,7 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
                 "session = create_session(config)",
                 "agent=agent",
             ),
-            (
-                'openai_api_key="your-api-key"',
-                "from easycat import Session, SessionConfig",
-                "OpenAIAgentsBridge",
-                "PydanticAIBridge",
-                "Session(SessionConfig(",
-                "bridge =",
-            ),
+            _STALE_BRIDGE_API_SHAPES,
             (),
         ),
         (
@@ -430,14 +435,7 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
                 "session = create_session(config)",
                 "agent=pydantic_agent",
             ),
-            (
-                'openai_api_key="your-api-key"',
-                "from easycat import Session, SessionConfig",
-                "OpenAIAgentsBridge",
-                "PydanticAIBridge",
-                "Session(SessionConfig(",
-                "bridge =",
-            ),
+            _STALE_BRIDGE_API_SHAPES,
             (),
         ),
         (

@@ -41,6 +41,11 @@ GUARD_FILES = {
     "tests/test_command_hints.py",
     "tests/test_regen_guard_commands.py",
     "tests/test_contributing.py",
+    # Teaching prose/generated-block scanners; the rest of tests/teaching is
+    # behavioral (executes chapter scripts) and stays in the fast loop.
+    "tests/teaching/test_regen_teaching_chapters.py",
+    "tests/teaching/test_ladder_index.py",
+    "tests/teaching/test_diagrams.py",
 }
 # Behavioral modules that live in a guard dir but must stay in the fast loop.
 GUARD_EXEMPT = {
@@ -152,8 +157,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         rel = _guard_rel_path(item)
         if rel is None or rel in GUARD_EXEMPT:
             continue
-        parent = rel.rsplit("/", 1)[0]
-        if parent in GUARD_DIRS or rel in GUARD_FILES:
+        if any(rel.startswith(d + "/") for d in GUARD_DIRS) or rel in GUARD_FILES:
             item.add_marker(pytest.mark.guard)
 
     if _HAS_LOCALHOST_SOCKET_ACCESS:

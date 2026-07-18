@@ -49,7 +49,7 @@ Implemented:
   `webrtc_stats` validation artifact.
 - `easycat validate release` builds distributions, installs the wheel into a
   clean temporary venv, verifies the installed package outside the source tree,
-  and aggregates quick, stress, contracts, live, and latency release gates into
+  and aggregates quick, guard, stress, contracts, live, and latency release gates into
   one validation report.
 - `.github/workflows/ci.yml` runs `easycat validate quick` and
   `easycat validate socket` with uploaded JSON, JUnit, stdout, stderr, and

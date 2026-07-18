@@ -8,8 +8,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
-CHAPTER_3 = ROOT / "docs" / "teaching" / "03-parrot-naive"
-CHAPTER_6 = ROOT / "docs" / "teaching" / "06-streaming-agent"
 
 
 def _load_probe():

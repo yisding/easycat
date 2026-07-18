@@ -172,8 +172,8 @@ form); `src/easycat/cli/scaffold/templates/openai-agents/agent.py` (emit the `ru
 *shape* — keep its `$AGENT_NAME`/`$AGENT_INSTRUCTIONS` substitution and the teaching
 `current_time` `@function_tool`).
 
-**Verifier verdict.** Landed and guarded by
-`tests/test_dx_helpers.py::test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence`.
+**Verifier verdict.** Landed; the dedicated evidence guard in
+`tests/test_dx_helpers.py` was pruned in the guard-test consolidation.
 The README's first runnable block, the package docstring, the canonical local-voice example,
 and the OpenAI Agents scaffold template all use the `run(EasyConfig.mic(...))` shape; the
 README's `create_session` block is now explicitly under "Advanced: own the lifecycle" and uses
@@ -417,8 +417,8 @@ cheap.
 
 **Files touched.** `src/easycat/__init__.py`.
 
-**Verifier verdict.** Landed and guarded by
-`tests/test_dx_helpers.py::test_package_docstring_leads_with_canonical_quickstart`. **Caveat
+**Verifier verdict.** Landed; the package-docstring guard in
+`tests/test_dx_helpers.py` was pruned in the guard-test consolidation. **Caveat
 folded in:** the module docstring includes the install hint (`uv add 'easycat[quickstart]'`)
 plus `uv run easycat doctor` / `.env` guidance so the teaser is honestly runnable even though
 the full example carries the richer `try/except ImportError` guard.
@@ -444,10 +444,8 @@ Add a trailing `# Next, try:` block to the canonical example and one-line `Next:
 **Files touched.** `examples/openai_agents_voice.py`; `src/easycat/config/easy.py` (preset
 docstrings); `src/easycat/session/_types.py` (`SessionConfig` docstring).
 
-**Verifier verdict.** Landed and guarded by
-`tests/test_dx_helpers.py::test_canonical_example_keeps_next_step_breadcrumbs`,
-`tests/test_dx_helpers.py::test_easyconfig_preset_docstrings_explain_next_rungs`, and
-`tests/test_dx_helpers.py::test_sessionconfig_docstring_steers_to_easyconfig`. **Caveats
+**Verifier verdict.** Landed; the breadcrumb and docstring guards in
+`tests/test_dx_helpers.py` were pruned in the guard-test consolidation. **Caveats
 folded in:** the `stt="deepgram/nova-2"` line names both `DEEPGRAM_API_KEY` and
 `easycat[deepgram]`; the canonical example now links to
 `uv run easycat docs --audience learners`; and the `SessionConfig` wording distinguishes
@@ -556,8 +554,9 @@ async with create_session(cfg) as session:   # Session.__aenter__/__aexit__ alre
 **Files touched.** `src/easycat/session/_session.py`; `src/easycat/helpers.py`.
 
 **Verifier verdict.** Landed and guarded by
-`tests/test_dx_helpers.py::test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence`,
-`tests/session/test_async_context_manager.py`, `tests/cli/test_library_prereqs.py`, and
+`tests/session/test_async_context_manager.py` (the plan-evidence guard in
+`tests/test_dx_helpers.py` was pruned in the guard-test consolidation),
+`tests/cli/test_library_prereqs.py`, and
 `tests/teaching/test_ladder_index.py::test_chapter_15_teaches_public_session_lifecycle`. The
 context-manager idiom is wired (`__aenter__` / `__aexit__` / `wait_closed`), `run()` drives
 that same lifecycle, `stop(force=...)` is the single explicit public teardown verb, and
