@@ -156,16 +156,16 @@ class _SqlJournalBase:
         return [self._row_to_record(r) for r in rows]
 
     def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
-        """Return records whose indexed ``stage`` column equals *stage_name*.
+        """Return records whose indexed stage token equals *stage_name*.
 
-        Backs :meth:`JournalView.filter_by_stage`.  ``stage`` is derived at
-        append time from ``data['stage']``/``data['observed_stage']`` and
-        indexed (``idx_journal_stage``), so this is an index lookup rather than
-        a deserialize-every-record scan.
+        Backs :meth:`JournalView.filter_by_stage`. The two derived columns
+        preserve the public ``stage OR observed_stage`` contract even when a
+        producer supplies different values; both predicates are indexed.
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM journal WHERE stage = ? ORDER BY sequence", [stage_name]
+                "SELECT * FROM journal WHERE stage = ? OR observed_stage = ? ORDER BY sequence",
+                [stage_name, stage_name],
             ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
@@ -539,12 +539,15 @@ class SqliteJournal(_SqlJournalBase):
 
         with self._lock:
             clear_clean_close = self._clean_close_marked
+            previous_seq = self._seq
             if clear_clean_close:
                 self._conn.execute("SAVEPOINT post_finalize_append")
+            self._conn.execute("SAVEPOINT journal_append")
+            append_savepoint_open = True
             try:
                 if clear_clean_close:
                     self._clear_clean_close_marker_before_write()
-                self._seq += 1
+                self._seq = previous_seq + 1
                 seq = self._seq
                 record = _journal_record_for_append(
                     sequence=seq,
@@ -579,12 +582,22 @@ class SqliteJournal(_SqlJournalBase):
                 )
                 # Same transaction as the row above — no extra COMMIT.
                 _insert_tag_index_rows(self._conn, record.sequence, record.tags)
+                self._conn.execute("RELEASE SAVEPOINT journal_append")
+                append_savepoint_open = False
             except Exception:
-                if clear_clean_close:
-                    try:
-                        self._conn.execute("ROLLBACK TO SAVEPOINT post_finalize_append")
-                    finally:
-                        self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
+                self._seq = previous_seq
+                try:
+                    if append_savepoint_open:
+                        try:
+                            self._conn.execute("ROLLBACK TO SAVEPOINT journal_append")
+                        finally:
+                            self._conn.execute("RELEASE SAVEPOINT journal_append")
+                finally:
+                    if clear_clean_close:
+                        try:
+                            self._conn.execute("ROLLBACK TO SAVEPOINT post_finalize_append")
+                        finally:
+                            self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
                 raise
             if clear_clean_close:
                 self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
@@ -1013,42 +1026,51 @@ class LibsqlJournal(_SqlJournalBase):
         now_mono = time.monotonic_ns()
         now_cpu = time.process_time_ns()
         with self._lock:
-            self._seq += 1
+            previous_seq = self._seq
+            self._seq = previous_seq + 1
             seq = self._seq
-            record = _journal_record_for_append(
-                sequence=seq,
-                session_id=session_id,
-                kind=kind,
-                name=name,
-                timing=TimingInfo(wall_ns=now_wall, mono_ns=now_mono, cpu_ns=now_cpu),
-                turn_id=turn_id,
-                data=data,
-                error=error,
-                tags=tags,
-                input_ref=input_ref,
-                output_ref=output_ref,
-            )
-            self._conn.execute(
-                _JOURNAL_INSERT_SQL,
-                _encode_journal_row(
-                    sequence=record.sequence,
-                    session_id=record.session_id,
-                    kind=record.kind,
-                    name=record.name,
-                    wall_ns=record.timing.wall_ns,
-                    mono_ns=record.timing.mono_ns,
-                    cpu_ns=record.timing.cpu_ns,
-                    turn_id=record.turn_id,
-                    data=record.data,
-                    error=record.error,
-                    tags=record.tags,
-                    input_ref=record.input_ref,
-                    output_ref=record.output_ref,
-                ),
-            )
-            # Populated in the same commit as the row — no extra COMMIT.
-            _insert_tag_index_rows(self._conn, record.sequence, record.tags)
-            self._conn.commit()
+            try:
+                record = _journal_record_for_append(
+                    sequence=seq,
+                    session_id=session_id,
+                    kind=kind,
+                    name=name,
+                    timing=TimingInfo(wall_ns=now_wall, mono_ns=now_mono, cpu_ns=now_cpu),
+                    turn_id=turn_id,
+                    data=data,
+                    error=error,
+                    tags=tags,
+                    input_ref=input_ref,
+                    output_ref=output_ref,
+                )
+                self._conn.execute(
+                    _JOURNAL_INSERT_SQL,
+                    _encode_journal_row(
+                        sequence=record.sequence,
+                        session_id=record.session_id,
+                        kind=record.kind,
+                        name=record.name,
+                        wall_ns=record.timing.wall_ns,
+                        mono_ns=record.timing.mono_ns,
+                        cpu_ns=record.timing.cpu_ns,
+                        turn_id=record.turn_id,
+                        data=record.data,
+                        error=record.error,
+                        tags=record.tags,
+                        input_ref=record.input_ref,
+                        output_ref=record.output_ref,
+                    ),
+                )
+                # Populated in the same commit as the row — no extra COMMIT.
+                _insert_tag_index_rows(self._conn, record.sequence, record.tags)
+                self._conn.commit()
+            except Exception:
+                self._seq = previous_seq
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    logger.debug("libsql append rollback failed", exc_info=True)
+                raise
             # NB: file-permission hardening is intentionally NOT done here.  It
             # is a stat+chmod over the DB and its WAL/SHM sidecars, so running
             # it on every append wastes syscalls on the hot path.  Hardening

@@ -6,12 +6,14 @@ import asyncio
 import concurrent.futures
 import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
 
 from easycat.telephony.compliance import (
     AIDisclosureConfig,
+    AsyncDNCStore,
     DNCList,
     DNCStore,
     SQLiteDNCList,
@@ -100,10 +102,12 @@ class TestDNCIntegration:
 class TestDNCStoreProtocol:
     def test_dnclist_satisfies_protocol(self) -> None:
         assert isinstance(DNCList(), DNCStore)
+        assert isinstance(DNCList(), AsyncDNCStore)
 
     def test_sqlite_dnclist_satisfies_protocol(self) -> None:
         store = SQLiteDNCList(":memory:")
         assert isinstance(store, DNCStore)
+        assert isinstance(store, AsyncDNCStore)
         store.close()
 
 
@@ -257,11 +261,21 @@ class TestSQLiteDNCListAsyncAPI:
         assert not await store.ais_on_dnc("+15551234567")
         store.close()
 
-    async def test_async_does_not_block_event_loop(self) -> None:
-        # A concurrently scheduled coroutine should keep making progress while
-        # the sqlite work runs in a worker thread rather than on the loop.
+    async def test_async_does_not_block_event_loop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         store = SQLiteDNCList(":memory:")
+        original_add = store.add
+        started = threading.Event()
+        release = threading.Event()
         ticks = 0
+
+        def controlled_add(phone: str) -> None:
+            started.set()
+            if not release.wait(timeout=2.0):
+                raise TimeoutError("test did not release controlled DNC write")
+            original_add(phone)
 
         async def ticker() -> None:
             nonlocal ticks
@@ -269,9 +283,17 @@ class TestSQLiteDNCListAsyncAPI:
                 await asyncio.sleep(0)
                 ticks += 1
 
-        await asyncio.gather(store.aadd("+15551234567"), ticker())
+        monkeypatch.setattr(store, "add", controlled_add)
+        add_task = asyncio.create_task(store.aadd("+15551234567"))
+        try:
+            assert await asyncio.to_thread(started.wait, 1.0)
+            await ticker()
+            assert ticks == 20
+            assert not add_task.done()
+        finally:
+            release.set()
+        await add_task
         assert await store.ais_on_dnc("+15551234567")
-        assert ticks == 20
         await store.aclose()
 
     async def test_aadd_normalizes_and_rejects_invalid_numbers(self) -> None:

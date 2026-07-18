@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS journal (
     output_ref   TEXT,
     tags         TEXT    NOT NULL DEFAULT '',
     error_children TEXT,
-    stage        TEXT
+    stage        TEXT,
+    observed_stage TEXT
 );
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -59,6 +60,8 @@ CREATE TABLE IF NOT EXISTS session_state (
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 """
 
+_INDEX_MIGRATION_VERSION = 2
+
 
 # Single source of truth for the persisted INSERT shared by every SQL backend
 # (SqliteJournal / LibsqlJournal).  Keeping the column list, placeholders, and
@@ -69,24 +72,24 @@ _JOURNAL_INSERT_SQL = (
     "INSERT INTO journal "
     "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
     "turn_id, data, error_type, error_msg, error_tb, error_notes, "
-    "input_ref, output_ref, tags, error_children, stage) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "input_ref, output_ref, tags, error_children, stage, observed_stage) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
 def _stage_of(data: dict[str, Any] | None) -> str | None:
-    """Return the indexable stage token for a record's ``data`` payload.
-
-    ``filter_by_stage`` matches a record when either ``data['stage']`` or
-    ``data['observed_stage']`` equals the target.  Framework producers stamp
-    both keys with the same value (``stages/base.py``): stage records set only
-    ``stage`` and control-signal records set ``stage == observed_stage``.  A
-    single ``COALESCE(stage, observed_stage)`` column therefore reproduces the
-    scan's OR semantics exactly while staying indexable.
-    """
+    """Return the primary indexable ``stage`` token from record data."""
     if not isinstance(data, dict):
         return None
-    candidate = data.get("stage") or data.get("observed_stage")
+    candidate = data.get("stage")
+    return candidate if isinstance(candidate, str) and candidate else None
+
+
+def _observed_stage_of(data: dict[str, Any] | None) -> str | None:
+    """Return the indexable ``observed_stage`` token from record data."""
+    if not isinstance(data, dict):
+        return None
+    candidate = data.get("observed_stage")
     return candidate if isinstance(candidate, str) and candidate else None
 
 
@@ -211,6 +214,7 @@ def _encode_journal_row(
         ",".join(sorted(tags)) if tags else "",
         error_children,
         _stage_of(data),
+        _observed_stage_of(data),
     )
 
 
@@ -252,37 +256,41 @@ def _ensure_journal_schema(conn: Any) -> None:
     EXISTS`` here.  All operations are additive — no data is dropped — so
     crash-dump promotion and the recovered-session marker flow keep working.
 
-    When the ``stage`` column is added to a file that already holds rows, the
-    stage column and the ``journal_tags`` junction are backfilled once from the
-    existing ``data``/``tags`` payloads so indexed stage/tag queries see the
-    historical rows too.  The backfill is gated on the column having been
-    absent, so a current-schema file pays nothing.
+    Stage/tag indexing is tracked by ``schema_version``. The idempotent
+    backfill records its completion only after every historical row has been
+    processed, so a process failure after additive DDL can safely resume on
+    the next open.
     """
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
     if "error_children" not in columns:
         conn.execute("ALTER TABLE journal ADD COLUMN error_children TEXT")
-    added_stage = "stage" not in columns
-    if added_stage:
+    if "stage" not in columns:
         conn.execute("ALTER TABLE journal ADD COLUMN stage TEXT")
+    if "observed_stage" not in columns:
+        conn.execute("ALTER TABLE journal ADD COLUMN observed_stage TEXT")
     # Idempotent for a current-schema file (already created by _SQLITE_SCHEMA);
     # this is what backfills the query surface for an older file.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_journal_turn_id ON journal(turn_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_journal_stage ON journal(stage)")
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_observed_stage ON journal(observed_stage)"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS journal_tags ("
         "tag TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (tag, sequence))"
     )
-    if added_stage:
+    version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    version = int(version_row[0]) if version_row and version_row[0] is not None else 0
+    if version < _INDEX_MIGRATION_VERSION:
         _backfill_index_columns(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
+            (_INDEX_MIGRATION_VERSION,),
+        )
 
 
 def _backfill_index_columns(conn: Any) -> None:
-    """Populate the ``stage`` column and ``journal_tags`` for pre-existing rows.
-
-    One-time migration cost paid only when the ``stage`` column was just added
-    to a file that predates it.  Splits the comma-joined ``tags`` string back
-    into junction rows and derives each row's stage from its JSON ``data``.
-    """
+    """Idempotently populate derived stage columns and tag-index rows."""
     rows = conn.execute("SELECT sequence, data, tags FROM journal").fetchall()
     for sequence, data_str, tags_str in rows:
         try:
@@ -290,8 +298,14 @@ def _backfill_index_columns(conn: Any) -> None:
         except (TypeError, ValueError):
             data = {}
         stage = _stage_of(data if isinstance(data, dict) else None)
+        observed_stage = _observed_stage_of(data if isinstance(data, dict) else None)
         if stage is not None:
             conn.execute("UPDATE journal SET stage = ? WHERE sequence = ?", (stage, sequence))
+        if observed_stage is not None:
+            conn.execute(
+                "UPDATE journal SET observed_stage = ? WHERE sequence = ?",
+                (observed_stage, sequence),
+            )
         if tags_str:
             for tag in str(tags_str).split(","):
                 if tag:
@@ -395,8 +409,8 @@ def _normalize_journal_row(row: tuple[Any, ...]) -> tuple[Any, ...]:
     """Coerce a raw ``SELECT *`` row to the 17 canonical record columns.
 
     The first 17 columns are the record's own fields; anything after them is a
-    derived index column (``stage``) recomputed from ``data`` on write, so it is
-    dropped here rather than round-tripped.  A 16-column row predates
+    derived index column recomputed from ``data`` on write, so it is dropped
+    here rather than round-tripped. A 16-column row predates
     ``error_children`` (an older on-disk file read via a read-only view that
     cannot ALTER); pad it with a trailing ``None``.
     """

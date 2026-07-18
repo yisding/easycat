@@ -114,9 +114,11 @@ register_stt_provider(
 
 `YourSTT` must accept a `YourSTTConfig` instance as its sole constructor
 argument — the same contract built-in providers follow. `YourSTTConfig` needs
-an `api_key` field (and, for the `"yours/model-name"` shortcut syntax, a
-`model` field — or a `MODEL_FIELD: ClassVar[str]` naming the field to use if
-it's called something else, e.g. ElevenLabs' `model_id`).
+an `api_key` field and may declare `event_bus: EventBus | None = None`; the
+factory injects the session bus into that optional config field when present.
+For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
+a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
+something else, e.g. ElevenLabs' `model_id`).
 
 Once registered, `"yours"` participates in `create_stt_provider`,
 `available_stt_providers`, and `stt="yours/some-model"` resolution exactly

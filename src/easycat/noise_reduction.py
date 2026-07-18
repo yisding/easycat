@@ -77,7 +77,7 @@ def _clip_round_to_pcm16_bytes(samples: np.ndarray) -> bytes:
     import numpy as np
 
     rounded = np.rint(samples)
-    clipped = np.clip(rounded, -32768, 32767).astype(np.int16)
+    clipped = np.clip(rounded, -32768, 32767).astype("<i2")
     return clipped.tobytes()
 
 
@@ -165,12 +165,12 @@ class RNNoiseReducer:
         while len(self._buffer_48k) >= frame_bytes:
             frame_data = self._buffer_48k[:frame_bytes]
             self._buffer_48k = self._buffer_48k[frame_bytes:]
-            frame = np.frombuffer(frame_data, dtype=np.int16)
+            frame = np.frombuffer(frame_data, dtype="<i2")
             processed, _ = self._rnnoise.process_mono_frame(self._state, frame.copy())
             output_chunks.append(_clip_round_to_pcm16_bytes(processed[: self._frame_samples]))
 
         if flush and self._buffer_48k:
-            tail = np.frombuffer(self._buffer_48k, dtype=np.int16)
+            tail = np.frombuffer(self._buffer_48k, dtype="<i2")
             valid = len(tail)
             padded = np.pad(tail, (0, self._frame_samples - valid), mode="constant")
             self._buffer_48k = b""

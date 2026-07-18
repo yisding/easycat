@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests._markdown_asserts import assert_prose_not_in
+from tests._markdown_asserts import assert_prose_in, assert_prose_not_in
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "09-interruption"
@@ -43,7 +43,6 @@ def test_playback_probe_distinguishes_delivery_callbacks_from_marks() -> None:
 def test_interruption_lesson_does_not_call_local_delivery_a_playback_mark() -> None:
     readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
     exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized_exercises = " ".join(exercises.split())
 
     assert "playback_evidence.py" in readme
     assert "playback_evidence.py" in exercises
@@ -51,6 +50,6 @@ def test_interruption_lesson_does_not_call_local_delivery_a_playback_mark() -> N
     assert "`TransportAudioDelivered`" in readme
     assert "`PlaybackMarkAck`" in readme
     assert "none proves sound reached a human ear" in readme
-    assert "human reaction is not an exact clock" in normalized_exercises
+    assert_prose_in("human reaction is not an exact clock", exercises)
     assert "Interrupt exactly after one word" not in readme
     assert "repeat several times" in readme

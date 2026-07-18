@@ -10,12 +10,15 @@ is recorded, and that a non-barge-in cancel does not record it.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
+from easycat.session import _session as session_module
 from easycat.session._session import Session
 from easycat.session._types import TurnState
 from tests.session._session_core_helpers import _full_config
@@ -69,11 +72,15 @@ def fake_meter(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeMeter]:
         original_get_meter.cache_clear()
 
 
-@pytest.mark.asyncio
-async def test_barge_in_records_cutoff_latency(fake_meter: _FakeMeter) -> None:
+async def test_barge_in_records_cutoff_latency(
+    fake_meter: _FakeMeter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = Session(_full_config())
     session._turn_state = TurnState.BOT_SPEAKING
     session._turn = TurnContext("cutoff-turn", CancelToken())
+    monotonic = Mock(side_effect=(100.0, 100.25))
+    monkeypatch.setattr(session_module, "time", SimpleNamespace(monotonic=monotonic))
 
     await session.cancel_turn(barge_in=True)
 
@@ -81,12 +88,11 @@ async def test_barge_in_records_cutoff_latency(fake_meter: _FakeMeter) -> None:
     assert histogram is not None, "cutoff-latency histogram was never recorded"
     assert len(histogram.records) == 1
     value, attributes = histogram.records[0]
-    # Elapsed ms from barge-in initiation to playback clear — non-negative.
-    assert value >= 0.0
+    # Latency histograms use seconds across the observability surface.
+    assert value == pytest.approx(0.25)
     assert attributes == {"easycat.surface": "vad"}
 
 
-@pytest.mark.asyncio
 async def test_non_barge_in_cancel_does_not_record_cutoff_latency(
     fake_meter: _FakeMeter,
 ) -> None:

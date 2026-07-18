@@ -111,6 +111,55 @@ class TestWebRTCIngressQueueOwnership:
         await audio_iter.aclose()
 
     @pytest.mark.asyncio
+    async def test_repeated_offer_closes_previous_outbound_source(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        previous_outbound = transport._outbound
+        previous_outbound.aclose = AsyncMock(  # type: ignore[method-assign]
+            wraps=previous_outbound.aclose
+        )
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+
+        previous_outbound.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnected_then_failed_counts_one_peer_drop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        record_disconnect = Mock()
+        transport._record_transport_disconnect = record_disconnect  # type: ignore[method-assign]
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        pc = _FakeRTCPeerConnection.instances[0]
+
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "failed"
+        await pc._handlers["connectionstatechange"]()
+
+        record_disconnect.assert_called_once_with("webrtc peer disconnected")
+
+        # A genuine recovery followed by another drop is a distinct incident.
+        pc.connectionState = "connected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        assert record_disconnect.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_disconnect_does_not_hold_offer_lock_during_http_cleanup(self):
         transport = WebRTCTransport()
         transport._web = _FakeWeb

@@ -1299,7 +1299,7 @@ class Session:
         if cutoff_started is not None:
             observability.record_histogram(
                 "easycat.interruption.cutoff_latency",
-                (time.monotonic() - cutoff_started) * 1000.0,
+                time.monotonic() - cutoff_started,
                 attributes={"easycat.surface": "vad"},
             )
 
