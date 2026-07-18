@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import os
-import subprocess
 from pathlib import Path
 
 from tests.examples._examples_helpers import (
@@ -250,7 +250,7 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     assert '- "8765:8765"' not in compose
 
 
-def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(
+async def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(
     tmp_path: Path,
 ) -> None:
     parent = tmp_path / "read-only"
@@ -266,18 +266,25 @@ def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(
         "EASYCAT_WS_HOST": "127.0.0.1",
     }
     try:
-        result = subprocess.run(
-            ["bash", str(REPO_ROOT / "docker" / "entrypoint.sh"), "true"],
-            check=False,
-            capture_output=True,
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            str(REPO_ROOT / "docker" / "entrypoint.sh"),
+            "true",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env=env,
-            text=True,
         )
+        try:
+            _, stderr = await asyncio.wait_for(process.communicate(), timeout=5.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
     finally:
         parent.chmod(0o700)
 
-    assert result.returncode == 0
-    assert "cannot be created; nearest existing ancestor" in result.stderr
+    assert process.returncode == 0
+    assert b"cannot be created; nearest existing ancestor" in stderr
 
 
 def test_docker_guide_serves_browser_client_from_localhost():

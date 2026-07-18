@@ -107,7 +107,6 @@ class TestWebRTCIngressQueueOwnership:
         assert received is new_chunk
         await audio_iter.aclose()
 
-    @pytest.mark.asyncio
     async def test_repeated_offer_closes_previous_outbound_source(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -138,7 +137,6 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._outbound is not first_outbound
         assert closed.is_set()
 
-    @pytest.mark.asyncio
     async def test_disconnected_then_failed_counts_one_peer_drop(
         self,
         monkeypatch: pytest.MonkeyPatch,
