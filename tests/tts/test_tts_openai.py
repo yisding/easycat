@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -36,14 +37,14 @@ class FakeStreamResponse:
         self.chunks_read = 0
 
     @property
-    def is_error(self) -> bool:
-        return self.status_code >= 400
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
 
     async def aread(self) -> bytes:
         return b"error"
 
-    def raise_for_status(self):
-        if self.status_code >= 400:
+    def raise_for_status(self) -> None:
+        if not self.is_success:
             response = MagicMock()
             response.status_code = self.status_code
             response.text = "error"
@@ -81,7 +82,7 @@ class ChunkedAsyncByteStream(httpx.AsyncByteStream):
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = chunks
 
-    async def __aiter__(self):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
 
@@ -308,7 +309,11 @@ class TestOpenAITTS:
         notes = getattr(err.exception, "__notes__", [])
         assert any("http_status=429" in n for n in notes)
 
-    async def test_streamed_http_error_surfaces_status_not_response_not_read(self):
+    @pytest.mark.parametrize("status_code", [302, 401])
+    async def test_streamed_http_error_surfaces_status_not_response_not_read(
+        self,
+        status_code: int,
+    ) -> None:
         """A streamed 4xx/5xx surfaces the HTTPStatusError, not ResponseNotRead.
 
         client.stream() leaves the body unread, so accessing exc.response.text
@@ -321,7 +326,10 @@ class TestOpenAITTS:
         bus.subscribe(Error, lambda e: errors.append(e))
 
         def handle(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(401, stream=ChunkedAsyncByteStream([b"invalid api key"]))
+            return httpx.Response(
+                status_code,
+                stream=ChunkedAsyncByteStream([b"invalid api key"]),
+            )
 
         provider = OpenAITTS(OpenAITTSConfig(api_key="bad", event_bus=bus))
         original_client = provider._client
@@ -337,7 +345,7 @@ class TestOpenAITTS:
         finally:
             await provider.close()
 
-        assert exc_info.value.response.status_code == 401
+        assert exc_info.value.response.status_code == status_code
 
         await asyncio.sleep(0)
         assert len(errors) == 1
@@ -345,7 +353,7 @@ class TestOpenAITTS:
         assert err.stage == ErrorStage.TTS
         assert err.provider == "openai"
         notes = getattr(err.exception, "__notes__", [])
-        assert any("http_status=401" in n for n in notes)
+        assert any(f"http_status={status_code}" in note for note in notes)
 
     async def test_no_event_bus_does_not_raise_on_error(self):
         """Without an event bus the error path stays a no-op (still raises)."""

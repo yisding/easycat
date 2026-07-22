@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.cli.validate import _format_duration
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -15,6 +17,25 @@ from easycat.validation.report import (
 )
 
 from ._validation_helpers import _validation_run
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    [
+        (None, "0.00s"),
+        (False, "0.00s"),
+        ("1.5", "0.00s"),
+        (-1, "0.00s"),
+        (float("nan"), "0.00s"),
+        (float("inf"), "0.00s"),
+        (float("-inf"), "0.00s"),
+        (10**400, "0.00s"),
+        (0, "0.00s"),
+        (1.234, "1.23s"),
+    ],
+)
+def test_format_duration_rejects_invalid_values(duration: object, expected: str) -> None:
+    assert _format_duration(duration) == expected
 
 
 def test_validate_report_help_names_latest_report_path(cli: CliRunner) -> None:

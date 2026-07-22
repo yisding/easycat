@@ -41,10 +41,10 @@ class FakeHTTPStream:
         self._closed = False
 
     @property
-    def is_error(self) -> bool:
-        return self.status_code >= 400
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         pass
 
     async def aread(self) -> bytes:

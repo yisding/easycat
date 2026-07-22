@@ -314,6 +314,20 @@ class TestDegradedMode:
         # snapshot must still report the live counter value.
         assert snapshot.latest_sequence == seq_before
 
+    def test_capacity_one_snapshot_preserves_live_sequence_after_degradation(self):
+        j = InMemoryRingBuffer(capacity=1)
+        assert j.append(kind=JournalRecordKind.EVENT, name="e1", session_id="s1") == 1
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        j._do_append = broken
+        assert j.append(kind=JournalRecordKind.EVENT, name="e2", session_id="s1") == -1
+        assert [record.sequence for record in j.slice()] == [-1]
+
+        snapshot = j.snapshot()
+        assert snapshot.latest_sequence == j.latest_sequence == 1
+
     def test_degraded_signalled_via_property_not_record_stream(self):
         # The degraded marker at sequence=-1 is a deliberate out-of-band signal:
         # normal consumers detect degradation via the ``degraded`` property, NOT
