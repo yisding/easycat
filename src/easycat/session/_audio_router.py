@@ -654,7 +654,11 @@ class AudioRouter:
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)
 
-    def _feed_reference_or_disable(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
+    async def _feed_reference_or_disable(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
         """Feed one far-end reference frame into AEC, latching off on failure.
 
         Single owner of the far-end feed, shared by both reference-feed
@@ -685,9 +689,9 @@ class AudioRouter:
             )
             return
         if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
-            self._maybe_record_aec_reference(chunk, turn)
+            await self._maybe_record_aec_reference(chunk, turn)
 
-    def _feed_transport_aec_reference(
+    async def _feed_transport_aec_reference(
         self, mic_chunk: AudioChunk, turn: TurnContext | None
     ) -> None:
         """Drain the transport's AEC reference queue and feed each frame.
@@ -715,7 +719,7 @@ class AudioRouter:
         for ref_data in frames:
             if self._aec_reference_failed:
                 break
-            self._feed_reference_or_disable(
+            await self._feed_reference_or_disable(
                 AudioChunk(data=ref_data, format=mic_chunk.format), turn
             )
 
@@ -762,7 +766,7 @@ class AudioRouter:
         # AudioStage.execute() so AEC3 always receives the far-end signal
         # before the near-end echo.
         if self._enable_noise_reduction() or self._enable_aec():
-            self._feed_transport_aec_reference(chunk, turn)
+            await self._feed_transport_aec_reference(chunk, turn)
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
         # Stage 3: VAD (optional) via VADStage.
@@ -921,7 +925,7 @@ class AudioRouter:
         # the shared _feed_reference_or_disable owner.
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
-            self._feed_reference_or_disable(chunk, turn)
+            await self._feed_reference_or_disable(chunk, turn)
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton
@@ -946,7 +950,7 @@ class AudioRouter:
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
 
-    def _maybe_record_aec_reference(
+    async def _maybe_record_aec_reference(
         self,
         chunk: AudioChunk,
         turn: TurnContext | None,
@@ -964,7 +968,7 @@ class AudioRouter:
         if index % _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES != 0:
             return
         try:
-            self._audio_stage.record_reference(
+            await self._audio_stage.record_reference(
                 chunk,
                 self._run_ctx,
                 turn or self._no_turn,

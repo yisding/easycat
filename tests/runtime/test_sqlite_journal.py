@@ -1796,6 +1796,41 @@ class TestIndexedStageTurnTagQueries:
 
 
 class TestOldSchemaJournalMigration:
+    def test_index_migration_uses_bounded_keyset_batches(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from easycat.runtime import _journal_codec as journal_codec
+
+        db_path = tmp_path / "batched.sqlite"
+        _write_pre_stage_journal(
+            db_path,
+            rows=[
+                (sequence, f"row-{sequence}", None, {"stage": "stt"}, {"tagged"})
+                for sequence in range(1, 6)
+            ],
+        )
+        conn = sqlite3.connect(db_path)
+        journal_codec._ensure_journal_schema(conn)
+        monkeypatch.setattr(journal_codec, "_INDEX_BACKFILL_BATCH_SIZE", 2)
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+
+        journal_codec._ensure_index_backfill(conn)
+
+        batch_reads = [
+            statement
+            for statement in statements
+            if "SELECT sequence, data, tags FROM journal" in statement
+        ]
+        assert len(batch_reads) == 4  # three populated batches plus the terminating read
+        assert all("LIMIT 2" in statement for statement in batch_reads)
+        assert all("WHERE sequence >" in statement for statement in batch_reads[1:])
+        assert conn.execute("SELECT COUNT(*) FROM journal WHERE stage = 'stt'").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM journal_tags").fetchone()[0] == 5
+        conn.close()
+
     def test_ensure_schema_migrates_pre_stage_file_additively(self, tmp_path: Path) -> None:
         from easycat.runtime._journal_codec import _ensure_index_backfill, _ensure_journal_schema
 

@@ -127,9 +127,12 @@ class TestWebRTCIngressQueueOwnership:
         first_outbound = transport._outbound
 
         closed = asyncio.Event()
+        close_calls = 0
         original_aclose = first_outbound.aclose
 
         async def _tracking_aclose() -> None:
+            nonlocal close_calls
+            close_calls += 1
             closed.set()
             await original_aclose()
 
@@ -139,6 +142,7 @@ class TestWebRTCIngressQueueOwnership:
         assert second_response.status == 200
         assert transport._outbound is not first_outbound
         assert closed.is_set()
+        assert close_calls == 1
 
     async def test_disconnected_then_failed_counts_one_peer_drop(
         self,

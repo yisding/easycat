@@ -33,7 +33,7 @@ import importlib.metadata
 import logging
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
 from typing import Any
 
@@ -50,7 +50,10 @@ def inject_event_bus(config: Any, event_bus: Any) -> Any:
     """
     if event_bus is None:
         return config
-    if any(f.name == "event_bus" for f in fields(config)) and config.event_bus is None:
+    if not is_dataclass(config) or isinstance(config, type):
+        return config
+    dataclass_config: Any = config
+    if any(f.name == "event_bus" for f in fields(config)) and dataclass_config.event_bus is None:
         return replace(config, event_bus=event_bus)
     return config
 

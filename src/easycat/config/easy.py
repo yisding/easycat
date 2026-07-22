@@ -486,9 +486,10 @@ class ObservabilityConfig:
     but into memory rather than doing a per-frame sha256 + temp-write-and-
     rename to a durable filesystem artifact store. Opt into ``"full"`` for
     deep debugging — it persists a crash-survivable journal and artifacts to
-    ``.easycat/`` and enables the debugger UI / bundle export, at the cost of
-    roughly 50 disk writes/sec/session (offloaded off the event loop so it
-    stays loop-friendly). Use ``"off"`` to disable recording entirely.
+    ``.easycat/`` and supports durable bundle export, at the cost of roughly
+    50 disk writes/sec/session (offloaded off the event loop so it stays
+    loop-friendly). Debugger UI launch is controlled independently by
+    ``debugger_autolaunch``. Use ``"off"`` to disable recording entirely.
     """
 
     debug: Literal["off", "light", "full"] = "light"

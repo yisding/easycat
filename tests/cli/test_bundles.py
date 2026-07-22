@@ -144,6 +144,7 @@ def test_bundles_list_empty(cli: CliRunner, tmp_path: Path) -> None:
     # journal explainer so newcomers know recordings need debug='full'.
     unwrapped = _unwrapped(result.stderr)
     assert "debug='full'" in unwrapped
+    assert "debug='light'" in unwrapped
     assert "easycat explain journal" in unwrapped
 
 

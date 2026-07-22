@@ -108,10 +108,11 @@ register_tts_provider(
 )
 ```
 
-`YourTTS` must accept a `YourTTSConfig` instance as its sole constructor
-argument — the same contract built-in providers follow. `YourTTSConfig` needs
-an `api_key` field and may declare `event_bus: EventBus | None = None`; the
-factory injects the session bus into that optional config field when present.
+`YourTTS` must accept a `YourTTSConfig` instance as its constructor argument —
+the same contract built-in providers follow. To receive the session
+`EventBus`, declare `event_bus: EventBus | None = None` on `YourTTSConfig`; the
+factory injects the bus into that optional config field before constructing the
+provider. `YourTTSConfig` also needs an `api_key` field.
 For the `"yours/voice-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).

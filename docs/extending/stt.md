@@ -112,10 +112,11 @@ register_stt_provider(
 )
 ```
 
-`YourSTT` must accept a `YourSTTConfig` instance as its sole constructor
-argument — the same contract built-in providers follow. `YourSTTConfig` needs
-an `api_key` field and may declare `event_bus: EventBus | None = None`; the
-factory injects the session bus into that optional config field when present.
+`YourSTT` must accept a `YourSTTConfig` instance as its constructor argument —
+the same contract built-in providers follow. To receive the session
+`EventBus`, declare `event_bus: EventBus | None = None` on `YourSTTConfig`; the
+factory injects the bus into that optional config field before constructing the
+provider. `YourSTTConfig` also needs an `api_key` field.
 For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
@@ -174,5 +175,6 @@ of breaking every other provider.
   `pending_commit_bytes() -> int | None` (the optional
   `PendingCommitReporter` capability) so the journal can explain commit
   decisions.
-- Need the session `EventBus`? Take it as a constructor argument like the
-  Deepgram/ElevenLabs providers do — Session never injects it implicitly.
+- Need the session `EventBus`? Declare the optional `event_bus` field on the
+  provider config as shown above; both session construction and the public
+  factory inject it when the caller has not already supplied one.

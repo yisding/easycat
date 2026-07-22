@@ -170,7 +170,7 @@ def _reference_records(journal: InMemoryRingBuffer) -> list:
 # ── AudioStage.record_reference (unit) ───────────────────────────
 
 
-def test_record_reference_journals_frame_with_output_ref():
+async def test_record_reference_journals_frame_with_output_ref() -> None:
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(capacity=64, artifact_store=artifact_store)
     ctx = RunContext(
@@ -187,7 +187,7 @@ def test_record_reference_journals_frame_with_output_ref():
     stage = AudioStage(PassthroughNoiseReducer(), echo_canceller=_PassthroughAEC())
     chunk = AudioChunk(data=b"\x05\x06" * 160, format=PCM16_MONO_16K)
 
-    stage.record_reference(chunk, ctx, turn)
+    await stage.record_reference(chunk, ctx, turn)
 
     refs = _reference_records(journal)
     assert len(refs) == 1
@@ -200,7 +200,7 @@ def test_record_reference_journals_frame_with_output_ref():
     assert artifact_store.get(rec.output_ref) == chunk.data
 
 
-def test_record_reference_skips_when_no_artifact_store():
+async def test_record_reference_skips_when_no_artifact_store() -> None:
     journal = InMemoryRingBuffer(capacity=64)  # no artifact store
     ctx = RunContext(
         run_id="s",
@@ -216,7 +216,7 @@ def test_record_reference_skips_when_no_artifact_store():
     stage = AudioStage(PassthroughNoiseReducer(), echo_canceller=_PassthroughAEC())
     chunk = AudioChunk(data=b"\x05\x06" * 160, format=PCM16_MONO_16K)
 
-    stage.record_reference(chunk, ctx, turn)
+    await stage.record_reference(chunk, ctx, turn)
 
     # No artifact store → put_artifact returns None → no record emitted.
     assert _reference_records(journal) == []
