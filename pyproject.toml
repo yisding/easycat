@@ -52,11 +52,11 @@ Repository = "https://github.com/yisding/easycat"
 easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
-openai-agents = ["openai-agents>=0.18.0"]
+openai-agents = ["openai-agents>=0.18.2"]
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.5.1,<3.0.0"]
-langchain = ["langchain-core>=1.3.3"]
-langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.8"]
+langchain = ["langchain-core>=1.4.9"]
+langgraph = ["langchain-core>=1.4.9", "langgraph>=1.2.9"]
 llama-agents = ["llama-index-workflows>=2.22.2,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
 openai = ["openai>=2.44.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
@@ -74,7 +74,7 @@ telephony = [
     "phonenumberslite>=9.0.34",
     "python-multipart>=0.0.29",
     "twilio>=9.0.0",
-    "uvicorn>=0.50.2",
+    "uvicorn>=0.51.0",
 ]
 aec = ["livekit>=1.1.13"]
 local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
@@ -93,12 +93,12 @@ smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.27.0"]
 debugger = [
     "aiohttp>=3.14.0",
 ]
-webrtc = ["aiortc>=1.9.0", "aiohttp>=3.14.0"]
+webrtc = ["aiortc>=1.15.0", "aiohttp>=3.14.0"]
 webtransport = ["aioquic>=1.3.0,<2"]
 quickstart = [
     "sounddevice>=0.4.6",
     "openai>=2.44.0",
-    "openai-agents>=0.18.0",
+    "openai-agents>=0.18.2",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "numpy>=1.24.0",
@@ -112,14 +112,14 @@ quickstart = [
 # tests/test_dependency_policy.py enforces this union invariant.
 all = [
     "aioquic>=1.3.0,<2",
-    "aiortc>=1.9.0",
+    "aiortc>=1.15.0",
     "livekit>=1.1.13",
     "aiohttp>=3.14.0",
     "fastapi>=0.139.0",
     "openai>=2.44.0",
-    "openai-agents>=0.18.0",
-    "langchain-core>=1.3.3",
-    "langgraph>=1.2.8",
+    "openai-agents>=0.18.2",
+    "langchain-core>=1.4.9",
+    "langgraph>=1.2.9",
     "llama-index-workflows>=2.22.2,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
     "phonenumberslite>=9.0.34",
@@ -128,7 +128,7 @@ all = [
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "twilio>=9.0.0",
-    "uvicorn>=0.50.2",
+    "uvicorn>=0.51.0",
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
     "onnxruntime>=1.27.0",
@@ -215,17 +215,17 @@ conflicts = [
 [dependency-groups]
 dev = [
     "diff-cover>=10.3.0",
-    "hypothesis>=6.156.2",
+    "hypothesis>=6.156.6",
     "import-linter>=2",
     "mutmut>=3.2.3",
-    "mypy>=1.18",
+    "mypy>=2.3.0",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.20",
+    "ruff>=0.15.21",
 ]
 
 [tool.ruff]
