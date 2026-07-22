@@ -1224,6 +1224,14 @@ class Session:
             self._turn = None
             self._finalize_debug_backends()
             self._mark_closed()
+            # Drop this session's armed emergency-export exporter from the
+            # process-wide registry now that it has stopped cleanly. Otherwise
+            # the exporter closure (which strongly references this Session)
+            # lingers until the shared excepthook/atexit hook runs, pinning
+            # every stopped session in memory for the process lifetime.
+            unregister = getattr(self, "_emergency_export_unregister", None)
+            if unregister is not None:
+                unregister()
         finally:
             # Clear the stopping flag FIRST so it is always reset even if a
             # later teardown step (observability / log-context reset) raises.

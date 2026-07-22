@@ -168,7 +168,9 @@ class FrozenJournalSnapshot:
 
     @property
     def latest_sequence(self) -> int:
-        return self._records[-1].sequence if self._records else 0
+        # Skip out-of-band markers (e.g. the degraded marker at sequence -1) so
+        # the postmortem value matches the live InMemoryRingBuffer counter.
+        return max((r.sequence for r in self._records if r.sequence >= 0), default=0)
 
     @property
     def degraded(self) -> bool:

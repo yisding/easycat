@@ -40,8 +40,15 @@ class FakeHTTPStream:
         self.status_code = status_code
         self._closed = False
 
+    @property
+    def is_error(self) -> bool:
+        return self.status_code >= 400
+
     def raise_for_status(self):
         pass
+
+    async def aread(self) -> bytes:
+        return b""
 
     async def aiter_bytes(self, chunk_size: int = 4096):
         for chunk in self._chunks:

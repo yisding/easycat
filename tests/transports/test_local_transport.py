@@ -141,6 +141,70 @@ class TestLocalTransport:
         assert events == cleanup_events
 
     @pytest.mark.asyncio
+    async def test_input_callback_clips_overdriven_mic_samples(self, monkeypatch):
+        """Out-of-range float32 mic samples saturate to int16 limits, not wrap.
+
+        sounddevice/PortAudio does not hard-clamp float32 capture, so an
+        overdriven input can exceed [-1, 1].  numpy's int16 cast wraps
+        (sign-flips) rather than saturating, which would inject a harsh
+        opposite-polarity click into AEC/VAD/STT.  The conversion must clip.
+        """
+        np = pytest.importorskip("numpy")
+
+        captured: dict[str, object] = {}
+
+        class FakeStream:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeSoundDevice:
+            @staticmethod
+            def InputStream(*, callback: object, **_kwargs: object) -> FakeStream:
+                captured["input_callback"] = callback
+                return FakeStream()
+
+            @staticmethod
+            def OutputStream(**_kwargs: object) -> FakeStream:
+                return FakeStream()
+
+        def fake_require_module(module_name: str, **_kwargs: object) -> object:
+            if module_name == "sounddevice":
+                return FakeSoundDevice()
+            return np
+
+        monkeypatch.setattr(local_mod, "require_module", fake_require_module)
+
+        transport = LocalTransport()
+        await transport.connect()
+        try:
+            input_callback = captured["input_callback"]
+            # Overdriven buffer: values above +1.0 and below -1.0.
+            frame_samples = transport._frame_samples
+            overdriven = np.full((frame_samples, 1), 1.5, dtype=np.float32)
+            overdriven[0, 0] = -1.5
+            input_callback(overdriven, frame_samples, None, None)  # type: ignore[operator]
+
+            # The callback schedules ``_enqueue_chunk`` onto the loop.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            chunk = transport._in_queue.get_nowait()
+            assert chunk is not None
+            samples = np.frombuffer(chunk.data, dtype=np.int16)
+            # Saturated, not wrapped: +1.5 -> +32767, -1.5 -> -32768.
+            assert samples.max() == 32767
+            assert samples.min() == -32768
+            assert samples[0] == -32768
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
         transport = LocalTransport()
         await transport.disconnect()
