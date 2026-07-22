@@ -389,7 +389,7 @@ class WebRTCRoutes:
         if hasattr(built, "start") and hasattr(built, "stop"):
             session = cast("Session", built)
         else:
-            session = create_session(cast("EasyConfig", built))
+            session = create_session(built)
         if self._runtime_feedback:
             from easycat.helpers import attach_runtime_feedback
 

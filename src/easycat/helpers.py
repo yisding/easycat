@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 from easycat._signals import create_shutdown_event as _create_shutdown_event
 from easycat._signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
+from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.session._session import Session
 
@@ -252,7 +253,7 @@ def _wired_summary(config: EasyConfig) -> str:
     )
 
     echo = config.echo_cancellation
-    echo_on = bool(echo.enabled) if echo is not None else False
+    echo_on = echo.enabled if isinstance(echo, EchoCancellationConfig) else echo is not None
     echo_label = "on" if echo_on else "off"
     if config.enable_echo_cancellation is None:
         echo_label += " (auto)"
