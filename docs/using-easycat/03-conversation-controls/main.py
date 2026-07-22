@@ -25,7 +25,6 @@ import argparse
 from typing import Literal, cast
 
 from easycat import (
-    AudioProcessingConfig,
     EasyConfig,
     TurnManagerConfig,
     VoiceApp,
@@ -42,15 +41,12 @@ def parse_profile() -> Profile:
     return cast(Profile, parser.parse_args().profile)
 
 
-def profile_config(profile: Profile) -> tuple[AudioProcessingConfig, TurnManagerConfig]:
+def profile_config(profile: Profile) -> tuple[dict[str, object], TurnManagerConfig]:
     if profile == "balanced":
-        return AudioProcessingConfig(), TurnManagerConfig()
+        return {}, TurnManagerConfig()
     if profile == "vad-only":
         return (
-            AudioProcessingConfig(
-                smart_turn=False,
-                enable_echo_cancellation=True,
-            ),
+            {"smart_turn": False, "enable_echo_cancellation": True},
             TurnManagerConfig(
                 end_of_turn_silence_ms=700,
                 punctuated_end_of_turn_silence_ms=250,
@@ -59,11 +55,11 @@ def profile_config(profile: Profile) -> tuple[AudioProcessingConfig, TurnManager
         )
     if profile == "fast":
         return (
-            AudioProcessingConfig(
-                smart_turn=True,
-                smart_turn_sensitivity=0.7,
-                enable_echo_cancellation=True,
-            ),
+            {
+                "smart_turn": True,
+                "smart_turn_sensitivity": 0.7,
+                "enable_echo_cancellation": True,
+            },
             TurnManagerConfig(
                 end_of_turn_silence_ms=400,
                 punctuated_end_of_turn_silence_ms=180,
@@ -72,20 +68,20 @@ def profile_config(profile: Profile) -> tuple[AudioProcessingConfig, TurnManager
         )
     if profile == "clean":
         return (
-            AudioProcessingConfig(
-                smart_turn=True,
-                smart_turn_sensitivity=0.6,
-                enable_noise_reduction=True,
-                enable_echo_cancellation=True,
-            ),
+            {
+                "smart_turn": True,
+                "smart_turn_sensitivity": 0.6,
+                "enable_noise_reduction": True,
+                "enable_echo_cancellation": True,
+            },
             TurnManagerConfig(),
         )
     return (
-        AudioProcessingConfig(
-            smart_turn=False,
-            enable_noise_reduction=False,
-            enable_echo_cancellation=False,
-        ),
+        {
+            "smart_turn": False,
+            "enable_noise_reduction": False,
+            "enable_echo_cancellation": False,
+        },
         TurnManagerConfig(end_of_turn_silence_ms=700),
     )
 
@@ -100,14 +96,14 @@ def build_config(profile: Profile) -> EasyConfig:
         ) from exc
 
     require_env("OPENAI_API_KEY")
-    audio_processing, turn_taking = profile_config(profile)
+    audio_options, turn_taking = profile_config(profile)
     return EasyConfig.mic(
         agent=Agent(
             name="feature-guide",
             instructions="Answer in one or two friendly sentences.",
         ),
-        audio_processing=audio_processing,
         turn_taking=turn_taking,
+        **audio_options,
     )
 
 

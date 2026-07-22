@@ -267,8 +267,8 @@ audio, the turn manager raises an interruption (barge-in): pending TTS
 is cancelled cooperatively via CancelToken and the journal records what
 the user actually heard.
 
-Tune it with `EasyConfig(turn_taking=TurnManagerConfig(...))` and the
-`smart_turn` / `smart_turn_sensitivity` knobs under `audio_processing`.
+Tune it with `EasyConfig(turn_taking=TurnManagerConfig(...))` and the direct
+`smart_turn` / `smart_turn_sensitivity` fields.
 
 Docs route: docs/architecture.md (`easycat docs --audience maintainers`,
 label "Architecture"); hands-on chapters: docs/teaching/04-vad-preroll/,

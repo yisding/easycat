@@ -9,7 +9,7 @@ from typing import TypeVar
 
 import httpx
 
-from easycat._audio_utils import pcm_to_wav  # noqa: F401 — re-exported for backward compat
+from easycat._audio_utils import pcm_to_wav as _pcm_to_wav
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent
 
@@ -332,7 +332,7 @@ class STTBase:
         """
         if not self._buffer or self._audio_format is None:
             return None
-        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
+        wav_data = _pcm_to_wav(bytes(self._buffer), self._audio_format)
         self._buffer.clear()
         return wav_data
 

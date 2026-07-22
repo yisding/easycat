@@ -40,10 +40,6 @@ class _ActiveSTT:
 
 
 class _ActiveTTS:
-    @property
-    def supports_ssml(self) -> bool:
-        return True
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         return
         yield

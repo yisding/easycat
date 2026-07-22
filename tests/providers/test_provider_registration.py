@@ -28,7 +28,6 @@ from easycat.stt.factory import (
     is_stt_config,
     parse_stt_string,
 )
-from easycat.stt.factory import provider_env_vars as stt_provider_env_vars
 from easycat.tts.factory import _CATALOG as TTS_CATALOG
 from easycat.tts.factory import (
     available_tts_providers,
@@ -266,9 +265,3 @@ def test_registered_provider_surfaces_in_scaffold_validation() -> None:
     assert init_module._provider_to_env_var()["faketts"] == "FAKETTS_API_KEY"
     # Scaffold validation accepts the registered shortcut.
     init_module._validate_provider_spec("faketts/fake-1", available_tts_providers(), kind="TTS")
-
-
-def test_provider_env_vars_returns_a_copy() -> None:
-    env = stt_provider_env_vars()
-    env["mutated"] = "X"
-    assert "mutated" not in stt_provider_env_vars()

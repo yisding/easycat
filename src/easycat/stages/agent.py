@@ -144,17 +144,6 @@ class AgentStage:
             AgentTurnInput.from_text(input_text, turn_id=turn.id)
         )
 
-    # ── Recorder construction ───────────────────────────────────
-
-    def _journal_ctx(self, ctx: RunContext) -> RunContext:
-        """Return *ctx*, substituting the constructor journal as a fallback.
-
-        Keeps the stage-event path (``journal_append_event``, which uses
-        ``ctx.journal``) and the recorder path on a single recording sink
-        even when the RunContext was built without a journal.
-        """
-        return journal_ctx(ctx, self._journal)
-
     def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> AgentRecorder:
         # Prefer the per-run ``ctx.journal`` so the recorder writes to the
         # same sink as ``journal_append_event`` (which always uses
@@ -212,7 +201,7 @@ class AgentStage:
         to ``turn_input.context``; Session uses it to surface caller-ID
         metadata when ``caller_id_exposure == "system_message"``.
         """
-        ctx = self._journal_ctx(ctx)
+        ctx = journal_ctx(ctx, self._journal)
         bridge = self._provider
         history_epoch = self._history_epoch
         journal_enabled = ctx.journal is not None
@@ -430,7 +419,7 @@ class AgentStage:
         interruption records (plan → committed → apply → success/failure)
         tied to this turn, matching the streaming path's recording.
         """
-        run_ctx = self._journal_ctx(ctx) if ctx is not None else None
+        run_ctx = journal_ctx(ctx, self._journal) if ctx is not None else None
         recorder = self._make_recorder(turn_id, run_ctx) if run_ctx is not None else None
         self._provider.apply_interruption(
             delivered_text,
@@ -449,7 +438,7 @@ class AgentStage:
         """Append an interruption note to the bridge and journal the fact."""
         if ctx is not None:
             journal_append_event(
-                self._journal_ctx(ctx),
+                journal_ctx(ctx, self._journal),
                 stage=self.name,
                 name="interruption_note",
                 turn_id=turn_id,
@@ -472,7 +461,7 @@ class AgentStage:
         """
         if ctx is not None:
             journal_append_event(
-                self._journal_ctx(ctx),
+                journal_ctx(ctx, self._journal),
                 stage=self.name,
                 name="replace_last_assistant_text",
                 turn_id=turn_id,
@@ -546,4 +535,6 @@ class AgentStage:
         """
         logger.debug("AgentStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)
+            journal_append_control_signal(
+                journal_ctx(ctx, self._journal), stage=self.name, signal=signal
+            )

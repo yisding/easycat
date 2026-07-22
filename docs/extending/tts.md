@@ -9,7 +9,6 @@ EasyCat-level `TTSAudio` events and schedules playback.
 
 | Member | Purpose |
 | --- | --- |
-| `supports_ssml` (property) | Whether the provider accepts SSML natively. |
 | `synthesize(payload) -> AsyncIterator[TTSEvent]` | Stream audio for one text payload (`str` or `TTSInput`). |
 | `async stop()` | Gracefully stop the current synthesis. |
 | `async cancel()` | Immediately cancel and discard pending output (barge-in). |
@@ -30,8 +29,6 @@ from easycat.tts.input import TTSInput
 
 class SilenceTTS:
     """Synthesizes silence proportional to the payload length."""
-
-    supports_ssml = False
 
     def __init__(self) -> None:
         self._cancelled = False
@@ -169,9 +166,8 @@ breaking every other provider.
 
 - `cancel()` is the barge-in path — it must take effect quickly, even
   mid-stream. `stop()` may drain what was already buffered.
-- Prefer exposing the typed `input_policy` property (the optional
-  `TTSInputPolicyProvider` capability in `easycat.providers`) for new
-  providers; `supports_ssml` remains the legacy structural flag.
+- Expose the optional typed `input_policy` property (`TTSInputPolicyProvider`
+  in `easycat.providers`) when the provider accepts more than plain text.
 - Best-effort word/phoneme alignment can be surfaced as
   `TTSEvent(type=TTSEventType.MARKERS, markers=[...])`; the shape is
   provider-native and recorded for debugging only.

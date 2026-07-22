@@ -48,8 +48,6 @@ class _FakeTTSEvent:
 class _RecordingTTS:
     """TTS provider that records synthesize calls and emits N audio chunks."""
 
-    supports_ssml = False
-
     def __init__(self, *, chunks: int = 1) -> None:
         self.chunks = chunks
         self.synthesized: list[TTSInput] = []
@@ -84,11 +82,6 @@ class _CoordinatedTTS(_RecordingTTS):
 
 
 class _SSMLTTS(_RecordingTTS):
-    supports_ssml = True
-
-
-class _PolicySSMLTTS(_RecordingTTS):
-    supports_ssml = False
     input_policy = TTSInputPolicy.native_ssml()
 
 
@@ -297,7 +290,7 @@ def test_prepare_writes_tts_payload_prepared_journal_record() -> None:
 
 
 def test_prepare_strips_ssml_when_provider_does_not_support_it() -> None:
-    tts = _RecordingTTS()  # supports_ssml = False
+    tts = _RecordingTTS()
     scheduler, ctx = _build_scheduler(tts=tts, output_processors=[_SSMLifyProcessor()])
 
     payload = scheduler.prepare("hello", is_streaming=False, is_final=True)
@@ -311,21 +304,13 @@ def test_prepare_strips_ssml_when_provider_does_not_support_it() -> None:
 
 
 def test_prepare_keeps_ssml_when_provider_supports_it() -> None:
-    tts = _SSMLTTS()  # supports_ssml = True
+    tts = _SSMLTTS()
     scheduler, ctx = _build_scheduler(tts=tts, output_processors=[_SSMLifyProcessor()])
 
     payload = scheduler.prepare("hello", is_streaming=False, is_final=True)
     assert payload.format == "ssml"
     rec = next(r for r in ctx["journal"].read() if r.name == "tts_payload_prepared")
     assert rec.data["ssml_downgraded"] is False
-
-
-def test_prepare_keeps_ssml_when_input_policy_supports_it() -> None:
-    tts = _PolicySSMLTTS()
-    scheduler, _ = _build_scheduler(tts=tts, output_processors=[_SSMLifyProcessor()])
-
-    payload = scheduler.prepare("hello", is_streaming=False, is_final=True)
-    assert payload.format == "ssml"
 
 
 # ── Tests: synthesize ────────────────────────────────────────

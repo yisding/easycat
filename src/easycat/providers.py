@@ -142,16 +142,6 @@ class TTSProvider(VersionedProvider, Protocol):
     than relying on garbage collection.
     """
 
-    @property
-    def supports_ssml(self) -> bool:
-        """Whether this provider accepts SSML input natively.
-
-        Prefer exposing ``input_policy`` for new providers. The legacy flag
-        remains part of this protocol so existing structural providers keep
-        satisfying ``isinstance(provider, TTSProvider)``.
-        """
-        ...
-
     def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects."""
         ...

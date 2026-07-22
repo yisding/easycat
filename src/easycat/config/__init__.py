@@ -1,8 +1,8 @@
 """Top-level configuration and session factories for EasyCat.
 
 The "super easy" surface lives in :mod:`easycat.config.easy` (the
-:class:`EasyConfig` / :class:`TextSessionConfig` dataclasses plus the audio,
-observability, policy, and telephony config helpers) and
+:class:`EasyConfig` / :class:`TextSessionConfig` dataclasses plus the telephony
+config helpers) and
 :mod:`easycat.config._factory` (the
 :func:`create_session` / :func:`create_text_session` factories). This package
 ``__init__`` is a thin re-export hub so ``easycat.config.X`` keeps working —
@@ -23,12 +23,9 @@ from ._factory import (
 )
 from .easy import (
     _VALID_MCP_SCHEMES,
-    AudioProcessingConfig,
     EasyConfig,
     EasyConfigError,
-    ObservabilityConfig,
     OutboundCallConfig,
-    SessionPolicyConfig,
     TelephonyConfig,
     TextSessionConfig,
     TransportConfig,
@@ -44,12 +41,9 @@ from .easy import (
 # package root re-exports). The private symbols above stay importable for
 # internal call sites and tests but are intentionally kept off ``__all__``.
 __all__ = [
-    "AudioProcessingConfig",
     "EasyConfig",
     "EasyConfigError",
-    "ObservabilityConfig",
     "OutboundCallConfig",
-    "SessionPolicyConfig",
     "TelephonyConfig",
     "TextSessionConfig",
     "VoicemailDetectionConfig",

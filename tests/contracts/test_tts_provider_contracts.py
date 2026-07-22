@@ -14,8 +14,6 @@ pytestmark = [pytest.mark.contract, pytest.mark.surface_tts, pytest.mark.provide
 
 
 class _ContractTTS:
-    supports_ssml = False
-
     def __init__(self) -> None:
         self.payloads: list[TTSInput] = []
         self.stop_calls = 0

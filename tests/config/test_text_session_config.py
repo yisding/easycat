@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from easycat import (
-    ObservabilityConfig,
-    create_text_session,
-)
+from easycat import create_text_session
 from tests.config._helpers import (
     _DummyAgent,
 )
 
 
-def test_create_text_session_forwards_observability_advanced_aliases():
+def test_create_text_session_forwards_warmup():
     session = create_text_session(
         agent=_DummyAgent(),
         warmup=False,
@@ -27,7 +24,6 @@ def test_text_session_config_defaults_debug_to_light():
 
     config = TextSessionConfig(agent=_DummyAgent())
     assert config.debug == "light"
-    assert config.observability.debug == "light"
 
 
 def test_create_text_session_defaults_build_memory_journal(
@@ -68,29 +64,6 @@ def test_text_session_config_validates_debug():
 
     with pytest.raises(ValueError, match="Invalid debug"):
         TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
-
-
-def test_text_session_config_observability_keeps_legacy_top_level_aliases():
-    from easycat.config import TextSessionConfig
-
-    config = TextSessionConfig(
-        agent=_DummyAgent(),
-        observability=ObservabilityConfig(journal_backend="libsql"),
-        debug="light",
-        journal_retention="delete",
-    )
-
-    assert config.observability == ObservabilityConfig(
-        debug="light",
-        journal_backend="libsql",
-        journal_retention="delete",
-    )
-    assert config.debug == "light"
-    assert config.journal_backend == "libsql"
-    assert config.journal_retention == "delete"
-
-    config.journal_backend = "sqlite"
-    assert config.observability.journal_backend == "sqlite"
 
 
 def test_create_text_session_rejects_config_plus_loose_kwargs():

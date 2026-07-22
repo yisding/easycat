@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Sequence
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -438,121 +438,6 @@ class TelephonyConfig:
     twilio_actions: TwilioSessionActionConfig | None = None
 
 
-@dataclass
-class SessionPolicyConfig:
-    """High-level session policy knobs for ``EasyConfig``.
-
-    New code should prefer grouping these related conversation and telephony
-    behaviors under ``session_policy=...``. The legacy top-level
-    ``EasyConfig(greeting=..., dnc_list=..., caller_id_exposure=...)``
-    aliases still work and forward into this object.
-    """
-
-    greeting: str | None = None
-    dnc_list: DNCStore | None = None
-    caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
-
-
-@dataclass
-class AudioProcessingConfig:
-    """Audio input processing knobs for ``EasyConfig``.
-
-    New code should prefer grouping these lower-frequency tuning knobs under
-    ``audio_processing=...``. The legacy top-level aliases (``vad=``,
-    ``noise_reduction=``, ``smart_turn=...``, etc.) still work and forward
-    into this object.
-    """
-
-    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
-    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
-    enable_noise_reduction: bool = False
-    enable_echo_cancellation: bool | None = None
-    smart_turn: SmartTurnConfig | bool | None = None
-    smart_turn_sensitivity: float | None = None
-
-
-@dataclass
-class ObservabilityConfig:
-    """Debug journal knobs shared by audio and text session configs.
-
-    New code can group lower-frequency journal backend choices under
-    ``observability=...`` while common shortcuts such as
-    ``EasyConfig(debug="full")`` and ``create_text_session(debug="light")``
-    keep working through legacy aliases.
-
-    ``debug`` defaults to ``"light"``: an in-memory journal that keeps the
-    live audio loop off the disk. Every mic/VAD/TTS frame is still recorded,
-    but into memory rather than doing a per-frame sha256 + temp-write-and-
-    rename to a durable filesystem artifact store. Opt into ``"full"`` for
-    deep debugging — it persists a crash-survivable journal and artifacts to
-    ``.easycat/`` and supports durable bundle export, at the cost of roughly
-    50 disk writes/sec/session (offloaded off the event loop so it stays
-    loop-friendly). Debugger UI launch is controlled independently by
-    ``debugger_autolaunch``. Use ``"off"`` to disable recording entirely.
-    """
-
-    debug: Literal["off", "light", "full"] = "light"
-    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
-    journal_retention: Literal["archive", "delete"] = "archive"
-    warmup: bool = True
-    # Strictly opt-in: ``debug="full"`` keeps a durable journal but never
-    # auto-launches the debugger UI on its own (that would race the port and
-    # pop a browser tab for every concurrent session). Set this — or the
-    # ``EASYCAT_DEBUGGER_AUTOLAUNCH`` env var — to auto-open the UI in an
-    # interactive terminal. Off by default.
-    debugger_autolaunch: bool = False
-    # Strictly opt-in: when AEC is enabled, the bot's far-end playback frame
-    # fed into the echo canceller can be journaled (one artifact + journal row
-    # per frame) so the debugger can align all three AEC tracks and compute
-    # ERLE. That is ~50 writes/sec/session of fsync + journal pressure on the
-    # live audio loop, so ``debug="full"`` alone never turns it on. Set this —
-    # or the ``EASYCAT_CAPTURE_AEC_REFERENCE`` env var — to capture it; the
-    # router still rate-limits the capture to roughly one frame per second.
-    # Off by default.
-    capture_aec_reference: bool = False
-    # Strictly opt-in: arm a best-effort debug-bundle export on an abnormal
-    # process exit (unhandled exception or unexpected ``atexit`` shutdown) so a
-    # crash leaves a redacted bundle on disk. Installing it reassigns
-    # ``sys.excepthook`` and registers an ``atexit`` hook process-wide, so it is
-    # never on by default. Set this — or the ``EASYCAT_EMERGENCY_EXPORT`` env
-    # var — to arm it. Off by default.
-    emergency_export: bool = False
-
-
-_SESSION_POLICY_ALIAS_FIELDS = frozenset(
-    {
-        "greeting",
-        "dnc_list",
-        "caller_id_exposure",
-    }
-)
-
-_AUDIO_PROCESSING_ALIAS_FIELDS = frozenset(
-    {
-        "vad",
-        "noise_reduction",
-        "echo_cancellation",
-        "enable_noise_reduction",
-        "enable_echo_cancellation",
-        "smart_turn",
-        "smart_turn_sensitivity",
-    }
-)
-
-_OBSERVABILITY_ALIAS_FIELDS = frozenset(
-    {
-        "debug",
-        "journal_backend",
-        "journal_retention",
-        "warmup",
-        "debugger_autolaunch",
-        "capture_aec_reference",
-        "emergency_export",
-    }
-)
-
-
 TransportConfig = (
     LocalTransportConfig
     | WebSocketTransportConfig
@@ -568,20 +453,7 @@ TransportConfig = (
 
 @dataclass(kw_only=True)
 class _AgentSessionConfig:
-    """Shared agent / observability fields for both session configs.
-
-    Extracted so :class:`EasyConfig` (audio sessions) and
-    :class:`TextSessionConfig` (text-only sessions) declare the
-    agent and debug-journal knobs once instead of copying them.
-
-    Both this base and its subclasses are ``@dataclass(kw_only=True)``:
-    a base dataclass injects its fields *before* the subclass's in the
-    generated ``__init__``, so without ``kw_only`` a positional
-    ``EasyConfig("sk-...")`` would silently mis-bind ``"sk-..."`` to
-    ``agent`` instead of ``openai_api_key``.  Keyword-only construction
-    makes that a loud ``TypeError`` and decouples the public field order
-    from this internal split.
-    """
+    """Agent and journal fields shared by audio and text configs."""
 
     agent: Any = None
     agent_model: str | None = None
@@ -595,46 +467,14 @@ class _AgentSessionConfig:
     # ``AgentRunner`` defaults — useful for tests and for bridges that
     # implement their own retry/timeout policy.
     wrap_agent: bool = True
-    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     mcp_servers: list[str] | None = None
-
-    # Backward-compatible aliases for fields now grouped under
-    # ``observability``.
-    debug: InitVar[Literal["off", "light", "full"] | None] = None
-    journal_backend: InitVar[Literal["sqlite", "sqlite+litestream", "libsql"] | None] = None
-    journal_retention: InitVar[Literal["archive", "delete"] | None] = None
-    warmup: InitVar[bool | None] = None
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in _OBSERVABILITY_ALIAS_FIELDS:
-            try:
-                observability = object.__getattribute__(self, "observability")
-            except AttributeError:
-                return object.__getattribute__(self, name)
-            return getattr(observability, name)
-        return object.__getattribute__(self, name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in _OBSERVABILITY_ALIAS_FIELDS and "observability" in self.__dict__:
-            setattr(self.observability, name, value)
-            return
-        object.__setattr__(self, name, value)
-
-    def _apply_observability_aliases(
-        self,
-        debug: Literal["off", "light", "full"] | None,
-        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
-        journal_retention: Literal["archive", "delete"] | None,
-        warmup: bool | None,
-    ) -> None:
-        if debug is not None:
-            self.debug = debug
-        if journal_backend is not None:
-            self.journal_backend = journal_backend
-        if journal_retention is not None:
-            self.journal_retention = journal_retention
-        if warmup is not None:
-            self.warmup = warmup
+    debug: Literal["off", "light", "full"] = "light"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
+    warmup: bool = True
+    debugger_autolaunch: bool = False
+    capture_aec_reference: bool = False
+    emergency_export: bool = False
 
 
 @dataclass(kw_only=True)
@@ -648,14 +488,15 @@ class EasyConfig(_AgentSessionConfig):
             implement EasyCat's provider Protocols. Leave both unset with
             ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
             OpenAI realtime STT + TTS chain.
-        audio_processing: Grouped audio input processing policies such as
-            ``VADConfig``, ``NoiseReducerConfig``, ``EchoCancellationConfig``,
-            ``smart_turn``, and ``smart_turn_sensitivity``.
-        observability: Grouped debug-journal settings. The shorter
-            ``debug=``, ``journal_backend=``, and ``journal_retention=``
-            aliases remain supported.
-        session_policy: Grouped conversation/telephony policies such as
-            greeting, DNC list, and caller-ID exposure.
+        vad: ``VADConfig`` or a live ``VADProvider``.
+        noise_reduction: ``NoiseReducerConfig`` or a live ``NoiseReducer``.
+        echo_cancellation: ``EchoCancellationConfig`` or a live
+            ``EchoCanceller``.
+        smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
+            detection.
+        debug / journal_backend / journal_retention: Debug-journal settings.
+        greeting / dnc_list / caller_id_exposure: Conversation and telephony
+            policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
             agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
             ``http://``, ``https://``.  Frozen per session — mid-session
@@ -665,7 +506,13 @@ class EasyConfig(_AgentSessionConfig):
     openai_api_key: str | None = None
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
-    audio_processing: AudioProcessingConfig = field(default_factory=AudioProcessingConfig)
+    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
+    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
+    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool | None = None
+    smart_turn: SmartTurnConfig | bool | None = None
+    smart_turn_sensitivity: float | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
@@ -675,7 +522,9 @@ class EasyConfig(_AgentSessionConfig):
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
-    session_policy: SessionPolicyConfig = field(default_factory=SessionPolicyConfig)
+    greeting: str | None = None
+    dnc_list: DNCStore | None = None
+    caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
     # user who hits a real failure already has the bundle saved to disk
@@ -683,94 +532,7 @@ class EasyConfig(_AgentSessionConfig):
     # journal actually exists.
     record_to: str | Path | None = None
 
-    # Backward-compatible aliases for fields now grouped under
-    # ``audio_processing``. ``None`` means "leave the grouped value as-is";
-    # pass ``audio_processing=AudioProcessingConfig(...)`` when you need to set
-    # one of the nullable audio values to ``None`` explicitly.
-    vad: InitVar[VADConfig | VADProvider | None] = None
-    noise_reduction: InitVar[NoiseReducerConfig | NoiseReducer | None] = None
-    echo_cancellation: InitVar[EchoCancellationConfig | EchoCanceller | None] = None
-    enable_noise_reduction: InitVar[bool | None] = None
-    enable_echo_cancellation: InitVar[bool | None] = None
-    smart_turn: InitVar[SmartTurnConfig | bool | None] = None
-    smart_turn_sensitivity: InitVar[float | None] = None
-
-    # Backward-compatible aliases for fields now grouped under
-    # ``session_policy``. ``None`` means "leave the grouped value as-is";
-    # pass ``session_policy=SessionPolicyConfig(...)`` when you need to set
-    # one of the nullable policy values to ``None`` explicitly.
-    greeting: InitVar[str | None] = None
-    dnc_list: InitVar[DNCStore | None] = None
-    caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in _AUDIO_PROCESSING_ALIAS_FIELDS:
-            try:
-                audio_processing = object.__getattribute__(self, "audio_processing")
-            except AttributeError:
-                return object.__getattribute__(self, name)
-            return getattr(audio_processing, name)
-        if name in _SESSION_POLICY_ALIAS_FIELDS:
-            try:
-                policy = object.__getattribute__(self, "session_policy")
-            except AttributeError:
-                return object.__getattribute__(self, name)
-            return getattr(policy, name)
-        return super().__getattribute__(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in _AUDIO_PROCESSING_ALIAS_FIELDS and "audio_processing" in self.__dict__:
-            setattr(self.audio_processing, name, value)
-            return
-        if name in _SESSION_POLICY_ALIAS_FIELDS and "session_policy" in self.__dict__:
-            setattr(self.session_policy, name, value)
-            return
-        super().__setattr__(name, value)
-
-    def __post_init__(
-        self,
-        debug: Literal["off", "light", "full"] | None,
-        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
-        journal_retention: Literal["archive", "delete"] | None,
-        warmup: bool | None,
-        vad: VADConfig | VADProvider | None,
-        noise_reduction: NoiseReducerConfig | NoiseReducer | None,
-        echo_cancellation: EchoCancellationConfig | EchoCanceller | None,
-        enable_noise_reduction: bool | None,
-        enable_echo_cancellation: bool | None,
-        smart_turn: SmartTurnConfig | bool | None,
-        smart_turn_sensitivity: float | None,
-        greeting: str | None,
-        dnc_list: DNCStore | None,
-        caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
-    ) -> None:
-        self._apply_observability_aliases(
-            debug,
-            journal_backend,
-            journal_retention,
-            warmup,
-        )
-        if vad is not None:
-            self.vad = vad
-        if noise_reduction is not None:
-            self.noise_reduction = noise_reduction
-        if echo_cancellation is not None:
-            self.echo_cancellation = echo_cancellation
-        if enable_noise_reduction is not None:
-            self.enable_noise_reduction = enable_noise_reduction
-        if enable_echo_cancellation is not None:
-            self.enable_echo_cancellation = enable_echo_cancellation
-        if smart_turn is not None:
-            self.smart_turn = smart_turn
-        if smart_turn_sensitivity is not None:
-            self.smart_turn_sensitivity = smart_turn_sensitivity
-        if greeting is not None:
-            self.greeting = greeting
-        if dnc_list is not None:
-            self.dnc_list = dnc_list
-        if caller_id_exposure is not None:
-            self.caller_id_exposure = caller_id_exposure
-
+    def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
@@ -945,16 +707,7 @@ class EasyConfig(_AgentSessionConfig):
         pin or replace voice activity detection.
         """
         kwargs.setdefault("transport", WebRTCTransportConfig())
-        if "enable_echo_cancellation" not in kwargs:
-            audio_processing = kwargs.get("audio_processing")
-            if isinstance(audio_processing, AudioProcessingConfig):
-                if audio_processing.enable_echo_cancellation is None:
-                    kwargs["audio_processing"] = replace(
-                        audio_processing,
-                        enable_echo_cancellation=True,
-                    )
-            else:
-                kwargs["enable_echo_cancellation"] = True
+        kwargs.setdefault("enable_echo_cancellation", True)
         return cls(**kwargs)
 
     @classmethod
@@ -980,7 +733,7 @@ class EasyConfig(_AgentSessionConfig):
 class TextSessionConfig(_AgentSessionConfig):
     """Configuration for a text-only Session (no audio pipeline).
 
-    Mirrors the shared observability/agent fields of :class:`EasyConfig`
+    Mirrors the shared debug-journal and agent fields of :class:`EasyConfig`
     (both inherit :class:`_AgentSessionConfig`) so ``create_session`` and
     ``create_text_session`` accept a single config object of the
     ``create_*(config)`` shape. Audio-only fields
@@ -998,19 +751,7 @@ class TextSessionConfig(_AgentSessionConfig):
     # timestamped debug bundle on stop when debug journaling is enabled.
     record_to: str | Path | None = None
 
-    def __post_init__(
-        self,
-        debug: Literal["off", "light", "full"] | None,
-        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
-        journal_retention: Literal["archive", "delete"] | None,
-        warmup: bool | None,
-    ) -> None:
-        self._apply_observability_aliases(
-            debug,
-            journal_backend,
-            journal_retention,
-            warmup,
-        )
+    def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
@@ -1078,7 +819,7 @@ class TextSessionConfig(_AgentSessionConfig):
             debug=debug,
             journal_backend=journal_backend,
             journal_retention=journal_retention,
-            warmup=warmup,
+            warmup=True if warmup is None else warmup,
             wrap_agent=wrap_agent,
             agent_runner=agent_runner,
             agent_model=agent_model,

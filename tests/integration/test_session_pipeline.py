@@ -220,8 +220,6 @@ class StreamingMultiSentenceAgent(_TestBridgeBase):
 class ZeroAudioTTS:
     """TTS that produces events with no audio data."""
 
-    supports_ssml = False
-
     def __init__(self) -> None:
         self.payloads: list = []
 

@@ -41,7 +41,7 @@ Source: https://github.com/yisding/easycat
 - [Session graduation](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md) — for app builders: Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 - [Testing and evals](https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md) — for app builders: Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
 - [Events reference](https://github.com/yisding/easycat/blob/main/docs/reference/events.md) — for app builders: Look up every public session event type and when it is emitted.
-- [EasyConfig reference](https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md) — for app builders: Look up every EasyConfig field, grouped config object, and legacy alias.
+- [EasyConfig reference](https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md) — for app builders: Look up every EasyConfig construction field.
 - [Session lifecycle](https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md) — for app builders: Start, stop, force-stop, and read the journal after teardown.
 - [Browser playground](https://github.com/yisding/easycat/blob/main/docs/browser-playground.md) — for app builders: Talk to a bot in the browser with one command, and read the WebSocket/WebRTC wire protocol behind the playground page.
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.

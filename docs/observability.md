@@ -277,12 +277,12 @@ There are three independent knobs, and they control different things:
   disk on the live audio loop. Opt into `"full"` for a crash-survivable
   on-disk journal + artifacts; set `debug="off"` to skip recording entirely.
   Debugger UI launch is an independent opt-in controlled by
-  `debugger_autolaunch`. `debug=` is **orthogonal to log level**:
+  `debugger_autolaunch=True`. `debug=` is **orthogonal to log level**:
   `EASYCAT_LOG_LEVEL` decides how verbose the human console log is. Turning
   one up does not turn the other up.
 
-- **Advanced observability knobs** live on `ObservabilityConfig` and keep a
-  top-level `EasyConfig` alias for first-run ergonomics: `warmup=False`. The
+- **Advanced observability knobs** are direct `EasyConfig` fields, for example
+  `warmup=False`. The
   value is validated and preserved in safe debug-bundle config snapshots.
   `warmup=True` runs structural provider/model `warmup()` hooks during
   `Session.start()` before audio ingress and emits `warmup_completed` timing

@@ -125,8 +125,7 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
         Requests PCM16 format directly to avoid decoding overhead.
         Yields TTSEvent objects with AUDIO type containing PCM16 chunks.
 
-        SSML is not supported (``supports_ssml`` is ``False``), so the
-        scheduler always delivers a plain-text payload here.
+        The default input policy makes the scheduler deliver plain text here.
         """
         self._start_synthesis()
 

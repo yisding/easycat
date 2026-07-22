@@ -5,7 +5,7 @@ from typing import Literal
 
 from easycat.config import _transport_factories
 from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
-from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
+from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
 from easycat.vad._base import _VALID_VAD_BACKENDS, VADBackend
 
 Surface = Literal["stt", "tts", "vad", "transport", "agent_bridge"]

@@ -305,8 +305,6 @@ class ScriptedSTT:
 
 
 class RecordingTTS:
-    supports_ssml = False
-
     def __init__(
         self,
         *,

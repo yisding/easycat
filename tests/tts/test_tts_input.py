@@ -90,24 +90,9 @@ def test_tts_input_policy_rejects_invalid_formats(accepted_formats: tuple[str, .
 
 def test_resolve_tts_input_policy_prefers_typed_policy() -> None:
     class Provider:
-        supports_ssml = False
         input_policy = TTSInputPolicy.native_ssml()
 
     assert resolve_tts_input_policy(Provider()).supports_ssml
-
-
-@pytest.mark.parametrize(("supports_ssml", "expected"), [(False, False), (True, True)])
-def test_resolve_tts_input_policy_uses_legacy_flag(
-    supports_ssml: bool,
-    expected: bool,
-) -> None:
-    class Provider:
-        pass
-
-    provider = Provider()
-    provider.supports_ssml = supports_ssml
-
-    assert resolve_tts_input_policy(provider).supports_ssml is expected
 
 
 def test_resolve_tts_input_policy_rejects_malformed_policy() -> None:

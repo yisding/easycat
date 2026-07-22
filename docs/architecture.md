@@ -156,15 +156,10 @@ each implementing the corresponding Protocol. Base classes (`STTBase`,
 [extending/](extending/README.md)).
 
 `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog`
-(`_provider_catalog.py`) from a central `_PROVIDER_TO_CONFIG` dict (provider
-name → `(provider class, config class)`) plus per-provider metadata maps:
-credential env var, install extra, and API domains (key-completeness enforced
-at import). The catalog is the single source of provider metadata — doctor's
-env checks, scaffold's extras/env hints, validation's pytest provider markers,
-and redaction's sensitive-URL regex all derive from it. To add a new STT/TTS
-provider: add a registry entry + catalog metadata + a config dataclass, and
-doctor/scaffold/redaction pick it up automatically. `tts/factory.py` still
-exposes `_PROVIDERS` as a back-compat alias.
+(`_provider_catalog.py`) from one `ProviderSpec` per backend. The catalog
+derives the `_PROVIDER_TO_CONFIG`, credential, install-extra, and API-domain
+views used by doctor, scaffolding, validation, and redaction. To add a new
+STT/TTS provider, add one spec and its config dataclass.
 
 ## Agent Bridges
 
@@ -211,8 +206,7 @@ VAD and noise reduction can each be forced to a single backend via
 
 - [Events reference](reference/events.md) — every public event type and when
   it fires.
-- [EasyConfig field reference](reference/easyconfig.md) — every field,
-  grouped config, and legacy alias.
+- [EasyConfig field reference](reference/easyconfig.md) — every construction field.
 - [Session lifecycle](reference/session-lifecycle.md) — start, stop/force,
   and postmortem journal reads.
 - [Public API contract](public-api.md) — the stable top-level import surface.

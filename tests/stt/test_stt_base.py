@@ -2,69 +2,17 @@
 
 from __future__ import annotations
 
-import struct
-
 import pytest
 
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.base import STTBase, pcm_to_wav
+from easycat.stt.base import STTBase
 from easycat.stt.websocket_base import WebSocketSTTBase
 from tests.stt.helpers import (
     collect_stt_events,
     generate_pcm_sine,
     make_audio_chunks,
 )
-
-# ── pcm_to_wav tests ─────────────────────────────────────────────
-
-
-def test_pcm_to_wav_header():
-    pcm = b"\x00\x00" * 100  # 100 samples of silence
-    wav = pcm_to_wav(pcm, PCM16_MONO_16K)
-
-    assert wav[:4] == b"RIFF"
-    assert wav[8:12] == b"WAVE"
-    assert wav[12:16] == b"fmt "
-    assert wav[36:40] == b"data"
-
-    # Data size field should match PCM data length
-    data_size = struct.unpack("<I", wav[40:44])[0]
-    assert data_size == len(pcm)
-
-    # RIFF size = 36 + data_size
-    riff_size = struct.unpack("<I", wav[4:8])[0]
-    assert riff_size == 36 + len(pcm)
-
-
-def test_pcm_to_wav_format_fields():
-    pcm = b"\x00\x00" * 50
-    wav = pcm_to_wav(pcm, PCM16_MONO_16K)
-
-    channels = struct.unpack("<H", wav[22:24])[0]
-    sample_rate = struct.unpack("<I", wav[24:28])[0]
-    bits_per_sample = struct.unpack("<H", wav[34:36])[0]
-
-    assert channels == 1
-    assert sample_rate == 16000
-    assert bits_per_sample == 16
-
-
-def test_pcm_to_wav_different_sample_rate():
-    pcm = b"\x00\x00" * 50
-    wav = pcm_to_wav(pcm, PCM16_MONO_8K)
-
-    sample_rate = struct.unpack("<I", wav[24:28])[0]
-    assert sample_rate == 8000
-
-
-def test_pcm_to_wav_contains_audio_data():
-    pcm = generate_pcm_sine(duration_ms=100, sample_rate=16000)
-    wav = pcm_to_wav(pcm, PCM16_MONO_16K)
-
-    # Audio data starts at byte 44
-    assert wav[44:] == pcm
-
 
 # ── _drain_buffer_to_wav tests ────────────────────────────────────
 

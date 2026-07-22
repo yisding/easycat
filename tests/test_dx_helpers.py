@@ -11,7 +11,7 @@ import pytest
 from easycat import EasyConfig, require_env, run
 from easycat.config import _resolve_easycat_log_level
 from easycat.config.easy import _EASYCAT_LOG_LEVELS
-from easycat.helpers import _feedback_enabled
+from easycat.helpers import _feedback_enabled, _wired_summary
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
@@ -76,6 +76,22 @@ def test_run_feedback_quiet_overrides_explicit_on(monkeypatch: pytest.MonkeyPatc
 def test_run_feedback_rejects_unknown_value() -> None:
     with pytest.raises(ValueError, match="Unknown feedback mode.*auto.*on.*off"):
         _feedback_enabled("loud")  # type: ignore[arg-type]
+
+
+def test_wired_summary_handles_live_echo_canceller() -> None:
+    class _CustomEchoCanceller:
+        async def process(self, chunk: object) -> object:
+            return chunk
+
+        def feed_reference(self, chunk: object) -> None:
+            pass
+
+    config = EasyConfig(
+        openai_api_key="test-key",
+        echo_cancellation=_CustomEchoCanceller(),
+    )
+
+    assert "echo-cancel=on" in _wired_summary(config)
 
 
 def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.MonkeyPatch):

@@ -18,7 +18,6 @@ Run:
 from __future__ import annotations
 
 from easycat import (
-    AudioProcessingConfig,
     EasyConfig,
     TurnManagerConfig,
     TurnMode,
@@ -43,7 +42,7 @@ def main() -> None:
             name="feature-guide",
             instructions="Answer in one or two friendly sentences.",
         ),
-        audio_processing=AudioProcessingConfig(smart_turn=False),
+        smart_turn=False,
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
     )
     run_stdin_push_to_talk_session(create_session(config))

@@ -264,7 +264,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "scripts/extras_smoke.py" = ["C901", "PLR0912"]
 "src/easycat/cli/debug/diff.py" = ["B904"]
 "src/easycat/cli/scaffold/init.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/config/easy.py" = ["C901", "PLR0912"]
+"src/easycat/config/easy.py" = ["C901"]
 # Landed in a concurrent wave-4 item, grandfathered at integration time.
 "src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915", "B007"]
 "src/easycat/debug/bundle.py" = ["C901"]

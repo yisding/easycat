@@ -245,28 +245,27 @@ def test_conversation_controls_chapter_builds_distinct_policy_profiles() -> None
     profile_config = namespace["profile_config"]
 
     balanced_audio, balanced_turns = profile_config("balanced")
-    assert balanced_audio.smart_turn is None
-    assert balanced_audio.enable_echo_cancellation is None
+    assert balanced_audio == {}
     assert balanced_turns.end_of_turn_silence_ms == 500
 
     vad_audio, vad_turns = profile_config("vad-only")
-    assert vad_audio.smart_turn is False
-    assert vad_audio.enable_echo_cancellation is True
+    assert vad_audio["smart_turn"] is False
+    assert vad_audio["enable_echo_cancellation"] is True
     assert vad_turns.end_of_turn_silence_ms == 700
 
     fast_audio, fast_turns = profile_config("fast")
-    assert fast_audio.smart_turn is True
-    assert fast_audio.smart_turn_sensitivity == 0.7
+    assert fast_audio["smart_turn"] is True
+    assert fast_audio["smart_turn_sensitivity"] == 0.7
     assert fast_turns.end_of_turn_silence_ms == 400
 
     clean_audio, _ = profile_config("clean")
-    assert clean_audio.enable_noise_reduction is True
-    assert clean_audio.enable_echo_cancellation is True
+    assert clean_audio["enable_noise_reduction"] is True
+    assert clean_audio["enable_echo_cancellation"] is True
 
     raw_audio, _ = profile_config("raw")
-    assert raw_audio.smart_turn is False
-    assert raw_audio.enable_noise_reduction is False
-    assert raw_audio.enable_echo_cancellation is False
+    assert raw_audio["smart_turn"] is False
+    assert raw_audio["enable_noise_reduction"] is False
+    assert raw_audio["enable_echo_cancellation"] is False
 
 
 def test_conversation_controls_teaches_barge_in_and_push_to_talk_boundaries() -> None:
@@ -279,7 +278,8 @@ def test_conversation_controls_teaches_barge_in_and_push_to_talk_boundaries() ->
         assert f'"{profile}"' in main_script
         assert f"main.py {profile}" in readme
     for surface in (
-        "AudioProcessingConfig",
+        "smart_turn",
+        "enable_noise_reduction",
         "TurnManagerConfig",
         "EasyConfig.mic",
         "VoiceApp(config=config)",

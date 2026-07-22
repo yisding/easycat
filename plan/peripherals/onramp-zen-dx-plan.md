@@ -17,7 +17,7 @@ sees *around* the floor. The README asserts three different "fastest paths" poin
 three incompatible code shapes (one of which never starts the session and makes no sound),
 the most common first-run error (forgotten `OPENAI_API_KEY`) raises a bare misleading
 `ValueError` that bypasses the framework's own excellent error catalog, `import easycat`
-confronts a newcomer with 95 flat alphabetical names where the two they need are buried at
+confronts a newcomer with 92 flat alphabetical names where the two they need are buried at
 index 14 and dead-last, and the running hello-world program has zero in-code pointers to the
 next rung. **The one big move is to spend the entire budget on signposting, error-teaching,
 and namespace/trust hygiene — anointing exactly one canonical shape at every fork and wiring
@@ -117,7 +117,7 @@ leaving the editor**.
 |---|:--:|:--:|---|
 | #2 Explicit is better than implicit | 2 | 4 | Today: silent key pickup, bool+config flags override an explicit `False`, no "what got wired" echo. After: missing-key warns + raises a coded error, run() prints the resolved STT/TTS/echo-cancel on a TTY. |
 | #3 Simple is better than complex | 5 | 5 | The 3-line happy path is untouched and remains best-in-category. |
-| #6 Sparse is better than dense | 2 | 3 | `__all__` stays the curated 95 (the snapshot is a tested contract), but the package `__doc__` now leads with a "start here" and `bot.py` gives an in-editor ladder, so the *effective* discovery surface is sparse even though the name list is not shrunk. |
+| #6 Sparse is better than dense | 2 | 3 | `__all__` stays the curated 92 (the snapshot is a tested contract), but the package `__doc__` now leads with a "start here" and `bot.py` gives an in-editor ladder, so the *effective* discovery surface is sparse even though the name list is not shrunk. |
 | #7 Readability counts | 3 | 4 | In-code "Next:" signposts, an honest module docstring, and non-ASCII rendered intact in the scaffolded file (no `—` escape at the first customization point). |
 | #9 Errors should never pass silently | 2 | 4 | The most common first-run failure now routes through `EASYCAT_E203` with a substituted fix, and `EasyCatError` carries its fix + `easycat explain` hint onto the plain `python bot.py` traceback. |
 | #10 Refuse the temptation to guess | 3 | 4 | A structurally-broken `agent=` now fails fast at construction with a coded error (with the real limits of `@runtime_checkable` honestly scoped), instead of a deep first-turn `AttributeError`. |
@@ -685,7 +685,7 @@ new concept, and breaks no power user — the CLI/JSON output reads `.code/.mess
   verbatim. Hand-built provider instances, custom transports, and the `easycat.providers`
   Protocols remain the documented advanced surface. We add a steering sentence to its docstring;
   we remove no capability.
-- **The tested 95-name `__all__` contract.** We do **not** shrink it (verifier: drop). It is a
+- **The tested 92-name `__all__` contract.** We do **not** shrink it (verifier: drop). It is a
   deliberately-curated, recently-reviewed release contract (`git` commits "api: trim public
   surface…"), `test_public_api.py` pins it exactly, and `dir()` re-sorts so a "tiered" `__all__`
   would not even change autocomplete order. Discoverability is solved at the docstring/`bot.py`

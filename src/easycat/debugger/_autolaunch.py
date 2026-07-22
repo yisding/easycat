@@ -11,7 +11,7 @@ on its own — that would break multi-session callers (the WebSocket and
 WebTransport servers, the Twilio phone scaffold) where eight concurrent
 sessions would each race for the same port and each pop a tab. Launch only
 happens when a developer explicitly asks for it (``EASYCAT_DEBUGGER_AUTOLAUNCH``
-or ``observability.debugger_autolaunch``) *and* the process is an interactive
+or ``debugger_autolaunch=True``) *and* the process is an interactive
 terminal (not CI, not a pytest run, stderr is a TTY).
 """
 
@@ -36,7 +36,7 @@ def _autolaunch_opted_in(config_opt_in: bool) -> bool:
 
     Opt-in only: armed when ``EASYCAT_DEBUGGER_AUTOLAUNCH`` is truthy in the
     environment, or the caller passes ``config_opt_in=True`` (resolved from the
-    ``observability.debugger_autolaunch`` config knob). ``debug="full"`` alone
+    ``debugger_autolaunch`` config knob). ``debug="full"`` alone
     never arms it — a durable journal must not drag a browser tab and a port
     bind onto every session.
     """
@@ -68,7 +68,7 @@ def maybe_launch_debugger_ui(session: Session, *, config_opt_in: bool = False) -
 
     - Auto-launch is explicitly opted in via ``EASYCAT_DEBUGGER_AUTOLAUNCH``
       (truthy) or ``config_opt_in=True`` (resolved by the caller from the
-      ``observability.debugger_autolaunch`` config knob). ``debug="full"`` on
+      ``debugger_autolaunch`` config knob). ``debug="full"`` on
       its own is *not* an opt-in.
     - The process is interactive: ``sys.stderr.isatty()`` is true and ``CI``
       is unset/falsy.

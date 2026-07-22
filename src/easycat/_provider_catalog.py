@@ -1,31 +1,4 @@
-"""Single source of truth for STT/TTS provider metadata.
-
-The STT and TTS factories each maintain a ``provider name → (provider
-class, config class)`` map plus sibling per-provider metadata maps (API
-key env var, optional install extra, API domains). They differ only in
-the concrete provider/config types and a couple of error labels. This
-module hoists their parallel machinery — name lookups, reverse map,
-fuzzy-matched ``parse_string``, key-completeness validation, third-party
-registration, and entry-point discovery — into one
-:class:`ProviderCatalog` value object that each factory parameterizes.
-
-The module-level helpers at the bottom merge the STT and TTS catalogs so
-downstream consumers (``easycat doctor``'s env checks, ``easycat init``'s
-scaffold extras/env hints, validation's pytest provider markers, and
-redaction's sensitive-URL regex) derive from the catalogs instead of
-hand-maintaining their own provider lists.
-
-Third-party providers join the catalog two ways:
-
-1. Directly, via :meth:`ProviderCatalog.register` (wrapped by the public
-   ``easycat.register_stt_provider`` / ``easycat.register_tts_provider``
-   functions).
-2. Automatically, by publishing a zero-arg callable under the catalog's
-   ``entry_point_group`` (``easycat.stt_providers`` /
-   ``easycat.tts_providers``). The callable is loaded and invoked once,
-   at the first catalog lookup, and is expected to perform its own
-   ``register_*_provider(...)`` call.
-"""
+"""Shared STT/TTS provider registration, lookup, and metadata."""
 
 from __future__ import annotations
 
@@ -59,74 +32,48 @@ def inject_event_bus(config: Any, event_bus: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class ProviderSpec:
+    """Classes and discovery metadata for one built-in provider."""
+
+    provider_cls: Callable[..., Any]
+    config_cls: type
+    env_var: str
+    extra: str
+    api_domains: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ProviderCatalog:
-    """Name-to-class lookup shared by the STT and TTS factories.
+    """Open provider registry shared by the STT and TTS factories."""
 
-    ``providers`` maps the public provider name (e.g. ``"deepgram"``) to
-    a ``(provider_cls, config_cls)`` pair. The three metadata maps are
-    keyed by the same provider names (enforced at construction):
-
-    - ``env_vars`` — environment variable that holds the API key, used
-      by :meth:`parse_string` to auto-fill credentials and by ``easycat
-      doctor`` to know which credentials to check.
-    - ``extras`` — optional install extra that ships the provider's
-      dependencies, used by ``easycat init`` to scaffold
-      ``pyproject.toml`` extras.
-    - ``api_domains`` — API host domains the provider talks to, used by
-      validation redaction to scrub provider URLs from artifacts.
-
-    The ``kind`` field is a short label (``"STT"`` / ``"TTS"``) used in
-    error messages so the user sees which factory rejected their input.
-
-    ``entry_point_group`` names the :mod:`importlib.metadata` entry-point
-    group scanned (once, lazily) for third-party providers; ``None``
-    disables discovery. The catalog is open post-construction: every
-    lookup method first runs :meth:`discover`, and :meth:`register`
-    mutates the maps in place so module-level aliases of the same dicts
-    (e.g. ``_PROVIDER_TO_CONFIG``) stay in sync.
-
-    Configs may set a ``MODEL_FIELD`` :data:`typing.ClassVar[str]` to
-    bridge non-standard field names (e.g. ElevenLabs uses ``model_id``).
-    Defaults to ``"model"`` when absent.
-    """
-
-    providers: dict[str, tuple[Callable[..., Any], type]]
-    env_vars: dict[str, str]
-    extras: dict[str, str]
-    api_domains: dict[str, tuple[str, ...]]
+    specs: Mapping[str, ProviderSpec]
     kind: str
     entry_point_group: str | None = None
+    providers: dict[str, tuple[Callable[..., Any], type]] = field(init=False)
+    env_vars: dict[str, str] = field(init=False)
+    extras: dict[str, str] = field(init=False)
+    api_domains: dict[str, tuple[str, ...]] = field(init=False)
     config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
-        self._validate_metadata_keys("env_vars", "env var keys", self.env_vars)
-        self._validate_metadata_keys("extras", "extra keys", self.extras)
-        self._validate_metadata_keys("api_domains", "api domain keys", self.api_domains)
-
-        # Frozen dataclasses block normal attribute assignment, so the
-        # reverse map is set via object.__setattr__ — same pattern the
-        # standard library uses for derived fields.
-        reverse = {cfg_cls: provider_cls for provider_cls, cfg_cls in self.providers.values()}
-        object.__setattr__(self, "config_to_provider", reverse)
-
-    def _validate_metadata_keys(
-        self, field_name: str, label: str, mapping: Mapping[str, object]
-    ) -> None:
-        """Require ``mapping`` to cover exactly the registered providers."""
-        provider_keys = set(self.providers)
-        metadata_keys = set(mapping)
-        if provider_keys == metadata_keys:
-            return
-        missing = sorted(provider_keys - metadata_keys)
-        unknown = sorted(metadata_keys - provider_keys)
-        details: list[str] = []
-        if missing:
-            details.append(f"missing {field_name} for: {', '.join(missing)}")
-        if unknown:
-            details.append(f"{field_name} without providers: {', '.join(unknown)}")
-        raise ValueError(
-            f"{self.kind} provider catalog keys must match {label}; " + "; ".join(details)
+        providers = {
+            name: (spec.provider_cls, spec.config_cls) for name, spec in self.specs.items()
+        }
+        object.__setattr__(self, "providers", providers)
+        object.__setattr__(
+            self, "env_vars", {name: spec.env_var for name, spec in self.specs.items()}
+        )
+        object.__setattr__(self, "extras", {name: spec.extra for name, spec in self.specs.items()})
+        object.__setattr__(
+            self,
+            "api_domains",
+            {name: spec.api_domains for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
+            "config_to_provider",
+            {config_cls: provider_cls for provider_cls, config_cls in providers.values()},
         )
 
     def register(
@@ -139,21 +86,7 @@ class ProviderCatalog:
         extra: str | None = None,
         api_domains: tuple[str, ...] = (),
     ) -> None:
-        """Register a provider under a string shortcut name.
-
-        Validates inputs first, then updates ``providers``, ``env_vars``,
-        the optional metadata maps, and the ``config_to_provider``
-        reverse map together — preserving the key-parity invariant per
-        registration. Re-registering an identical entry is a no-op (so
-        entry-point discovery stays idempotent); a conflicting duplicate
-        raises.
-
-        ``extra`` optionally names the install extra shipping the
-        provider's dependencies (surfaced by ``easycat init`` scaffold
-        extras); ``api_domains`` optionally lists API host domains
-        (folded into validation's URL redaction). Both default to empty,
-        which simply means the provider does not surface there.
-        """
+        """Register a provider; identical registration is idempotent."""
         normalized = name.strip().lower() if isinstance(name, str) else ""
         if not normalized:
             raise ValueError(f"{self.kind} provider name must be a non-empty string.")
@@ -181,13 +114,7 @@ class ProviderCatalog:
         self.config_to_provider[config_cls] = provider_cls
 
     def discover(self) -> None:
-        """Load entry-point providers once (idempotent, lazy).
-
-        Scans :attr:`entry_point_group` via :mod:`importlib.metadata`;
-        each entry point must load to a zero-arg callable that performs
-        its own ``register_*_provider(...)`` call. A broken plugin logs
-        a warning instead of breaking every factory call.
-        """
+        """Load entry-point registration callbacks once, logging failures."""
         if self._discovered or not self.entry_point_group:
             return
         object.__setattr__(self, "_discovered", True)
@@ -209,18 +136,8 @@ class ProviderCatalog:
         self.discover()
         return sorted(self.providers)
 
-    def provider_env_vars(self) -> dict[str, str]:
-        """Return a copy of the provider-name → API-key-env-var map."""
-        self.discover()
-        return dict(self.env_vars)
-
     def is_config_instance(self, value: object) -> bool:
-        """True when ``value`` is an instance of a registered config class.
-
-        The open-world replacement for ``isinstance(x, STTConfig/TTSConfig)``
-        union checks: membership is decided by the live catalog, so
-        third-party configs registered via either layer count too.
-        """
+        """True when ``value`` is an instance of a registered config class."""
         self.discover()
         return type(value) in self.config_to_provider
 
@@ -232,20 +149,37 @@ class ProviderCatalog:
             raise ValueError(f"Unsupported {self.kind} configuration type.")
         return provider_cls
 
+    def create_provider(
+        self,
+        provider: object,
+        *,
+        params: Mapping[str, Any] | None = None,
+        api_key: str | None = None,
+        event_bus: Any = None,
+    ) -> Any:
+        """Build a provider from its registered name and config parameters."""
+        name = self.validate_name(provider)
+        provider_cls, config_cls = self.providers[name]
+        kwargs = dict(params or {})
+        if api_key is not None:
+            kwargs["api_key"] = api_key
+        try:
+            config = config_cls(**kwargs)
+        except TypeError as exc:
+            raise ValueError(
+                f"Invalid params for {provider!r} {self.kind} provider: {exc}"
+            ) from exc
+        if not getattr(config, "api_key", None):
+            raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
+        return provider_cls(inject_event_bus(config, event_bus))
+
+    def create_from_config(self, config: Any, event_bus: Any) -> Any:
+        """Build a provider, injecting an event bus when its config declares one."""
+        provider_cls = self.provider_for_config(type(config))
+        return provider_cls(inject_event_bus(config, event_bus))
+
     def validate_name(self, provider: object) -> str:
-        """Normalize and validate a provider name against the registry.
-
-        Returns the lowercased, registered provider name. Raises the
-        shared :data:`~easycat.errors.EASYCAT_E104` (with a fuzzy-match
-        ``Did you mean?`` hint) when the name is unknown — the same error
-        path as :meth:`parse_string`, so the typed-config and
-        string-shortcut entry points report unknown providers
-        identically.
-
-        Raises:
-            EasyCatError (EASYCAT_E104): Unknown (or non-string) provider,
-                with fuzzy-match suggestion.
-        """
+        """Return a normalized registered name or raise ``EASYCAT_E104``."""
         from easycat.errors import EASYCAT_E104
 
         self.discover()
@@ -264,20 +198,7 @@ class ProviderCatalog:
     def parse_string(
         self, spec: str, *, api_key_overrides: Mapping[str, str] | None = None
     ) -> Any:
-        """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
-
-        Looks up the provider in :attr:`providers`, reads the API key
-        from ``api_key_overrides`` or :attr:`env_vars`, and instantiates
-        the provider's config class. The ``model`` token is written to whichever field the
-        config exposes via its ``MODEL_FIELD`` class var (defaulting to
-        ``"model"``).
-
-        Raises:
-            EasyCatError (EASYCAT_E104): Unknown provider, with
-                fuzzy-match suggestion.
-            EasyCatError (EASYCAT_E203): Missing required API key env
-                var.
-        """
+        """Parse ``provider/model`` and resolve its credential."""
         from easycat.errors import EASYCAT_E203
 
         provider, _, model_token = spec.partition("/")
@@ -301,14 +222,7 @@ class ProviderCatalog:
 
 
 def stt_tts_catalogs() -> tuple[ProviderCatalog, ProviderCatalog]:
-    """Return the (STT, TTS) catalogs, entry-point discovery included.
-
-    Imported lazily because the factories import this module at their own
-    import time — a top-level import here would be circular. Discovery is
-    triggered here so every merged helper below (doctor env checks,
-    scaffold extras/env hints, redaction domains) sees third-party
-    providers registered via the entry-point groups.
-    """
+    """Return the lazily imported and discovered STT/TTS catalogs."""
     from easycat.stt.factory import _CATALOG as stt_catalog
     from easycat.tts.factory import _CATALOG as tts_catalog
 
@@ -319,36 +233,27 @@ def stt_tts_catalogs() -> tuple[ProviderCatalog, ProviderCatalog]:
 
 def provider_names() -> frozenset[str]:
     """Every registered STT/TTS provider name, merged across catalogs."""
-    names: set[str] = set()
-    for catalog in stt_tts_catalogs():
-        names.update(catalog.providers)
-    return frozenset(names)
+    return frozenset(name for catalog in stt_tts_catalogs() for name in catalog.providers)
 
 
 def provider_env_vars() -> dict[str, str]:
     """Provider → API-key env var, merged across the STT and TTS catalogs."""
-    merged: dict[str, str] = {}
-    for catalog in stt_tts_catalogs():
-        merged.update(catalog.env_vars)
-    return merged
+    return {
+        name: env_var
+        for catalog in stt_tts_catalogs()
+        for name, env_var in catalog.env_vars.items()
+    }
 
 
 def provider_extras() -> dict[str, str]:
     """Provider → optional install extra, merged across the STT and TTS catalogs."""
-    merged: dict[str, str] = {}
-    for catalog in stt_tts_catalogs():
-        merged.update(catalog.extras)
-    return merged
+    return {
+        name: extra for catalog in stt_tts_catalogs() for name, extra in catalog.extras.items()
+    }
 
 
 def credential_env_vars() -> dict[str, str]:
-    """Provider → env var with one provider per distinct credential.
-
-    Providers that reuse another provider's credential (e.g.
-    ``openai-realtime`` shares ``OPENAI_API_KEY`` with ``openai``) are
-    collapsed onto the alphabetically first provider name, so ``easycat
-    doctor`` checks each credential exactly once.
-    """
+    """Provider → env var, deduplicated by credential."""
     merged = provider_env_vars()
     deduped: dict[str, str] = {}
     claimed_vars: set[str] = set()
@@ -363,8 +268,13 @@ def credential_env_vars() -> dict[str, str]:
 
 def sensitive_api_domains() -> tuple[str, ...]:
     """Sorted union of every provider API domain, for URL redaction."""
-    domains: set[str] = set()
-    for catalog in stt_tts_catalogs():
-        for provider_domains in catalog.api_domains.values():
-            domains.update(provider_domains)
-    return tuple(sorted(domains))
+    return tuple(
+        sorted(
+            {
+                domain
+                for catalog in stt_tts_catalogs()
+                for domains in catalog.api_domains.values()
+                for domain in domains
+            }
+        )
+    )

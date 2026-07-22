@@ -52,10 +52,6 @@ def full_scale(sample_width: int) -> int:
     return (1 << (8 * width - 1)) - 1
 
 
-# Back-compat ALL-CAPS alias: callers in the fix spec refer to ``FULL_SCALE``.
-FULL_SCALE = full_scale
-
-
 def decode_pcm_mono(blob: bytes, *, sample_width: int, channels: int) -> list[int]:
     """Decode *blob* to a flat mono list of signed ints (channels averaged).
 
@@ -85,7 +81,6 @@ def decode_pcm_mono(blob: bytes, *, sample_width: int, channels: int) -> list[in
 
 
 __all__ = [
-    "FULL_SCALE",
     "decode_pcm_mono",
     "full_scale",
     "is_supported_width",

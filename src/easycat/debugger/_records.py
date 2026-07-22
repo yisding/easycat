@@ -6,14 +6,9 @@ grep-style regex compiler with its catastrophic-backtracking analyzer, the
 full-text search scan shared with ``easycat journal grep``, and the transcript
 projection.
 
-The JournalRecord → JSON-dict coercion is **not** defined here: it is the
-canonical generic dataclass walk in :mod:`easycat.debug._serialize`, re-exported
-below as ``_record_to_dict`` so the live debugger and the export bundle
-serialize records through one implementation (this is the #28 consolidation —
-the server previously dropped ``tags`` and record-subclass fields).
+JournalRecord → JSON-dict coercion lives in the canonical generic dataclass
+walk in :mod:`easycat.debug._serialize`.
 
-``server.py`` re-exports every name here so the historical
-``from easycat.debugger.server import _helper`` import sites keep resolving.
 """
 
 from __future__ import annotations
@@ -24,7 +19,6 @@ from collections.abc import Iterable
 from re import _parser as re_parser  # type: ignore[attr-defined]
 from typing import Any
 
-from easycat.debug._serialize import record_to_dict as _record_to_dict
 from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 
 # Hard cap on records scanned by full-text search (``/api/records?q=`` and
@@ -350,19 +344,3 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     wrapper keeps the historical name the SPA routes call.
     """
     return _extract_turn_transcripts(records)
-
-
-__all__ = [
-    "_SEARCH_MAX_QUERY_LEN",
-    "_SEARCH_SCAN_LIMIT",
-    "_UNSAFE_REGEX_MESSAGE",
-    "_build_transcript",
-    "_compile_search_regex",
-    "_filter_and_paginate",
-    "_filter_records",
-    "_record_match_fields",
-    "_record_searchable_text",
-    "_record_to_dict",
-    "_regex_tree_has_unsafe_backtracking",
-    "_search_records",
-]

@@ -23,7 +23,6 @@ PUBLIC_API_SNAPSHOT = (
     "AudioFormat",
     "AudioIn",
     "AudioOut",
-    "AudioProcessingConfig",
     "BotStartedSpeaking",
     "BotStoppedSpeaking",
     "CallAnswered",
@@ -46,7 +45,6 @@ PUBLIC_API_SNAPSHOT = (
     "MarkdownStripProcessor",
     "NoiseReducer",
     "NoiseReducerConfig",
-    "ObservabilityConfig",
     "OutboundCallConfig",
     "PCM16_MONO_16K",
     "PCM16_MONO_24K",
@@ -64,7 +62,6 @@ PUBLIC_API_SNAPSHOT = (
     "SessionAudioBroadcaster",
     "SessionConfig",
     "SessionManager",
-    "SessionPolicyConfig",
     "SmartTurnConfig",
     "SupervisorListenerAttached",
     "SupervisorListenerDetached",
@@ -249,11 +246,9 @@ def test_public_api_documents_deprecation_and_removal_policy() -> None:
             "docs/public-api.md is missing the Deprecation & Removal Policy section"
         ) from exc
 
-    assert "`settings=`" in section
     assert "machine-visible deprecation signal" in section
     assert "pre-release" in section
     assert "ownership ambiguity" in section
-    assert "`params=`" in section
 
 
 def test_curated_public_api_lazy_imports() -> None:
@@ -360,8 +355,6 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
 def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.debug.testing import load_bundle
     from easycat.integrations.agents import AgentRunner, AgentRunnerConfig
-    from easycat.quick import speak as quick_speak
-    from easycat.quick import transcribe_file as quick_transcribe_file
     from easycat.recipes import speak, transcribe_file
     from easycat.session import split_at_sentence_boundaries
     from easycat.session.actions import CoreSessionActionExecutor
@@ -379,8 +372,6 @@ def test_culled_symbols_remain_available_from_modules() -> None:
     assert load_bundle.__name__ == "load_bundle"
     assert speak.__name__ == "speak"
     assert transcribe_file.__name__ == "transcribe_file"
-    assert quick_speak is speak
-    assert quick_transcribe_file is transcribe_file
     assert split_at_sentence_boundaries("Hello world. ") == ("Hello world. ", "")
 
 

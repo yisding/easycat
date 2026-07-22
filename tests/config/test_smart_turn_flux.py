@@ -6,7 +6,6 @@ import math
 import pytest
 
 from easycat import (
-    AudioProcessingConfig,
     EasyConfig,
     create_session,
 )
@@ -218,27 +217,6 @@ def test_create_session_derives_endpoint_threshold_from_smart_turn_sensitivity(
         smart_turn_sensitivity=0.75,
         agent=_DummyAgent(),
     )
-
-    session = create_session(config)
-
-    assert session._turn_manager._config.endpoint_threshold == pytest.approx(0.25)
-
-
-def test_create_session_derives_endpoint_threshold_from_grouped_audio_processing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stub_audio_backends(monkeypatch)
-    config = EasyConfig(
-        openai_api_key="test-key",
-        audio_processing=AudioProcessingConfig(
-            smart_turn=True,
-            smart_turn_sensitivity=0.75,
-        ),
-        agent=_DummyAgent(),
-    )
-
-    assert isinstance(config.audio_processing.smart_turn, SmartTurnConfig)
-    assert config.smart_turn.threshold == pytest.approx(0.25)
 
     session = create_session(config)
 

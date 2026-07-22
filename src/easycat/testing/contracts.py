@@ -236,7 +236,6 @@ class TTSProviderContractSuite(ProviderContractSuite):
 
     async def test_satisfies_tts_provider_protocol(self, provider: Any) -> None:
         assert isinstance(provider, TTSProvider)
-        assert isinstance(provider.supports_ssml, bool)
 
     async def test_synthesize_streams_normalized_events(self, provider: Any) -> None:
         """synthesize(str) yields a terminating TTSEvent stream carrying audio."""

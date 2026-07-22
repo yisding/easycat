@@ -39,10 +39,6 @@ class LoggingTTS:
     def __init__(self, inner: TTSProvider) -> None:
         self._inner = inner
 
-    @property
-    def supports_ssml(self) -> bool:
-        return self._inner.supports_ssml
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         text = payload if isinstance(payload, str) else payload.text
         print(f"[tts] synthesize: {text[:80]!r}")

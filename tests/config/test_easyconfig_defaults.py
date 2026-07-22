@@ -8,14 +8,9 @@ from easycat import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
     PCM16_MONO_24K,
-    AudioProcessingConfig,
     EasyConfig,
-    ObservabilityConfig,
-    SessionPolicyConfig,
 )
 from easycat.echo_cancellation import EchoCancellationConfig
-from easycat.smart_turn import SmartTurnConfig
-from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransportConfig
@@ -42,53 +37,41 @@ def test_easycat_config_openai_defaults():
 
 def test_easycat_config_defaults_debug_to_light():
     # The default is the in-memory ``"light"`` journal so per-frame capture
-    # stays off the disk and off the live audio loop. The single source of
-    # the default lives on ObservabilityConfig, and EasyConfig inherits it
-    # through the observability alias proxy. ``"full"`` is the opt-in
-    # durable/deep-debugging mode.
+    # stays off the disk and off the live audio loop. ``"full"`` is the
+    # opt-in durable/deep-debugging mode.
     config = EasyConfig(openai_api_key="test-key")
     assert config.debug == "light"
-    assert config.observability.debug == "light"
-    assert ObservabilityConfig().debug == "light"
 
 
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.
-    assert ObservabilityConfig().debugger_autolaunch is False
     config = EasyConfig(openai_api_key="test-key", debug="full")
-    assert config.observability.debug == "full"
-    assert config.observability.debugger_autolaunch is False
-    # Reachable through the observability alias proxy.
+    assert config.debug == "full"
     assert config.debugger_autolaunch is False
 
 
-def test_debugger_autolaunch_opt_in_via_observability_knob():
+def test_debugger_autolaunch_opt_in():
     config = EasyConfig(
         openai_api_key="test-key",
-        observability=ObservabilityConfig(debugger_autolaunch=True),
+        debugger_autolaunch=True,
     )
-    assert config.observability.debugger_autolaunch is True
     assert config.debugger_autolaunch is True
 
 
 def test_capture_aec_reference_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT journal per-frame
     # AEC reference rows on its own — that is strictly opt-in.
-    assert ObservabilityConfig().capture_aec_reference is False
     config = EasyConfig(openai_api_key="test-key", debug="full")
-    assert config.observability.debug == "full"
-    assert config.observability.capture_aec_reference is False
-    # Reachable through the observability alias proxy.
+    assert config.debug == "full"
     assert config.capture_aec_reference is False
 
 
-def test_capture_aec_reference_opt_in_via_observability_knob():
+def test_capture_aec_reference_opt_in():
     config = EasyConfig(
         openai_api_key="test-key",
-        observability=ObservabilityConfig(capture_aec_reference=True),
+        capture_aec_reference=True,
     )
-    assert config.observability.capture_aec_reference is True
     assert config.capture_aec_reference is True
 
 
@@ -149,108 +132,16 @@ def test_easycat_config_uses_transport_echo_preference_capability():
     assert config.echo_cancellation.enabled is True
 
 
-def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
-    config = EasyConfig(
-        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
-        tts=OpenAITTSConfig(api_key="test-key"),
-        greeting="Hello",
-        caller_id_exposure="system_message",
-    )
-
-    assert config.session_policy == SessionPolicyConfig(
-        greeting="Hello",
-        caller_id_exposure="system_message",
-    )
-    assert config.greeting == "Hello"
-    assert config.caller_id_exposure == "system_message"
-
-    config.caller_id_exposure = "tools_only"
-
-    assert config.session_policy.caller_id_exposure == "tools_only"
-
-
-def test_easyconfig_audio_processing_keeps_legacy_top_level_aliases():
-    echo_cancellation = EchoCancellationConfig(enabled=False)
-
-    config = EasyConfig(
-        openai_api_key="test-key",
-        echo_cancellation=echo_cancellation,
-        enable_noise_reduction=True,
-        smart_turn=True,
-    )
-
-    assert config.audio_processing.echo_cancellation is echo_cancellation
-    assert config.echo_cancellation is echo_cancellation
-    assert config.audio_processing.enable_noise_reduction is True
-    assert config.enable_noise_reduction is True
-    assert isinstance(config.audio_processing.smart_turn, SmartTurnConfig)
-    assert config.smart_turn.enabled is True
-
-    config.enable_noise_reduction = False
-    config.echo_cancellation = EchoCancellationConfig(enabled=True)
-
-    assert config.audio_processing.enable_noise_reduction is False
-    assert config.audio_processing.echo_cancellation is config.echo_cancellation
-    assert config.echo_cancellation.enabled is True
-
-
-def test_browser_preset_preserves_grouped_echo_cancellation_override(
+def test_browser_preset_preserves_echo_cancellation_override(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
 
-    config = EasyConfig.browser(
-        audio_processing=AudioProcessingConfig(enable_echo_cancellation=False)
-    )
+    config = EasyConfig.browser(enable_echo_cancellation=False)
 
     assert config.enable_echo_cancellation is False
     assert config.echo_cancellation is not None
     assert config.echo_cancellation.enabled is False
-
-
-def test_easyconfig_observability_keeps_legacy_top_level_aliases():
-    config = EasyConfig(
-        openai_api_key="test-key",
-        observability=ObservabilityConfig(debug="light", journal_backend="libsql"),
-        debug="off",
-        journal_retention="delete",
-    )
-
-    assert config.observability == ObservabilityConfig(
-        debug="off",
-        journal_backend="libsql",
-        journal_retention="delete",
-    )
-    assert config.debug == "off"
-    assert config.journal_backend == "libsql"
-    assert config.journal_retention == "delete"
-
-    config.debug = "light"
-    config.journal_retention = "archive"
-
-    assert config.observability.debug == "light"
-    assert config.observability.journal_retention == "archive"
-
-
-def test_easyconfig_observability_carries_advanced_runtime_knobs():
-    config = EasyConfig(
-        openai_api_key="test-key",
-        observability=ObservabilityConfig(
-            warmup=False,
-        ),
-    )
-
-    assert config.warmup is False
-
-
-def test_easyconfig_observability_advanced_knobs_keep_top_level_aliases():
-    config = EasyConfig(
-        openai_api_key="test-key",
-        observability=ObservabilityConfig(warmup=True),
-        warmup=False,
-    )
-
-    assert config.observability.warmup is False
 
 
 @pytest.mark.parametrize(

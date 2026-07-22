@@ -41,12 +41,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from easycat._net import is_loopback_host
-from easycat.debug._issues import build_issues as _build_issues  # noqa: F401
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
-from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
-from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall  # noqa: F401
 from easycat.debug.annotations import (
     Annotation,
     AnnotationError,
@@ -54,74 +51,22 @@ from easycat.debug.annotations import (
     save_annotation,
 )
 from easycat.debug.bundle import RunBundle
-
-# AEC diagnostics + VAD what-if payload builders were split into
-# ``_aec_routes.py`` (QS3). Re-exported here so the historical
-# ``from easycat.debugger.server import _helper`` sites keep resolving.
-# ``_AEC_MAX_TRACK_BYTES`` is monkeypatched by tests, so it lives physically in
-# ``_aec_routes`` (patch its real home, not this module).
 from easycat.debugger._aec_routes import (
     _aec_diagnostics_for_turn,
-    _aec_interruption_frames,
-    _aec_track_format,
-    _limit_aec_track,
     _vad_baseline_start_count,
     _vad_whatif_frames,
 )
-
-# PCM/WAV/frame coercion helpers were split into ``_audio.py`` (QS3). Re-exported
-# here so the historical ``from easycat.debugger.server import _helper`` sites
-# keep resolving. ``_AUDIO_MAX_CONVERTED_FRAME_BYTES`` is monkeypatched by tests,
-# so it lives physically in ``_audio`` (patch its real home, not this alias).
 from easycat.debugger._audio import (
-    _AUDIO_DEFAULT_FMT,
-    _AUDIO_MAX_CONVERTED_FRAME_BYTES,
-    _AUDIO_MAX_RESAMPLE_RATIO,
-    _AUDIO_MAX_SAMPLE_RATE,
-    _AUDIO_MIN_SAMPLE_RATE,
-    _AUDIO_VALID_CHANNELS,
-    _audio_metadata_int,
     _coerce_frames_to_format,
-    _is_safe_audio_format,
-    _np_pcm_dtype,
-    _np_ratecv,
-    _np_tomono,
-    _project_converted_pcm_bytes,
     _safe_audio_format_from_metadata,
-    _serialize_frame,
     _wav_header,
 )
 from easycat.debugger._core_routes import register_core_routes
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
-
-# Record filtering / full-text search / transcript / record coercion helpers
-# were split into ``_records.py`` (QS3). Re-exported here so the historical
-# ``from easycat.debugger.server import _helper`` import sites keep resolving.
-from easycat.debugger._records import (
-    _SEARCH_MAX_QUERY_LEN,
-    _SEARCH_SCAN_LIMIT,
-    _UNSAFE_REGEX_MESSAGE,
-    _build_transcript,
-    _compile_search_regex,
-    _filter_and_paginate,
-    _filter_records,
-    _record_match_fields,
-    _record_searchable_text,
-    _record_to_dict,
-    _regex_tree_has_unsafe_backtracking,
-    _search_records,
-)
-
-# Source adaptation (DebuggerSource + bundle/session sources and ref/turn-id
-# validators) was split into ``_sources.py`` (QS3). Re-exported here so the
-# historical ``from easycat.debugger.server import _helper`` sites keep
-# resolving. ``_REPLAY_FRAME_LIMIT`` is monkeypatched by tests, so it lives
-# physically in ``_sources`` (patch its real home, not this module).
 from easycat.debugger._sources import (
     DebuggerSource,
     _bundle_source,
     _run_bundle_source,
-    _safe_ref,
     _safe_turn_id,
     _session_source,
     _validated_replay_kwargs,
@@ -151,12 +96,6 @@ _AUDIO_TRACK_TTS = "tts"
 _AUDIO_TRACK_MIC = "mic"
 _AUDIO_TRACK_REFERENCE = "reference"
 _VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
-
-
-# ── Pure helpers (record filtering / rollups) ────────────────────
-# The record filtering, full-text search, transcript, and record/error
-# coercion helpers now live in ``easycat.debugger._records`` and are
-# re-exported at the top of this module (QS3 split).
 
 
 def _record_sequence(record: dict[str, Any]) -> int | None:
@@ -1694,60 +1633,11 @@ def _ensure_aiohttp() -> None:
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
 
-# ``server.py`` stays a facade over the QS3 split modules; every private moved
-# into ``_records.py`` / ``_audio.py`` / ``_sources.py`` / ``_aec_routes.py`` is
-# re-exported here so the historical ``from easycat.debugger.server import
-# _helper`` import sites (tests, ``cli/debug/grep.py``) keep resolving.
 __all__ = [
-    # Public entry points.
     "DebuggerSource",
     "run_app_async",
     "serve_bundle",
     "serve_dev_registry",
     "serve_run_bundle",
     "serve_session",
-    # Re-exported from ``_records`` (record filtering / search / transcript).
-    "_SEARCH_MAX_QUERY_LEN",
-    "_SEARCH_SCAN_LIMIT",
-    "_UNSAFE_REGEX_MESSAGE",
-    "_build_transcript",
-    "_compile_search_regex",
-    "_filter_and_paginate",
-    "_filter_records",
-    "_record_match_fields",
-    "_record_searchable_text",
-    "_record_to_dict",
-    "_regex_tree_has_unsafe_backtracking",
-    "_search_records",
-    # Re-exported from ``_audio`` (PCM/WAV/frame coercion).
-    "_AUDIO_DEFAULT_FMT",
-    "_AUDIO_MAX_CONVERTED_FRAME_BYTES",
-    "_AUDIO_MAX_RESAMPLE_RATIO",
-    "_AUDIO_MAX_SAMPLE_RATE",
-    "_AUDIO_MIN_SAMPLE_RATE",
-    "_AUDIO_VALID_CHANNELS",
-    "_audio_metadata_int",
-    "_coerce_frames_to_format",
-    "_is_safe_audio_format",
-    "_np_pcm_dtype",
-    "_np_ratecv",
-    "_np_tomono",
-    "_project_converted_pcm_bytes",
-    "_safe_audio_format_from_metadata",
-    "_serialize_frame",
-    "_wav_header",
-    # Re-exported from ``_sources`` (source adaptation + validators).
-    "_bundle_source",
-    "_run_bundle_source",
-    "_safe_ref",
-    "_safe_turn_id",
-    "_session_source",
-    "_validated_replay_kwargs",
-    # Re-exported from ``_aec_routes`` (AEC diagnostics + VAD what-if).
-    "_aec_diagnostics_for_turn",
-    "_aec_interruption_frames",
-    "_aec_track_format",
-    "_limit_aec_track",
-    "_vad_baseline_start_count",
-    "_vad_whatif_frames",
 ]

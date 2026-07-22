@@ -256,8 +256,7 @@ class DeepgramTTS(_WSTTSBase):
         they arrive. Sends a flush message after the text to signal
         end of input.
 
-        SSML is not supported (``supports_ssml`` is ``False``), so the
-        scheduler always delivers a plain-text payload here.
+        The default input policy makes the scheduler deliver plain text here.
         """
         text = coerce_tts_input(payload).text
         # Deepgram's stream has no context IDs. Serializing guarantees exactly

@@ -25,6 +25,15 @@ from tests.session._session_core_helpers import (
 )
 
 
+class CaptureTTS(FakeTTS):
+    def __init__(self) -> None:
+        self.payloads: list[TTSInput] = []
+
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+        self.payloads.append(payload if isinstance(payload, TTSInput) else TTSInput(payload))
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+
 def test_session_strip_markdown_does_not_inject_hidden_processor():
     class MarkerProcessor:
         def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
@@ -96,18 +105,6 @@ async def test_prepare_tts_payload_writes_journal_record():
 
 @pytest.mark.asyncio
 async def test_session_applies_output_processors_before_tts() -> None:
-    class CaptureTTS(FakeTTS):
-        def __init__(self) -> None:
-            self.payloads: list[TTSInput] = []
-
-        @property
-        def supports_ssml(self) -> bool:
-            return True
-
-        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-            self.payloads.append(payload)
-            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
-
     class PrefixProcessor:
         def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
             return TTSInput(text=f"speak: {payload.text}", format=payload.format)
@@ -132,18 +129,6 @@ async def test_session_applies_output_processors_before_tts() -> None:
 
 @pytest.mark.asyncio
 async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
-    class CaptureTTS(FakeTTS):
-        def __init__(self) -> None:
-            self.payloads: list[TTSInput] = []
-
-        @property
-        def supports_ssml(self) -> bool:
-            return False
-
-        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-            self.payloads.append(payload)
-            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
-
     tts = CaptureTTS()
     session = Session(
         _full_config(
@@ -173,18 +158,6 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
 
 @pytest.mark.asyncio
 async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
-    class CaptureTTS(FakeTTS):
-        def __init__(self) -> None:
-            self.payloads: list[TTSInput] = []
-
-        @property
-        def supports_ssml(self) -> bool:
-            return False
-
-        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-            self.payloads.append(payload)
-            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
-
     tts = CaptureTTS()
     session = Session(
         _full_config(
@@ -210,20 +183,6 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
 
 @pytest.mark.asyncio
 async def test_session_composes_phonetic_and_phone_processors() -> None:
-    class CaptureTTS(FakeTTS):
-        def __init__(self) -> None:
-            self.payloads: list[TTSInput] = []
-
-        @property
-        def supports_ssml(self) -> bool:
-            return False
-
-        async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
-            if isinstance(payload, str):
-                payload = TTSInput(payload)
-            self.payloads.append(payload)
-            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
-
     tts = CaptureTTS()
     session = Session(
         _full_config(

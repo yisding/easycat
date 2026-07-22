@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from easycat._provider_catalog import ProviderCatalog, inject_event_bus
+from easycat._provider_catalog import ProviderCatalog, ProviderSpec
 from easycat.events import EventBus
 from easycat.providers import TTSProvider
 from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
@@ -21,68 +20,33 @@ from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 # so runtime checks must use :func:`is_tts_config`, never ``isinstance``
 # against this union.
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig | CartesiaTTSConfig
-TTSConfigType = (
-    type[OpenAITTSConfig]
-    | type[DeepgramTTSConfig]
-    | type[ElevenLabsTTSConfig]
-    | type[CartesiaTTSConfig]
-)
-
-# Registry of known provider names to their config/class pairs. Named to
-# mirror ``easycat.stt.factory._PROVIDER_TO_CONFIG`` so the two factories
-# stay symmetric.
-_PROVIDER_TO_CONFIG: dict[str, tuple[Callable[..., TTSProvider], TTSConfigType]] = {
-    "openai": (OpenAITTS, OpenAITTSConfig),
-    "deepgram": (DeepgramTTS, DeepgramTTSConfig),
-    "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
-    "cartesia": (CartesiaTTS, CartesiaTTSConfig),
-}
-
-# Back-compat alias for the pre-rename registry name.
-_PROVIDERS = _PROVIDER_TO_CONFIG
-
-# Provider name → env var that holds its API key. Used by string-keyed
-# provider selection (e.g. ``tts="openai"``) to auto-detect the API
-# key without explicit wiring.
-_PROVIDER_ENV_VAR: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
-
-# Provider name → optional install extra shipping its dependencies.
-# Consumed by ``easycat init`` to scaffold ``pyproject.toml`` extras.
-_PROVIDER_EXTRA: dict[str, str] = {
-    "openai": "openai",
-    "deepgram": "deepgram",
-    "elevenlabs": "elevenlabs",
-    "cartesia": "cartesia",
-}
-
-# Provider name → API host domains. Consumed by validation redaction to
-# scrub provider URLs from exported artifacts.
-_PROVIDER_API_DOMAINS: dict[str, tuple[str, ...]] = {
-    "openai": ("openai.com",),
-    "deepgram": ("deepgram.com",),
-    "elevenlabs": ("elevenlabs.io",),
-    "cartesia": ("cartesia.ai",),
-}
-
-# Entry-point group scanned (lazily, at first factory call) for
-# third-party TTS providers. Each entry point must load to a zero-arg
-# callable that calls :func:`register_tts_provider`.
 TTS_PROVIDER_ENTRY_POINT_GROUP = "easycat.tts_providers"
 
 _CATALOG = ProviderCatalog(
-    providers=_PROVIDER_TO_CONFIG,
-    env_vars=_PROVIDER_ENV_VAR,
-    extras=_PROVIDER_EXTRA,
-    api_domains=_PROVIDER_API_DOMAINS,
+    specs={
+        # implementation, config, credential env, install extra, API domains
+        "openai": ProviderSpec(
+            OpenAITTS, OpenAITTSConfig, "OPENAI_API_KEY", "openai", ("openai.com",)
+        ),
+        "deepgram": ProviderSpec(
+            DeepgramTTS, DeepgramTTSConfig, "DEEPGRAM_API_KEY", "deepgram", ("deepgram.com",)
+        ),
+        "elevenlabs": ProviderSpec(
+            ElevenLabsTTS,
+            ElevenLabsTTSConfig,
+            "ELEVENLABS_API_KEY",
+            "elevenlabs",
+            ("elevenlabs.io",),
+        ),
+        "cartesia": ProviderSpec(
+            CartesiaTTS, CartesiaTTSConfig, "CARTESIA_API_KEY", "cartesia", ("cartesia.ai",)
+        ),
+    },
     kind="TTS",
     entry_point_group=TTS_PROVIDER_ENTRY_POINT_GROUP,
 )
-_CONFIG_TO_PROVIDER: dict[TTSConfigType, Callable[..., TTSProvider]] = _CATALOG.config_to_provider
+_PROVIDER_TO_CONFIG = _CATALOG.providers
+_PROVIDER_ENV_VAR = _CATALOG.env_vars
 
 
 def register_tts_provider(
@@ -94,24 +58,7 @@ def register_tts_provider(
     extra: str | None = None,
     api_domains: tuple[str, ...] = (),
 ) -> None:
-    """Register a third-party TTS provider under a string shortcut name.
-
-    After registration the provider participates everywhere built-ins do:
-    ``tts="<name>/<model>"`` shortcuts, :func:`create_tts_provider`,
-    :func:`available_tts_providers`, ``easycat doctor`` env-var checks,
-    and ``easycat init`` scaffold validation.
-
-    ``provider_cls`` must accept its ``config_cls`` instance as the sole
-    constructor argument (the same contract built-in providers follow);
-    ``env_var`` names the environment variable holding the API key.
-    ``extra`` optionally names an install extra surfaced by ``easycat
-    init`` scaffold extras; ``api_domains`` optionally lists API host
-    domains folded into validation's URL redaction.
-
-    Packages can register automatically by exposing a zero-arg callable
-    that performs this call under the ``easycat.tts_providers``
-    entry-point group.
-    """
+    """Register a TTS provider and its discovery metadata."""
     _CATALOG.register(
         name, provider_cls, config_cls, env_var=env_var, extra=extra, api_domains=api_domains
     )
@@ -122,132 +69,39 @@ def is_tts_config(value: object) -> bool:
     return _CATALOG.is_config_instance(value)
 
 
-def provider_env_vars() -> dict[str, str]:
-    """Return the provider-name → API-key-env-var map (discovery included)."""
-    return _CATALOG.provider_env_vars()
-
-
 @dataclass
 class TTSProviderConfig:
-    """Top-level configuration for creating a TTS provider.
-
-    Mirrors :class:`easycat.stt.factory.STTProviderConfig`: ``api_key``
-    is a top-level field and provider-specific parameters are passed via
-    ``params``. An ``api_key`` nested inside ``params`` is also honored
-    (and a top-level ``api_key`` takes precedence when both are set).
-
-    ``settings`` is a deprecated alias for ``params``, kept so existing
-    callers (e.g. ``TTSProviderConfig(provider="openai",
-    settings={"api_key": k})``) keep working; it is folded into
-    ``params`` at construction.
-    """
+    """Named TTS provider, credential, and provider-specific parameters."""
 
     provider: str
     api_key: str | None = None
     params: dict[str, Any] | None = None
-    settings: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        # Fold the deprecated ``settings`` alias into ``params`` so the
-        # rest of the factory only has to read ``params``.
-        if self.settings is not None:
-            warnings.warn(
-                "`settings` is deprecated; pass `params=` instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            merged = dict(self.settings)
-            if self.params:
-                merged.update(self.params)
-            self.params = merged
-            self.settings = None
 
 
 def create_tts_provider(
     config: TTSProviderConfig, event_bus: EventBus | None = None
 ) -> TTSProvider:
-    """Create a TTS provider instance from a configuration object.
-
-    Validates the provider name and params at construction time.
-
-    ``event_bus``, when given, is structurally injected into the resulting
-    provider config the same way :func:`create_tts_provider_from_config`
-    does: only providers whose config dataclass declares an ``event_bus``
-    field (and that don't already have one set via ``params``) receive it.
-    Pass it so providers that emit provider-scoped events (e.g. Deepgram,
-    ElevenLabs) keep reconnect/error observability when constructed through
-    this string/params path.
-
-    Raises:
-        EasyCatError (EASYCAT_E104): Unknown provider name, with fuzzy-match
-            suggestion (shared with the ``tts="provider/model"`` shortcut path).
-        ValueError: If the params are invalid or the API key is missing.
-    """
-    provider_name = _CATALOG.validate_name(config.provider)
-
-    provider_cls, config_cls = _PROVIDER_TO_CONFIG[provider_name]
-    params = dict(config.params or {})
-    if config.api_key is not None:
-        params["api_key"] = config.api_key
-
-    try:
-        provider_config = config_cls(**params)
-    except TypeError as exc:
-        raise ValueError(f"Invalid params for {config.provider!r} TTS provider: {exc}") from exc
-
-    if not provider_config.api_key:
-        raise ValueError(f"API key is required for TTS provider '{config.provider}'")
-
-    provider_config = inject_event_bus(provider_config, event_bus)
-
-    return provider_cls(provider_config)
+    """Create a registered TTS provider, optionally wiring its event bus."""
+    return _CATALOG.create_provider(
+        config.provider,
+        params=config.params,
+        api_key=config.api_key,
+        event_bus=event_bus,
+    )
 
 
 def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> TTSProvider:
-    """Create a TTS provider from a concrete config object.
-
-    This is used by ``easycat.config.create_session`` so there is one TTS
-    provider registry in the codebase.
-    """
-    provider_cls = _provider_for_config(type(config))
-    return provider_cls(inject_event_bus(config, event_bus))
-
-
-def _provider_for_config(config_type: TTSConfigType) -> Callable[..., TTSProvider]:
-    return _CATALOG.provider_for_config(config_type)
-
-
-def available_providers() -> list[str]:
-    """Return every registered TTS provider name, sorted."""
-    return _CATALOG.available_names()
+    """Create a TTS provider from a concrete provider config."""
+    return _CATALOG.create_from_config(config, event_bus)
 
 
 def available_tts_providers() -> list[str]:
-    """Return every valid ``tts=`` provider name, sorted.
-
-    Public, unambiguously named alias of :func:`available_providers`,
-    exported from the top-level ``easycat`` package so callers can
-    enumerate valid ``tts="provider/model"`` shortcut names.
-    """
-    return available_providers()
+    """Return every valid ``tts=`` provider name, sorted."""
+    return _CATALOG.available_names()
 
 
 def parse_tts_string(
     spec: str, *, api_key_overrides: Mapping[str, str] | None = None
 ) -> TTSConfig:
-    """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
-
-    Looks up the provider in the registry, reads the corresponding API
-    key from ``api_key_overrides`` or the env var
-    (:data:`_PROVIDER_ENV_VAR`), and returns a concrete
-    :class:`TTSConfig` with ``model`` set when supplied.
-
-    ``api_key_overrides`` is keyed by env-var name so callers can inject
-    per-call credentials without mutating process-global environment.
-
-    Raises:
-        EasyCatError (EASYCAT_E104): Unknown provider, with fuzzy-match
-            suggestion.
-        EasyCatError (EASYCAT_E203): Missing required API key env var.
-    """
+    """Parse a ``provider/model`` shortcut into a concrete TTS config."""
     return _CATALOG.parse_string(spec, api_key_overrides=api_key_overrides)

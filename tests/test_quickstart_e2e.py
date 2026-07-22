@@ -729,8 +729,6 @@ def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> No
         "tts=LocalTTSProvider(...)",
         "agent=LocalAgent(...)",
         "Provider instances are",
-        "AudioProcessingConfig",
-        "`audio_processing=AudioProcessingConfig(",
         "`vad=`",
         "`noise_reduction=`",
         "`echo_cancellation=`",
@@ -745,9 +743,9 @@ def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> No
 def test_readme_current_capabilities_track_public_provider_and_bridge_surfaces() -> None:
     from easycat.integrations import agents as agent_integrations
     from easycat.noise_reduction import NoiseReducerBackend
-    from easycat.stt.factory import available_providers as available_stt_providers
+    from easycat.stt.factory import available_stt_providers
     from easycat.transports import __all__ as transport_exports
-    from easycat.tts.factory import available_providers as available_tts_providers
+    from easycat.tts.factory import available_tts_providers
     from easycat.vad import VADBackend
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

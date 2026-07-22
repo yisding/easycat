@@ -40,23 +40,10 @@ class STTStage:
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
         self._provider = provider
-        # Fallback recording sink: ``execute`` / ``handle_upstream`` record
-        # through ``ctx.journal``; this constructor journal is only used
-        # when the RunContext was created without one (see ``_with_journal``).
         self._journal = journal
 
-    def _journal_ctx(self, ctx: RunContext) -> RunContext:
-        """Return *ctx*, substituting the constructor journal as a fallback.
-
-        Recording flows through ``ctx.journal``; when the RunContext was
-        built without a journal but the stage was handed one directly, we
-        record into the stage's journal instead so it is never silently
-        dead.
-        """
-        return journal_ctx(ctx, self._journal)
-
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
-        ctx = self._journal_ctx(ctx)
+        ctx = journal_ctx(ctx, self._journal)
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
@@ -175,4 +162,6 @@ class STTStage:
         """
         logger.debug("STTStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)
+            journal_append_control_signal(
+                journal_ctx(ctx, self._journal), stage=self.name, signal=signal
+            )

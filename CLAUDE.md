@@ -108,7 +108,7 @@ page when moving modules; this file keeps only the orientation map below.
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
-- **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from a central `_PROVIDER_TO_CONFIG` dict (provider name → `(provider class, config class)`) plus per-provider metadata maps: credential env var, install extra, and API domains (key-completeness enforced at import). The catalog is the single source of provider metadata — doctor's env checks, scaffold's extras/env hints, validation's pytest provider markers, and redaction's sensitive-URL regex all derive from it. To add a new STT/TTS provider: add a registry entry + catalog metadata + a config dataclass, and doctor/scaffold/redaction pick it up automatically. `tts/factory.py` still exposes `_PROVIDERS` as a back-compat alias.
+- **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from one `ProviderSpec` per backend. The catalog derives `_PROVIDER_TO_CONFIG`, credential, install-extra, and API-domain views used by doctor, scaffolding, validation, and redaction. To add a provider, add one spec and its config dataclass.
 - **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 

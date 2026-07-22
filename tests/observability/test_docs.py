@@ -72,6 +72,70 @@ def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     assert "`exc`" in config
 
 
+def test_observability_doc_tracks_error_note_context() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for token in (
+        "PEP 678 exception notes",
+        "`ErrorInfo.notes`",
+        "`stage`",
+        "`provider`",
+        "`turn_id`",
+        "`elapsed_ms`",
+        "`sequence`",
+        "`record_key`",
+        "failing input",
+        "`ExceptionGroup`",
+        "both child errors",
+    ):
+        assert token in journal
+
+
+def test_observability_doc_tracks_record_to_auto_capture() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for token in (
+        '`record_to="runs"`',
+        "`EasyConfig`",
+        "`create_text_session(...)`",
+        "timestamped debug bundle",
+    ):
+        assert token in journal
+
+
+def test_observability_doc_tracks_advanced_config_knobs() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    config = doc.split("## Configuration and orthogonality", 1)[1].split(
+        "### Correlation ids",
+        1,
+    )[0]
+    caveats = doc.split("## Honesty caveats", 1)[1]
+    config_text = " ".join(config.split())
+
+    for token in (
+        "`debugger_autolaunch=True`",
+        "`warmup=False`",
+        "safe debug-bundle config snapshots",
+        "structural provider/model `warmup()` hooks",
+        "`warmup_completed` timing records",
+        "The bundled providers now implement those hooks",
+    ):
+        assert token in config_text
+
+    assert "Latency is reported, not gated" in caveats
+    assert "`turn_total_latency_ms`" in caveats
+    assert "`text_turn_latency_ms`" in caveats
+    assert "`easycat validate latency`" in caveats
+
+
 def test_latency_docs_defaults_match_code() -> None:
     """Every default documented in docs/latency.md matches the code.
 

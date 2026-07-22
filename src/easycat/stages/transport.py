@@ -38,13 +38,7 @@ class TransportStage:
 
     def __init__(self, provider: Any, *, journal: Any = None) -> None:
         self._provider = provider
-        # Fallback recording sink used only when ``ctx.journal`` is None
-        # (see ``_journal_ctx``); recording normally flows through ctx.
         self._journal = journal
-
-    def _journal_ctx(self, ctx: RunContext) -> RunContext:
-        """Return *ctx*, substituting the constructor journal as a fallback."""
-        return journal_ctx(ctx, self._journal)
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> bool:
         """Send audio through the wrapped transport.
@@ -55,7 +49,7 @@ class TransportStage:
         that return ``None`` after a successful send are treated as
         delivered for backward compatibility.
         """
-        ctx = self._journal_ctx(ctx)
+        ctx = journal_ctx(ctx, self._journal)
         capture_enabled = ctx.journal is not None or ctx.artifact_store is not None
         started = time.perf_counter()
         result_attr = "pass"
@@ -199,4 +193,6 @@ class TransportStage:
         """
         logger.debug("TransportStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)
+            journal_append_control_signal(
+                journal_ctx(ctx, self._journal), stage=self.name, signal=signal
+            )

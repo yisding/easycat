@@ -604,7 +604,7 @@ uv run easycat docs --audience app-builders
 - Path: docs/reference/easyconfig.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md
 - Audience: app builders
-- Look up every EasyConfig field, grouped config object, and legacy alias.
+- Look up every EasyConfig construction field.
 
 Commands:
 

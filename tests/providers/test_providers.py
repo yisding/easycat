@@ -1,11 +1,13 @@
 """Tests for provider Protocol definitions — verify structural subtyping works."""
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import pytest
 
-from easycat._provider_catalog import ProviderCatalog
+from easycat._provider_catalog import ProviderCatalog, ProviderSpec
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.errors import EasyCatError
 from easycat.events import (
     Event,
     STTEvent,
@@ -56,10 +58,6 @@ class StubSTT:
 
 
 class StubTTS:
-    @property
-    def supports_ssml(self) -> bool:
-        return False
-
     async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
         yield TTSEvent(
             type=TTSEventType.AUDIO,
@@ -202,53 +200,71 @@ def test_transport_without_clear_audio_satisfies_protocol():
 
 
 class _CatalogProvider:
-    pass
+    def __init__(self, config: "_CatalogConfig") -> None:
+        self.config = config
 
 
+@dataclass
 class _CatalogConfig:
-    pass
+    api_key: str = ""
+    option: str = ""
+    event_bus: object | None = None
 
 
 def _catalog_kwargs() -> dict:
     return {
-        "providers": {"known": (_CatalogProvider, _CatalogConfig)},
-        "env_vars": {"known": "KNOWN_API_KEY"},
-        "extras": {"known": "known"},
-        "api_domains": {"known": ("known.example",)},
+        "specs": {
+            "known": ProviderSpec(
+                _CatalogProvider,
+                _CatalogConfig,
+                "KNOWN_API_KEY",
+                "known",
+                ("known.example",),
+            )
+        },
         "kind": "Test",
     }
 
 
-def test_provider_catalog_rejects_mismatched_provider_and_env_var_keys():
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Test provider catalog keys must match env var keys; "
-            "missing env_vars for: known; env_vars without providers: extra"
-        ),
-    ):
-        ProviderCatalog(**{**_catalog_kwargs(), "env_vars": {"extra": "EXTRA_API_KEY"}})
+def test_provider_catalog_normalizes_and_validates_names():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    assert catalog.validate_name(" KNOWN ") == "known"
+    with pytest.raises(EasyCatError, match="Did you mean 'known'") as exc_info:
+        catalog.validate_name("knwn")
+    assert exc_info.value.code == "EASYCAT_E104"
 
 
-def test_provider_catalog_rejects_mismatched_extras_keys():
-    with pytest.raises(
-        ValueError,
-        match="Test provider catalog keys must match extra keys; missing extras for: known",
-    ):
-        ProviderCatalog(**{**_catalog_kwargs(), "extras": {}})
+def test_provider_catalog_creates_named_provider():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    provider = catalog.create_provider(
+        "known",
+        params={"api_key": "nested", "option": "value"},
+        api_key="top-level",
+    )
+
+    assert provider.config == _CatalogConfig(api_key="top-level", option="value")
 
 
-def test_provider_catalog_rejects_mismatched_api_domain_keys():
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Test provider catalog keys must match api domain keys; "
-            "api_domains without providers: extra"
-        ),
-    ):
-        ProviderCatalog(
-            **{
-                **_catalog_kwargs(),
-                "api_domains": {"known": ("known.example",), "extra": ("extra.example",)},
-            }
-        )
+def test_provider_catalog_rejects_missing_key_and_invalid_params():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    with pytest.raises(ValueError, match="API key is required"):
+        catalog.create_provider("known")
+    with pytest.raises(ValueError, match="Invalid params"):
+        catalog.create_provider("known", params={"unknown": True})
+
+
+def test_provider_catalog_injects_or_preserves_event_bus():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+    injected = object()
+    existing = object()
+
+    created = catalog.create_from_config(_CatalogConfig(api_key="key"), injected)
+    preserved = catalog.create_from_config(
+        _CatalogConfig(api_key="key", event_bus=existing), object()
+    )
+
+    assert created.config.event_bus is injected
+    assert preserved.config.event_bus is existing

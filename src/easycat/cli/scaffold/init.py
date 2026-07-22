@@ -42,8 +42,8 @@ from easycat.cli.scaffold._schema import (
 )
 from easycat.config import _VALID_MCP_SCHEMES
 from easycat.errors import EASYCAT_E101, EASYCAT_E102, EASYCAT_E103, EASYCAT_E104
-from easycat.stt.factory import available_providers as available_stt_providers
-from easycat.tts.factory import available_providers as available_tts_providers
+from easycat.stt.factory import available_stt_providers
+from easycat.tts.factory import available_tts_providers
 
 _SCAFFOLD_DEFAULTS: dict[str, str] = {
     "AGENT_NAME": "Support",

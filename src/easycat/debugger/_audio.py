@@ -6,9 +6,6 @@ fallbacks, the bounded frame-format reconciliation used to stitch a turn's
 audio, the RIFF/WAVE header builder, the in-memory concat helper, and the
 JSON-safe :class:`ReplayFrame` projection.
 
-``server.py`` re-exports every name here so the historical
-``from easycat.debugger.server import _helper`` import sites keep resolving.
-
 DEPENDENCY NOTE: ``audioop`` was removed from the stdlib in Python 3.13 and
 ``numpy`` is an optional extra; both are resolved lazily with fallbacks so a
 bare (``aiohttp``-only) debugger install still imports this module.
@@ -345,23 +342,3 @@ def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size
             struct.pack("<I", data_size),
         ]
     )
-
-
-__all__ = [
-    "_AUDIO_DEFAULT_FMT",
-    "_AUDIO_MAX_CONVERTED_FRAME_BYTES",
-    "_AUDIO_MAX_RESAMPLE_RATIO",
-    "_AUDIO_MIN_SAMPLE_RATE",
-    "_AUDIO_MAX_SAMPLE_RATE",
-    "_AUDIO_VALID_CHANNELS",
-    "_audio_metadata_int",
-    "_coerce_frames_to_format",
-    "_is_safe_audio_format",
-    "_np_pcm_dtype",
-    "_np_ratecv",
-    "_np_tomono",
-    "_project_converted_pcm_bytes",
-    "_safe_audio_format_from_metadata",
-    "_serialize_frame",
-    "_wav_header",
-]

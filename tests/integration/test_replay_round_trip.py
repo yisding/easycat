@@ -83,10 +83,6 @@ class _ScriptedTTS:
     CHUNK_A = b"AAAA" * 4
     CHUNK_B = b"BBBB" * 4
 
-    @property
-    def supports_ssml(self) -> bool:
-        return False
-
     async def synthesize(self, payload: Any) -> AsyncIterator[TTSEvent]:  # type: ignore[override]
         yield TTSEvent(
             type=TTSEventType.AUDIO,
