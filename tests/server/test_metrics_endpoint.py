@@ -146,7 +146,8 @@ async def test_metrics_endpoint_shape_from_manifest(
             "sessions_rejected_total",
         }
         # No resolved token can appear in a metrics snapshot.
-        async with client.get(f"{_base_url(server)}/metrics") as resp:
+        async with client.get(f"{_base_url(server)}/metrics", headers=_auth_headers()) as resp:
+            assert resp.status == 200
             assert _RESOLVED_TOKEN not in await resp.text()
     finally:
         await server.stop()
@@ -208,9 +209,9 @@ async def test_manifest_endpoint_from_manifest_has_no_token(
         manifest = body["manifest"]
         # The redacted dump exposes only the bearer-env:NAME reference.
         assert manifest["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
-        # The IPv4 bind host is routed through the shared redaction policy so
-        # the public manifest cannot expose private bind metadata.
-        assert manifest["server"]["host"] == "[REDACTED_PHONE]"
+        # The public manifest uses the explicit topology placeholder rather
+        # than leaking the bind host or depending on PII-pattern heuristics.
+        assert manifest["server"]["host"] == "[REDACTED_HOST]"
         # The resolved (secret-shaped) token must never appear in the dump.
         assert _RESOLVED_TOKEN not in text
     finally:
