@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -35,8 +36,15 @@ class FakeStreamResponse:
         self.aiter_bytes_chunk_size: int | None = -1
         self.chunks_read = 0
 
-    def raise_for_status(self):
-        if self.status_code >= 400:
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    async def aread(self) -> bytes:
+        return b"error"
+
+    def raise_for_status(self) -> None:
+        if not self.is_success:
             response = MagicMock()
             response.status_code = self.status_code
             response.text = "error"
@@ -74,7 +82,7 @@ class ChunkedAsyncByteStream(httpx.AsyncByteStream):
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = chunks
 
-    async def __aiter__(self):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
 
@@ -300,6 +308,52 @@ class TestOpenAITTS:
         assert err.provider == "openai"
         notes = getattr(err.exception, "__notes__", [])
         assert any("http_status=429" in n for n in notes)
+
+    @pytest.mark.parametrize("status_code", [302, 401])
+    async def test_streamed_http_error_surfaces_status_not_response_not_read(
+        self,
+        status_code: int,
+    ) -> None:
+        """A streamed 4xx/5xx surfaces the HTTPStatusError, not ResponseNotRead.
+
+        client.stream() leaves the body unread, so accessing exc.response.text
+        without a prior read raises httpx.ResponseNotRead on real httpx. The
+        handler must read the body first so the real HTTP error propagates and a
+        provider Error still reaches the event bus.
+        """
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        def handle(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code,
+                stream=ChunkedAsyncByteStream([b"invalid api key"]),
+            )
+
+        provider = OpenAITTS(OpenAITTSConfig(api_key="bad", event_bus=bus))
+        original_client = provider._client
+        provider._client = httpx.AsyncClient(
+            base_url="https://example.test",
+            transport=httpx.MockTransport(handle),
+        )
+        await original_client.aclose()
+        try:
+            with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                async for _ in provider.synthesize("error test"):
+                    pass
+        finally:
+            await provider.close()
+
+        assert exc_info.value.response.status_code == status_code
+
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        err = errors[0]
+        assert err.stage == ErrorStage.TTS
+        assert err.provider == "openai"
+        notes = getattr(err.exception, "__notes__", [])
+        assert any(f"http_status={status_code}" in note for note in notes)
 
     async def test_no_event_bus_does_not_raise_on_error(self):
         """Without an event bus the error path stays a no-op (still raises)."""

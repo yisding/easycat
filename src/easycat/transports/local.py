@@ -163,8 +163,11 @@ class LocalTransport(AudioQueueMixin):
             arr = indata
             if hasattr(arr, "copy"):
                 arr = arr.copy()
-            # Convert float32 [-1, 1] to int16
-            pcm = (arr * 32767).astype(np.int16).tobytes()
+            # Convert float32 [-1, 1] to int16.  Clip before the cast:
+            # sounddevice/PortAudio does not hard-clamp float32 capture, so an
+            # overdriven input can exceed 1.0, and numpy's int16 cast wraps
+            # (sign-flips) rather than saturating.  Mirror the resampler sites.
+            pcm = np.clip(arr * 32767.0, -32768, 32767).astype(np.int16).tobytes()
             chunk = AudioChunk(data=pcm, format=self._audio_format)
             # ``_enqueue_chunk`` is sync-safe and emits the canonical
             # ``inbound_queue_full`` TransportDegraded event on overflow, so

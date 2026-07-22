@@ -142,7 +142,11 @@ class InMemoryRingBuffer:
     def snapshot(self) -> FrozenJournalSnapshot:
         """Return a read-only copy of the current buffer contents."""
         with self._lock:
-            return FrozenJournalSnapshot(list(self._buf), degraded=self._degraded)
+            return FrozenJournalSnapshot(
+                list(self._buf),
+                degraded=self._degraded,
+                latest_sequence=self._seq,
+            )
 
     @property
     def latest_sequence(self) -> int:
