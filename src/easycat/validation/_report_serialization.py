@@ -14,7 +14,8 @@ from easycat.validation._report_models import ArtifactRef, ValidationEnvironment
 from easycat.validation.redaction import redact_text, redact_value, should_redact_key
 
 _GENERATED_RUN_PATH_SEGMENT_RE = re.compile(
-    r"(?<=/runs/)\d{8}T\d{6}Z-(?:quick|socket|stress|contracts|live|release|latency-[^/]+)-[^/]+"
+    r"(?<=/runs/)\d{8}T\d{6}Z-"
+    r"(?:quick|guard|socket|stress|contracts|live|release|latency-[^/]+)-[^/]+"
 )
 
 

@@ -228,7 +228,8 @@ Current verified state:
   `easycat.validation.runner.main` and exits with its return code.
 - `src/easycat/validation/runner.py` owns reusable slice execution through
   `run_validation_slice(...)`; `VALIDATION_SELECTORS` currently includes
-  `quick`, `socket`, `stress`, and `contracts`.
+  `quick`, the internal `guard` overlay used by release validation, `socket`,
+  `stress`, and `contracts`.
 - The current `quick` selector is
   `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard`;
   the current `socket` selector is

@@ -518,6 +518,25 @@ def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:
     assert commands[0][-2:] == ["-m", "integration_socket and not integration_live and not flaky"]
 
 
+def test_validation_main_dispatches_guard_slice(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        commands.append(command)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    exit_code = main(
+        ["guard", "--artifacts-dir", str(tmp_path)],
+        command_runner=fake_command_runner,
+    )
+
+    assert exit_code == 0
+    assert commands[0][-2:] == [
+        "-m",
+        "guard and not integration_live and not integration_external and not flaky",
+    ]
+
+
 def test_validation_main_dispatches_stress_slice(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
