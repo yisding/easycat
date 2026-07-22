@@ -99,7 +99,7 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     assert livekit.command[livekit.command.index("--python") + 1] == sys.executable
     assert pipecat.command[pipecat.command.index("--python") + 1] == sys.executable
     assert PINS == {
-        "livekit": ("livekit-agents==1.6.4",),
+        "livekit": ("livekit-agents==1.6.6",),
         "pipecat": ("pipecat-ai==1.4.0", "websockets==15.0.1"),
     }
 
