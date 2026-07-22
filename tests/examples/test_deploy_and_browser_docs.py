@@ -257,7 +257,10 @@ async def test_docker_healthcheck_http_requires_2xx(
     status: int,
     expected: bool,
 ) -> None:
-    healthcheck = runpy.run_path(str(REPO_ROOT / "docker" / "healthcheck.py"))
+    healthcheck = await asyncio.to_thread(
+        runpy.run_path,
+        str(REPO_ROOT / "docker" / "healthcheck.py"),
+    )
 
     class _Client:
         async def __aenter__(self) -> _Client:
@@ -277,17 +280,21 @@ async def test_docker_healthcheck_http_requires_2xx(
 async def test_docker_healthcheck_tcp_uses_async_loopback_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    healthcheck = runpy.run_path(str(REPO_ROOT / "docker" / "healthcheck.py"))
+    healthcheck = await asyncio.to_thread(
+        runpy.run_path,
+        str(REPO_ROOT / "docker" / "healthcheck.py"),
+    )
     calls: list[tuple[str, int]] = []
 
     class _Writer:
         closed = False
+        waited_closed = False
 
         def close(self) -> None:
             self.closed = True
 
         async def wait_closed(self) -> None:
-            return None
+            self.waited_closed = True
 
     writer = _Writer()
 
@@ -300,6 +307,10 @@ async def test_docker_healthcheck_tcp_uses_async_loopback_probe(
     assert await healthcheck["_check_tcp"]("0.0.0.0", 8765)
     assert calls == [("127.0.0.1", 8765)]
     assert writer.closed
+    assert writer.waited_closed
+
+    assert await healthcheck["_check_tcp"]("::", 8765)
+    assert calls[-1] == ("::1", 8765)
 
 
 async def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(

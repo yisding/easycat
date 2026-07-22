@@ -44,8 +44,9 @@ async def _check_http(url: str) -> bool:
 
 
 async def _check_tcp(host: str, port: int) -> bool:
-    # 0.0.0.0 is a bind address, not a connect address — probe loopback instead.
-    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+    # Wildcard bind addresses are not usable probe destinations — select the
+    # matching IP-family loopback address instead.
+    connect_host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     try:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection(connect_host, port),
