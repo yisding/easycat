@@ -131,13 +131,8 @@ def _make_plan_handler(server: VoiceServer) -> Any:
     async def _handle_plan(request: Any) -> Any:
         from aiohttp import web
 
-        auth = server.config.auth
-        if auth is not None:
-            from easycat.server.auth import from_aiohttp_request
-
-            result = auth.authorize(from_aiohttp_request(request))
-            if not result.allowed:
-                return web.json_response({"error": "Missing or invalid bearer token"}, status=401)
+        if not _authorized_readonly_request(server, request):
+            return _auth_failure_response()
 
         payload = server.plan_payload()
         return web.json_response(payload)

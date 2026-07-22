@@ -98,8 +98,8 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     # shifts the whole transitive snapshot) fails loudly instead of moving the
     # dict and the command in lockstep.
     assert LOCK_EXCLUDE_NEWER_BY_FRAMEWORK == {
-        "livekit": "2026-07-18T07:55:38Z",
-        "pipecat": "2026-07-11T22:00:00Z",
+        "livekit": "2026-07-19T00:00:00Z",
+        "pipecat": "2026-07-19T00:00:00Z",
     }
     assert "--isolated" in livekit.command
     assert "--locked" in livekit.command

@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-18T07:55:38Z"
+exclude-newer = "2026-07-19T00:00:00Z"
 
 [[package]]
 name = "aiofiles"
