@@ -26,6 +26,7 @@ from easycat.events import (
     VoicemailDetected,
 )
 from easycat.telephony._install import TELEPHONY_INSTALL_HINT
+from easycat.telephony.compliance import dnc_is_on_dnc
 from easycat.telephony.voicemail import TWILIO_AMD_MAP, VoicemailResult
 
 if TYPE_CHECKING:
@@ -298,8 +299,9 @@ class OutboundCallManager:
             raise RuntimeError("OutboundCallManager must be started before placing calls")
         if self._state is not OutboundCallManagerState.IDLE or self._active_call_sid is not None:
             raise RuntimeError("OutboundCallManager already has an active call")
-        if self.dnc_list is not None and await asyncio.to_thread(self.dnc_list.is_on_dnc, to):
-            raise ValueError(f"Refusing to call {to!r}: on DNC list")
+        if self.dnc_list is not None:
+            if await dnc_is_on_dnc(self.dnc_list, to):
+                raise ValueError(f"Refusing to call {to!r}: on DNC list")
         if self.compliance_check is not None and not self.compliance_check(to):
             raise ValueError(
                 f"Refusing to call {to!r}: blocked by compliance_check "

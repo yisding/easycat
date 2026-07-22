@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +65,24 @@ _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
 # Browser-created data channel carrying session events to the playground.
 _EVENTS_CHANNEL_LABEL = "events"
+
+
+def _inspect_static_dir(static_dir: str | Path) -> tuple[Path, bool, bool]:
+    """Resolve static-directory state away from the asyncio event loop."""
+    static_path = Path(static_dir)
+    is_dir = static_path.is_dir()
+    has_client = is_dir and (static_path / "webrtc_client.html").is_file()
+    return static_path, is_dir, has_client
+
+
+async def _wait_for_ice_gathering(pc: Any, completed: asyncio.Event) -> None:
+    """Wait briefly for a candidate-complete SDP without polling the loop."""
+    if pc.iceGatheringState == "complete":
+        return
+    try:
+        await asyncio.wait_for(completed.wait(), timeout=2.0)
+    except TimeoutError:
+        pass
 
 
 # ── WebRTC Transport ─────────────────────────────────────────────
@@ -244,11 +261,12 @@ class WebRTCTransport(AudioQueueMixin):
         if static_dir == WebRTCTransportConfig._USE_BUNDLED:
             static_dir = WebRTCTransportConfig._BUNDLED_STATIC_DIR
         if static_dir is not None:
-            static_path = Path(static_dir)
-            if static_path.is_dir():
-                default_client = static_path / "webrtc_client.html"
-                if default_client.is_file():
-                    self._has_bundled_client = True
+            static_path, is_dir, has_client = await asyncio.to_thread(
+                _inspect_static_dir,
+                static_dir,
+            )
+            if is_dir:
+                self._has_bundled_client = has_client
                 app.router.add_static("/", static_path)
                 logger.info("Serving static files from %s", static_path)
             else:
@@ -474,6 +492,12 @@ class WebRTCTransport(AudioQueueMixin):
         captured_track: Any | None = None
         try:
             pc = RTCPeerConnection(rtc_config)
+            ice_gathering_complete = asyncio.Event()
+
+            @pc.on("icegatheringstatechange")
+            def on_ice_gathering_state_change() -> None:
+                if pc.iceGatheringState == "complete":
+                    ice_gathering_complete.set()
 
             # Re-check teardown before committing the new peer. This handler still
             # holds ``_offer_lock``, so ``disconnect`` cannot flip ``_connected``
@@ -512,15 +536,26 @@ class WebRTCTransport(AudioQueueMixin):
                     logger.info("WebRTC events data channel received")
                     self._events_channel = channel
 
+            abnormal_disconnect_recorded = False
+
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
+                nonlocal abnormal_disconnect_recorded
                 if not self._is_current_peer_generation(peer_generation):
                     return
                 state = pc.connectionState
                 logger.info("WebRTC connection state: %s", state)
                 if state == "connected":
+                    # A later drop after a genuine recovery is a new incident.
+                    abnormal_disconnect_recorded = False
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
+                    # ``disconnected``/``failed`` are abnormal peer drops (ICE
+                    # loss, connectivity failure); ``closed`` is the terminal
+                    # state of an application-initiated teardown and is clean.
+                    if state in ("disconnected", "failed") and not abnormal_disconnect_recorded:
+                        self._record_transport_disconnect(f"webrtc peer {state}")
+                        abnormal_disconnect_recorded = True
                     self._client_connected.clear()
                     self._peer_closed.set()
                     # Null the outbound track so send_audio() reports the
@@ -538,9 +573,7 @@ class WebRTCTransport(AudioQueueMixin):
 
             # Wait for ICE gathering to complete before responding, so that
             # the SDP answer includes candidates (important behind NAT).
-            start = time.monotonic()
-            while pc.iceGatheringState != "complete" and (time.monotonic() - start) < 2.0:
-                await asyncio.sleep(0.1)
+            await _wait_for_ice_gathering(pc, ice_gathering_complete)
         except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
             self._emit_degraded(

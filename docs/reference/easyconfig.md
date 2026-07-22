@@ -107,11 +107,14 @@ Group under `audio_processing=AudioProcessingConfig(...)`:
 
 Group under `observability=ObservabilityConfig(...)`:
 
-- `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
-  (default; records audio artifacts too). Durable journaling is on by default
-  so sessions are always recorded; set `debug="off"` to opt out. `"full"`
-  keeps a crash-survivable SQLite journal but never auto-launches the debugger
-  UI on its own — set `debugger_autolaunch` for that.
+- `debug` — journal mode: `"off"` (no journal), `"light"` (default), or
+  `"full"`. Journaling is on by default so sessions are always recorded, but
+  the default `"light"` keeps the journal and audio artifacts in memory so
+  per-frame capture never touches the disk on the live audio loop. Opt into
+  `"full"` for a crash-survivable on-disk SQLite journal + artifacts (deep
+  debugging / production capture); set `debug="off"` to skip recording. `"full"`
+  keeps the durable journal but never auto-launches the debugger UI on its own
+  — set `debugger_autolaunch` for that.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;

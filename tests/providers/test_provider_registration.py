@@ -47,6 +47,16 @@ class FakeSTT:
         self.config = config
 
 
+class PlainSTTConfig:
+    def __init__(self, api_key: str = "") -> None:
+        self.api_key = api_key
+
+
+class PlainSTT:
+    def __init__(self, config: PlainSTTConfig) -> None:
+        self.config = config
+
+
 @dataclass
 class FakeTTSConfig:
     api_key: str = ""
@@ -140,6 +150,19 @@ def test_create_from_config_dispatches_registered_provider() -> None:
     _register_fake_stt()
     provider = create_stt_provider_from_config(FakeSTTConfig(api_key="k"), EventBus())
     assert isinstance(provider, FakeSTT)
+
+
+def test_create_from_plain_config_does_not_require_dataclass() -> None:
+    from easycat.events import EventBus
+    from easycat.stt.factory import create_stt_provider_from_config
+
+    register_stt_provider("plainstt", PlainSTT, PlainSTTConfig, env_var="PLAINSTT_API_KEY")
+    config = PlainSTTConfig(api_key="k")
+
+    provider = create_stt_provider_from_config(config, EventBus())
+
+    assert isinstance(provider, PlainSTT)
+    assert provider.config is config
 
 
 def test_identical_reregistration_is_a_noop() -> None:

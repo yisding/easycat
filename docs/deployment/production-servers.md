@@ -186,6 +186,58 @@ For public Twilio deployments:
 - Send barge-in `clear` messages when interruption policy requires clearing
   already-buffered Twilio playback.
 
+## Journal persistence, replication, and metrics scraping
+
+`debug="full"` (opt in — the `EasyConfig` default is the in-memory
+`debug="light"`, which writes nothing to disk) writes a crash-durable SQLite
+journal per session under `EASYCAT_DATA_DIR` (default `.easycat`) — see
+[`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
+for the exact durability guarantees and storage layout. That promise only
+holds if `EASYCAT_DATA_DIR` is a **persistent** path: a container without a
+volume mounted there, or a process directory that gets wiped on redeploy,
+silently discards every journal. The Docker-specific version of this guidance
+— including the image's `VOLUME` declaration and named-volume compose
+config — lives in
+[docker.md's "Persisting the journal across restarts"](docker.md#persisting-the-journal-across-restarts);
+the same `EASYCAT_DATA_DIR` mount requirement applies to any long-lived
+process host (systemd unit, EC2 instance, Kubernetes `Deployment`), not just
+containers.
+
+For continuous off-host replication instead of periodic filesystem backups,
+set `journal_backend="sqlite+litestream"` or `journal_backend="libsql"` on
+`EasyConfig`/`SessionConfig` and configure the replica target through
+environment variables (`EASYCAT_JOURNAL_LITESTREAM_REPLICA`,
+`EASYCAT_LIBSQL_URL` / `EASYCAT_LIBSQL_AUTH_TOKEN`) — see
+[docker.md's "Litestream and libSQL replicas in a container"](docker.md#litestream-and-libsql-replicas-in-a-container)
+for the sidecar-vs-bundled-binary tradeoff and the crash-recovery gap on the
+libSQL backend.
+
+**Readiness probes.** `VoiceServer` (the process layer behind
+`run_webrtc_config_server()` and `VoiceServer.from_app(...)`) serves
+`GET /health/live` (loop responsiveness), `GET /health/ready` (draining /
+capacity / route-stack / manifest+plan checks — 200 only when every check
+passes), and `GET /health` (the full JSON snapshot, also summarized above).
+Point a Kubernetes readiness probe, an ALB target-group health check, or a
+Docker `HEALTHCHECK` at `/health/ready` rather than a bare TCP connect —
+plain WebSocket-only servers such as `run_websocket_config_server()` do not
+serve an HTTP endpoint at all, so they can only be probed at the TCP level
+(see docker.md's ["Container health checks"](docker.md#container-health-checks)
+for the concrete `HEALTHCHECK` wiring and its `EASYCAT_HEALTH_URL` switch).
+
+**Metrics scraping.** `VoiceServer`'s `GET /metrics` is a read-only, PII-safe
+JSON snapshot of in-process counters/gauges — poll it directly without an
+OTel SDK. For histograms and traces, install an OTel SDK/exporter and
+initialize `MeterProvider`/`TracerProvider` yourself before creating
+sessions (EasyCat's `easycat._observability` facade is a no-op without one);
+point the standard `OTEL_EXPORTER_OTLP_ENDPOINT` /
+`OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_SERVICE_NAME` environment variables at
+your collector, which then bridges to a Prometheus scrape target or your
+backend of choice. See
+[observability.md](../observability.md#d-—-opentelemetry-facade) for the full
+metric/attribute catalog and the PII-safety allow-list, and docker.md's
+["Scraping metrics"](docker.md#scraping-metrics) for the container-specific
+walkthrough.
+
 ## Operations checklist
 
 - **Ingress:** terminate TLS/WSS at a reverse proxy or load balancer; forward
@@ -199,6 +251,12 @@ For public Twilio deployments:
 - **Shutdown:** fail readiness first, stop accepting new connections, give live
   calls a bounded drain window, then force-stop remaining sessions before the
   process manager's graceful-shutdown timeout expires.
+- **Persistence:** mount a persistent volume/path at `EASYCAT_DATA_DIR` before
+  running with `debug="full"` in production — see "Journal persistence,
+  replication, and metrics scraping" above.
+- **Health probes:** point liveness/readiness checks at `/health/live` /
+  `/health/ready` for `VoiceServer`-based servers; fall back to a TCP connect
+  for WebSocket-only servers with no HTTP surface.
 - **Observability:** export journals/debug bundles, track connect/disconnect
   counts, close codes, queue drops, WebRTC ICE states, Twilio `stop` events,
   and first-audio latency per transport.

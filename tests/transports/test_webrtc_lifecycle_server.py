@@ -110,8 +110,10 @@ class TestWebRTCIngressQueueOwnership:
         assert received is new_chunk
         await audio_iter.aclose()
 
-    @pytest.mark.asyncio
-    async def test_repeated_offer_closes_previous_outbound_source(self, monkeypatch):
+    async def test_repeated_offer_closes_previous_outbound_source(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Peer replacement must retire the old outbound source via aclose():
         ``disconnect()`` only closes the *current* source, so a delivery worker
         owned by the replaced source would otherwise survive indefinitely."""
@@ -125,9 +127,12 @@ class TestWebRTCIngressQueueOwnership:
         first_outbound = transport._outbound
 
         closed = asyncio.Event()
+        close_calls = 0
         original_aclose = first_outbound.aclose
 
         async def _tracking_aclose() -> None:
+            nonlocal close_calls
+            close_calls += 1
             closed.set()
             await original_aclose()
 
@@ -137,6 +142,35 @@ class TestWebRTCIngressQueueOwnership:
         assert second_response.status == 200
         assert transport._outbound is not first_outbound
         assert closed.is_set()
+        assert close_calls == 1
+
+    async def test_disconnected_then_failed_counts_one_peer_drop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        record_disconnect = Mock()
+        transport._record_transport_disconnect = record_disconnect  # type: ignore[method-assign]
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        pc = _FakeRTCPeerConnection.instances[0]
+
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "failed"
+        await pc._handlers["connectionstatechange"]()
+
+        record_disconnect.assert_called_once_with("webrtc peer disconnected")
+
+        # A genuine recovery followed by another drop is a distinct incident.
+        pc.connectionState = "connected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        assert record_disconnect.call_count == 2
 
     @pytest.mark.asyncio
     async def test_disconnect_does_not_hold_offer_lock_during_http_cleanup(self):

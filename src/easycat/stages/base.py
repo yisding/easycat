@@ -8,12 +8,14 @@ surface.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
+from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
@@ -180,6 +182,55 @@ def put_artifact(
         return None
     ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
     return ref or None
+
+
+async def put_artifact_async(
+    ctx: RunContext,
+    payload: bytes | None,
+    *,
+    artifact_class: Literal["replay_critical", "debug_verbose"] = "replay_critical",
+) -> str | None:
+    """Async :func:`put_artifact` that offloads *blocking* store writes to a thread.
+
+    ``FilesystemArtifactStore.put`` does a sha256 plus a temp
+    write-and-rename (a blocking, fsync-class syscall). On the live audio
+    loop — where every mic/VAD/TTS frame runs through a stage's ``execute``
+    — doing that inline would stall the asyncio event loop, so for a
+    filesystem store the write runs on a worker thread via
+    :func:`asyncio.to_thread` and ``debug="full"`` still captures durably.
+
+    In-memory stores (``debug="light"``, the default) do a microsecond-scale
+    sha256 + lock + dict insert with no syscall, so the write runs inline: a
+    thread hop there is pure overhead (executor queue contention, GIL
+    ping-pong, an extra loop wakeup) at ~50 fps across every capture site.
+
+    Either way the write completes before this coroutine returns, so a
+    journal record appended afterwards never references an artifact that
+    was not written.
+    """
+    if ctx.artifact_store is None or not payload:
+        return None
+    store = ctx.artifact_store
+    if _writes_block(store):
+        ref = await asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
+        return ref or None
+    return put_artifact(ctx, payload, artifact_class=artifact_class)
+
+
+def _writes_block(store: Any) -> bool:
+    """Whether ``store.put`` blocks on a syscall and should run off-loop.
+
+    A store can declare this itself via a ``writes_block`` attribute — the
+    escape hatch for custom ``ArtifactStore`` implementations (S3/NFS-backed,
+    wrappers around the filesystem store) whose ``put`` does I/O. Otherwise
+    only disk-backed stores (``FilesystemArtifactStore``) do fsync-class
+    I/O; in-memory backends insert into a dict and must run inline to avoid
+    a per-frame thread hop on the live audio loop.
+    """
+    declared = getattr(store, "writes_block", None)
+    if declared is not None:
+        return bool(declared)
+    return isinstance(store, FilesystemArtifactStore)
 
 
 def journal_ctx(ctx: RunContext, fallback_journal: Any) -> RunContext:

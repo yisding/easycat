@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from tests._markdown_asserts import assert_prose_in
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
 CHAPTER_3 = ROOT / "docs" / "teaching" / "03-parrot-naive"
@@ -59,8 +61,10 @@ def test_chapter_teaches_reversibility_instead_of_ignoring_partials() -> None:
     assert "never commit irreversible work from a partial" in text
     assert "cancellable speculation" in text
     assert "dispatch those from `final`, not `partial`" in text
-    assert "irreversible output waits for\n`sttfinal`" in text
+    assert_prose_in("irreversible output waits for\n`sttfinal`", text)
     assert "commit spoken output on final only" in text
 
-    assert "reversible consumers such as live\ncaptions or cancellable speculation" in chapter_6
+    assert_prose_in(
+        "reversible consumers such as live\ncaptions or cancellable speculation", chapter_6
+    )
     assert "irreversible agent commits and spoken output wait for `STTFinal`" in chapter_6

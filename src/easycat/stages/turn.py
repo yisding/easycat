@@ -18,7 +18,7 @@ from easycat.stages.base import (
     journal_append_event,
     journal_ctx,
     live_replay_input,
-    put_artifact,
+    put_artifact_async,
     record_stage_failure,
 )
 
@@ -58,7 +58,7 @@ class TurnStage:
         result_attr = "pass"
         state_before = self.snapshot_state()
         audio_bytes = _concat_chunks(input)
-        input_ref = put_artifact(ctx, audio_bytes)
+        input_ref = await put_artifact_async(ctx, audio_bytes)
         start_sequence = journal_append_event(
             ctx,
             stage=self.name,

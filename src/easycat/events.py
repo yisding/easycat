@@ -709,6 +709,20 @@ class EventBus:
         except ValueError:
             pass
 
+    def subscribers(self, event_type: type) -> list[EventHandler]:
+        """Return a snapshot of handlers registered for the exact event type.
+
+        Only handlers registered via :meth:`subscribe` for *this exact* type are
+        included — parent-class handlers and :meth:`subscribe_all` handlers are
+        excluded, matching the buckets :meth:`emit` walks per class. The result
+        is a fresh list, so callers may iterate or filter it without observing
+        later subscribe/unsubscribe mutations. Intended for collaborators that
+        must reason about who else listens to an internal event (e.g. a router
+        deciding whether it is the sole owner of a bus-scoped callback).
+        """
+        handlers = self._handlers.get(event_type)
+        return list(handlers) if handlers else []
+
     def subscribe_all(self, handler: EventHandler) -> EventSubscription:
         """Register a handler that receives every emitted event."""
         self._all_handlers.append(handler)

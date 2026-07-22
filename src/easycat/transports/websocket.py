@@ -195,8 +195,10 @@ class WebSocketTransport(ServerTransportBase):
         try:
             await ws.send(json.dumps({"type": "ready"}))
             await self._receive_loop(ws)
-        except websockets.exceptions.ConnectionClosed:
+        except websockets.exceptions.ConnectionClosed as exc:
             logger.info("WebSocket client disconnected")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("websocket connection closed abnormally")
         finally:
             if self._ws is ws:
                 self._ws = None
@@ -387,8 +389,10 @@ class WebSocketConnectionTransport(AudioQueueMixin):
                     self._enqueue_chunk(chunk, context="WebSocket")
                 elif isinstance(message, str):
                     self._handle_control_message(message)
-        except websockets.exceptions.ConnectionClosed:
+        except websockets.exceptions.ConnectionClosed as exc:
             logger.info("WebSocket client disconnected")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("websocket connection closed abnormally")
         finally:
             self._connected = False
             self._client_connected.clear()

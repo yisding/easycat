@@ -11,17 +11,21 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
-    import phonenumbers as _phonenumbers
+    import phonenumbers
 except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
-    _phonenumbers = None
+    _phonenumbers: Any = None
+else:
+    _phonenumbers = phonenumbers
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +215,12 @@ class DNCStore(Protocol):
     in-memory :class:`DNCList` and the durable :class:`SQLiteDNCList` satisfy
     it; apps needing a shared/clustered backend (Redis, Postgres, a DNC
     vendor API) can implement their own.
+
+    These three methods remain the minimal, backward-compatible surface a
+    custom backend must implement. Async-capable stores can additionally
+    implement :class:`AsyncDNCStore`; EasyCat uses that native contract when
+    available and otherwise offloads these methods with
+    :func:`asyncio.to_thread`.
     """
 
     def add(self, phone: str) -> None: ...
@@ -218,6 +228,52 @@ class DNCStore(Protocol):
     def remove(self, phone: str) -> None: ...
 
     def is_on_dnc(self, phone: str) -> bool: ...
+
+
+@runtime_checkable
+class AsyncDNCStore(DNCStore, Protocol):
+    """Typed asynchronous extension to :class:`DNCStore`.
+
+    The separate protocol preserves compatibility for existing sync-only
+    third-party stores while allowing async call sites to use native backend
+    operations without guessing at attributes.
+    """
+
+    async def aadd(self, phone: str) -> None: ...
+
+    async def aremove(self, phone: str) -> None: ...
+
+    async def ais_on_dnc(self, phone: str) -> bool: ...
+
+
+async def _dispatch_dnc_call(store: DNCStore, async_name: str, sync_fn: Any, phone: str) -> Any:
+    """Prefer the store's native async verb, else offload the sync one.
+
+    ``inspect.iscoroutinefunction`` (not ``isinstance`` of the runtime-checkable
+    protocol) decides the branch: ``runtime_checkable`` only verifies attribute
+    *presence*, so a store whose ``a``-named attributes are not actually
+    coroutine functions (a proxy, a test double) must still take the
+    ``to_thread`` path instead of failing at ``await``.
+    """
+    method = getattr(store, async_name, None)
+    if inspect.iscoroutinefunction(method):
+        return await method(phone)
+    return await asyncio.to_thread(sync_fn, phone)
+
+
+async def dnc_add(store: DNCStore, phone: str) -> None:
+    """Add *phone* to *store*, natively async when the store supports it."""
+    await _dispatch_dnc_call(store, "aadd", store.add, phone)
+
+
+async def dnc_remove(store: DNCStore, phone: str) -> None:
+    """Remove *phone* from *store*, natively async when the store supports it."""
+    await _dispatch_dnc_call(store, "aremove", store.remove, phone)
+
+
+async def dnc_is_on_dnc(store: DNCStore, phone: str) -> bool:
+    """Check *phone* against *store*, natively async when the store supports it."""
+    return bool(await _dispatch_dnc_call(store, "ais_on_dnc", store.is_on_dnc, phone))
 
 
 class DNCList:
@@ -259,6 +315,23 @@ class DNCList:
         number = self._normalize_lookup(phone)
         return number is not None and number in self._numbers
 
+    async def aadd(self, phone: str) -> None:
+        """Async counterpart to :meth:`add`.
+
+        ``DNCList`` is in-memory (no I/O), so this does not need a thread
+        offload; it exists for API symmetry with :class:`SQLiteDNCList` so
+        callers can treat any :class:`DNCStore` uniformly from async code.
+        """
+        self.add(phone)
+
+    async def aremove(self, phone: str) -> None:
+        """Async counterpart to :meth:`remove`. See :meth:`aadd`."""
+        self.remove(phone)
+
+    async def ais_on_dnc(self, phone: str) -> bool:
+        """Async counterpart to :meth:`is_on_dnc`. See :meth:`aadd`."""
+        return self.is_on_dnc(phone)
+
     def __len__(self) -> int:
         return len(self._numbers)
 
@@ -275,10 +348,13 @@ class SQLiteDNCList:
     Pass the same ``path`` to every session to share one list; pass
     ``":memory:"`` for an ephemeral instance (e.g. in tests).  The single
     WAL-mode connection is guarded by a lock so it is safe to share across
-    threads.  The methods are synchronous and do blocking disk I/O, so async
-    callers (the action executor, the outbound pre-dial check) must offload
-    them with :func:`asyncio.to_thread` rather than call them on the event
-    loop.
+    threads.  :meth:`add`, :meth:`remove`, and :meth:`is_on_dnc` are
+    synchronous and do blocking disk I/O (``sqlite3`` execute + ``commit``),
+    so calling them directly from an event loop blocks it on disk fsync.
+    Async callers (the action executor, the outbound pre-dial check) should
+    use :meth:`aadd`, :meth:`aremove`, and :meth:`ais_on_dnc` instead, which
+    internally wrap the sync core in :func:`asyncio.to_thread`.  The sync
+    methods remain for non-async callers and back-compat.
 
     Phone numbers tied to do-not-call status are PII, so an on-disk database
     (and its WAL/SHM sidecars) is created owner-only (``0o600``), matching the
@@ -371,6 +447,27 @@ class SQLiteDNCList:
             except Exception:
                 logger.debug("DNC store WAL checkpoint on close failed", exc_info=True)
             self._conn.close()
+
+    async def aadd(self, phone: str) -> None:
+        """Async counterpart to :meth:`add`.
+
+        Runs the synchronous SQLite insert + commit in a worker thread via
+        :func:`asyncio.to_thread`, so the event loop is not blocked on disk
+        fsync. Prefer this over :meth:`add` from async code.
+        """
+        await asyncio.to_thread(self.add, phone)
+
+    async def aremove(self, phone: str) -> None:
+        """Async counterpart to :meth:`remove`. See :meth:`aadd`."""
+        await asyncio.to_thread(self.remove, phone)
+
+    async def ais_on_dnc(self, phone: str) -> bool:
+        """Async counterpart to :meth:`is_on_dnc`. See :meth:`aadd`."""
+        return await asyncio.to_thread(self.is_on_dnc, phone)
+
+    async def aclose(self) -> None:
+        """Async counterpart to :meth:`close`. See :meth:`aadd`."""
+        await asyncio.to_thread(self.close)
 
 
 @dataclass

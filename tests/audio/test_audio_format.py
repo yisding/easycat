@@ -65,3 +65,26 @@ def test_audio_chunk_has_timestamp():
     chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
     assert isinstance(chunk.timestamp, float)
     assert chunk.timestamp > 0
+
+
+def test_audio_chunk_routing_metadata_defaults_unset():
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    assert chunk._easycat_replay_chunk is False
+    assert chunk._easycat_session_id is None
+    assert chunk._easycat_turn_id is None
+    assert chunk._easycat_turn_ref is None
+
+
+def test_audio_chunk_routing_metadata_excluded_from_eq_and_repr():
+    # Two chunks with identical audio must compare equal regardless of the
+    # outbound routing metadata stamped onto one of them, and that metadata
+    # must not appear in repr (preserving the prior side-channel behavior).
+    data = b"\x01\x02\x03\x04"
+    a = AudioChunk(data=data, format=PCM16_MONO_16K, timestamp=1.0)
+    b = AudioChunk(data=data, format=PCM16_MONO_16K, timestamp=1.0)
+    b._easycat_replay_chunk = True
+    b._easycat_session_id = "sess"
+    b._easycat_turn_id = "turn"
+    b._easycat_turn_ref = object()
+    assert a == b
+    assert "_easycat" not in repr(b)

@@ -21,7 +21,7 @@ from easycat.stages.base import (
     journal_append_event,
     journal_ctx,
     live_replay_input,
-    put_artifact,
+    put_artifact_async,
     record_stage_failure,
 )
 
@@ -176,7 +176,7 @@ class TTSStage:
                     audio = getattr(event, "audio", None)
                     audio_bytes = getattr(audio, "data", None) if audio is not None else None
                     if audio_bytes:
-                        output_ref = put_artifact(ctx, audio_bytes)
+                        output_ref = await put_artifact_async(ctx, audio_bytes)
                         extra = {
                             "audio_bytes": len(audio_bytes),
                             "frame_index": frame_count,

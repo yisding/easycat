@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, replace
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any
 
-from easycat._provider_catalog import ProviderCatalog
+from easycat._provider_catalog import ProviderCatalog, inject_event_bus
 from easycat.events import EventBus
 from easycat.stt.base import STTBase
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
@@ -169,13 +169,21 @@ class STTProviderConfig:
             self.settings = None
 
 
-def create_stt_provider(config: STTProviderConfig) -> STTBase:
+def create_stt_provider(config: STTProviderConfig, event_bus: EventBus | None = None) -> STTBase:
     """Create an STT provider instance from configuration.
 
     Validates the provider name and params at construction time (fail-fast).
     Provider-specific parameters are passed via ``config.params``; an
     ``api_key`` nested in ``params`` is also honored (a top-level
     ``api_key`` takes precedence).
+
+    ``event_bus``, when given, is structurally injected into the resulting
+    provider config the same way :func:`create_stt_provider_from_config`
+    does: only providers whose config dataclass declares an ``event_bus``
+    field (and that don't already have one set via ``params``) receive it.
+    Pass it so providers that emit provider-scoped events (e.g. Deepgram,
+    ElevenLabs) keep reconnect/error observability when constructed through
+    this string/params path.
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider name, with fuzzy-match
@@ -197,6 +205,8 @@ def create_stt_provider(config: STTProviderConfig) -> STTBase:
     if not provider_config.api_key:
         raise ValueError(f"API key is required for STT provider '{config.provider}'")
 
+    provider_config = inject_event_bus(provider_config, event_bus)
+
     return provider_cls(provider_config)
 
 
@@ -207,15 +217,7 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     provider registry in the codebase.
     """
     provider_cls = _provider_for_config(type(config))
-    provider_config = config
-    # Derive "needs an event bus" structurally from the dataclass itself
-    # (it declares an ``event_bus`` field) rather than from a hand-maintained
-    # isinstance tuple — so any future event-bus-aware provider is included
-    # automatically.
-    has_event_bus_field = any(f.name == "event_bus" for f in fields(config))
-    if has_event_bus_field and cast(Any, config).event_bus is None:
-        provider_config = replace(cast(Any, config), event_bus=event_bus)
-    return provider_cls(provider_config)
+    return provider_cls(inject_event_bus(config, event_bus))
 
 
 def _provider_for_config(config_type: STTConfigType) -> Callable[..., STTBase]:
