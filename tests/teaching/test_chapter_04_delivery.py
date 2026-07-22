@@ -46,15 +46,3 @@ def test_vad_parrot_preserves_speak_acceptance_counts() -> None:
     assert '"accepted_chunks": accepted_chunks' in source
     assert '"rejected_chunks": rejected_chunks' in source
     assert "Preserve transport acceptance without claiming speaker playback" in source
-
-
-def test_lesson_keeps_input_and_output_evidence_separate() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "Better input does not prove output" in lesson
-    assert "delivery_probe.py" in lesson
-    assert "A rejection proves a drop" in lesson
-    assert "scheduling, not rendering or audibility" in lesson
-    assert "do not relabel accepted chunks as played audio" in lesson

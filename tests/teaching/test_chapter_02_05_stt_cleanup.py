@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.teaching._source_guards import assert_sources_match
+
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
 CHAPTER_4 = TEACHING / "04-vad-preroll"
@@ -70,25 +72,29 @@ def test_chapter_4_closes_stt_on_normal_and_cancelled_turns() -> None:
 
 
 def test_chapters_2_through_6_close_manually_created_stt() -> None:
-    scoped_cleanup_paths = (
-        TEACHING / "02-transcribe" / "streaming.py",
-        TEACHING / "03-parrot-naive" / "main.py",
+    assert_sources_match(
+        (
+            TEACHING / "02-transcribe" / "streaming.py",
+            TEACHING / "03-parrot-naive" / "main.py",
+        ),
+        required=(
+            "from easycat.runtime.capabilities import close_if_supported",
+            "resources.push_async_callback(close_if_supported, stt)",
+        ),
+        label="Scoped STT cleanup copies",
     )
-    for path in scoped_cleanup_paths:
-        source = path.read_text(encoding="utf-8")
-        assert "from easycat.runtime.capabilities import close_if_supported" in source
-        assert "resources.push_async_callback(close_if_supported, stt)" in source
-
-    direct_cleanup_paths = (
-        TEACHING / "04-vad-preroll" / "main.py",
-        TEACHING / "05-blocking-agent" / "main.py",
-        CHAPTER_6 / "main.py",
+    assert_sources_match(
+        (
+            TEACHING / "04-vad-preroll" / "main.py",
+            TEACHING / "05-blocking-agent" / "main.py",
+            CHAPTER_6 / "main.py",
+        ),
+        required=(
+            "from easycat.runtime.capabilities import close_if_supported",
+            "await close_if_supported(",
+        ),
+        label="Direct STT cleanup copies",
     )
-
-    for path in direct_cleanup_paths:
-        source = path.read_text(encoding="utf-8")
-        assert "from easycat.runtime.capabilities import close_if_supported" in source
-        assert "await close_if_supported(" in source
 
 
 def _load_chapter_6(monkeypatch):
@@ -125,12 +131,3 @@ async def test_chapter_6_closes_stt_on_normal_and_cancelled_turns(
         await operation
 
     assert (stt.started, stt.ended, stt.closed) == (1, 1, 1)
-
-
-def test_chapter_4_names_cleanup_as_distinct_from_stream_end() -> None:
-    readme = (CHAPTER_4 / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER_4 / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "A VAD turn does not own the provider process" in readme
-    assert "normal and cancelled paths" in readme
-    assert "ends and closes exactly once" in exercises

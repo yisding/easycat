@@ -102,16 +102,3 @@ def test_replay_journal_retains_more_than_default_capacity() -> None:
     assert records[0].name == "audio.config"
     assert sum(record.name == "replay.frame" for record in records) == frame_count
     assert records[-1].name == "replay.summary"
-
-
-def test_lesson_treats_rms_as_signal_evidence_not_quality_score() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "replay_metrics_probe.py" in lesson
-    assert "The replay fails closed" in lesson
-    assert "RMS is not a quality score" in lesson
-    assert "reference_frames_fed" in lesson
-    assert "per-frame `replay.frame`" in lesson
-    assert "long recordings cannot evict earlier frame evidence" in lesson

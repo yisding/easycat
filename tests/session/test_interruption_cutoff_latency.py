@@ -77,7 +77,9 @@ async def test_barge_in_records_cutoff_latency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = Session(_full_config())
-    session._turn_state = TurnState.BOT_SPEAKING
+    # Scenario doc only: the barge-in cutoff path keys off ``self._turn`` +
+    # ``barge_in=True``, not this attribute (Session has no ``_turn_state``).
+    session._turn_state = TurnState.BOT_SPEAKING  # type: ignore[attr-defined]
     session._turn = TurnContext("cutoff-turn", CancelToken())
     monotonic = Mock(side_effect=(100.0, 100.25))
     monkeypatch.setattr(session_module, "time", SimpleNamespace(monotonic=monotonic))
@@ -97,7 +99,9 @@ async def test_non_barge_in_cancel_does_not_record_cutoff_latency(
     fake_meter: _FakeMeter,
 ) -> None:
     session = Session(_full_config())
-    session._turn_state = TurnState.BOT_SPEAKING
+    # Scenario doc only: the barge-in cutoff path keys off ``self._turn`` +
+    # ``barge_in=True``, not this attribute (Session has no ``_turn_state``).
+    session._turn_state = TurnState.BOT_SPEAKING  # type: ignore[attr-defined]
     session._turn = TurnContext("cutoff-turn", CancelToken())
 
     await session.cancel_turn()

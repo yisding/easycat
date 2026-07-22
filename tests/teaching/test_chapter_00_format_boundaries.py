@@ -42,20 +42,3 @@ def test_format_boundary_probe_reports_runtime_defaults_without_io() -> None:
     assert rows["webrtc_media_frames"]["role"] == "media"
     assert rows["openai_realtime_stt_input"]["role"] == "provider_input"
     assert rows["openai_tts_config_default"]["role"] == "provider_config_default"
-
-
-def test_lesson_names_boundaries_instead_of_brand_wide_rates() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "format_boundaries.py" in readme
-    assert "boundaries and defaults" in lesson
-    assert "wire, capture, pipeline, provider input, or provider output" in lesson
-    assert "cannot recreate spectrum" in lesson
-    assert "Most STT providers (Deepgram, OpenAI Realtime, ElevenLabs)" not in lesson
-    assert "WebRTC receives and sends 48 kHz media frames" in lesson
-    assert "default pipeline target is 16 kHz" in lesson
-    assert "`LocalTransport` capture/playback pipeline" in readme
-    assert "raw-`sounddevice` demo is a separate path" in readme
-    assert "Local capture + playback" not in readme

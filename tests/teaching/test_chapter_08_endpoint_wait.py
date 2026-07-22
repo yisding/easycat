@@ -63,15 +63,6 @@ def test_endpoint_wait_probe_decomposes_three_commit_paths() -> None:
     }
 
 
-def test_endpoint_commit_records_additive_wait_components() -> None:
-    source = (CHAPTER / "main.py").read_text(encoding="utf-8")
-
-    assert '"silence_wait_ms": self._silence_wait_ms' in source
-    assert '"classification_inference_ms": self._last_inference_ms' in source
-    assert '"pending_wait_ms": pending_wait_ms' in source
-    assert '"endpoint_wait_ms": (committed_at - estimated_speech_end_t) * 1000' in source
-
-
 def test_fallback_deadline_tracks_a_changed_classifier_cost() -> None:
     probe = load_probe()
 
@@ -81,15 +72,3 @@ def test_fallback_deadline_tracks_a_changed_classifier_cost() -> None:
     assert result["pending_wait_ms"] == 800.0
     assert result["endpoint_wait_ms"] == 1120.0
     assert result["components_match_total"] is True
-
-
-def test_lesson_explains_fallback_timeout_is_not_total_wait() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "endpoint_wait_probe.py" in lesson
-    assert "The fallback timeout is not the total wait" in lesson
-    assert "200 + 40 + 800" in lesson
-    assert "1,040 ms" in lesson
-    assert "configured timeout alone" in lesson

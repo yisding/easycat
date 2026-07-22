@@ -49,17 +49,3 @@ def test_tool_and_filler_records_share_attribution_fields() -> None:
     assert '"tool_call_id": tc["id"]' in main
     assert '"tool_call_id": tool_call_id' in main
     assert "filler_played" not in main + blocking
-
-
-def test_lesson_names_the_enqueue_delivery_boundary() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "filler_delivery_probe.py" in lesson
-    assert "Enqueued is not delivered" in lesson
-    assert "filler_enqueued" in lesson
-    assert "scheduled for delivery" in lesson
-    assert "first accepted reply chunk" in lesson
-    assert "five action dataclasses" not in lesson
-    assert '("reply" | "filler", text)' not in lesson

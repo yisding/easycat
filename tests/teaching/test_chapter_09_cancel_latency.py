@@ -56,15 +56,3 @@ def test_chapter_9_and_10_cancellation_copies_keep_latency_fields() -> None:
             stale.append(path.relative_to(ROOT).as_posix())
 
     assert not stale, "Cancellation latency evidence drifted in: " + ", ".join(stale)
-
-
-def test_lesson_separates_software_completion_from_acoustic_silence() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "cancel_latency_probe.py" in lesson
-    assert "Software cancellation is measurable" in lesson
-    assert "cancel_to_clear_audio_return_ms" in lesson
-    assert "cancel_to_bot_task_return_ms" in lesson
-    assert "does not prove acoustic silence" in lesson

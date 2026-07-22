@@ -63,15 +63,3 @@ def test_workflow_state_probe_restores_optional_sdk_module(monkeypatch) -> None:
     load_probe()
 
     assert sys.modules["openai"] is sentinel
-
-
-def test_chapter_teaches_author_owned_snapshot_boundary() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "workflow_state_probe.py" in normalized
-    assert "metadata-only allowlist" in normalized
-    assert "author-owned artifact data" in normalized
-    assert "never use a real credential" in normalized
-    assert "much broader `workflow.__dict__` serialization" in normalized

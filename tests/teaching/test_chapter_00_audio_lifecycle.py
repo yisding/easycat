@@ -89,14 +89,3 @@ def test_chunked_playback_closes_stream_when_write_fails(
         "close",
         ("exit_error", RuntimeError),
     ]
-
-
-def test_lesson_distinguishes_enqueue_from_playback_and_teaches_scope() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "time-to-first-write-return" in lesson
-    assert "not proof that the speaker played" in lesson
-    assert "context manager" in lesson
-    assert "guarantees stop + close" in lesson

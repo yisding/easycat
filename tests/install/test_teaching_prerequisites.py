@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tests.install._install_guidance_helpers import (
     MARKDOWN_PREREQS_RE,
     PROVIDER_EXTRA_BY_ENV_VAR,
@@ -40,8 +42,35 @@ def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
     )
 
 
-def test_teaching_provider_prerequisites_warn_about_live_usage_costs() -> None:
-    """Provider-backed lessons should set billing expectations before learners run them."""
+@pytest.mark.parametrize(
+    ("overview_phrase_a", "overview_phrase_b", "section_phrase_a", "section_phrase_b", "label"),
+    [
+        (
+            "may incur charges",
+            "billing and usage limits",
+            "may incur charges",
+            "billing and usage limits",
+            "cost",
+        ),
+        (
+            "non-sensitive test content",
+            "provider data-handling policies",
+            # Per-chapter sections may say "non-sensitive test data" instead of
+            # "non-sensitive test content", so match the shorter shared phrase there.
+            "non-sensitive test",
+            "provider data-handling policies",
+            "data handling",
+        ),
+    ],
+)
+def test_teaching_provider_prerequisites_warn_learners(
+    overview_phrase_a: str,
+    overview_phrase_b: str,
+    section_phrase_a: str,
+    section_phrase_b: str,
+    label: str,
+) -> None:
+    """Provider-backed lessons should disclose cost/privacy policy before learners run them."""
     teaching_root = REPO_ROOT / "docs" / "teaching"
     overview = (teaching_root / "README.md").read_text(encoding="utf-8")
     overview_prerequisites = " ".join(
@@ -49,39 +78,10 @@ def test_teaching_provider_prerequisites_warn_about_live_usage_costs() -> None:
     )
     missing: list[str] = []
 
-    if "may incur charges" not in overview_prerequisites:
-        missing.append("docs/teaching/README.md: charge warning")
-    if "billing and usage limits" not in overview_prerequisites:
-        missing.append("docs/teaching/README.md: billing limits")
-
-    for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
-        text = path.read_text(encoding="utf-8")
-        match = MARKDOWN_PREREQS_RE.search(text)
-        if match is None:
-            continue
-        section = match.group("body")
-        if "API_KEY" not in section:
-            continue
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        if "may incur charges" not in section:
-            missing.append(f"{rel}: charge warning")
-        if "billing and usage limits" not in section:
-            missing.append(f"{rel}: billing limits")
-
-    assert not missing, "Teaching provider cost guidance is incomplete:\n" + "\n".join(missing)
-
-
-def test_teaching_provider_prerequisites_warn_about_data_handling() -> None:
-    """Provider-backed lessons should keep sensitive data out of live exercises."""
-    teaching_root = REPO_ROOT / "docs" / "teaching"
-    overview = (teaching_root / "README.md").read_text(encoding="utf-8")
-    overview_prerequisites = overview.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0]
-    missing: list[str] = []
-
-    if "non-sensitive test content" not in overview_prerequisites:
-        missing.append("docs/teaching/README.md: non-sensitive content")
-    if "provider data-handling policies" not in overview_prerequisites:
-        missing.append("docs/teaching/README.md: provider policies")
+    if overview_phrase_a not in overview_prerequisites:
+        missing.append(f"docs/teaching/README.md: {label} ({overview_phrase_a!r})")
+    if overview_phrase_b not in overview_prerequisites:
+        missing.append(f"docs/teaching/README.md: {label} ({overview_phrase_b!r})")
 
     for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
         text = path.read_text(encoding="utf-8")
@@ -93,12 +93,12 @@ def test_teaching_provider_prerequisites_warn_about_data_handling() -> None:
             continue
         normalized_section = " ".join(section.split())
         rel = path.relative_to(REPO_ROOT).as_posix()
-        if "non-sensitive test" not in normalized_section:
-            missing.append(f"{rel}: non-sensitive test data")
-        if "provider data-handling policies" not in normalized_section:
-            missing.append(f"{rel}: provider policies")
+        if section_phrase_a not in normalized_section:
+            missing.append(f"{rel}: {label} ({section_phrase_a!r})")
+        if section_phrase_b not in normalized_section:
+            missing.append(f"{rel}: {label} ({section_phrase_b!r})")
 
-    assert not missing, "Teaching provider data guidance is incomplete:\n" + "\n".join(missing)
+    assert not missing, f"Teaching provider {label} guidance is incomplete:\n" + "\n".join(missing)
 
 
 def test_teaching_provider_key_setup_names_required_extras() -> None:

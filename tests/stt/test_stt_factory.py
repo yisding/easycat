@@ -205,43 +205,22 @@ def test_factory_no_event_bus_by_default():
     assert provider._config.event_bus is None
 
 
-def test_factory_injects_event_bus_for_deepgram_when_given():
-    config = STTProviderConfig(provider="deepgram", api_key="dg-test")
+@pytest.mark.parametrize(
+    ("provider_name", "api_key", "provider_cls"),
+    [
+        ("deepgram", "dg-test", DeepgramSTT),
+        ("elevenlabs", "el-test", ElevenLabsSTT),
+        ("cartesia", "c-test", CartesiaSTT),
+        ("openai-realtime", "sk-test", OpenAIRealtimeSTT),
+    ],
+)
+def test_factory_injects_event_bus_when_given(provider_name, api_key, provider_cls):
+    config = STTProviderConfig(provider=provider_name, api_key=api_key)
     event_bus = EventBus()
 
     provider = create_stt_provider(config, event_bus=event_bus)
 
-    assert isinstance(provider, DeepgramSTT)
-    assert provider._config.event_bus is event_bus
-
-
-def test_factory_injects_event_bus_for_elevenlabs_when_given():
-    config = STTProviderConfig(provider="elevenlabs", api_key="el-test")
-    event_bus = EventBus()
-
-    provider = create_stt_provider(config, event_bus=event_bus)
-
-    assert isinstance(provider, ElevenLabsSTT)
-    assert provider._config.event_bus is event_bus
-
-
-def test_factory_injects_event_bus_for_cartesia_when_given():
-    config = STTProviderConfig(provider="cartesia", api_key="c-test")
-    event_bus = EventBus()
-
-    provider = create_stt_provider(config, event_bus=event_bus)
-
-    assert isinstance(provider, CartesiaSTT)
-    assert provider._config.event_bus is event_bus
-
-
-def test_factory_injects_event_bus_for_openai_realtime_when_given():
-    config = STTProviderConfig(provider="openai-realtime", api_key="sk-test")
-    event_bus = EventBus()
-
-    provider = create_stt_provider(config, event_bus=event_bus)
-
-    assert isinstance(provider, OpenAIRealtimeSTT)
+    assert isinstance(provider, provider_cls)
     assert provider._config.event_bus is event_bus
 
 

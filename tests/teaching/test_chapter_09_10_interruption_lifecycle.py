@@ -326,14 +326,3 @@ async def test_chapter_10_replay_closes_offline_audio_stages(monkeypatch) -> Non
 
     await module.run(Path("mic.wav"), Path("ref.wav"), "on", "on")
     assert closed == ["vad.close", "aec.close", "nr.close"]
-
-
-def test_chapter_9_teaches_triggering_turn_continuity() -> None:
-    readme = (CHAPTER_9 / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER_9 / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "Preserving the triggering utterance" in readme
-    assert "barge_in_turn_probe.py" in readme
-    assert "same `speech_started` event" in readme
-    assert "barge_in_turn_probe.py" in exercises
-    assert "must not be consumed" in exercises

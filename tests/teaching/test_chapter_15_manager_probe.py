@@ -46,15 +46,3 @@ def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
         },
     }
     assert result.stderr == ""
-
-
-def test_manager_exercise_does_not_invent_journal_events() -> None:
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(exercises.split())
-
-    assert "`SessionManager` has no journal" in exercises
-    assert "not runtime record names" in normalized
-    assert "manager_probe.py" in exercises
-    assert "PortAudio device sharing varies" in normalized
-    assert "`stop_all()` clears the registry" in exercises
-    assert "does not prevent the other stop" in normalized

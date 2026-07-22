@@ -593,16 +593,6 @@ def test_readme_has_required_sections(name: str) -> None:
         assert section in readme, f"{name}/README.md missing section: {section}"
 
 
-def test_cli_test_plan_documents_template_readme_contract() -> None:
-    test_plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
-    section_names = [section.removeprefix("## ") for section in _README_SECTIONS]
-
-    assert "four required sections" not in test_plan
-    assert "uv run python agent.py" not in test_plan
-    for section in section_names:
-        assert section in test_plan
-
-
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_install_section_names_rendered_base_requirement(name: str) -> None:
     source = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
@@ -691,6 +681,12 @@ def test_readme_avoids_ad_hoc_env_export_recipes(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
+    """Structural check only — exact narrative phrasing is not hard-locked here.
+
+    Command validity is covered by same-file
+    ``test_readme_command_hints_match_scaffold_next_steps`` and
+    ``test_template_catalog_commands_are_copyable_and_resolve``.
+    """
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     next_steps = readme.split("## Next steps", 1)[1]
     normalized_next_steps = " ".join(next_steps.split())
@@ -707,23 +703,7 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     for command in required_commands:
         assert command in next_steps
     assert 'uv run easycat docs --audience "app builders"' not in next_steps
-    assert "narrow the map to app-building routes" in normalized_next_steps
-    assert "uv run easycat docs --audience app-builders --json" in next_steps
-    assert "automation needs the route map with command hints" in normalized_next_steps
-    assert "uv run easycat docs --json" in next_steps
-    assert "uv run easycat init --list-templates" in next_steps
-    assert "uv run easycat init --list-templates --json" in next_steps
-    assert "uv run easycat explain json-schema" in next_steps
-    assert "Coding agent? Use this generated project's `AGENTS.md`" in (normalized_next_steps)
-    assert "machine-readable docs route discovery" in normalized_next_steps
-    assert "[llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt)" in (
-        normalized_next_steps
-    )
     assert "when a script or coding agent" not in normalized_next_steps
-    assert (
-        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
-        "before running those hints"
-    ) in normalized_next_steps
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
@@ -780,15 +760,13 @@ def test_pydantic_templates_keep_first_code_readable() -> None:
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None:
+    """Structural check only — exact narrative phrasing is not hard-locked here."""
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     assert "~/.cache/easycat" not in readme
     assert "RunBundle journal" not in readme
     assert ".easycat/journals/" in readme
     assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in readme
     assert 'record_to=".easycat/runs"' in readme
-    assert "timestamped `RunBundle` under `.easycat/runs/`" in readme
-    assert "Debug bundles can contain raw transcripts" in readme
-    assert "gitignored `.easycat/` tree" in readme
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

@@ -108,6 +108,18 @@ def test_split_chinese_sentence():
     assert remaining == "继续"
 
 
+def test_split_no_punctuation():
+    ready, remaining = split_at_sentence_boundaries("Hello world")
+    assert ready == ""
+    assert remaining == "Hello world"
+
+
+def test_split_only_whitespace():
+    ready, remaining = split_at_sentence_boundaries("   ")
+    assert ready == ""
+    assert remaining == "   "
+
+
 def test_split_first_clause_empty_inputs():
     assert split_first_clause("") == ("", "")
     assert split_first_clause("   ") == ("", "   ")
@@ -316,6 +328,15 @@ def test_estimate_text_spoken_skips_zero_audio_chunks():
     chunks = [("First. ", 320, True), ("Never spoken.", 0, True), ("Third.", 320, True)]
     # 320 covers first chunk, 0-byte chunk is skipped, then 320 for third
     assert _estimate_text_spoken(chunks, 640) == "First. Third."
+
+
+def test_estimate_text_spoken_negative_bytes_sent():
+    assert _estimate_text_spoken([("hello", 100, True)], -10) == ""
+
+
+def test_estimate_text_spoken_all_zero_audio_chunks():
+    chunks = [("a", 0, True), ("b", 0, True)]
+    assert _estimate_text_spoken(chunks, 100) == ""
 
 
 def test_all_tts_audio_delivered():

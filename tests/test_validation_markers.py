@@ -5,12 +5,14 @@ from datetime import date
 from pathlib import Path
 
 from tests._marker_lint import validate_flaky_marker, validate_provider_surface_markers
+from tests.conftest import GUARD_DIRS, GUARD_EXEMPT, GUARD_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_VALIDATION_MARKERS = {
     "agent_bridge",
     "contract",
     "flaky",
+    "guard",
     "integration_external",
     "integration_live",
     "integration_local",
@@ -156,6 +158,14 @@ def test_valid_flaky_marker_passes_until_review_date() -> None:
     )
 
     assert errors == []
+
+
+def test_guard_overlay_paths_exist() -> None:
+    """A moved or deleted guard path would silently drop its guard coverage."""
+    for rel in sorted(GUARD_FILES | GUARD_EXEMPT):
+        assert (REPO_ROOT / rel).is_file(), f"guard overlay references missing file: {rel}"
+    for rel in sorted(GUARD_DIRS):
+        assert (REPO_ROOT / rel).is_dir(), f"guard overlay references missing directory: {rel}"
 
 
 def test_required_validation_markers_are_registered() -> None:

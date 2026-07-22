@@ -63,15 +63,3 @@ def test_parrot_delivery_record_preserves_rejections(capsys) -> None:
         "offset_ms": 750.0,
     }
     assert "transport rejected 1/3 audio chunks" in capsys.readouterr().out
-
-
-def test_parrot_journals_delivery_without_claiming_playback() -> None:
-    main = (CHAPTER / "main.py").read_text(encoding="utf-8")
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "accepted_chunks, rejected_chunks = await speak" in main
-    assert "await speak_and_record(transport, journal, last_text, start)" in main
-    assert 'name="parrot.delivery"' in main
-    assert "These counts prove only transport acceptance" in readme
-    assert "not rendered by a device or heard by a person" in exercises

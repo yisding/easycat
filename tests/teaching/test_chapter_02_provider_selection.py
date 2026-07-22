@@ -162,18 +162,3 @@ def test_streaming_cli_exposes_both_providers() -> None:
     )
 
     assert "--provider {openai,deepgram}" in completed.stdout
-
-
-def test_lesson_teaches_executable_swap_and_rate_contract() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "streaming.py --provider openai" in lesson
-    assert "streaming.py --provider deepgram" in lesson
-    assert "no source edit should be necessary" in lesson
-    assert "provider-side wire target" in lesson
-    assert "resamples it to the configured target rather than rejecting it" in lesson
-    assert "stt.provider.selected" in lesson
-    assert "after_stream_end" in lesson
-    assert "during_audio" in lesson

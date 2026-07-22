@@ -13,15 +13,13 @@ blocks below are generated from the `justfile` by
 
 <!-- BEGIN auto:guard-commands format=just-bash -->
 ```bash
-just guard-docs          # root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes
+just guard-docs          # root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors
 just guard-teaching      # teaching ladder chapters, generated README blocks, and learner route hints
-just guard-examples      # examples README, support files, script smoke checks, and docs-route hints
-just guard-templates     # scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene
+just guard-examples      # examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene
 just guard-contributing  # contributor guidance, agent guide contracts, validation state, and route hints
 just guard-validation    # validation workflow docs, validation reference docs, and validate CLI behavior
 just guard-contracts     # provider contract docs, offline contract suite, contract kit, and provider wiring matrix
 just guard-ops           # operator docs, deployment guide, observability docs, journal CLI, and durability
-just guard-markdown      # maintained Markdown links, anchors, and docs-route Markdown targets
 ```
 <!-- END auto:guard-commands -->
 
@@ -32,21 +30,26 @@ directly:
 
 <!-- BEGIN auto:guard-commands format=raw-bash -->
 ```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
-uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
+uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing
 uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
-uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 ```
 <!-- END auto:guard-commands -->
 
 The quick validation lane runs deterministic local tests only: no live
 credentials, no localhost socket lane, no external binary/service lane, no
-contract lane, no slow tests, and no flaky quarantine.
+contract lane, no slow tests, no flaky quarantine, and no `guard` tests. The
+`guard` marker tags the prose-only overlay (Markdown, routes, generated blocks,
+and documentation-to-code drift checks) within the broader `guard-*` lanes;
+the fast dev loop (`just test-fast`, `just cov`, and
+`uv run easycat validate quick`) skips them, while `just test` and `just check`
+still run them. Some named guard lanes also own behavioral CLI and runtime
+tests, so `uv run pytest -m guard` is useful for the prose overlay but is not a
+replacement for the relevant named guard command above.
 Each run writes an isolated report under
 `.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
 logs, and updates `.easycat/validation/latest.json` after the report is
@@ -79,7 +82,8 @@ uv run easycat validate report .easycat/validation/latest.json --json # emit lat
 installs the wheel into a clean temporary venv, clears `PYTHONPATH`, verifies
 the installed package outside the source tree, smokes `easycat --help`,
 `easycat init`, `python -m easycat`, and documented top-level API imports, then
-runs quick, stress, contracts, live, and latency release gates through that
+runs quick, guard (docs/route guard tests excluded from the quick lane),
+stress, contracts, live, and latency release gates through that
 installed environment. Use `--python`, `--extra`, `--provider`, and `--surface`
 to match the release target.
 

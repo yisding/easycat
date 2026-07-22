@@ -138,9 +138,9 @@ them. Multi-word audience filters accept hyphens or underscores, so
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,
-  `just guard-teaching`, `just guard-examples`, `just guard-templates`,
+  `just guard-teaching`, `just guard-examples`,
   `just guard-contributing`, `just guard-validation`, `just guard-contracts`,
-  `just guard-ops`, `just guard-markdown`), marker taxonomy, cassettes, and
+  `just guard-ops`), marker taxonomy, cassettes, and
   provider-addition checklist. If `just` is not installed, use its raw command
   table for the equivalent `uv run pytest ...` commands.
 - Operating sessions in production: read

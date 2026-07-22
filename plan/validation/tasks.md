@@ -146,7 +146,7 @@ Verification:
 
 ```bash
 uv run pytest --collect-only -q
-uv run pytest -q -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+uv run pytest -q -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 ```
 
 ### V0.2 Define Validation Report Model
@@ -228,9 +228,10 @@ Current verified state:
   `easycat.validation.runner.main` and exits with its return code.
 - `src/easycat/validation/runner.py` owns reusable slice execution through
   `run_validation_slice(...)`; `VALIDATION_SELECTORS` currently includes
-  `quick`, `socket`, `stress`, and `contracts`.
+  `quick`, the internal `guard` overlay used by release validation, `socket`,
+  `stress`, and `contracts`.
 - The current `quick` selector is
-  `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky`;
+  `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard`;
   the current `socket` selector is
   `integration_socket and not integration_live and not flaky`.
 - `run_validation_slice(...)` creates isolated
@@ -255,7 +256,7 @@ Tasks:
 - Keep `scripts/validate.py` as a thin shim over reusable runner/report code
   so V1 can reuse the implementation instead of creating a parallel codepath.
 - Implement `quick` with:
-  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"`.
+  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"`.
 - Implement `socket` with:
   `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "integration_socket and not integration_live and not flaky"`.
 - Create `.easycat/validation/runs/<run_id>/` automatically. Use a run id
@@ -368,8 +369,8 @@ Current verified state:
   validation docs, validation reference docs, provider contract docs, operator
   docs, maintained Markdown links, or docs-route Markdown targets; the named
   `just` recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
-  `guard-templates`, `guard-contributing`, `guard-validation`,
-  `guard-contracts`, `guard-ops`, and `guard-markdown`.
+  `guard-contributing`, `guard-validation`, `guard-contracts`, and
+  `guard-ops`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,
   provider/surface pairing, flaky quarantine metadata, and the rule that
   validation slices deselect `flaky`.
@@ -540,7 +541,7 @@ Acceptance:
 Verification:
 
 ```bash
-uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 uv run pytest -q --junitxml=.easycat/validation/runs/manual-socket/junit.xml -m "integration_socket and not integration_live and not flaky"
 ```
 
