@@ -21,6 +21,7 @@ from easycat.runtime._journal_codec import (
     _SQLITE_SCHEMA,
     _build_slice_where,
     _encode_journal_row,
+    _ensure_index_backfill,
     _ensure_journal_schema,
     _insert_tag_index_rows,
     _journal_record_for_append,
@@ -260,6 +261,9 @@ class SqliteJournal(_SqlJournalBase):
         _ensure_journal_schema(self._conn)
 
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
+        # After reconcile the live table is empty (prior rows were promoted
+        # or truncated), so the pre-v2 backfill only stamps the version.
+        _ensure_index_backfill(self._conn)
 
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
@@ -542,8 +546,12 @@ class SqliteJournal(_SqlJournalBase):
             previous_seq = self._seq
             if clear_clean_close:
                 self._conn.execute("SAVEPOINT post_finalize_append")
-            self._conn.execute("SAVEPOINT journal_append")
-            append_savepoint_open = True
+            # The savepoint only buys multi-statement atomicity (row INSERT +
+            # tag-index INSERTs); a lone INSERT is already statement-atomic,
+            # so skip the two extra statements per untagged hot-path append.
+            append_savepoint_open = bool(tags)
+            if append_savepoint_open:
+                self._conn.execute("SAVEPOINT journal_append")
             try:
                 if clear_clean_close:
                     self._clear_clean_close_marker_before_write()
@@ -582,8 +590,9 @@ class SqliteJournal(_SqlJournalBase):
                 )
                 # Same transaction as the row above — no extra COMMIT.
                 _insert_tag_index_rows(self._conn, record.sequence, record.tags)
-                self._conn.execute("RELEASE SAVEPOINT journal_append")
-                append_savepoint_open = False
+                if append_savepoint_open:
+                    self._conn.execute("RELEASE SAVEPOINT journal_append")
+                    append_savepoint_open = False
             except Exception:
                 self._seq = previous_seq
                 try:
@@ -918,6 +927,10 @@ class LibsqlJournal(_SqlJournalBase):
             # ``clean_close`` marker; preserve ``degraded`` so file/bundle
             # inspection stays consistent with the retained history.
             self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+
+        # Unclean reuse retains prior rows, so pre-v2 files must be
+        # backfilled here (post-truncation) for stage/tag queries to see them.
+        _ensure_index_backfill(self._conn)
 
         # Recover sequence counter from any remaining records.
         row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()

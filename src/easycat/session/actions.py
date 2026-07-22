@@ -9,7 +9,6 @@ executors.
 
 from __future__ import annotations
 
-import asyncio
 import enum
 import logging
 import threading
@@ -408,16 +407,11 @@ class CoreSessionActionExecutor(SessionActionExecutor):
             return SessionActionResult(
                 metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
             )
-        from easycat.telephony.compliance import AsyncDNCStore
+        from easycat.telephony.compliance import dnc_add, dnc_remove
 
-        if isinstance(dnc_list, AsyncDNCStore):
-            if isinstance(action, AddToDNCAction):
-                await dnc_list.aadd(number)
-            else:
-                await dnc_list.aremove(number)
-        elif isinstance(action, AddToDNCAction):
-            await asyncio.to_thread(dnc_list.add, number)
+        if isinstance(action, AddToDNCAction):
+            await dnc_add(dnc_list, number)
         else:
-            await asyncio.to_thread(dnc_list.remove, number)
+            await dnc_remove(dnc_list, number)
         logger.info("Agent updated DNC list (%s %s): reason=%s", verb, number, action.reason)
         return SessionActionResult(metadata={**meta, "applied": True})

@@ -12,17 +12,29 @@ fi
 # voice endpoint to anything that can reach the container's network. The app
 # itself raises ValueError at start() for this (enforce_bind_guard); fail
 # here too so a misconfigured container exits before the slower Python
-# import/model-load path.
+# import/model-load path. EASYCAT_UNSAFE_ALLOW_NO_AUTH=1 mirrors the app's
+# `unsafe_allow_no_auth` escape hatch for deployments that terminate auth at
+# an ingress proxy and mount their own server script.
 ws_host="${EASYCAT_WS_HOST:-127.0.0.1}"
+# Normalize like the app's is_loopback_host: lowercase, strip IPv6 brackets.
+ws_host_normalized="$(printf '%s' "$ws_host" | tr '[:upper:]' '[:lower:]')"
+ws_host_normalized="${ws_host_normalized#\[}"
+ws_host_normalized="${ws_host_normalized%\]}"
 if [ -z "${EASYCAT_WS_TOKEN:-}" ]; then
-    case "$ws_host" in
-        127.0.0.1 | localhost | ::1) ;;
-        *)
-            echo "error: EASYCAT_WS_HOST=$ws_host is not loopback, but EASYCAT_WS_TOKEN is unset" >&2
-            echo "       set EASYCAT_WS_TOKEN, or keep EASYCAT_WS_HOST on loopback behind your own ingress auth" >&2
-            exit 1
-            ;;
-    esac
+    if [ "${EASYCAT_UNSAFE_ALLOW_NO_AUTH:-}" = "1" ]; then
+        echo "warning: EASYCAT_UNSAFE_ALLOW_NO_AUTH=1 — serving without a token on EASYCAT_WS_HOST=$ws_host" >&2
+        echo "         make sure authentication is enforced upstream (ingress proxy)" >&2
+    else
+        case "$ws_host_normalized" in
+            127.* | localhost | ::1 | ::ffff:127.*) ;;
+            *)
+                echo "error: EASYCAT_WS_HOST=$ws_host is not loopback, but EASYCAT_WS_TOKEN is unset" >&2
+                echo "       set EASYCAT_WS_TOKEN, or keep EASYCAT_WS_HOST on loopback behind your own ingress auth" >&2
+                echo "       (EASYCAT_UNSAFE_ALLOW_NO_AUTH=1 skips this check when auth terminates upstream)" >&2
+                exit 1
+                ;;
+        esac
+    fi
 fi
 
 # EASYCAT_DATA_DIR (default ".easycat", relative to WORKDIR /app) holds the

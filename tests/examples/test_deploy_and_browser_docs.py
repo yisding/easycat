@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import runpy
 from pathlib import Path
 
 from tests.examples._examples_helpers import (
@@ -248,6 +249,57 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     assert "EASYCAT_WS_TOKEN: ${EASYCAT_WS_TOKEN:?set EASYCAT_WS_TOKEN" in compose
     assert '"127.0.0.1:8765:8765"' in compose
     assert '- "8765:8765"' not in compose
+
+
+@pytest.mark.parametrize("status, expected", [(204, True), (302, False), (503, False)])
+async def test_docker_healthcheck_http_requires_2xx(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    expected: bool,
+) -> None:
+    healthcheck = runpy.run_path(str(REPO_ROOT / "docker" / "healthcheck.py"))
+
+    class _Client:
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str) -> object:
+            return type("Response", (), {"is_success": 200 <= status < 300})()
+
+    monkeypatch.setattr(healthcheck["httpx"], "AsyncClient", lambda **_kwargs: _Client())
+
+    assert await healthcheck["_check_http"]("http://127.0.0.1/health") is expected
+
+
+async def test_docker_healthcheck_tcp_uses_async_loopback_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    healthcheck = runpy.run_path(str(REPO_ROOT / "docker" / "healthcheck.py"))
+    calls: list[tuple[str, int]] = []
+
+    class _Writer:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            return None
+
+    writer = _Writer()
+
+    async def _open_connection(host: str, port: int) -> tuple[object, _Writer]:
+        calls.append((host, port))
+        return object(), writer
+
+    monkeypatch.setattr(healthcheck["asyncio"], "open_connection", _open_connection)
+
+    assert await healthcheck["_check_tcp"]("0.0.0.0", 8765)
+    assert calls == [("127.0.0.1", 8765)]
+    assert writer.closed
 
 
 async def test_docker_entrypoint_warns_when_missing_data_dir_parent_is_unwritable(

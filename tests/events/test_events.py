@@ -403,17 +403,15 @@ def test_eventbus_subscribers_snapshot_excludes_globals_and_parents():
 
     snapshot = bus.subscribers(STTFinal)
     assert snapshot == [exact]
-    assert bus.subscriber_count(STTFinal) == 1
     # Snapshot is a copy: later subscriptions do not mutate it.
     bus.subscribe(STTFinal, lambda e: None)
     assert snapshot == [exact]
-    assert bus.subscriber_count(STTFinal) == 2
+    assert len(bus.subscribers(STTFinal)) == 2
 
 
 def test_eventbus_subscribers_empty_for_unknown_type():
     bus = EventBus()
     assert bus.subscribers(STTFinal) == []
-    assert bus.subscriber_count(STTFinal) == 0
     # Querying must not create an empty bucket in the underlying defaultdict.
     assert STTFinal not in bus._handlers
 

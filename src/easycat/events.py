@@ -723,15 +723,6 @@ class EventBus:
         handlers = self._handlers.get(event_type)
         return list(handlers) if handlers else []
 
-    def subscriber_count(self, event_type: type) -> int:
-        """Number of handlers registered for the exact event type.
-
-        Counts only exact-type subscriptions (see :meth:`subscribers`); global
-        and parent-class handlers are not included.
-        """
-        handlers = self._handlers.get(event_type)
-        return len(handlers) if handlers else 0
-
     def subscribe_all(self, handler: EventHandler) -> EventSubscription:
         """Register a handler that receives every emitted event."""
         self._all_handlers.append(handler)

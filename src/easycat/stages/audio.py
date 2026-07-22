@@ -19,7 +19,6 @@ from easycat.stages.base import (
     journal_append_event,
     journal_ctx,
     live_replay_input,
-    put_artifact,
     put_artifact_async,
     record_stage_failure,
 )
@@ -141,7 +140,7 @@ class AudioStage:
         )
         return result
 
-    def record_reference(
+    async def record_reference(
         self,
         chunk: Any,
         ctx: RunContext,
@@ -167,7 +166,7 @@ class AudioStage:
         """
         ctx = self._journal_ctx(ctx)
         raw_bytes = getattr(chunk, "data", None) if not isinstance(chunk, bytes) else chunk
-        ref = put_artifact(ctx, raw_bytes)
+        ref = await put_artifact_async(ctx, raw_bytes)
         if ref is None:
             return
         extra = {

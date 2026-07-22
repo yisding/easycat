@@ -12,6 +12,7 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import sqlite3
 import threading
@@ -243,6 +244,36 @@ class AsyncDNCStore(DNCStore, Protocol):
     async def aremove(self, phone: str) -> None: ...
 
     async def ais_on_dnc(self, phone: str) -> bool: ...
+
+
+async def _dispatch_dnc_call(store: DNCStore, async_name: str, sync_fn: Any, phone: str) -> Any:
+    """Prefer the store's native async verb, else offload the sync one.
+
+    ``inspect.iscoroutinefunction`` (not ``isinstance`` of the runtime-checkable
+    protocol) decides the branch: ``runtime_checkable`` only verifies attribute
+    *presence*, so a store whose ``a``-named attributes are not actually
+    coroutine functions (a proxy, a test double) must still take the
+    ``to_thread`` path instead of failing at ``await``.
+    """
+    method = getattr(store, async_name, None)
+    if inspect.iscoroutinefunction(method):
+        return await method(phone)
+    return await asyncio.to_thread(sync_fn, phone)
+
+
+async def dnc_add(store: DNCStore, phone: str) -> None:
+    """Add *phone* to *store*, natively async when the store supports it."""
+    await _dispatch_dnc_call(store, "aadd", store.add, phone)
+
+
+async def dnc_remove(store: DNCStore, phone: str) -> None:
+    """Remove *phone* from *store*, natively async when the store supports it."""
+    await _dispatch_dnc_call(store, "aremove", store.remove, phone)
+
+
+async def dnc_is_on_dnc(store: DNCStore, phone: str) -> bool:
+    """Check *phone* against *store*, natively async when the store supports it."""
+    return bool(await _dispatch_dnc_call(store, "ais_on_dnc", store.is_on_dnc, phone))
 
 
 class DNCList:

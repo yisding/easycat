@@ -25,48 +25,55 @@ Exits 0 (healthy) or 1 (unhealthy) per the Docker HEALTHCHECK contract.
 
 from __future__ import annotations
 
+import asyncio
 import os
-import socket
 import sys
-import urllib.error
-import urllib.request
+
+import httpx
 
 TIMEOUT_S = 2.0
 
-# These bounded blocking calls are intentional. The health check is a one-shot
-# child process with no concurrent work or event loop to protect, and keeping it
-# stdlib-only avoids making container liveness depend on importing the app or
-# its optional async HTTP stack.
 
-
-def _check_http(url: str) -> bool:
+async def _check_http(url: str) -> bool:
     try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT_S) as response:  # noqa: S310
-            return 200 <= response.status < 300
-    except (urllib.error.URLError, OSError, ValueError):
+        async with httpx.AsyncClient(timeout=TIMEOUT_S, follow_redirects=False) as client:
+            response = await client.get(url)
+        return response.is_success
+    except (httpx.HTTPError, OSError, ValueError):
         return False
 
 
-def _check_tcp(host: str, port: int) -> bool:
+async def _check_tcp(host: str, port: int) -> bool:
     # 0.0.0.0 is a bind address, not a connect address — probe loopback instead.
     connect_host = "127.0.0.1" if host == "0.0.0.0" else host
     try:
-        with socket.create_connection((connect_host, port), timeout=TIMEOUT_S):
-            return True
-    except OSError:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(connect_host, port),
+            timeout=TIMEOUT_S,
+        )
+    except (OSError, TimeoutError, ValueError):
         return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
 
 
-def main() -> int:
+async def main() -> int:
     health_url = os.environ.get("EASYCAT_HEALTH_URL", "").strip()
     if health_url:
-        ok = _check_http(health_url)
+        ok = await _check_http(health_url)
     else:
         host = os.environ.get("EASYCAT_WS_HOST", "127.0.0.1")
-        port = int(os.environ.get("EASYCAT_WS_PORT", "8765"))
-        ok = _check_tcp(host, port)
+        try:
+            port = int(os.environ.get("EASYCAT_WS_PORT", "8765"))
+        except ValueError:
+            return 1
+        ok = await _check_tcp(host, port)
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

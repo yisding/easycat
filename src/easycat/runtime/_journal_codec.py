@@ -61,6 +61,7 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 """
 
 _INDEX_MIGRATION_VERSION = 2
+_INDEX_BACKFILL_BATCH_SIZE = 500
 
 
 # Single source of truth for the persisted INSERT shared by every SQL backend
@@ -77,20 +78,22 @@ _JOURNAL_INSERT_SQL = (
 )
 
 
-def _stage_of(data: dict[str, Any] | None) -> str | None:
-    """Return the primary indexable ``stage`` token from record data."""
+def _indexable_token(data: dict[str, Any] | None, key: str) -> str | None:
+    """Return a non-empty string token from record data, else ``None``."""
     if not isinstance(data, dict):
         return None
-    candidate = data.get("stage")
+    candidate = data.get(key)
     return candidate if isinstance(candidate, str) and candidate else None
+
+
+def _stage_of(data: dict[str, Any] | None) -> str | None:
+    """Return the primary indexable ``stage`` token from record data."""
+    return _indexable_token(data, "stage")
 
 
 def _observed_stage_of(data: dict[str, Any] | None) -> str | None:
     """Return the indexable ``observed_stage`` token from record data."""
-    if not isinstance(data, dict):
-        return None
-    candidate = data.get("observed_stage")
-    return candidate if isinstance(candidate, str) and candidate else None
+    return _indexable_token(data, "observed_stage")
 
 
 def _insert_tag_index_rows(conn: Any, sequence: int, tags: frozenset[str]) -> None:
@@ -256,10 +259,10 @@ def _ensure_journal_schema(conn: Any) -> None:
     EXISTS`` here.  All operations are additive — no data is dropped — so
     crash-dump promotion and the recovered-session marker flow keep working.
 
-    Stage/tag indexing is tracked by ``schema_version``. The idempotent
-    backfill records its completion only after every historical row has been
-    processed, so a process failure after additive DDL can safely resume on
-    the next open.
+    This applies only additive DDL. The stage/tag-index *backfill* is a
+    separate step (:func:`_ensure_index_backfill`) that callers run after
+    prior-session reconciliation, so rows that are about to be truncated
+    (crash-dump promotion, clean reuse) are never rewritten first.
     """
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
     if "error_children" not in columns:
@@ -279,6 +282,18 @@ def _ensure_journal_schema(conn: Any) -> None:
         "CREATE TABLE IF NOT EXISTS journal_tags ("
         "tag TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (tag, sequence))"
     )
+
+
+def _ensure_index_backfill(conn: Any) -> None:
+    """Backfill derived stage columns and tag-index rows for pre-v2 files.
+
+    Tracked by ``schema_version``: completion is recorded only after every
+    historical row has been processed, so a process failure mid-backfill
+    safely resumes on the next open. Run this *after* prior-session
+    reconciliation — for the SQLite backend the live table is empty by then
+    (prior rows were promoted/truncated), so the scan is O(0); for libSQL's
+    retained-rows unclean reuse it keeps stage/tag queries correct.
+    """
     version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     version = int(version_row[0]) if version_row and version_row[0] is not None else 0
     if version < _INDEX_MIGRATION_VERSION:
@@ -289,30 +304,65 @@ def _ensure_journal_schema(conn: Any) -> None:
         )
 
 
-def _backfill_index_columns(conn: Any) -> None:
-    """Idempotently populate derived stage columns and tag-index rows."""
-    rows = conn.execute("SELECT sequence, data, tags FROM journal").fetchall()
+def _index_updates_for_rows(
+    rows: list[tuple[Any, Any, Any]],
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]], list[tuple[str, int]]]:
+    """Decode one migration batch into bulk update parameters."""
+    stage_updates: list[tuple[str, int]] = []
+    observed_stage_updates: list[tuple[str, int]] = []
+    tag_rows: list[tuple[str, int]] = []
     for sequence, data_str, tags_str in rows:
         try:
             data = json.loads(data_str) if data_str else {}
         except (TypeError, ValueError):
             data = {}
-        stage = _stage_of(data if isinstance(data, dict) else None)
-        observed_stage = _observed_stage_of(data if isinstance(data, dict) else None)
+        record_data = data if isinstance(data, dict) else None
+        stage = _stage_of(record_data)
+        observed_stage = _observed_stage_of(record_data)
         if stage is not None:
-            conn.execute("UPDATE journal SET stage = ? WHERE sequence = ?", (stage, sequence))
+            stage_updates.append((stage, sequence))
         if observed_stage is not None:
-            conn.execute(
-                "UPDATE journal SET observed_stage = ? WHERE sequence = ?",
-                (observed_stage, sequence),
-            )
+            observed_stage_updates.append((observed_stage, sequence))
         if tags_str:
-            for tag in str(tags_str).split(","):
-                if tag:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO journal_tags (tag, sequence) VALUES (?, ?)",
-                        (tag, sequence),
-                    )
+            tag_rows.extend((tag, sequence) for tag in str(tags_str).split(",") if tag)
+    return stage_updates, observed_stage_updates, tag_rows
+
+
+def _backfill_index_columns(conn: Any) -> None:
+    """Idempotently populate derived indexes in bounded keyset batches."""
+    last_sequence: int | None = None
+    while True:
+        if last_sequence is None:
+            rows = conn.execute(
+                "SELECT sequence, data, tags FROM journal ORDER BY sequence LIMIT ?",
+                (_INDEX_BACKFILL_BATCH_SIZE,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT sequence, data, tags FROM journal WHERE sequence > ? "
+                "ORDER BY sequence LIMIT ?",
+                (last_sequence, _INDEX_BACKFILL_BATCH_SIZE),
+            ).fetchall()
+        if not rows:
+            return
+
+        stage_updates, observed_stage_updates, tag_rows = _index_updates_for_rows(rows)
+        if stage_updates:
+            conn.executemany(
+                "UPDATE journal SET stage = ? WHERE sequence = ?",
+                stage_updates,
+            )
+        if observed_stage_updates:
+            conn.executemany(
+                "UPDATE journal SET observed_stage = ? WHERE sequence = ?",
+                observed_stage_updates,
+            )
+        if tag_rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO journal_tags (tag, sequence) VALUES (?, ?)",
+                tag_rows,
+            )
+        last_sequence = int(rows[-1][0])
 
 
 def _journal_record_for_append(

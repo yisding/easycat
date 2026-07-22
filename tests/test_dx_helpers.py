@@ -211,8 +211,8 @@ def _opt_in_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_debug_full_does_not_auto_launch_without_opt_in(monkeypatch: pytest.MonkeyPatch):
     """``debug='full'`` alone must NOT launch the debugger UI.
 
-    Keeping a durable journal is the default; auto-launch is strictly
-    opt-in so concurrent sessions never race a port bind or pop a tab.
+    Durable capture and auto-launch are separate opt-ins so concurrent
+    sessions never race a port bind or pop a tab.
     """
     from easycat.debugger._autolaunch import maybe_launch_debugger_ui
 

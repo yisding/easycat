@@ -30,7 +30,7 @@ Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
 _WORKER_EOF = object()
 ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
-LOCK_EXCLUDE_NEWER = "2026-07-11T22:00:00Z"
+LOCK_EXCLUDE_NEWER = "2026-07-19T00:00:00Z"
 PINS = {
     framework: tuple(
         tomllib.loads((ENVIRONMENT_ROOT / framework / "pyproject.toml").read_text())["project"][
