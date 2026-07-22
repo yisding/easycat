@@ -378,7 +378,7 @@ class TurnRunner:
         """
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
-        current_tts_task = self._tts.current_task
+        current_tts_task = self._tts.active_turn_task
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
         gen = self._turn.generation
@@ -397,7 +397,7 @@ class TurnRunner:
                 new_task = self._runtime_scope.create_task("on_turn_ended", turn_ended)
         finally:
             reset_turn(turn_token)
-        self._tts.current_task = new_task
+        self._tts.active_turn_task = new_task
         new_task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def on_turn_ended(

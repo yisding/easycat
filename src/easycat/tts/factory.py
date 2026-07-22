@@ -78,9 +78,16 @@ class TTSProviderConfig:
     params: dict[str, Any] | None = None
 
 
-def create_tts_provider(config: TTSProviderConfig) -> TTSProvider:
-    """Create a registered TTS provider from its named configuration."""
-    return _CATALOG.create_provider(config.provider, params=config.params, api_key=config.api_key)
+def create_tts_provider(
+    config: TTSProviderConfig, event_bus: EventBus | None = None
+) -> TTSProvider:
+    """Create a registered TTS provider, optionally wiring its event bus."""
+    return _CATALOG.create_provider(
+        config.provider,
+        params=config.params,
+        api_key=config.api_key,
+        event_bus=event_bus,
+    )
 
 
 def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> TTSProvider:

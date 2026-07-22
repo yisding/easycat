@@ -18,7 +18,7 @@ from easycat.stages.base import (
     journal_append_event,
     journal_ctx,
     live_replay_input,
-    put_artifact,
+    put_artifact_async,
     record_stage_failure,
 )
 
@@ -59,7 +59,7 @@ class TransportStage:
         output_ref = None
         extra: dict[str, Any] | None = None
         if capture_enabled:
-            output_ref = put_artifact(ctx, audio_bytes)
+            output_ref = await put_artifact_async(ctx, audio_bytes)
             extra = {
                 "audio_bytes": (
                     len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0

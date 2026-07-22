@@ -60,8 +60,13 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         self._init_emit_tasks()
 
     def _resolve_event_bus(self) -> Any | None:
-        # STT carries the bus per connection (set in ``_connect_websocket``),
-        # not on a static config object like the TTS providers do.
+        # Providers still source the bus from their own static config object
+        # (e.g. Deepgram passes ``self._config.event_bus`` into
+        # ``_connect_websocket``), same as the TTS providers. Only the
+        # resolution timing differs: this base class doesn't know each
+        # subclass's config type, so it caches the bus on the instance when
+        # ``_connect_websocket`` runs (``self._provider_event_bus``) instead
+        # of reading a config attribute directly here.
         return self._provider_event_bus
 
     async def _connect_websocket(

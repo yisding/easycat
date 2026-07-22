@@ -410,10 +410,11 @@ class SessionJournalSink:
 
         The counter carries only the low-cardinality ``easycat.surface`` (``vad``)
         attribute — never ``turn_id`` / ``transcript``, which the observability
-        sanitizer rejects as forbidden keys.  The cutoff-latency histogram is
-        defined for OTel consumers but not emitted here: the sink sees the
-        barge-in event before the bot has stopped, so the cutoff delta is
-        computed offline by the issues engine.
+        sanitizer rejects as forbidden keys.  The companion cutoff-latency
+        histogram is not emitted here: the sink sees the barge-in event before
+        the bot has stopped, so it cannot measure the cutoff delta. That
+        histogram is emitted by ``Session.cancel_turn`` once playback has
+        actually been cleared on the transport.
         """
         journal_handler = self._make_event_handler(kind, "interruption")
 

@@ -173,6 +173,98 @@ def _safe_audio_format_from_metadata(data: dict[str, Any]) -> dict[str, int]:
     return {"sample_rate": rate, "channels": channels, "sample_width": width}
 
 
+def _apply_pcm_conversion(
+    blob: bytes,
+    *,
+    rate: int,
+    channels: int,
+    width: int,
+    target_rate: int,
+    target_channels: int,
+) -> bytes | None:
+    """Downmix/resample validated PCM; ``None`` on a too-large ratio or bad PCM."""
+    try:
+        converted = blob
+        if channels == 2 and target_channels == 1:
+            if _audioop is not None:
+                converted = _audioop.tomono(converted, width, 0.5, 0.5)
+            else:
+                converted = _np_tomono(converted, width)
+        if rate != target_rate:
+            if target_rate / rate > _AUDIO_MAX_RESAMPLE_RATIO:
+                return None
+            if _audioop is not None:
+                converted, _ = _audioop.ratecv(
+                    converted, width, target_channels, rate, target_rate, None
+                )
+            else:
+                converted = _np_ratecv(converted, width, target_channels, rate, target_rate)
+    except Exception:
+        # audio helpers reject malformed PCM lengths; never abort the turn.
+        return None
+    return converted
+
+
+def _convert_mic_frame(
+    blob: bytes,
+    *,
+    rate: int,
+    channels: int,
+    width: int,
+    target_rate: int,
+    target_channels: int,
+    target_width: int,
+) -> bytes | None:
+    """Best-effort convert a mismatched mic frame to the target PCM geometry.
+
+    Returns the converted bytes, or ``None`` when the frame should be dropped
+    (unsafe geometry, missing helper, unsupported channel change, or malformed
+    PCM).  Raises :class:`ValueError` when a conversion would exceed the
+    debugger's converted-frame size limit.
+    """
+    # Debug bundles are untrusted, so both the source and target geometry must be
+    # within bounded voice-audio limits before we hand them to a resampler;
+    # otherwise drop the blob rather than corrupt the stream or trigger a runaway
+    # conversion.
+    source_fmt = {"sample_rate": rate, "channels": channels, "sample_width": width}
+    target_fmt = {
+        "sample_rate": target_rate,
+        "channels": target_channels,
+        "sample_width": target_width,
+    }
+    if (
+        (_audioop is None and _np is None)
+        or not _is_safe_audio_format(source_fmt)
+        or not _is_safe_audio_format(target_fmt)
+        or width != target_width
+    ):
+        return None
+    if channels == 2 and target_channels == 1:
+        projected_target_channels = 1
+    elif channels == target_channels:
+        projected_target_channels = target_channels
+    else:
+        return None
+    projected_bytes = _project_converted_pcm_bytes(
+        blob,
+        width=width,
+        channels=channels,
+        target_channels=projected_target_channels,
+        rate=rate,
+        target_rate=target_rate,
+    )
+    if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
+        raise ValueError("resampled audio frame exceeds debugger size limit")
+    return _apply_pcm_conversion(
+        blob,
+        rate=rate,
+        channels=channels,
+        width=width,
+        target_rate=target_rate,
+        target_channels=target_channels,
+    )
+
+
 def _coerce_frames_to_format(
     frames: list[tuple[int, bytes, dict[str, Any]]],
     fmt: dict[str, int],
@@ -211,56 +303,18 @@ def _coerce_frames_to_format(
                 "sample_rate/channels/sample_width"
             )
         # Non-strict (mic): convert when sample widths match and at least one
-        # audio helper (audioop/numpy) is present.  Debug bundles are untrusted,
-        # so both the source and target geometry must be within bounded voice-
-        # audio limits before we hand them to a resampler; otherwise drop the
-        # blob rather than corrupt the stream or trigger a runaway conversion.
-        source_fmt = {"sample_rate": rate, "channels": channels, "sample_width": width}
-        if (
-            (_audioop is None and _np is None)
-            or not _is_safe_audio_format(source_fmt)
-            or not _is_safe_audio_format(fmt)
-            or width != target_width
-        ):
-            dropped += 1
-            continue
-        if channels == 2 and target_channels == 1:
-            projected_target_channels = 1
-        elif channels == target_channels:
-            projected_target_channels = target_channels
-        else:
-            dropped += 1
-            continue
-        projected_bytes = _project_converted_pcm_bytes(
+        # audio helper (audioop/numpy) is present, otherwise drop the blob rather
+        # than corrupt the stream.
+        converted = _convert_mic_frame(
             blob,
-            width=width,
-            channels=channels,
-            target_channels=projected_target_channels,
             rate=rate,
+            channels=channels,
+            width=width,
             target_rate=target_rate,
+            target_channels=target_channels,
+            target_width=target_width,
         )
-        if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
-            raise ValueError("resampled audio frame exceeds debugger size limit")
-        try:
-            converted = blob
-            if channels == 2 and target_channels == 1:
-                if _audioop is not None:
-                    converted = _audioop.tomono(converted, width, 0.5, 0.5)
-                else:
-                    converted = _np_tomono(converted, width)
-            if rate != target_rate:
-                resample_ratio = target_rate / rate
-                if resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO:
-                    dropped += 1
-                    continue
-                if _audioop is not None:
-                    converted, _ = _audioop.ratecv(
-                        converted, width, target_channels, rate, target_rate, None
-                    )
-                else:
-                    converted = _np_ratecv(converted, width, target_channels, rate, target_rate)
-        except Exception:
-            # audio helpers reject malformed PCM lengths; never abort the turn.
+        if converted is None:
             dropped += 1
             continue
         blobs.append(converted)

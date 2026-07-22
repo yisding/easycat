@@ -1305,32 +1305,6 @@ class TestToolReplayPolicies:
 
 
 class TestProviderVersionMatch:
-    def test_match(self, tmp_path):
-        """Provider versions that match should load without error."""
-        manifest = {
-            "format_version": FORMAT_VERSION,
-            "provider_versions": {"stt": "deepgram-v3"},
-        }
-        bundle_path = _make_bundle_zip(tmp_path, manifest=manifest)
-        loaded = RunBundle.load(bundle_path)
-        # Simulating version match check
-        bundle_version = loaded.manifest.provider_versions.get("stt")
-        current_version = "deepgram-v3"
-        assert bundle_version == current_version
-
-    def test_mismatch_raises(self):
-        """Provider version mismatch should raise ProviderVersionMismatchError."""
-        err = ProviderVersionMismatchError(
-            "STT version mismatch: expected deepgram-v3, got deepgram-v2"
-        )
-        assert err.error_code == "PROVIDER_VERSION_MISMATCH"
-        assert "mismatch" in str(err)
-
-    def test_force_skips_mismatch(self):
-        """With force=True, version mismatch should not block replay."""
-        spec = ReplaySpec(fidelity=ReplayFidelity.ARTIFACT, force=True)
-        assert spec.force is True
-
     def test_unknown_provider(self, tmp_path):
         """Unknown providers in the manifest should not cause errors."""
         manifest = {

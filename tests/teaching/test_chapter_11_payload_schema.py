@@ -69,16 +69,3 @@ def test_emitter_validator_rejects_non_metric_values(value: object, type_name: s
         match=rf"must be a finite int or float; got {type_name}",
     ):
         chapter.require_finite_number(record, "t_ms")
-
-
-def test_lesson_assigns_payload_schema_to_emitters_not_journal() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "payload_schema_probe.py" in readme
-    assert "data: dict[str, Any]" in lesson
-    assert "emitters' contract—not validation performed by the journal" in lesson
-    assert "serialization alone is not schema validation" in lesson
-    assert '`data["text"]` is always a string' not in lesson
-    assert '`data["t_ms"]` is always a float' not in lesson

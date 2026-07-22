@@ -92,9 +92,14 @@ class STTProviderConfig:
     params: dict[str, Any] | None = None
 
 
-def create_stt_provider(config: STTProviderConfig) -> STTBase:
-    """Create a registered STT provider from its named configuration."""
-    return _CATALOG.create_provider(config.provider, params=config.params, api_key=config.api_key)
+def create_stt_provider(config: STTProviderConfig, event_bus: EventBus | None = None) -> STTBase:
+    """Create a registered STT provider, optionally wiring its event bus."""
+    return _CATALOG.create_provider(
+        config.provider,
+        params=config.params,
+        api_key=config.api_key,
+        event_bus=event_bus,
+    )
 
 
 def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> STTBase:

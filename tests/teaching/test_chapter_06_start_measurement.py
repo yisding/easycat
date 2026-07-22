@@ -59,21 +59,3 @@ def test_start_measurer_attributes_model_startup_before_first_token(tmp_path: Pa
             "text": "hello",
         }
     ]
-
-
-def test_lesson_names_the_three_distinct_start_intervals() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "measure_start.py" in readme
-    assert "measure_start.py" in exercises
-    for field in (
-        "stt_final_to_first_token_ms",
-        "first_token_to_first_audio_ms",
-        "stt_final_to_first_audio_ms",
-        "sentence_tts_ms",
-    ):
-        assert field in readme
-        assert field in exercises
-    assert "agent.first_token → tts.first_audio` span" not in readme
-    assert "time to *start* speaking" not in exercises

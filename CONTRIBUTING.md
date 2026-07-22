@@ -42,7 +42,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
 | Full test suite | `just test` | `uv run pytest` |
-| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
+| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"` |
 | One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
 | Lint | `just lint` | `uv run ruff check .` |
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
@@ -50,7 +50,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
 | Type gate (mypy, whole package) | `just typecheck` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
-| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
+| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
 | Validate (stress) | `just validate-stress` | `uv run easycat validate stress` |
@@ -69,15 +69,13 @@ in the `justfile`, then re-run the script.
 <!-- BEGIN auto:guard-commands format=table -->
 | Docs guard | `just` recipe | Raw command |
 | --- | --- | --- |
-| Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
+| Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py` |
 | Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py` |
-| Guard examples README, support files, script smoke checks, and docs-route hints | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path` |
-| Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-templates` | `uv run pytest tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
+| Guard examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
 | Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py` |
 | Guard validation workflow docs, validation reference docs, and validate CLI behavior | `just guard-validation` | `uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py` |
 | Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix | `just guard-contracts` | `uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing` |
 | Guard operator docs, deployment guide, observability docs, journal CLI, and durability | `just guard-ops` | `uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py` |
-| Guard maintained Markdown links, anchors, and docs-route Markdown targets | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 <!-- END auto:guard-commands -->
 
 > `mypy` ships in the `dev` group, so `just typecheck` works right after
@@ -103,15 +101,13 @@ surface before the broader validation lane:
 
 | If you change | Run | What it protects |
 | --- | --- | --- |
-| Root README chooser, docs route map, public API docs, or CLI JSON envelopes | `just guard-docs` | Root onboarding links, README e2e coverage, install guidance, command-hint extraction, `easycat docs`, public API import-surface docs, JSON route entries, and shared CLI `--json` envelope contracts |
+| Root README chooser, docs route map, public API docs, CLI JSON envelopes, or Markdown links | `just guard-docs` | Root onboarding links, README e2e coverage, install guidance, command-hint extraction, `easycat docs`, public API import-surface docs, JSON route entries, shared CLI `--json` envelope contracts, and maintained Markdown links, anchors, and docs-route Markdown targets |
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
-| Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
-| Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, generated project smoke, and generated project secret/artifact hygiene |
+| Examples chooser or command matrix, scaffold templates, or template catalog | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, docs-route hints, generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, generated project smoke, and generated project secret/artifact hygiene |
 | Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, and docs-route hints |
 | Validation workflow, validation reference, or validate CLI behavior | `just guard-validation` | The `docs/validation.md` workflow, validation reference route hints, validate CLI reports, JSON envelopes, latency options, and error handling |
 | Provider protocols, cassettes, contract matrix, or bridge event grammar | `just guard-contracts` | Provider contract docs-route hints, contributor provider guidance, offline contract suite, cassette redaction/replay, schema fingerprints, bridge contracts, and provider wiring matrix |
 | Operator deployment, observability, or journal durability docs | `just guard-ops` | Docker deployment guide, operator docs-route hints, journal CLI entry points, debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, and SQLite journal durability |
-| Markdown links in maintained docs | `just guard-markdown` | Local links, anchors, and docs-route Markdown targets |
 
 If `just` is not installed, use the raw command table in
 [the development loop](#the-development-loop) for the equivalent
@@ -153,7 +149,7 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 
 | Slice | Command | Marker selection |
 | --- | --- | --- |
-| `quick` | `uv run easycat validate quick` | not integration_socket / live / external / contract / slow / stress / flaky |
+| `quick` | `uv run easycat validate quick` | not integration_socket / live / external / contract / slow / stress / flaky / guard |
 | `socket` | `uv run easycat validate socket` | integration_socket, not live, not flaky |
 | `stress` | `uv run easycat validate stress` | stress, not live, not flaky |
 | `contracts` | `uv run easycat validate contracts` | contract, not live, not flaky |
@@ -194,6 +190,15 @@ collection. The full list lives in `pyproject.toml` under
 - `flaky` — quarantined intermittent test (see policy below).
 - `allow_task_leak` — explicit escape hatch for async tests that intentionally
   leave background tasks alive beyond the test body.
+- `guard` — docs/onboarding/prose guard test that scans Markdown, docstrings,
+  routes, or generated blocks rather than exercising product runtime. Applied
+  by path in `tests/conftest.py` (the `tests/docs`, `tests/install`, and
+  `tests/examples` trees plus a short list of prose-only guard modules, minus a
+  behavioral exempt list). Excluded from the fast dev loop (`just test-fast`,
+  `just cov`, and the `quick` validation lane) but always run in `just test`,
+  `just check`, and the `guard-*` lanes. The named guard lanes also include
+  behavioral CLI and runtime coverage; use `-m guard` only for the prose
+  overlay, not as a replacement for a relevant `just guard-*` command.
 - `provider_openai` / `provider_deepgram` / `provider_elevenlabs` /
   `provider_cartesia` — provider coverage; `provider("name")` is the generic
   form for custom providers.

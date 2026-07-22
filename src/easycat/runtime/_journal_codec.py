@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS journal (
     input_ref    TEXT,
     output_ref   TEXT,
     tags         TEXT    NOT NULL DEFAULT '',
-    error_children TEXT
+    error_children TEXT,
+    stage        TEXT,
+    observed_stage TEXT
 );
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -58,6 +60,9 @@ CREATE TABLE IF NOT EXISTS session_state (
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 """
 
+_INDEX_MIGRATION_VERSION = 2
+_INDEX_BACKFILL_BATCH_SIZE = 500
+
 
 # Single source of truth for the persisted INSERT shared by every SQL backend
 # (SqliteJournal / LibsqlJournal).  Keeping the column list, placeholders, and
@@ -68,9 +73,41 @@ _JOURNAL_INSERT_SQL = (
     "INSERT INTO journal "
     "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
     "turn_id, data, error_type, error_msg, error_tb, error_notes, "
-    "input_ref, output_ref, tags, error_children) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "input_ref, output_ref, tags, error_children, stage, observed_stage) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
+
+
+def _indexable_token(data: dict[str, Any] | None, key: str) -> str | None:
+    """Return a non-empty string token from record data, else ``None``."""
+    if not isinstance(data, dict):
+        return None
+    candidate = data.get(key)
+    return candidate if isinstance(candidate, str) and candidate else None
+
+
+def _stage_of(data: dict[str, Any] | None) -> str | None:
+    """Return the primary indexable ``stage`` token from record data."""
+    return _indexable_token(data, "stage")
+
+
+def _observed_stage_of(data: dict[str, Any] | None) -> str | None:
+    """Return the indexable ``observed_stage`` token from record data."""
+    return _indexable_token(data, "observed_stage")
+
+
+def _insert_tag_index_rows(conn: Any, sequence: int, tags: frozenset[str]) -> None:
+    """Populate the ``journal_tags`` junction for one record's tags.
+
+    Runs inside the caller's open transaction (no extra COMMIT), so tag-index
+    rows land atomically with the ``journal`` row itself.  Records without tags
+    (the common case) do zero work.
+    """
+    for tag in tags:
+        conn.execute(
+            "INSERT OR IGNORE INTO journal_tags (tag, sequence) VALUES (?, ?)",
+            (tag, sequence),
+        )
 
 
 def _escape_like(value: str) -> str:
@@ -91,16 +128,27 @@ def _build_slice_where(
     turn_id: str | None = None,
     name: str | None = None,
     tags: frozenset[str] | None = None,
+    use_tag_index: bool = False,
 ) -> tuple[str, list[Any]]:
     """Build the ``WHERE`` clause + params shared by every SQL ``slice``.
 
     ``kind``/``session_id``/``turn_id``/``name`` map to indexed equality
-    predicates.  ``tags`` is stored as a sorted comma-joined string (see
-    :data:`_SQLITE_SCHEMA`), so each requested tag matches the comma-wrapped
-    column exactly — ``(',' || tags || ',') LIKE '%,tag,%'`` with LIKE
-    metacharacters in the tag escaped.  This gives the same exact-subset
-    semantics as the in-memory backend (``requested <= record.tags``) rather
-    than a loose substring match (so ``"stt"`` never matches ``"not_stt"``).
+    predicates (``turn_id`` is backed by ``idx_journal_turn_id``).
+
+    ``tags`` uses subset semantics — a record matches when every requested tag
+    is present — matching the in-memory backend (``requested <= record.tags``).
+    Two tag strategies are available:
+
+    * ``use_tag_index=True`` (live SQL backends): each requested tag becomes a
+      ``sequence IN (SELECT sequence FROM journal_tags WHERE tag = ?)``
+      predicate served by the ``journal_tags(tag, sequence)`` primary-key
+      index — no full-table scan.
+    * ``use_tag_index=False`` (default; read-only views over arbitrary/older
+      files that may predate the junction table): each requested tag matches
+      the comma-wrapped ``tags`` column exactly via
+      ``(',' || tags || ',') LIKE '%,tag,%'`` with LIKE metacharacters
+      escaped.  This stays correct on files that lack ``journal_tags`` at the
+      cost of a scan.
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -118,8 +166,12 @@ def _build_slice_where(
         params.append(name)
     if tags:
         for tag in sorted(tags):
-            clauses.append(r"(',' || tags || ',') LIKE ? ESCAPE '\'")
-            params.append(f"%,{_escape_like(tag)},%")
+            if use_tag_index:
+                clauses.append("sequence IN (SELECT sequence FROM journal_tags WHERE tag = ?)")
+                params.append(tag)
+            else:
+                clauses.append(r"(',' || tags || ',') LIKE ? ESCAPE '\'")
+                params.append(f"%,{_escape_like(tag)},%")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -164,6 +216,8 @@ def _encode_journal_row(
         output_ref,
         ",".join(sorted(tags)) if tags else "",
         error_children,
+        _stage_of(data),
+        _observed_stage_of(data),
     )
 
 
@@ -197,9 +251,118 @@ def _error_info_from_dict(value: Any) -> ErrorInfo | None:
 
 
 def _ensure_journal_schema(conn: Any) -> None:
+    """Additively migrate an existing ``journal`` table to the current schema.
+
+    ``CREATE TABLE IF NOT EXISTS`` keeps a pre-existing table's *old* column
+    set, so a file written by an older EasyCat needs the newer columns, index
+    predicates, and side tables added by ``ALTER``/``CREATE ... IF NOT
+    EXISTS`` here.  All operations are additive — no data is dropped — so
+    crash-dump promotion and the recovered-session marker flow keep working.
+
+    This applies only additive DDL. The stage/tag-index *backfill* is a
+    separate step (:func:`_ensure_index_backfill`) that callers run after
+    prior-session reconciliation, so rows that are about to be truncated
+    (crash-dump promotion, clean reuse) are never rewritten first.
+    """
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
     if "error_children" not in columns:
         conn.execute("ALTER TABLE journal ADD COLUMN error_children TEXT")
+    if "stage" not in columns:
+        conn.execute("ALTER TABLE journal ADD COLUMN stage TEXT")
+    if "observed_stage" not in columns:
+        conn.execute("ALTER TABLE journal ADD COLUMN observed_stage TEXT")
+    # Idempotent for a current-schema file (already created by _SQLITE_SCHEMA);
+    # this is what backfills the query surface for an older file.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_journal_turn_id ON journal(turn_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_journal_stage ON journal(stage)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_journal_observed_stage ON journal(observed_stage)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS journal_tags ("
+        "tag TEXT NOT NULL, sequence INTEGER NOT NULL, PRIMARY KEY (tag, sequence))"
+    )
+
+
+def _ensure_index_backfill(conn: Any) -> None:
+    """Backfill derived stage columns and tag-index rows for pre-v2 files.
+
+    Tracked by ``schema_version``: completion is recorded only after every
+    historical row has been processed, so a process failure mid-backfill
+    safely resumes on the next open. Run this *after* prior-session
+    reconciliation — for the SQLite backend the live table is empty by then
+    (prior rows were promoted/truncated), so the scan is O(0); for libSQL's
+    retained-rows unclean reuse it keeps stage/tag queries correct.
+    """
+    version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    version = int(version_row[0]) if version_row and version_row[0] is not None else 0
+    if version < _INDEX_MIGRATION_VERSION:
+        _backfill_index_columns(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
+            (_INDEX_MIGRATION_VERSION,),
+        )
+
+
+def _index_updates_for_rows(
+    rows: list[tuple[Any, Any, Any]],
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]], list[tuple[str, int]]]:
+    """Decode one migration batch into bulk update parameters."""
+    stage_updates: list[tuple[str, int]] = []
+    observed_stage_updates: list[tuple[str, int]] = []
+    tag_rows: list[tuple[str, int]] = []
+    for sequence, data_str, tags_str in rows:
+        try:
+            data = json.loads(data_str) if data_str else {}
+        except (TypeError, ValueError):
+            data = {}
+        record_data = data if isinstance(data, dict) else None
+        stage = _stage_of(record_data)
+        observed_stage = _observed_stage_of(record_data)
+        if stage is not None:
+            stage_updates.append((stage, sequence))
+        if observed_stage is not None:
+            observed_stage_updates.append((observed_stage, sequence))
+        if tags_str:
+            tag_rows.extend((tag, sequence) for tag in str(tags_str).split(",") if tag)
+    return stage_updates, observed_stage_updates, tag_rows
+
+
+def _backfill_index_columns(conn: Any) -> None:
+    """Idempotently populate derived indexes in bounded keyset batches."""
+    last_sequence: int | None = None
+    while True:
+        if last_sequence is None:
+            rows = conn.execute(
+                "SELECT sequence, data, tags FROM journal ORDER BY sequence LIMIT ?",
+                (_INDEX_BACKFILL_BATCH_SIZE,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT sequence, data, tags FROM journal WHERE sequence > ? "
+                "ORDER BY sequence LIMIT ?",
+                (last_sequence, _INDEX_BACKFILL_BATCH_SIZE),
+            ).fetchall()
+        if not rows:
+            return
+
+        stage_updates, observed_stage_updates, tag_rows = _index_updates_for_rows(rows)
+        if stage_updates:
+            conn.executemany(
+                "UPDATE journal SET stage = ? WHERE sequence = ?",
+                stage_updates,
+            )
+        if observed_stage_updates:
+            conn.executemany(
+                "UPDATE journal SET observed_stage = ? WHERE sequence = ?",
+                observed_stage_updates,
+            )
+        if tag_rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO journal_tags (tag, sequence) VALUES (?, ?)",
+                tag_rows,
+            )
+        last_sequence = int(rows[-1][0])
 
 
 def _journal_record_for_append(
@@ -292,11 +455,27 @@ def _persist_degraded_marker(conn: Any, session_id: str, exc: Exception) -> None
         logger.debug("Failed to commit degraded markers", exc_info=True)
 
 
+def _normalize_journal_row(row: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Coerce a raw ``SELECT *`` row to the 17 canonical record columns.
+
+    The first 17 columns are the record's own fields; anything after them is a
+    derived index column recomputed from ``data`` on write, so it is dropped
+    here rather than round-tripped. A 16-column row predates
+    ``error_children`` (an older on-disk file read via a read-only view that
+    cannot ALTER); pad it with a trailing ``None``.
+    """
+    n = len(row)
+    if n == 16:
+        return (*row, None)
+    if n >= 18:
+        return row[:17]
+    if n != 17:
+        raise ValueError(f"Unexpected journal row shape with {n} columns.")
+    return row
+
+
 def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
-    if len(row) == 16:
-        row = (*row, None)
-    elif len(row) != 17:
-        raise ValueError(f"Unexpected journal row shape with {len(row)} columns.")
+    row = _normalize_journal_row(row)
     (
         sequence,
         session_id,

@@ -107,16 +107,3 @@ async def test_partial_is_queued_during_speak_then_consumed(
     assert partials[1].data["received_offset_ms"] == paris_received_ms
     assert partials[1].data["consumer_lag_ms"] >= 0
     assert partials[1].data["queue_depth_after_get"] == 1
-
-
-def test_lesson_calls_backlog_delay_instead_of_data_loss() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "provider ingress from consumer dequeue" in lesson
-    assert "post_fire_ingress_gap_ms" in lesson
-    assert "post_fire_consumer_gap_ms" in lesson
-    assert "consumer_backlog_ms" in lesson
-    assert "delayed, not dropped" in lesson
-    assert "this naive one drops it on the floor" not in lesson

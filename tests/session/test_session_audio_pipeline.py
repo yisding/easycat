@@ -137,8 +137,8 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session._turn_runner.schedule_turn_ended(TurnEnded(turn_id="race-turn"))
     with pytest.raises(asyncio.CancelledError):
         await commit_task
-    if session._tts_scheduler.current_task is not None:
-        await session._tts_scheduler.current_task
+    if session._tts_scheduler.active_turn_task is not None:
+        await session._tts_scheduler.active_turn_task
 
     # Invariant: we never observe BOTH commit_done AND end_stream in
     # the same run — the in-flight cancel closes the window.

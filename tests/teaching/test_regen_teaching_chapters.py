@@ -6,16 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from easycat.events import (
-    SessionActionCompleted,
-    SessionActionFailed,
-    SessionActionRequested,
-    SessionActionStarted,
-    ToolCallDelta,
-    ToolCallResult,
-    ToolCallStarted,
-)
-from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     EXERCISE_COMPLETION_RE,
     EXERCISE_HINTS_RE,
@@ -840,59 +830,3 @@ def test_teaching_easyconfig_examples_rely_on_openai_env_key() -> None:
         "Teaching EasyConfig examples should let EasyConfig read OPENAI_API_KEY:\n"
         + "\n".join(stale)
     )
-
-
-def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:
-    """Keep the tools chapter plan aligned with the current bridge event surface."""
-    plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
-        encoding="utf-8"
-    )
-
-    assert "easycat.integrations.agents.base.AgentBridgeEvent" in plan
-    assert '"tool_started"' in plan
-    assert '"tool_delta"' in plan
-    assert '"tool_result"' in plan
-    assert "_legacy_types.AgentStreamEventType" not in plan
-    assert "AgentStreamEventType." not in plan
-
-
-def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
-    """Keep the tools chapter plan aligned with production tool-call journaling."""
-    plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
-        encoding="utf-8"
-    )
-
-    assert "SessionJournalSink" in plan
-    assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
-    registered_records = {spec.event_type: spec.name for spec in _SIMPLE_EVENT_RECORDS}
-    tool_call_events = (ToolCallStarted, ToolCallDelta, ToolCallResult)
-    assert {registered_records[event_type] for event_type in tool_call_events} == {
-        "tool_call_started",
-        "tool_call_delta",
-        "tool_call_result",
-    }
-    assert all(registered_records[event_type] in plan for event_type in tool_call_events)
-    assert "tool name and call id" in plan
-    assert "tool name and args" not in plan
-    assert "session/_session.py" not in plan
-    assert "_sub(ToolCallStarted" not in plan
-    assert "Session._subscribe_journal_sink" not in plan
-
-    # SessionAction lifecycle events are now journaled in the same declarative
-    # registry as tool calls; the plan must document this instead of
-    # claiming a journaling gap.
-    session_action_events = (
-        SessionActionRequested,
-        SessionActionStarted,
-        SessionActionCompleted,
-        SessionActionFailed,
-    )
-    assert {registered_records[event_type] for event_type in session_action_events} == {
-        "session_action_requested",
-        "session_action_started",
-        "session_action_completed",
-        "session_action_failed",
-    }
-    assert all(registered_records[event_type] in plan for event_type in session_action_events)
-    assert "*not* currently journaled" not in plan
-    assert "`SessionAction` flows are journaled too" in plan

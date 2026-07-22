@@ -85,6 +85,83 @@ The in-tree behavioral contract lives in
 mirror its cases (audio event streaming, `cancel()` discarding pending
 output, teardown via `aclose`) when your provider talks to a real backend.
 
+## Register a shortcut name
+
+Injecting an instance (above) works for one session. To make your provider
+selectable everywhere built-ins are — `tts="yours/voice"` string shortcuts,
+`easycat doctor` credential checks, `easycat init` scaffold extras, and
+validation's URL redaction — register it with the catalog instead.
+
+```python
+from easycat import register_tts_provider
+
+register_tts_provider(
+    "yours",
+    YourTTS,
+    YourTTSConfig,
+    env_var="YOURS_API_KEY",
+    extra="yours",  # optional: install extra shipping your deps
+    api_domains=("yours.example.com",),  # optional: for URL redaction
+)
+```
+
+`YourTTS` must accept a `YourTTSConfig` instance as its constructor argument —
+the same contract built-in providers follow. To receive the session
+`EventBus`, declare `event_bus: EventBus | None = None` on `YourTTSConfig`; the
+factory injects the bus into that optional config field before constructing the
+provider. `YourTTSConfig` also needs an `api_key` field.
+For the `"yours/voice-name"` shortcut syntax, it also needs a `model` field (or
+a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
+something else, e.g. ElevenLabs' `model_id`).
+
+Once registered, `"yours"` participates in `create_tts_provider`,
+`available_tts_providers`, and `tts="yours/some-voice"` resolution exactly
+like `"openai"` or `"elevenlabs"` do.
+
+What each metadata field feeds:
+
+| Field | Consumed by |
+| --- | --- |
+| `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/voice"` shortcuts |
+| `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
+| `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
+
+### Auto-registering from a pip-installed package
+
+A third-party package can register itself automatically — no explicit call
+required from the app — by exposing a zero-arg callable under the
+`easycat.tts_providers` entry-point group:
+
+```toml
+# pyproject.toml of the third-party package
+[project.entry-points."easycat.tts_providers"]
+yours = "easycat_yours:register"
+```
+
+```python
+# easycat_yours/__init__.py
+from easycat import register_tts_provider
+
+from ._provider import YourTTS, YourTTSConfig
+
+
+def register() -> None:
+    register_tts_provider(
+        "yours",
+        YourTTS,
+        YourTTSConfig,
+        env_var="YOURS_API_KEY",
+        extra="yours",
+        api_domains=("yours.example.com",),
+    )
+```
+
+EasyCat scans this entry-point group lazily, once, the first time any TTS
+factory function is called — so simply `pip install`ing the package is
+enough for `tts="yours/voice"` to work with no import or registration call in
+the app. A plugin that fails to load or register logs a warning instead of
+breaking every other provider.
+
 ## Notes
 
 - `cancel()` is the barge-in path — it must take effect quickly, even

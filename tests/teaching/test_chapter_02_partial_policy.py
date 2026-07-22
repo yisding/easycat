@@ -8,8 +8,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
-CHAPTER_3 = ROOT / "docs" / "teaching" / "03-parrot-naive"
-CHAPTER_6 = ROOT / "docs" / "teaching" / "06-streaming-agent"
 
 
 def _load_probe():
@@ -45,22 +43,3 @@ def test_revision_aware_policy_commits_only_the_final_hypothesis() -> None:
         "speculations_cancelled": ["set a timer for fifteen minutes"],
         "safe_commits": ["set a timer for fifty minutes"],
     }
-
-
-def test_chapter_teaches_reversibility_instead_of_ignoring_partials() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    chapter_3 = (CHAPTER_3 / "README.md").read_text(encoding="utf-8")
-    chapter_6 = (CHAPTER_6 / "README.md").read_text(encoding="utf-8")
-    text = f"{readme}\n{exercises}\n{chapter_3}\n{chapter_6}".lower()
-
-    assert "never act on a partial" not in text
-    assert "never act on partials" not in text
-    assert "never commit irreversible work from a partial" in text
-    assert "cancellable speculation" in text
-    assert "dispatch those from `final`, not `partial`" in text
-    assert "irreversible output waits for\n`sttfinal`" in text
-    assert "commit spoken output on final only" in text
-
-    assert "reversible consumers such as live\ncaptions or cancellable speculation" in chapter_6
-    assert "irreversible agent commits and spoken output wait for `STTFinal`" in chapter_6

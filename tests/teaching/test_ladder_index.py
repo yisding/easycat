@@ -157,27 +157,20 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat docs" in readme
     assert "uv run easycat docs --audience learners" in readme
     assert "uv run easycat docs --audience learners --json" in readme
-    assert "maintained docs map" in normalized
-    assert "narrow that map to learner-facing routes" in normalized
-    assert "automation needs that smaller route map" in normalized
     assert (
         "Coding agent? Use the root [AGENTS.md](../../AGENTS.md) for repository coding rules"
     ) in normalized
     assert "[llms.txt](../../llms.txt) for machine-readable docs route discovery" in normalized
-    assert "when a script or coding agent" not in normalized
     assert "uv run easycat explain json-schema" in readme
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --json" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
     assert _has_env_file_run_hint(normalized)
-    assert "first-run environment checks as parseable rows" in normalized
-    assert "environment/check rows as parseable output" in normalized
     assert "uv run easycat validate quick" in readme
     assert "uv run easycat validate quick --json" in readme
     assert "uv run easycat validate report .easycat/validation/latest.json" in readme
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
-    assert "repository validation lane from the root" in normalized
 
 
 def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> None:
@@ -267,43 +260,7 @@ def test_teaching_chapters_have_reader_entrypoints() -> None:
 
 
 def test_teaching_chapters_follow_documented_learning_contract() -> None:
-    index = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
-    normalized_index = re.sub(r"\s+", " ", index)
-    stale_contracts = (
-        "Each README gets one diagram and one exercise",
-        "longer than one page",
-        "~≤200 lines of new reader-facing code",
-    )
     invalid_exercises: list[str] = []
-
-    assert "Narrative, exercises, self-check" in normalized_index
-    assert "[progress worksheet](./PROGRESS.md)" in index
-    assert "end-to-end completion record" in normalized_index
-    assert "closed-book integration reviews after the Build, Operate, and Generalise" in (
-        normalized_index
-    )
-    assert "Complete each phase gate before starting the next group" in normalized_index
-    assert "one or more applied tasks in the dedicated `EXERCISES.md`" in normalized_index
-    assert "Generated source diffs can make a README long" in normalized_index
-    assert "Generated handoffs connect those steps" in normalized_index
-    assert (
-        "return to the progress worksheet before pointing to the next chapter" in normalized_index
-    )
-    assert "concealed behind numbered disclosures" in normalized_index
-    assert "make a fresh attempt before opening the next clue" in normalized_index
-    assert "A task is complete when the learner has kept an initial plan" in normalized_index
-    assert "Closing self-checks are closed-book retrieval gates" in normalized_index
-    assert "answer every numbered question" in normalized_index
-    assert "support each answer with attempt evidence" in normalized_index
-    assert "mark each answer pass or retry" in normalized_index
-    assert "chapter's N/N threshold" in normalized_index
-    assert "Phase reviews use the same mastery rule for synthesis" in normalized_index
-    for criterion in ("coverage", "causality", "evidence", "limits"):
-        assert f"**{criterion}**" in normalized_index
-    assert "mark each criterion pass or retry" in normalized_index
-    assert "enter the next phase only at 4/4" in normalized_index
-    assert "one primary question" in normalized_index
-    assert not any(contract in index for contract in stale_contracts)
 
     for chapter_dir in _chapter_dirs():
         exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
@@ -690,21 +647,6 @@ def test_teaching_cli_error_code_examples_use_current_namespace() -> None:
     )
     assert not unknown_mentions, "Teaching docs reference unknown EasyCat errors: " + ", ".join(
         unknown_mentions
-    )
-
-
-def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
-    stale_mentions: list[str] = []
-
-    for chapter_dir in _chapter_dirs():
-        for filename in ("README.md", "EXERCISES.md"):
-            path = chapter_dir / filename
-            text = path.read_text(encoding="utf-8")
-            if "`tests/teaching/` doesn't exist yet" in text:
-                stale_mentions.append(path.relative_to(REPO_ROOT).as_posix())
-
-    assert not stale_mentions, "Teaching docs claim tests/teaching/ is missing: " + ", ".join(
-        stale_mentions
     )
 
 

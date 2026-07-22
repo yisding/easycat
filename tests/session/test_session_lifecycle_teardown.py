@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
@@ -68,6 +69,49 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
     assert warmed == ["stt", "tts", "agent", "transport"]
+
+
+@pytest.mark.asyncio
+async def test_stop_unregisters_armed_emergency_export():
+    """A clean ``stop()`` drops the session's emergency exporter promptly.
+
+    Without the unregister call the exporter closure (which strongly
+    references the Session) lingers in the process-wide registry until the
+    shared excepthook/atexit hook runs, pinning every stopped session in
+    memory for the process lifetime.
+    """
+    from easycat.config import _factory
+
+    saved_excepthook = sys.excepthook
+    saved_registry = dict(_factory._EXPORT_REGISTRY)
+    saved_installed = _factory._EXPORT_INSTALLED
+    saved_previous = _factory._EXPORT_PREVIOUS_EXCEPTHOOK
+    saved_hook = _factory._EXPORT_EXCEPTHOOK
+
+    _factory._EXPORT_REGISTRY.clear()
+    _factory._EXPORT_INSTALLED = False
+    _factory._EXPORT_PREVIOUS_EXCEPTHOOK = None
+    _factory._EXPORT_EXCEPTHOOK = None
+    try:
+        session = Session(_full_config(transport=FakeTransport()))
+        _factory.install_emergency_export(session)
+        assert id(session) in _factory._EXPORT_REGISTRY
+
+        await session.start()
+        await session.stop()
+
+        # The exporter (and the Session it captures) is dropped on clean stop.
+        assert id(session) not in _factory._EXPORT_REGISTRY
+        # Draining the last entry uninstalls the shared hook.
+        assert _factory._EXPORT_REGISTRY == {}
+        assert _factory._EXPORT_INSTALLED is False
+    finally:
+        _factory._EXPORT_REGISTRY.clear()
+        _factory._EXPORT_REGISTRY.update(saved_registry)
+        _factory._EXPORT_INSTALLED = saved_installed
+        _factory._EXPORT_PREVIOUS_EXCEPTHOOK = saved_previous
+        _factory._EXPORT_EXCEPTHOOK = saved_hook
+        sys.excepthook = saved_excepthook
 
 
 @pytest.mark.asyncio

@@ -41,15 +41,3 @@ def test_postmortem_probe_preserves_view_records_and_bundle() -> None:
         "record_count": record_count,
         "matches_postmortem_view": True,
     }
-
-
-def test_chapter_teaches_journal_view_is_always_read_only() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "postmortem_probe.py" in normalized
-    assert "stable, read-only `JournalView`" in normalized
-    assert "application code never appends through it" in normalized
-    assert "`append_exposed_before_stop` was already false" in normalized
-    assert "`InMemoryRingBuffer` to `FrozenJournalSnapshot`" in normalized

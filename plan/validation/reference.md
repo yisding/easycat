@@ -189,7 +189,7 @@ Runner selector for PR-local quick validation:
 
 ```bash
 uv run pytest -q --junitxml=<run-dir>/junit.xml \
-  -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+  -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 ```
 
 Expected coverage: unit tests, local integration tests, fake-provider agent

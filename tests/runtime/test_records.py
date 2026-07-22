@@ -141,7 +141,10 @@ class TestSentinelRecords:
 
 class TestJournalRecordKind:
     def test_all_kinds(self):
-        expected = {
+        # These strings are the on-disk/JSON journal wire format. External
+        # consumers and historical bundles key on them, so any rename,
+        # removal, or addition must be a deliberate change to this set.
+        assert {k.value for k in JournalRecordKind} == {
             "event",
             "span_start",
             "span_end",
@@ -151,8 +154,6 @@ class TestJournalRecordKind:
             "degraded",
             "recovery",
         }
-        actual = {k.value for k in JournalRecordKind}
-        assert actual == expected
 
 
 class TestSubclassDefaultsRule:

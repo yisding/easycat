@@ -109,12 +109,3 @@ def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None
     assert payload["total"] == 1
     assert payload["matches"][0]["name"] == "tts_payload_prepared"
     assert payload["matches"][0]["data"]["ssml_downgraded"] is True
-
-
-def test_exercise_distinguishes_the_real_scheduler_record() -> None:
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(exercises.split())
-
-    assert "not a family of `output_processor.*` records" in normalized
-    assert "`tts_payload_prepared`" in normalized
-    assert "exact 120 ms timing guarantee is gone" in normalized

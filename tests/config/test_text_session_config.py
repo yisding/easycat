@@ -19,14 +19,14 @@ def test_create_text_session_forwards_warmup():
     assert session._warmup.enabled is False
 
 
-def test_text_session_config_defaults_debug_to_full():
+def test_text_session_config_defaults_debug_to_light():
     from easycat.config import TextSessionConfig
 
     config = TextSessionConfig(agent=_DummyAgent())
-    assert config.debug == "full"
+    assert config.debug == "light"
 
 
-def test_create_text_session_defaults_build_sqlite_journal(
+def test_create_text_session_defaults_build_memory_journal(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
     from easycat.runtime import InMemoryRingBuffer, SqliteJournal
@@ -34,11 +34,12 @@ def test_create_text_session_defaults_build_sqlite_journal(
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
     session = create_text_session(agent=_DummyAgent())
     try:
-        # Durable journaling on by default: a read view is exposed and the
-        # backing journal is a SqliteJournal, not the in-memory ring buffer.
+        # Default ``debug="light"``: a read view is exposed but the backing
+        # journal is the in-memory ring buffer, not the durable SqliteJournal
+        # (which is the opt-in ``debug="full"`` mode).
         assert session.journal is not None
-        assert isinstance(session._journal, SqliteJournal)
-        assert not isinstance(session._journal, InMemoryRingBuffer)
+        assert isinstance(session._journal, InMemoryRingBuffer)
+        assert not isinstance(session._journal, SqliteJournal)
     finally:
         session._journal.close()
 
@@ -85,8 +86,8 @@ def test_create_text_session_config_with_default_kwargs_ok():
     from easycat.config import TextSessionConfig, create_text_session
 
     # Passing config alongside only default-valued kwargs is allowed.
-    # The default is now debug="full"; passing the matching default kwarg
+    # The default is debug="light"; passing the matching default kwarg
     # is treated as "unset" by the config-vs-loose mutual-exclusion check.
     config = TextSessionConfig(agent=_DummyAgent(), debug="off")
-    session = create_text_session(config, debug="full")
+    session = create_text_session(config, debug="light")
     assert session is not None

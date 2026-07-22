@@ -147,6 +147,35 @@ def _emit_json_meta(slug: str) -> None:
     )
 
 
+def _emit_unknown(raw: str, *, json_output: bool) -> None:
+    """Render the "unknown code" response with any close-match suggestions."""
+    normalized = _normalize(raw)
+    matches = suggest_codes(normalized)
+    matches += [slug for slug in META_ENTRIES if slug.startswith(raw.lower())]
+    if json_output:
+        err = EASYCAT_E501(code=raw)
+        emit_json(
+            json_envelope(
+                "explain",
+                status="error",
+                code=err.code,
+                message=err.message,
+                fix=err.rendered_fix(),
+                context=err.context,
+                query=raw,
+                suggestions=matches,
+                exit_code=2,
+            )
+        )
+        return
+    stderr_console.print(
+        f"  [red]✗[/] [red]EASYCAT_E501[/]: Unknown error code {escape(repr(raw))}."
+    )
+    if matches:
+        stderr_console.print(f"    Did you mean: {escape(', '.join(matches))}?")
+    stderr_console.print("    Run [cyan]easycat explain --list[/] for the full catalog.")
+
+
 @cli_command
 def explain(
     code: str = typer.Argument(
@@ -198,28 +227,5 @@ def explain(
         raise typer.Exit(0)
 
     # Unknown — render suggestions if any.
-    matches = suggest_codes(normalized)
-    matches += [slug for slug in META_ENTRIES if slug.startswith(raw.lower())]
-    if json_output:
-        err = EASYCAT_E501(code=raw)
-        emit_json(
-            json_envelope(
-                "explain",
-                status="error",
-                code=err.code,
-                message=err.message,
-                fix=err.rendered_fix(),
-                context=err.context,
-                query=raw,
-                suggestions=matches,
-                exit_code=2,
-            )
-        )
-    else:
-        stderr_console.print(
-            f"  [red]✗[/] [red]EASYCAT_E501[/]: Unknown error code {escape(repr(raw))}."
-        )
-        if matches:
-            stderr_console.print(f"    Did you mean: {escape(', '.join(matches))}?")
-        stderr_console.print("    Run [cyan]easycat explain --list[/] for the full catalog.")
+    _emit_unknown(raw, json_output=json_output)
     raise typer.Exit(2)

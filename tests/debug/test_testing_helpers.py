@@ -204,15 +204,15 @@ async def test_run_text_turn_result_works_with_bundle_assert_helpers():
 
 
 async def test_run_text_turn_with_text_session_config():
-    cfg = TextSessionConfig(agent=_EchoAgent())  # debug defaults to "full"
+    cfg = TextSessionConfig(agent=_EchoAgent())  # debug defaults to "light"
 
     result = await run_text_turn(cfg, "config path")
 
     assert result.response == "echo: config path"
     assert_turn_completed(result, result.turn_id)
     # The caller's config must not be mutated to get a journal; the default
-    # debug="full" already journals, so run_text_turn uses it as-is.
-    assert cfg.debug == "full"
+    # debug="light" already journals, so run_text_turn uses it as-is.
+    assert cfg.debug == "light"
 
 
 async def test_run_text_turn_with_debug_off_config_upgrades_without_mutation():

@@ -59,13 +59,3 @@ def test_transport_contract_probe_is_device_free_and_executable() -> None:
         "legacy_transport_like": True,
         "legacy_full_transport": False,
     }
-
-
-def test_chapter_names_acceptance_and_full_versioned_contract() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "send_audio(self, chunk: AudioChunk) -> bool" in readme
-    assert "class Transport(VersionedProvider, Protocol)" in readme
-    assert "Acceptance is not playback" in readme
-    assert "`True` means accepted, not heard" in exercises

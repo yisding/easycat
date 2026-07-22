@@ -82,41 +82,6 @@ def test_agent_guide_command_examples_are_current() -> None:
     just_recipes = just_recipe_names(REPO_ROOT)
     command_sections = _agent_guide_command_sections()
 
-    for filename, command_section in command_sections.items():
-        assert "raw docs/onboarding guard commands" in command_section, filename
-        assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in (command_section), (
-            filename
-        )
-        assert "just check" in command_section
-        assert "just validate-quick" in command_section
-        assert "uv run easycat docs" in command_section
-        assert "uv run easycat docs --json" in command_section
-        assert "uv run easycat doctor --json" in command_section
-        assert "uv run easycat doctor --env-file .env --json" in command_section
-        assert "uv run easycat explain json-schema" in command_section
-        assert "uv run easycat bundles show PATH --json" in command_section
-        assert "uv run easycat bundles export PATH --output DIR --json" in command_section
-        assert "uv run easycat replay PATH --json" in command_section
-        assert "uv run easycat validate quick" in command_section
-        assert "uv run easycat validate report .easycat/validation/latest.json" in (
-            command_section
-        )
-        assert "uv run easycat validate report .easycat/validation/latest.json --json" in (
-            command_section
-        )
-        assert "tests/test_metrics.py" not in command_section, filename
-
-    agents_commands = command_sections["AGENTS.md"]
-    assert "uv run easycat docs --audience coding-agents" in agents_commands
-    assert "uv run easycat docs --audience coding-agents --json" in agents_commands
-    assert 'uv run easycat docs --audience "coding agents"' not in agents_commands
-    assert "architecture and maintenance" in agents_commands
-    assert "examples, teaching, validation, and operations" not in agents_commands
-
-    claude_commands = command_sections["CLAUDE.md"]
-    assert "uv run easycat docs --audience maintainers" in claude_commands
-    assert "uv run easycat docs --audience maintainers --json" in claude_commands
-
     stale_recipes: list[str] = []
     for filename, command_section in command_sections.items():
         for match in GUIDE_JUST_COMMAND_RE.finditer(command_section):
@@ -235,36 +200,25 @@ def test_agent_guides_reference_config_package_layout() -> None:
     )
 
 
-def test_agent_guides_name_major_source_packages() -> None:
-    """Keep first-contact maintainer maps aligned with major source packages."""
+def test_agent_guides_name_major_source_and_test_packages() -> None:
+    """Keep first-contact maintainer maps aligned with major source and test packages."""
+    src_prefix, test_prefix = "src/easycat", "tests"
     for package_name in ("cli", "debugger", "vad", "validation"):
-        assert (REPO_ROOT / "src" / "easycat" / package_name).is_dir()
+        assert (REPO_ROOT / src_prefix / package_name).is_dir()
+        assert (REPO_ROOT / test_prefix / package_name).is_dir()
 
     missing: list[str] = []
     for filename in ("AGENTS.md", "CLAUDE.md"):
         text = (REPO_ROOT / filename).read_text(encoding="utf-8")
         for package_name in ("cli", "debugger", "vad", "validation"):
-            mention = f"`{package_name}/`"
-            if mention not in text:
-                missing.append(f"{filename}: {mention}")
+            source_mention = f"`{package_name}/`"
+            if source_mention not in text:
+                missing.append(f"{filename}: {source_mention}")
+            test_mention = f"`{test_prefix}/{package_name}/`"
+            if test_mention not in text:
+                missing.append(f"{filename}: {test_mention}")
 
-    assert not missing, "Agent guides missing major source packages: " + ", ".join(missing)
-
-
-def test_agent_guides_name_major_test_domains() -> None:
-    """Source-package maps should point contributors to matching tests."""
-    for package_name in ("cli", "debugger", "vad", "validation"):
-        assert (REPO_ROOT / "tests" / package_name).is_dir()
-
-    missing: list[str] = []
-    for filename in ("AGENTS.md", "CLAUDE.md"):
-        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
-        for package_name in ("cli", "debugger", "vad", "validation"):
-            mention = f"`tests/{package_name}/`"
-            if mention not in text:
-                missing.append(f"{filename}: {mention}")
-
-    assert not missing, "Agent guides missing test-domain packages: " + ", ".join(missing)
+    assert not missing, "Agent guides missing major source/test packages: " + ", ".join(missing)
 
 
 def test_agent_guide_source_path_mentions_exist() -> None:

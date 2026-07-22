@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from perf.bench_framework_latency import (
-    LOCK_EXCLUDE_NEWER,
+    LOCK_EXCLUDE_NEWER_BY_FRAMEWORK,
     PINS,
     Worker,
     WorkerSpec,
@@ -91,8 +91,16 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     assert easycat.command == (sys.executable, str(worker), "--framework", "easycat")
     assert "--no-config" in livekit.command
     assert "--no-config" in pipecat.command
-    assert livekit.command[livekit.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
-    assert pipecat.command[pipecat.command.index("--exclude-newer") + 1] == LOCK_EXCLUDE_NEWER
+    for spec in (livekit, pipecat):
+        cutoff = spec.command[spec.command.index("--exclude-newer") + 1]
+        assert cutoff == LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[spec.framework]
+    # Pin the cutoffs as literals so an unintended lock regeneration (which
+    # shifts the whole transitive snapshot) fails loudly instead of moving the
+    # dict and the command in lockstep.
+    assert LOCK_EXCLUDE_NEWER_BY_FRAMEWORK == {
+        "livekit": "2026-07-19T00:00:00Z",
+        "pipecat": "2026-07-19T00:00:00Z",
+    }
     assert "--isolated" in livekit.command
     assert "--locked" in livekit.command
     assert "--locked" in pipecat.command
@@ -119,9 +127,10 @@ def test_competitor_lock_metadata_is_content_addressed() -> None:
     metadata = _lock_metadata()
 
     assert set(metadata) == {"livekit", "pipecat"}
-    for lock in metadata.values():
+    for framework, lock in metadata.items():
         assert lock["path"].endswith("uv.lock")
         assert len(lock["sha256"]) == 64
+        assert lock["exclude_newer"] == LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework]
 
 
 def test_percentile_interpolates_and_validates_inputs() -> None:

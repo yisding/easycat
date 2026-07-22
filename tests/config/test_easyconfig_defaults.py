@@ -35,15 +35,18 @@ def test_easycat_config_openai_defaults():
     assert isinstance(config.tts, OpenAITTSConfig)
 
 
-def test_easycat_config_defaults_debug_to_full():
+def test_easycat_config_defaults_debug_to_light():
+    # The default is the in-memory ``"light"`` journal so per-frame capture
+    # stays off the disk and off the live audio loop. ``"full"`` is the
+    # opt-in durable/deep-debugging mode.
     config = EasyConfig(openai_api_key="test-key")
-    assert config.debug == "full"
+    assert config.debug == "light"
 
 
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.
-    config = EasyConfig(openai_api_key="test-key")
+    config = EasyConfig(openai_api_key="test-key", debug="full")
     assert config.debug == "full"
     assert config.debugger_autolaunch is False
 
@@ -59,7 +62,7 @@ def test_debugger_autolaunch_opt_in():
 def test_capture_aec_reference_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT journal per-frame
     # AEC reference rows on its own — that is strictly opt-in.
-    config = EasyConfig(openai_api_key="test-key")
+    config = EasyConfig(openai_api_key="test-key", debug="full")
     assert config.debug == "full"
     assert config.capture_aec_reference is False
 

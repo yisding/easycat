@@ -21,7 +21,7 @@ from easycat.stages.base import (
     journal_append_event,
     journal_ctx,
     live_replay_input,
-    put_artifact,
+    put_artifact_async,
     record_stage_failure,
 )
 
@@ -71,7 +71,7 @@ class VADStage:
         result_attr = "pass"
         state_before = self.snapshot_state()
         data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        input_ref = put_artifact(ctx, data_bytes)
+        input_ref = await put_artifact_async(ctx, data_bytes)
         # VAD backends decode the raw byte stream as flat int16 mono (frame
         # boundaries are computed as samples*2). Interleaved multi-channel
         # input would be misread as garbage, so downmix to mono before

@@ -16,14 +16,22 @@ services:
       EASYCAT_WS_MAX_SESSIONS: ${EASYCAT_WS_MAX_SESSIONS:-10}
     ports:
       - "127.0.0.1:8765:8765"
+    volumes:
+      # Crash-durable journals (EASYCAT_DATA_DIR, default ".easycat") — an
+      # ephemeral container filesystem would silently drop the framework's
+      # journal-durability guarantee across `docker compose down`/recreate.
+      # See "Persisting the journal across restarts" in docs/deployment/docker.md.
+      - easycat-journal:/app/.easycat
     restart: unless-stopped
+    # Delegates to the image's own HEALTHCHECK (docker/healthcheck.py), which
+    # TCP-probes EASYCAT_WS_HOST/EASYCAT_WS_PORT for this raw-websockets
+    # example; set EASYCAT_HEALTH_URL instead if you swap the CMD for a
+    # VoiceServer-based script that serves /health/ready.
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import socket; s=socket.create_connection(('127.0.0.1',8765),2); s.close()"
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 10s
+
+volumes:
+  easycat-journal:

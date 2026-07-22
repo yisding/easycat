@@ -101,7 +101,7 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
 
   coverage:
-    name: Coverage (report-only)
+    name: Coverage + guard suite (diff-cover report-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -116,9 +116,10 @@ jobs:
           python-version: "3.12"
       - run: uv sync --locked --group dev --python 3.12
       # pytest --cov (NOT `coverage run -m pytest -n auto`, which reports 0%
-      # under xdist; pytest-cov itself is xdist-safe). Mirrors `just cov` and
-      # the `easycat validate quick` slice, so this job doubles as the per-PR
-      # Python 3.12 test signal.
+      # under xdist; pytest-cov itself is xdist-safe). Uses the `just cov`
+      # marker slice but deliberately KEEPS the `guard` docs/prose tests (which
+      # `just cov`/`just test-fast`/`validate quick` skip for the fast loop) so
+      # this per-PR Python 3.12 job is the PR signal for the guard suite too.
       - name: Run safe slice with coverage
         run: >-
           uv run --python 3.12 pytest -q -n auto --dist loadscope

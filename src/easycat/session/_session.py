@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -1147,7 +1148,7 @@ class Session:
                 # (it cancels the consumer task, ends the stream, and drains
                 # scoped commit/pause tasks) — matching 92f8ebf's move away
                 # from an ad-hoc stt_task cancel here.
-                current_tts_task = self._tts_scheduler.current_task
+                current_tts_task = self._tts_scheduler.active_turn_task
                 if current_tts_task and not current_tts_task.done():
                     current_tts_task.cancel()
                     tasks.append(current_tts_task)
@@ -1224,6 +1225,14 @@ class Session:
             self._turn = None
             self._finalize_debug_backends()
             self._mark_closed()
+            # Drop this session's armed emergency-export exporter from the
+            # process-wide registry now that it has stopped cleanly. Otherwise
+            # the exporter closure (which strongly references this Session)
+            # lingers until the shared excepthook/atexit hook runs, pinning
+            # every stopped session in memory for the process lifetime.
+            unregister = getattr(self, "_emergency_export_unregister", None)
+            if unregister is not None:
+                unregister()
         finally:
             # Clear the stopping flag FIRST so it is always reset even if a
             # later teardown step (observability / log-context reset) raises.
@@ -1271,6 +1280,11 @@ class Session:
         if turn:
             turn.cancel_token.cancel()
 
+        # Stamp the barge-in initiation time so the cutoff-latency histogram
+        # can measure the elapsed wall time until playback is actually cleared
+        # on the transport below. Monotonic to stay immune to clock steps.
+        cutoff_started = time.monotonic() if barge_in else None
+
         if barge_in:
             if turn:
                 turn.record_barge_in()
@@ -1287,6 +1301,16 @@ class Session:
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
 
+        # Playback is cleared at this point; record the barge-in -> cutoff
+        # latency so OTel consumers can track how long the caller kept hearing
+        # the bot after interrupting it.
+        if cutoff_started is not None:
+            observability.record_histogram(
+                "easycat.interruption.cutoff_latency",
+                time.monotonic() - cutoff_started,
+                attributes={"easycat.surface": "vad"},
+            )
+
         if not barge_in:
             self._reset_turn_state()
 
@@ -1297,10 +1321,9 @@ class Session:
         ``cancel_token`` so any in-flight agent stream can continue
         producing text (which will simply not be synthesized).
 
-        Importantly, this does NOT cancel ``_current_tts_task`` — that
-        task is the entire ``TurnRunner.on_turn_ended`` coroutine which
-        includes the agent consumer.  Cancelling it would abort the
-        agent stream.
+        Constraint: never cancel ``active_turn_task`` here — it is the whole
+        ``on_turn_ended`` coroutine (agent consumer included), so cancelling it
+        would abort the agent stream.
         """
         self._tts_scheduler.set_playback_suppressed(True)
         await self._tts_scheduler.synthesizer.cancel()

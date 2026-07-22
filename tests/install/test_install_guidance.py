@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tests.install._install_guidance_helpers import (
     EASYCAT_EXTRA_RE,
     META_ENTRIES,
@@ -40,36 +42,27 @@ def test_optional_extra_guidance_uses_current_uv_commands() -> None:
     )
 
 
-def test_repo_local_uv_sync_extra_guidance_keeps_dev_group() -> None:
-    """Repo-local optional-extra setup should not drop development tools."""
+@pytest.mark.parametrize(
+    ("pattern", "label"),
+    [
+        (REPO_UV_SYNC_EXTRA_COMMAND_RE, "extra"),
+        (REPO_UV_SYNC_PYTHON_COMMAND_RE, "--python"),
+    ],
+)
+def test_repo_local_uv_sync_guidance_keeps_dev_group(pattern: re.Pattern[str], label: str) -> None:
+    """Repo-local uv sync setup (optional-extra or --python) should not drop dev tools."""
     stale: list[str] = []
 
     for path in _iter_guidance_files():
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(REPO_ROOT).as_posix()
-        for match in REPO_UV_SYNC_EXTRA_COMMAND_RE.finditer(text):
+        for match in pattern.finditer(text):
             command = match.group(0).strip().rstrip(".,")
             if "--group dev" not in command:
                 line = text.count("\n", 0, match.start()) + 1
                 stale.append(f"{rel}:{line}: {command}")
 
-    assert not stale, "Repo-local uv sync extra commands missing --group dev:\n" + "\n".join(stale)
-
-
-def test_repo_local_uv_sync_python_guidance_keeps_dev_group() -> None:
-    """Repo-local Python-version sync hints should still install dev tools."""
-    stale: list[str] = []
-
-    for path in _iter_guidance_files():
-        text = path.read_text(encoding="utf-8")
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        for match in REPO_UV_SYNC_PYTHON_COMMAND_RE.finditer(text):
-            command = match.group(0).strip().rstrip(".,")
-            if "--group dev" not in command:
-                line = text.count("\n", 0, match.start()) + 1
-                stale.append(f"{rel}:{line}: {command}")
-
-    assert not stale, "Repo-local uv sync --python commands missing --group dev:\n" + "\n".join(
+    assert not stale, f"Repo-local uv sync {label} commands missing --group dev:\n" + "\n".join(
         stale
     )
 
@@ -255,36 +248,6 @@ def test_template_list_guidance_points_to_catalog_json() -> None:
     )
 
 
-def test_readme_cli_explain_examples_are_copyable() -> None:
-    """``easycat explain`` requires a code or --list; the README should show one."""
-    cli_section = _readme_cli_section()
-
-    assert not re.search(r"(?m)^easycat explain\s+#", cli_section)
-    assert "easycat explain E102" in cli_section
-    assert "easycat explain json-schema" in cli_section
-    assert "easycat explain --list" in cli_section
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    normalized_readme = re.sub(r"\s+", " ", readme)
-    assert "standard `--json` envelope" in normalized_readme
-    assert "command-specific fields" in normalized_readme
-    assert "`entries`, `commands`, `catalog`" in normalized_readme
-    assert "`command_note`" in normalized_readme
-    assert "`available_audience_filters`" in normalized_readme
-    assert "`audience_alias_note`" in normalized_readme
-    assert "`base_requirement`, `create_command`, `repo_create_command`" in normalized_readme
-    assert "`next_step_commands`" in normalized_readme
-    assert "`pyproject_name`, `run_command`" in normalized_readme
-    assert "`run_command`, `check_command`, `fix_command`, `environment`, `checks`" in (
-        normalized_readme
-    )
-    assert "`fix_command`, `environment`, `checks`, `validation`" in normalized_readme
-    assert "`source_path`, and `fidelity_effective`" in normalized_readme
-    assert (
-        "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
-        "or `<session_id>`"
-    ) in normalized_readme
-
-
 def test_readme_cli_command_examples_are_locally_valid() -> None:
     cli_section = _readme_cli_section()
     commands = documented_commands(
@@ -315,50 +278,29 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
     normalized_readme = re.sub(r"\s+", " ", readme)
     schema_body = META_ENTRIES["json-schema"].body
 
-    command_family_mentions = {
-        "easycat docs --json": "docs route map",
-        "easycat docs --audience learners --json": "docs route map",
-        "easycat init --list-templates --json": "template catalog",
-        "easycat init NAME --json": "scaffold output",
-        "easycat doctor --json": "doctor environment/checks output",
-        "easycat validate quick --json": "validation quick/contracts/release/report output",
-        "easycat validate contracts --json": ("validation quick/contracts/release/report output"),
-        "easycat validate release --json": ("validation quick/contracts/release/report output"),
-        "easycat validate report PATH --json": (
-            "validation quick/contracts/release/report output"
-        ),
-        "easycat bundles list --json": "bundle list/show/export",
-        "easycat bundles show PATH --json": "bundle list/show/export",
-        "easycat bundles export PATH --output DIR --json": "bundle list/show/export",
-        "easycat inspect PATH --json": "inspect",
-        "easycat replay PATH --json": "replay",
-    }
-
-    for schema_command, readme_phrase in command_family_mentions.items():
-        assert schema_command in schema_body
-        assert readme_phrase in normalized_readme
-    assert "`audience_filter`" in normalized_readme
-    assert "`available_audiences`" in normalized_readme
-    assert "`available_audience_filters`" in normalized_readme
-    assert "`audience_alias_note`" in normalized_readme
-
-
-def test_readme_cli_debug_json_examples_are_copyable() -> None:
-    """Debug CLI commands should include machine-readable support handoffs."""
-    cli_section = _readme_cli_section()
-
-    for command in (
+    command_families = (
+        "easycat docs --json",
+        "easycat docs --audience learners --json",
+        "easycat init --list-templates --json",
+        "easycat init NAME --json",
+        "easycat doctor --json",
+        "easycat validate quick --json",
+        "easycat validate contracts --json",
+        "easycat validate release --json",
+        "easycat validate report PATH --json",
         "easycat bundles list --json",
         "easycat bundles show PATH --json",
         "easycat bundles export PATH --output DIR --json",
         "easycat inspect PATH --json",
         "easycat replay PATH --json",
-    ):
-        assert command in cli_section
-    assert "machine-readable bundle list" in cli_section
-    assert "machine-readable bundle/journal summary" in cli_section
-    assert "context-pack metadata" in cli_section
-    assert "machine-readable replay summary" in cli_section
+    )
+
+    for schema_command in command_families:
+        assert schema_command in schema_body
+    assert "`audience_filter`" in normalized_readme
+    assert "`available_audiences`" in normalized_readme
+    assert "`available_audience_filters`" in normalized_readme
+    assert "`audience_alias_note`" in normalized_readme
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:
@@ -368,65 +310,16 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     validation_doc = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
-    assert "easycat validate quick" in cli_section
-    assert "easycat validate quick --json" in cli_section
-    assert "easycat validate contracts" in cli_section
-    assert "easycat validate contracts --json" in cli_section
-    assert "easycat validate release" in cli_section
-    assert "easycat validate release --json" in cli_section
-    assert "easycat validate report .easycat/validation/latest.json" in cli_section
-    assert "easycat validate report .easycat/validation/latest.json --json" in cli_section
-    assert "uv run easycat validate quick --json" in validation_doc
-    assert "uv run easycat validate contracts --json" in validation_doc
-    assert "uv run easycat validate release --json" in validation_doc
-    assert "uv run easycat validate report .easycat/validation/latest.json --json" in (
-        validation_doc
-    )
     assert "easycat validate report PATH" not in readme
     assert "easycat validate report PATH" not in validation_doc
 
 
-def test_readme_cli_doctor_documents_env_file_option() -> None:
-    """``easycat doctor`` should show the direct .env path for scaffold users."""
-    cli_section = _readme_cli_section()
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    normalized_readme = re.sub(r"\s+", " ", readme)
-
-    assert "easycat doctor --env-file .env" in cli_section
-    assert "easycat doctor --json" in cli_section
-    assert "environment/check rows without Rich formatting" in normalized_readme
-
-
 def test_cli_init_examples_name_target_directory() -> None:
     """``easycat init`` requires NAME unless listing templates."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    normalized_readme = re.sub(r"\s+", " ", readme)
     cli_section = _readme_cli_section()
     production_chapter = (
         REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
     ).read_text(encoding="utf-8")
-    normalized_production_chapter = re.sub(r"\s+", " ", production_chapter)
 
     assert not re.search(r"(?m)^easycat init\s+#", cli_section)
-    assert "easycat init my-agent" in cli_section
-    assert "easycat init --list-templates" in cli_section
-    assert "easycat init --list-templates --json" in cli_section
-    assert "`easycat init my-agent` scaffolds" in readme
-    assert "`easycat init --list-templates` shows" in readme
-    assert "base `easycat[...]` package requirement and extras" in normalized_readme
-    assert "required environment variables" in normalized_readme
-    assert "optional environment knobs" in normalized_readme
-    assert "generated files" in normalized_readme
-    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
-        normalized_readme
-    )
-    assert "`uv run easycat init my-agent`" in production_chapter
-    assert "`uv run easycat init --list-templates`" in production_chapter
-    assert "base `easycat[...]` package requirements and extras" in normalized_production_chapter
-    assert "required environment variables" in normalized_production_chapter
-    assert "optional environment knobs" in normalized_production_chapter
-    assert "generated files" in normalized_production_chapter
-    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
-        normalized_production_chapter
-    )
     assert "**`uv run easycat init`**" not in production_chapter

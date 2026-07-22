@@ -590,9 +590,11 @@ when you have custom audio-processing stages.
 
 ## Inspecting conversation flow
 
-Observability is handled by the journal runtime. Enable it via `debug="light"`
-(in-memory) or `debug="full"` (SQLite WAL, crash-durable) and tail records
-live or read them after the session ends:
+Observability is handled by the journal runtime. It defaults to `debug="light"`
+(in-memory), so sessions are recorded without any per-frame disk writes on the
+live audio loop; opt into `debug="full"` (SQLite WAL, crash-durable) for deep
+debugging. Either way you can tail records live or read them after the session
+ends:
 
 ```python
 import asyncio

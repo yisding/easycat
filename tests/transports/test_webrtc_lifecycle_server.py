@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable, Iterable
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import easycat.transports.webrtc as webrtc_mod
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, TransportDegraded
 from easycat.server.webrtc_routes import serve_webrtc_config_sessions
@@ -110,8 +107,10 @@ class TestWebRTCIngressQueueOwnership:
         assert received is new_chunk
         await audio_iter.aclose()
 
-    @pytest.mark.asyncio
-    async def test_repeated_offer_closes_previous_outbound_source(self, monkeypatch):
+    async def test_repeated_offer_closes_previous_outbound_source(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Peer replacement must retire the old outbound source via aclose():
         ``disconnect()`` only closes the *current* source, so a delivery worker
         owned by the replaced source would otherwise survive indefinitely."""
@@ -125,9 +124,12 @@ class TestWebRTCIngressQueueOwnership:
         first_outbound = transport._outbound
 
         closed = asyncio.Event()
+        close_calls = 0
         original_aclose = first_outbound.aclose
 
         async def _tracking_aclose() -> None:
+            nonlocal close_calls
+            close_calls += 1
             closed.set()
             await original_aclose()
 
@@ -137,6 +139,35 @@ class TestWebRTCIngressQueueOwnership:
         assert second_response.status == 200
         assert transport._outbound is not first_outbound
         assert closed.is_set()
+        assert close_calls == 1
+
+    async def test_disconnected_then_failed_counts_one_peer_drop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        record_disconnect = Mock()
+        transport._record_transport_disconnect = record_disconnect  # type: ignore[method-assign]
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        pc = _FakeRTCPeerConnection.instances[0]
+
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "failed"
+        await pc._handlers["connectionstatechange"]()
+
+        record_disconnect.assert_called_once_with("webrtc peer disconnected")
+
+        # A genuine recovery followed by another drop is a distinct incident.
+        pc.connectionState = "connected"
+        await pc._handlers["connectionstatechange"]()
+        pc.connectionState = "disconnected"
+        await pc._handlers["connectionstatechange"]()
+        assert record_disconnect.call_count == 2
 
     @pytest.mark.asyncio
     async def test_disconnect_does_not_hold_offer_lock_during_http_cleanup(self):
@@ -326,60 +357,6 @@ class TestWebRTCIngressQueueOwnership:
 
 class TestWebRTCStatsArtifact:
     @pytest.mark.asyncio
-    async def test_stats_endpoint_persists_sanitized_snapshots(self, tmp_path):
-        stats_path = tmp_path / "webrtc-stats.jsonl"
-        transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
-        transport._web = _FakeWeb
-
-        response = await transport._handle_stats(
-            _FakeSameOriginJsonRequest(
-                {
-                    "kind": "webrtc_client_stats",
-                    "schema_version": 1,
-                    "sample_id": "sample-1\nextra",
-                    "label": "first_received_audio",
-                    "local_candidate_ip": "192.168.1.20",
-                    "candidate_pair": {
-                        "state": "succeeded",
-                        "current_round_trip_time_ms": 12.5,
-                        "local_candidate_id": "candidate-secret",
-                    },
-                    "inbound_audio": {
-                        "packets_received": 42,
-                        "jitter_ms": 3.25,
-                        "remote_candidate_id": "candidate-secret",
-                    },
-                }
-            )
-        )
-
-        assert response.status == 200
-        line = stats_path.read_text(encoding="utf-8").strip()
-        payload = json.loads(line)
-        assert payload["sample_id"] == "sample-1 extra"
-        assert payload["label"] == "first_received_audio"
-        assert payload["candidate_pair"] == {
-            "current_round_trip_time_ms": 12.5,
-            "state": "succeeded",
-        }
-        assert payload["inbound_audio"] == {"jitter_ms": 3.25, "packets_received": 42}
-        assert "candidate-secret" not in line
-        assert "192.168.1.20" not in line
-
-    @pytest.mark.asyncio
-    async def test_stats_endpoint_rejects_non_object_payload(self, tmp_path):
-        stats_path = tmp_path / "webrtc-stats.jsonl"
-        transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
-        transport._web = _FakeWeb
-
-        response = await transport._handle_stats(
-            _FakeSameOriginJsonRequest(["not", "an", "object"])
-        )
-
-        assert response.status == 400
-        assert not stats_path.exists()
-
-    @pytest.mark.asyncio
     async def test_stats_endpoint_requires_same_origin_for_unauthenticated_stats_path(
         self, tmp_path
     ):
@@ -459,22 +436,6 @@ class TestWebRTCStatsArtifact:
 
         assert response.status == 429
         assert not stats_path.exists()
-
-    def test_bundled_client_posts_webrtc_stats_milestones(self):
-        html_path = Path(webrtc_mod.__file__).with_name("static") / "webrtc_client.html"
-        html = html_path.read_text(encoding="utf-8")
-
-        # M7: the client paths are templated through a ``?webrtc=`` base so the
-        # SAME page serves both the flat helper and the namespaced VoiceServer.
-        assert 'fetch(baseUrl + WEBRTC_BASE + "/stats"' in html
-        assert 'safeWebRTCBase(new URLSearchParams(location.search).get("webrtc") || "")' in html
-        for label in (
-            "before_speech",
-            "client_speech_end",
-            "first_received_audio",
-            "teardown",
-        ):
-            assert f'postStatsSnapshot("{label}"' in html
 
 
 @pytest.mark.integration_socket

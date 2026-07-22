@@ -819,8 +819,8 @@ def install_emergency_export(session: Session) -> Callable[[], None]:
     session's exporter; the shared hook is uninstalled and the original
     ``sys.excepthook``/atexit state restored only once the registry drains.
     The unregister is also stored on ``session._emergency_export_unregister``
-    and invoked by the export body once a session has cleanly stopped, so the
-    hook becomes inert for that session after :meth:`Session.stop`.
+    and invoked directly by :meth:`Session.stop` after clean teardown; the
+    export body retains a stopped-session fallback for defensive cleanup.
 
     Strictly opt-in (see :func:`_emergency_export_enabled`): callers must
     explicitly arm it. Never raises; the export is wrapped best-effort.
@@ -873,7 +873,7 @@ def create_text_session(
     *,
     agent: Any = None,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] = "full",
+    debug: Literal["off", "light", "full"] = "light",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     warmup: bool | None = None,

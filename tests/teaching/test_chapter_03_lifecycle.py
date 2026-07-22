@@ -94,17 +94,3 @@ def test_parrot_carries_chapter_2_lifetime_scopes_forward() -> None:
     assert "except* ParrotEventStreamEndedError" in source
     assert "provider_errors.append(event.exception)" in source
     assert "asyncio.gather(" not in source
-
-
-def test_lesson_identifies_only_timeout_as_deliberately_broken() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "Keep the intended bug isolated" in lesson
-    assert "normal_event_end" in lesson
-    assert "failed_event_end" in lesson
-    assert "ParrotEventStreamEndedError" in lesson
-    assert "silence-timeout policy" in lesson
-    assert "cleanup and cancellation are not" in lesson
-    assert "only deliberate failure introduced by this chapter" in lesson

@@ -594,7 +594,7 @@ async def test_cancel_cancels_pending_current_task() -> None:
             raise
 
     task: asyncio.Task[None] = asyncio.create_task(_long_running())
-    scheduler.current_task = task
+    scheduler.active_turn_task = task
     await started.wait()
 
     await scheduler.cancel()

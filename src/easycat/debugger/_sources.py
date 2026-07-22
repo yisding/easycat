@@ -301,6 +301,75 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
     )
 
 
+def _session_records(session: Any) -> Iterable[dict[str, Any]]:
+    journal = getattr(session, "journal", None)
+    if journal is None:
+        return []
+    return [_record_to_dict(r) for r in journal.read()]
+
+
+def _session_records_since(session: Any, after_seq: int, cap: int) -> list[dict[str, Any]]:
+    # Push the tail bound down to the journal: ``read(start=after_seq + 1,
+    # limit=cap)`` returns only records with ``sequence > after_seq`` (the
+    # backend filters/limits in SQL or on the ring buffer), so a live WS
+    # tick serializes at most ``cap`` records instead of the whole journal.
+    journal = getattr(session, "journal", None)
+    if journal is None:
+        return []
+    return [_record_to_dict(r) for r in journal.read(start=after_seq + 1, limit=cap)]
+
+
+def _session_progress(session: Any) -> tuple[int, int]:
+    # O(1) growth probe: the backend keeps ``latest_sequence`` as an
+    # in-memory counter, so this never re-reads or re-serializes the
+    # journal.  Sequence is monotonic (the WS change-detection key);
+    # we surface it as the displayed count too — it equals the record
+    # count on persistent backends, which are the ones that grow
+    # unboundedly and the only ones the WS poll needs to track.
+    journal = getattr(session, "journal", None)
+    if journal is None:
+        return (0, 0)
+    seq = getattr(journal, "latest_sequence", None)
+    if seq is None:
+        n = len(list(journal.read()))
+        return (n, n)
+    return (int(seq), int(seq))
+
+
+def _session_artifact(session: Any, ref: str) -> bytes | None:
+    store = getattr(session, "_artifact_store", None)
+    if store is None:
+        return None
+    return store.get(ref)
+
+
+def _session_artifact_for_analysis(session: Any, ref: str) -> bytes | None:
+    store = getattr(session, "_artifact_store", None)
+    if store is None:
+        return None
+    bounded = getattr(store, "get_head_tail", None)
+    if callable(bounded):
+        return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
+    return store.get(ref)
+
+
+def _session_manifest(session: Any) -> dict[str, Any]:
+    return {
+        "source": "session",
+        "session_id": getattr(session, "session_id", ""),
+        "config_snapshot": safe_config_snapshot_from_session(session),
+        "is_running": bool(getattr(session, "is_running", False)),
+        "turn_state": str(getattr(session, "turn_state", "")),
+        "supports_replay": False,
+        "supports_export": True,
+        # Live sessions don't carry a stable on-disk bundle to sidecar
+        # against; verdicts are recorded after capture, on a bundle.
+        "supports_annotate": False,
+        "is_live": True,
+        "replay_entry_points": [],
+    }
+
+
 def _session_source(session: Any) -> DebuggerSource:
     """Adapt a live ``Session`` so the UI can poll while it's running.
 
@@ -308,78 +377,14 @@ def _session_source(session: Any) -> DebuggerSource:
     bytes from ``session._artifact_store`` if one is attached.  No
     side-effecting hooks into Session — purely observational.
     """
-
-    def _records() -> Iterable[dict[str, Any]]:
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return []
-        return [_record_to_dict(r) for r in journal.read()]
-
-    def _records_since(after_seq: int, cap: int) -> list[dict[str, Any]]:
-        # Push the tail bound down to the journal: ``read(start=after_seq + 1,
-        # limit=cap)`` returns only records with ``sequence > after_seq`` (the
-        # backend filters/limits in SQL or on the ring buffer), so a live WS
-        # tick serializes at most ``cap`` records instead of the whole journal.
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return []
-        return [_record_to_dict(r) for r in journal.read(start=after_seq + 1, limit=cap)]
-
-    def _progress() -> tuple[int, int]:
-        # O(1) growth probe: the backend keeps ``latest_sequence`` as an
-        # in-memory counter, so this never re-reads or re-serializes the
-        # journal.  Sequence is monotonic (the WS change-detection key);
-        # we surface it as the displayed count too — it equals the record
-        # count on persistent backends, which are the ones that grow
-        # unboundedly and the only ones the WS poll needs to track.
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return (0, 0)
-        seq = getattr(journal, "latest_sequence", None)
-        if seq is None:
-            n = len(list(journal.read()))
-            return (n, n)
-        return (int(seq), int(seq))
-
-    def _artifact(ref: str) -> bytes | None:
-        store = getattr(session, "_artifact_store", None)
-        if store is None:
-            return None
-        return store.get(ref)
-
-    def _artifact_for_analysis(ref: str) -> bytes | None:
-        store = getattr(session, "_artifact_store", None)
-        if store is None:
-            return None
-        bounded = getattr(store, "get_head_tail", None)
-        if callable(bounded):
-            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
-        return store.get(ref)
-
-    def _manifest() -> dict[str, Any]:
-        return {
-            "source": "session",
-            "session_id": getattr(session, "session_id", ""),
-            "config_snapshot": safe_config_snapshot_from_session(session),
-            "is_running": bool(getattr(session, "is_running", False)),
-            "turn_state": str(getattr(session, "turn_state", "")),
-            "supports_replay": False,
-            "supports_export": True,
-            # Live sessions don't carry a stable on-disk bundle to sidecar
-            # against; verdicts are recorded after capture, on a bundle.
-            "supports_annotate": False,
-            "is_live": True,
-            "replay_entry_points": [],
-        }
-
     return DebuggerSource(
         label=f"session-{getattr(session, 'session_id', 'unknown')}",
-        _records_fn=_records,
-        _progress_fn=_progress,
-        _records_since_fn=_records_since,
-        _artifact_fn=_artifact,
-        _manifest_fn=_manifest,
-        _artifact_analysis_fn=_artifact_for_analysis,
+        _records_fn=lambda: _session_records(session),
+        _progress_fn=lambda: _session_progress(session),
+        _records_since_fn=lambda after_seq, cap: _session_records_since(session, after_seq, cap),
+        _artifact_fn=lambda ref: _session_artifact(session, ref),
+        _manifest_fn=lambda: _session_manifest(session),
+        _artifact_analysis_fn=lambda ref: _session_artifact_for_analysis(session, ref),
         _bundle_fn=None,
         _replay_fn=None,
         is_live=True,

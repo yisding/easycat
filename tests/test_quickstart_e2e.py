@@ -256,33 +256,17 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         ),
     }
 
+    # Route existence and command-hint validity for this section are covered by
+    # tests/docs/test_route_registry.py::test_docs_index_routes_primary_reader_paths,
+    # ::test_start_here_docs_route_tracks_root_path_chooser_commands, and
+    # tests/docs/test_command_hints.py::test_root_path_chooser_command_hints_are_locally_valid.
     for goal, (link, *first_moves) in expected_rows.items():
         assert goal in section
         assert link in section
         for first_move in first_moves:
             assert first_move in normalized
-    for route in (
-        "docs/teaching/",
-        "docs/teaching/11-journal/",
-        "docs/teaching/12-evals-and-latency/",
-        "docs/using-easycat/",
-        "docs/using-easycat/00-first-voice-app/",
-        "examples/README.md",
-        "examples/journal_demo.py",
-        "CONTRIBUTING.md",
-        "CLAUDE.md",
-        "AGENTS.md",
-        "docs/observability.md",
-        "docs/deployment/docker.md",
-        "docs/validation.md",
-    ):
-        assert (REPO_ROOT / route.rstrip("/")).exists()
     assert "[validation workflow](docs/validation.md)" in section
     assert "(#validation-workflow)" not in section
-    assert "uv sync --extra quickstart --group dev" in section
-    assert "uv sync --extra debugger --group dev" in section
-    assert "uv run easycat docs --audience coding-agents" in section
-    assert "uv run easycat init my-agent" in section
 
 
 def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None:
@@ -408,75 +392,112 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
 
 
-def test_readme_agent_framework_snippets_use_easyconfig_auto_adapt_surface() -> None:
+# Retired manual-bridge API shapes that must stay out of the idiomatic
+# EasyConfig auto-adapt README sections.
+_STALE_BRIDGE_API_SHAPES = (
+    'openai_api_key="your-api-key"',
+    "from easycat import Session, SessionConfig",
+    "OpenAIAgentsBridge",
+    "PydanticAIBridge",
+    "Session(SessionConfig(",
+    "bridge =",
+)
+
+
+@pytest.mark.parametrize(
+    (
+        "heading",
+        "end_marker",
+        "sub_split_marker",
+        "must_contain",
+        "must_not_contain",
+        "full_section_must_contain",
+    ),
+    [
+        (
+            "### OpenAI Agents SDK (idiomatic)",
+            "### ",
+            None,
+            (
+                "from easycat import EasyConfig, create_session",
+                "session = create_session(config)",
+                "agent=agent",
+            ),
+            _STALE_BRIDGE_API_SHAPES,
+            (),
+        ),
+        (
+            "### PydanticAI (idiomatic)",
+            "### ",
+            None,
+            (
+                "from easycat import EasyConfig, create_session",
+                "session = create_session(config)",
+                "agent=pydantic_agent",
+            ),
+            _STALE_BRIDGE_API_SHAPES,
+            (),
+        ),
+        (
+            "### LangChain and LangGraph",
+            "### ",
+            None,
+            (
+                "EasyConfig(agent=...)",
+                "LangChainBridge",
+                "uv sync --extra langchain",
+                "LangGraphBridge",
+                "checkpointer",
+                "uv sync --extra langgraph",
+                "examples/langchain_voice.py",
+                "examples/langgraph_voice.py",
+            ),
+            (),
+            (),
+        ),
+        (
+            "### LlamaAgents / LlamaIndex Workflows",
+            "## Examples",
+            "To call a workflow mounted",
+            (
+                "from easycat import EasyConfig, create_session",
+                "agent=GreetingWorkflow()",
+                "session = create_session(",
+            ),
+            (
+                'openai_api_key="your-api-key"',
+                "from easycat.integrations.agents import LlamaAgentsBridge",
+                'input_key="message"',
+                "LlamaAgentsBridge(workflow=GreetingWorkflow()",
+            ),
+            ("LlamaAgentsBridge(base_url=",),
+        ),
+    ],
+)
+def test_readme_agent_snippet_sections_use_easyconfig_auto_adapt_surface(
+    heading: str,
+    end_marker: str,
+    sub_split_marker: str | None,
+    must_contain: tuple[str, ...],
+    must_not_contain: tuple[str, ...],
+    full_section_must_contain: tuple[str, ...],
+) -> None:
+    """Guard README agent-framework snippets against rotting to removed API shapes.
+
+    Covers the OpenAI Agents SDK, PydanticAI, LangChain/LangGraph, and LlamaAgents
+    sections, each checking the current EasyConfig auto-adapt surface is taught and
+    stale shapes (e.g. ``Session(SessionConfig(...))``) are not.
+    """
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    snippets = {
-        "### OpenAI Agents SDK (idiomatic)": ("agent=agent",),
-        "### PydanticAI (idiomatic)": ("agent=pydantic_agent",),
-    }
+    section = readme.split(heading, 1)[1].split(end_marker, 1)[0]
+    snippet = section.split(sub_split_marker, 1)[0] if sub_split_marker else section
 
-    for heading, expected_terms in snippets.items():
-        section = readme.split(heading, 1)[1].split("### ", 1)[0]
-
-        for term in (
-            "from easycat import EasyConfig, create_session",
-            "session = create_session(config)",
-            *expected_terms,
-        ):
-            assert term in section
-
-        for stale_term in (
-            'openai_api_key="your-api-key"',
-            "from easycat import Session, SessionConfig",
-            "OpenAIAgentsBridge",
-            "PydanticAIBridge",
-            "Session(SessionConfig(",
-            "bridge =",
-        ):
-            assert stale_term not in section
-
-
-def test_readme_langchain_langgraph_section_teaches_auto_adapt_requirements() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### LangChain and LangGraph", 1)[1].split("### ", 1)[0]
-
-    for term in (
-        "EasyConfig(agent=...)",
-        "LangChainBridge",
-        "uv sync --extra langchain",
-        "LangGraphBridge",
-        "checkpointer",
-        "uv sync --extra langgraph",
-        "examples/langchain_voice.py",
-        "examples/langgraph_voice.py",
-    ):
+    for term in must_contain:
+        assert term in snippet
+    for stale_term in must_not_contain:
+        assert stale_term not in snippet
+    for term in full_section_must_contain:
         assert term in section
-
-
-def test_readme_llama_agents_local_snippet_uses_easyconfig_auto_adapt() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### LlamaAgents / LlamaIndex Workflows", 1)[1].split(
-        "## Examples",
-        1,
-    )[0]
-    local_snippet = section.split("To call a workflow mounted", 1)[0]
-
-    for term in (
-        "from easycat import EasyConfig, create_session",
-        "agent=GreetingWorkflow()",
-        "session = create_session(",
-    ):
-        assert term in local_snippet
-
-    for stale_term in (
-        'openai_api_key="your-api-key"',
-        "from easycat.integrations.agents import LlamaAgentsBridge",
-        'input_key="message"',
-        "LlamaAgentsBridge(workflow=GreetingWorkflow()",
-    ):
-        assert stale_term not in local_snippet
-
-    assert "LlamaAgentsBridge(base_url=" in section
 
 
 def test_readme_python_snippets_do_not_embed_placeholder_api_keys() -> None:

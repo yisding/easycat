@@ -468,7 +468,7 @@ class _AgentSessionConfig:
     # implement their own retry/timeout policy.
     wrap_agent: bool = True
     mcp_servers: list[str] | None = None
-    debug: Literal["off", "light", "full"] = "full"
+    debug: Literal["off", "light", "full"] = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
@@ -769,7 +769,7 @@ class TextSessionConfig(_AgentSessionConfig):
         *,
         agent: Any = None,
         session_id: str | None = None,
-        debug: Literal["off", "light", "full"] = "full",
+        debug: Literal["off", "light", "full"] = "light",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
@@ -794,7 +794,7 @@ class TextSessionConfig(_AgentSessionConfig):
             loose = {
                 "agent": (agent, None),
                 "session_id": (session_id, None),
-                "debug": (debug, "full"),
+                "debug": (debug, "light"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),

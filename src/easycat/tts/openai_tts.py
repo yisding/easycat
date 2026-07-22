@@ -146,6 +146,11 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
                 json=request_body,
             ) as response:
                 self._response = response
+                if not response.is_success:
+                    # A streamed non-2xx response has an unread body; read it now,
+                    # while the stream is still open, so the except handler can
+                    # touch exc.response.text without raising ResponseNotRead.
+                    await response.aread()
                 response.raise_for_status()
 
                 # Read at the response's native cadence so httpx does not hold

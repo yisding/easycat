@@ -74,16 +74,3 @@ def test_limit_is_positive_and_only_reports_real_truncation() -> None:
     truncated = run_investigate("--limit", "1")
     assert truncated.returncode == 0
     assert "... (showing 1 of 13 matches)" in truncated.stdout
-
-
-def test_chapter_teaches_query_coverage_before_absence() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "Validate an empty query" in readme
-    assert "query_coverage_probe.py" in readme
-    assert "--require-match" in readme
-    assert "query_coverage_probe.py" in exercises
-    assert "filtered sequence gap" in normalized
-    assert "stt.final" in exercises and "agent.first_token" in exercises

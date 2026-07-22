@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import IO, Annotated, NoReturn, cast
 
@@ -705,7 +706,7 @@ def report_command(
 
     _print_literal(f"{payload['kind']} {payload['run_id']}: {status}")
     _print_literal(f"command: {_format_command(payload.get('command'))}")
-    _print_literal(f"duration: {payload.get('duration_s', 0):.2f}s")
+    _print_literal(f"duration: {_format_duration(payload.get('duration_s'))}")
     _print_literal(f"exit_code: {exit_code}")
     git = payload.get("git")
     if isinstance(git, dict):
@@ -849,6 +850,19 @@ def _load_report_payload(path: Path, *, json_output: bool = False) -> dict[str, 
             json_output=json_output,
         )
     return payload
+
+
+def _format_duration(duration: object) -> str:
+    """Render a finite non-negative numeric duration with a safe fallback."""
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        return "0.00s"
+    try:
+        value = float(duration)
+    except OverflowError:
+        return "0.00s"
+    if value < 0 or not math.isfinite(value):
+        return "0.00s"
+    return f"{value:.2f}s"
 
 
 def _format_command(command: object) -> str:

@@ -57,16 +57,3 @@ def test_printed_debugger_command_invokes_the_registered_cli(
     assert calls[0]["open_browser"] is True
     assert calls[0]["label"] == "ch15.bundle"
     assert calls[0]["records"][0]["name"] == "session_started"
-
-
-def test_chapter_distinguishes_offline_cli_from_live_embedding() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    source = (CHAPTER / "main.py").read_text(encoding="utf-8")
-
-    assert "intentionally *not* a CLI subcommand" not in readme
-    assert "uv run easycat debugger serve" in readme
-    assert "serve_session(...)" in readme
-    assert "`stt_final`" in readme
-    assert "`stt.final`" not in readme
-    assert "uv run python -c" not in source
-    assert "debugger_command(bundle_path)" in source

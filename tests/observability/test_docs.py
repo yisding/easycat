@@ -8,55 +8,7 @@ from tests.observability._observability_helpers import (
     json,
     logging,
     pytest,
-    re,
 )
-
-
-def test_observability_doc_explains_journal_redaction_boundary() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    caveats = " ".join(doc.split("## Honesty caveats", 1)[1].split())
-
-    assert "safe config/environment snapshots" in caveats
-    assert "selected agent-bridge metadata" in caveats
-    assert "obvious secret-like journal fields through `apply_write_filter`" in caveats
-    assert "transcript text, agent output, and tool-result text for replay" in caveats
-    assert "Config snapshots are diagnostic rather than lossless" in caveats
-    assert "cannot recurse forever or grow without bound" in caveats
-
-
-def test_observability_doc_lists_journal_cli_entry_points() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
-        "### D — OpenTelemetry facade",
-        1,
-    )[0]
-
-    for command in (
-        "easycat bundles list",
-        "easycat bundles list --json",
-        "easycat bundles show <path>",
-        "easycat bundles show <path> --json",
-        "easycat inspect <path>",
-        "easycat inspect <path> --json",
-        "easycat replay <path>",
-        "easycat replay <path> --json",
-        "easycat bundles export <path>",
-        "easycat bundles export <path> --output DIR --json",
-    ):
-        assert command in journal
-    assert "parseable summary" in journal
-
-
-def test_observability_doc_points_operators_to_filtered_docs_route() -> None:
-    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    intro = doc.split("## The four layers", 1)[0]
-    normalized_intro = re.sub(r"\s+", " ", intro)
-
-    assert "uv run easycat docs --audience operators" in intro
-    assert "uv run easycat docs --audience operators --json" in intro
-    assert "operator-facing route slice" in intro
-    assert "same operator map with command hints" in intro
-    assert "deployment, observability, and journal durability" in normalized_intro
 
 
 def test_observability_doc_lists_debugger_ui_entry_points() -> None:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.cli.validate import _format_duration
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -15,6 +17,25 @@ from easycat.validation.report import (
 )
 
 from ._validation_helpers import _validation_run
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    [
+        (None, "0.00s"),
+        (False, "0.00s"),
+        ("1.5", "0.00s"),
+        (-1, "0.00s"),
+        (float("nan"), "0.00s"),
+        (float("inf"), "0.00s"),
+        (float("-inf"), "0.00s"),
+        (10**400, "0.00s"),
+        (0, "0.00s"),
+        (1.234, "1.23s"),
+    ],
+)
+def test_format_duration_rejects_invalid_values(duration: object, expected: str) -> None:
+    assert _format_duration(duration) == expected
 
 
 def test_validate_report_help_names_latest_report_path(cli: CliRunner) -> None:
@@ -211,6 +232,21 @@ def test_validate_report_cli_rejects_unknown_kind(cli: CliRunner, tmp_path: Path
 
     assert result.exit_code == 2
     assert "unknown validation report kind: other" in result.stdout
+
+
+def test_validate_report_cli_renders_null_duration_without_crashing(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload["duration_s"] = None
+    report_path.write_text(json.dumps(payload))
+
+    result = cli.invoke(app, ["validate", "report", str(report_path)])
+
+    assert result.exit_code == 0
+    assert "duration: 0.00s" in result.stdout
 
 
 def test_validate_report_cli_json_rejects_malformed_exit_code_with_envelope(

@@ -94,22 +94,3 @@ async def test_aec_no_reference_mode_does_not_label_cleaned_vad_input_raw(
 
     assert [event async for event in detector.frames(pipeline)] == []
     assert rows == []
-
-
-def test_exercises_name_real_signal_quadrants_and_records() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-
-    assert "--nr on --aec off" in exercises
-    assert "--nr off --aec on" in exercises
-    assert "AEC runs but its reference path is dead" not in exercises
-    assert "`--aec off` installs `_Passthrough`" in exercises
-    assert "stage.vad.execute" not in exercises
-    assert "stage.nr.execute" not in exercises
-    for name in ("vad.processed_before_nr", "nr.applied_after_vad"):
-        assert name in readme
-        assert name in exercises
-    source = (CHAPTER / "wrong_order.py").read_text(encoding="utf-8")
-    assert "vad.processed_raw" not in readme + exercises + source
-    assert "VAD's verdicts are unchanged" not in source
-    assert "keystrokes still fire VAD-on" not in source

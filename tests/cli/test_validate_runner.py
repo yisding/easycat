@@ -64,7 +64,7 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
         "-m",
         (
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not flaky"
+            "and not contract and not slow and not stress and not flaky and not guard"
         ),
     ]
     assert any(arg.startswith("--junitxml=") for arg in command)
@@ -301,6 +301,7 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
         "release.doctor",
         "release.cli-smoke",
         "release.quick",
+        "release.guard",
         "release.stress",
         "release.contracts",
         "release.live",
@@ -382,7 +383,7 @@ def test_release_validation_fails_when_child_slice_fails(
             )
         quick_selector = (
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not flaky"
+            "and not contract and not slow and not stress and not flaky and not guard"
         )
         if quick_selector in command:
             return CommandResult(exit_code=1, stdout="", stderr="quick failed")
@@ -515,6 +516,25 @@ def test_validation_main_dispatches_socket_slice(tmp_path: Path) -> None:
 
     assert exit_code == 0
     assert commands[0][-2:] == ["-m", "integration_socket and not integration_live and not flaky"]
+
+
+def test_validation_main_dispatches_guard_slice(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        commands.append(command)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    exit_code = main(
+        ["guard", "--artifacts-dir", str(tmp_path)],
+        command_runner=fake_command_runner,
+    )
+
+    assert exit_code == 0
+    assert commands[0][-2:] == [
+        "-m",
+        "guard and not integration_live and not integration_external and not flaky",
+    ]
 
 
 def test_validation_main_dispatches_stress_slice(tmp_path: Path) -> None:

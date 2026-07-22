@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
 
 import pytest
 import websockets
@@ -13,23 +12,10 @@ from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 
+from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
 
 _make_chunk = make_chunk
-
-
-class _UsesPytestTcpPortFactory:
-    _unused_tcp_port_factory: Callable[[], int]
-
-    @pytest.fixture(autouse=True)
-    def _set_unused_tcp_port_factory(
-        self,
-        unused_tcp_port_factory: Callable[[], int],
-    ) -> None:
-        self._unused_tcp_port_factory = unused_tcp_port_factory
-
-    def _unused_port(self) -> int:
-        return self._unused_tcp_port_factory()
 
 
 def test_websocket_transport_config_defaults_to_loopback():

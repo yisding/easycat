@@ -7,7 +7,6 @@ import base64
 import json
 import logging
 import struct
-from collections.abc import Callable
 
 import pytest
 import websockets
@@ -29,23 +28,10 @@ from easycat.transports.twilio_media import (
     twiml_stream,
 )
 
+from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
 
 _make_chunk = make_chunk
-
-
-class _UsesPytestTcpPortFactory:
-    _unused_tcp_port_factory: Callable[[], int]
-
-    @pytest.fixture(autouse=True)
-    def _set_unused_tcp_port_factory(
-        self,
-        unused_tcp_port_factory: Callable[[], int],
-    ) -> None:
-        self._unused_tcp_port_factory = unused_tcp_port_factory
-
-    def _unused_port(self) -> int:
-        return self._unused_tcp_port_factory()
 
 
 def _make_sine_pcm16(freq: int = 440, duration_ms: int = 20, sample_rate: int = 16000) -> bytes:

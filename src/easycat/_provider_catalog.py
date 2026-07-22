@@ -6,11 +6,29 @@ import importlib.metadata
 import logging
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
 from typing import Any
 
 logger = logging.getLogger("easycat")
+
+
+def inject_event_bus(config: Any, event_bus: Any) -> Any:
+    """Return *config* with ``event_bus`` structurally injected when possible.
+
+    "Needs an event bus" is derived from the config dataclass itself (it
+    declares an ``event_bus`` field) rather than from a hand-maintained
+    isinstance tuple, so any future event-bus-aware provider is included
+    automatically. An ``event_bus`` already set on the config wins.
+    """
+    if event_bus is None:
+        return config
+    if not is_dataclass(config) or isinstance(config, type):
+        return config
+    dataclass_config: Any = config
+    if any(f.name == "event_bus" for f in fields(config)) and dataclass_config.event_bus is None:
+        return replace(config, event_bus=event_bus)
+    return config
 
 
 @dataclass(frozen=True)
@@ -137,6 +155,7 @@ class ProviderCatalog:
         *,
         params: Mapping[str, Any] | None = None,
         api_key: str | None = None,
+        event_bus: Any = None,
     ) -> Any:
         """Build a provider from its registered name and config parameters."""
         name = self.validate_name(provider)
@@ -152,14 +171,12 @@ class ProviderCatalog:
             ) from exc
         if not getattr(config, "api_key", None):
             raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
-        return provider_cls(config)
+        return provider_cls(inject_event_bus(config, event_bus))
 
     def create_from_config(self, config: Any, event_bus: Any) -> Any:
         """Build a provider, injecting an event bus when its config declares one."""
         provider_cls = self.provider_for_config(type(config))
-        if any(item.name == "event_bus" for item in fields(config)) and config.event_bus is None:
-            config = replace(config, event_bus=event_bus)
-        return provider_cls(config)
+        return provider_cls(inject_event_bus(config, event_bus))
 
     def validate_name(self, provider: object) -> str:
         """Return a normalized registered name or raise ``EASYCAT_E104``."""

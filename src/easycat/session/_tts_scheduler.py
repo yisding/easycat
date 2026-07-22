@@ -117,11 +117,17 @@ class TTSScheduler:
         self._playback_suppressed = value
 
     @property
-    def current_task(self) -> asyncio.Task[None] | None:
+    def active_turn_task(self) -> asyncio.Task[None] | None:
+        """The in-flight ``TurnRunner.on_turn_ended`` task for the active turn.
+
+        This is the *whole* end-of-turn coroutine (STT finalize → agent stream →
+        TTS), not just the TTS synthesis step. Cancelling it aborts the agent
+        stream, so ``Session.cancel_tts_playback`` must leave it running.
+        """
         return self._current_tts_task
 
-    @current_task.setter
-    def current_task(self, task: asyncio.Task[None] | None) -> None:
+    @active_turn_task.setter
+    def active_turn_task(self, task: asyncio.Task[None] | None) -> None:
         self._current_tts_task = task
 
     @property

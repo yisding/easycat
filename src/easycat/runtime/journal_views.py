@@ -110,9 +110,20 @@ class ReadonlySqliteJournal:
 class FrozenJournalSnapshot:
     """Immutable point-in-time copy of an in-memory journal."""
 
-    def __init__(self, records: list[JournalRecord], *, degraded: bool = False) -> None:
+    def __init__(
+        self,
+        records: list[JournalRecord],
+        *,
+        degraded: bool = False,
+        latest_sequence: int | None = None,
+    ) -> None:
         self._records = tuple(records)
         self._degraded = degraded
+        self._latest_sequence = (
+            latest_sequence
+            if latest_sequence is not None
+            else max((record.sequence for record in records if record.sequence >= 0), default=0)
+        )
 
     def append(
         self,
@@ -168,7 +179,7 @@ class FrozenJournalSnapshot:
 
     @property
     def latest_sequence(self) -> int:
-        return self._records[-1].sequence if self._records else 0
+        return self._latest_sequence
 
     @property
     def degraded(self) -> bool:

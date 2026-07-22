@@ -492,8 +492,11 @@ class AudioRouter:
                 # decremented by *any* chunk sharing the outbound queue
                 # (e.g. interleaved synthesis or hold audio), which could
                 # leave BOT_SPEAKING early and truncate the replayed tail.
+                # Guarded: providers are duck-typed, so a foreign chunk class
+                # (slots/frozen/NamedTuple) may reject the tag; it then simply
+                # doesn't count against the replay tally.
                 try:
-                    chunk._easycat_replay_chunk = True  # type: ignore[attr-defined]
+                    chunk._easycat_replay_chunk = True
                 except Exception:
                     logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
@@ -573,10 +576,9 @@ class AudioRouter:
         check; a second router means the bus is shared across sessions and bare
         delivery callbacks must be dropped instead of relabeled.
         """
-        handlers = getattr(self._event_bus, "_handlers", {}).get(TransportAudioDelivered, ())
         routers = [
             handler
-            for handler in handlers
+            for handler in self._event_bus.subscribers(TransportAudioDelivered)
             if getattr(handler, "__func__", None) is AudioRouter.on_audio_delivered
             and isinstance(getattr(handler, "__self__", None), AudioRouter)
         ]
@@ -652,7 +654,11 @@ class AudioRouter:
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)
 
-    def _feed_reference_or_disable(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
+    async def _feed_reference_or_disable(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
         """Feed one far-end reference frame into AEC, latching off on failure.
 
         Single owner of the far-end feed, shared by both reference-feed
@@ -683,9 +689,9 @@ class AudioRouter:
             )
             return
         if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
-            self._maybe_record_aec_reference(chunk, turn)
+            await self._maybe_record_aec_reference(chunk, turn)
 
-    def _feed_transport_aec_reference(
+    async def _feed_transport_aec_reference(
         self, mic_chunk: AudioChunk, turn: TurnContext | None
     ) -> None:
         """Drain the transport's AEC reference queue and feed each frame.
@@ -713,7 +719,7 @@ class AudioRouter:
         for ref_data in frames:
             if self._aec_reference_failed:
                 break
-            self._feed_reference_or_disable(
+            await self._feed_reference_or_disable(
                 AudioChunk(data=ref_data, format=mic_chunk.format), turn
             )
 
@@ -760,7 +766,7 @@ class AudioRouter:
         # AudioStage.execute() so AEC3 always receives the far-end signal
         # before the near-end echo.
         if self._enable_noise_reduction() or self._enable_aec():
-            self._feed_transport_aec_reference(chunk, turn)
+            await self._feed_transport_aec_reference(chunk, turn)
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
         # Stage 3: VAD (optional) via VADStage.
@@ -812,9 +818,10 @@ class AudioRouter:
             # merely because replay chunks are pending.  This keeps the
             # tally correct even if a non-replay chunk shares the outbound
             # queue while replay audio is still draining.
-            replayed_chunk = (
-                self._replay_chunks_pending > 0
-                and getattr(chunk, "_easycat_replay_chunk", False) is True
+            # ``getattr`` keeps foreign chunk objects (duck-typed providers,
+            # app-injected hold audio) from killing the drain task here.
+            replayed_chunk = self._replay_chunks_pending > 0 and getattr(
+                chunk, "_easycat_replay_chunk", False
             )
             turn = self._current_turn()
             # Claim before waiting for the send lock. Otherwise a contended
@@ -886,11 +893,13 @@ class AudioRouter:
 
     def _stamp_outbound_chunk(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
         """Attach session/turn ownership so buffered transports can report later delivery."""
+        session_id, _ = self._correlation_ids()
+        # Guarded: a foreign chunk class that rejects the stamp must still be
+        # sent (unstamped delivery loses attribution, not audio).
         try:
-            session_id, _ = self._correlation_ids()
-            chunk._easycat_session_id = session_id  # type: ignore[attr-defined]
-            chunk._easycat_turn_id = turn.id if turn is not None else None  # type: ignore[attr-defined]
-            chunk._easycat_turn_ref = turn  # type: ignore[attr-defined]
+            chunk._easycat_session_id = session_id
+            chunk._easycat_turn_id = turn.id if turn is not None else None
+            chunk._easycat_turn_ref = turn
         except Exception:
             logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
 
@@ -916,7 +925,7 @@ class AudioRouter:
         # the shared _feed_reference_or_disable owner.
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
-            self._feed_reference_or_disable(chunk, turn)
+            await self._feed_reference_or_disable(chunk, turn)
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton
@@ -941,7 +950,7 @@ class AudioRouter:
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
 
-    def _maybe_record_aec_reference(
+    async def _maybe_record_aec_reference(
         self,
         chunk: AudioChunk,
         turn: TurnContext | None,
@@ -959,7 +968,7 @@ class AudioRouter:
         if index % _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES != 0:
             return
         try:
-            self._audio_stage.record_reference(
+            await self._audio_stage.record_reference(
                 chunk,
                 self._run_ctx,
                 turn or self._no_turn,

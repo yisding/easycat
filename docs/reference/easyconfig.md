@@ -43,9 +43,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `mcp_servers` — optional list of MCP server URIs (`stdio://`, `sse://`,
   `http://`, `https://`) passed through to agent bridges; frozen per
   session.
-- `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
-  (default; records audio artifacts too). Durable journaling is on by default;
-  set `debug="off"` to opt out.
+- `debug` — journal mode: `"off"` (no journal), `"light"` (default), or
+  `"full"`. The default keeps the journal and audio artifacts in memory so
+  per-frame capture does not touch disk on the live audio loop. Use `"full"`
+  for a crash-survivable on-disk journal and artifacts, or `"off"` to disable
+  recording.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;

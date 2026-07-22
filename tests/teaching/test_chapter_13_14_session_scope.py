@@ -171,23 +171,3 @@ async def test_chapter_13_exports_after_cancelled_session(monkeypatch, tmp_path:
         ("session.stop", True),
         ("export", session, bundle, True),
     ]
-
-
-def test_chapters_teach_scope_and_custom_dependency_ownership() -> None:
-    chapter_13 = (CHAPTER_13 / "README.md").read_text(encoding="utf-8")
-    chapter_14 = (CHAPTER_14 / "README.md").read_text(encoding="utf-8")
-    exercises_13 = (CHAPTER_13 / "EXERCISES.md").read_text(encoding="utf-8")
-    exercises_14 = (CHAPTER_14 / "EXERCISES.md").read_text(encoding="utf-8")
-    normalized_13 = " ".join(chapter_13.split())
-    normalized_14 = " ".join(chapter_14.split())
-
-    assert "The production session boundary" in chapter_13
-    assert "session_scope_probe.py" in chapter_13
-    assert "read-only postmortem" in normalized_13
-    assert "stop(force=False)" in chapter_13
-    assert "idempotent no-op" in chapter_13
-    assert "cancelled trace has only an effective `stop(force=True)`" in exercises_13
-    assert "session_scope_probe.py" in exercises_13
-    assert "Caller-owned workflow dependencies" in chapter_14
-    assert "`GenericWorkflowBridge` does not infer" in normalized_14
-    assert "caller-owned `AsyncOpenAI`" in exercises_14

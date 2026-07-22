@@ -271,6 +271,56 @@ def test_factory_krisp_preferred_in_auto():
         del sys.modules["krisp_audio"]
 
 
+# ── Vectorized clip/round regression test ────────────────────────────
+
+
+def test_clip_round_to_pcm16_bytes_matches_scalar_reference():
+    """The vectorized clip+round+pack must be byte-identical to the scalar
+    ``max(-32768, min(32767, int(round(v))))`` + ``struct.pack`` loop it
+    replaced, including out-of-range values and exact .5 rounding boundaries
+    (both use round-half-to-even, so this must hold exactly, not just
+    approximately).
+    """
+    import random
+
+    np = pytest.importorskip("numpy")
+
+    from easycat.noise_reduction import _clip_round_to_pcm16_bytes
+
+    def scalar_reference(samples: list[float]) -> bytes:
+        clipped = (max(-32768, min(32767, int(round(v)))) for v in samples)
+        return struct.pack(f"<{len(samples)}h", *clipped)
+
+    rng = random.Random(1234)
+
+    # Random floats across and beyond the int16 range.
+    random_samples = [rng.uniform(-40000, 40000) for _ in range(2000)]
+
+    # Exact .5 boundaries (banker's rounding: rounds to nearest even integer).
+    half_boundary_samples = [
+        -32768.5,
+        -3.5,
+        -2.5,
+        -1.5,
+        -0.5,
+        0.5,
+        1.5,
+        2.5,
+        3.5,
+        32766.5,
+        32767.5,
+        32768.5,
+    ]
+
+    # Exact int16 range edges and beyond.
+    edge_samples = [-32769.0, -32768.0, -32767.9, 32767.0, 32767.9, 32768.0, 32769.0, 0.0]
+
+    for samples in (random_samples, half_boundary_samples, edge_samples):
+        expected = scalar_reference(samples)
+        actual = _clip_round_to_pcm16_bytes(np.asarray(samples, dtype=np.float64))
+        assert actual == expected
+
+
 # ── Resample round-trip test ─────────────────────────────────────────
 
 

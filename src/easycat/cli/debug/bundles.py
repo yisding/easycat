@@ -163,7 +163,8 @@ def list_bundles(
             "[cyan]session.export_debug_bundle()[/] to capture one.[/]"
         )
         stderr_console.print(
-            "[dim]Durable journals need [cyan]debug='full'[/] (the default); see "
+            "[dim]Durable journals need [cyan]debug='full'[/] (opt in; the default "
+            "[cyan]debug='light'[/] is in-memory); see "
             "[cyan]easycat explain journal[/] for how recordings are captured.[/]"
         )
         raise typer.Exit(0)

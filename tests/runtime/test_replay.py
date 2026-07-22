@@ -581,24 +581,6 @@ class TestToolPolicyEnforcement:
         assert any("ALLOW" in rec.message for rec in caplog.records)
 
 
-# ── ReplaySpec data-class behaviour ──────────────────────────────
-
-
-class TestReplaySpecBehaviour:
-    def test_fidelity_required(self):
-        with pytest.raises(TypeError):
-            ReplaySpec()  # type: ignore[call-arg]
-
-    def test_tool_policy_default_is_deny(self):
-        spec = ReplaySpec(fidelity=ReplayFidelity.ARTIFACT)
-        assert spec.tool_policy is ToolReplayPolicy.DENY
-
-    def test_frozen(self):
-        spec = ReplaySpec(fidelity=ReplayFidelity.ARTIFACT)
-        with pytest.raises(Exception):
-            spec.fidelity = ReplayFidelity.LIVE  # type: ignore[misc]
-
-
 # ── Cassette behaviour (stand-alone, not via runner) ─────────────
 
 

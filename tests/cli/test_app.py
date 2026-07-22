@@ -23,10 +23,10 @@ from easycat.cli._app import (
     _DOCS_AUDIENCE_ALIAS_NOTE,
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
-    _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
+    _DOCS_SOURCE_URL,
     _JOURNEY_SECTIONS,
     _available_docs_audience_filters,
+    _available_docs_audiences,
     _docs_entries,
     _format_docs_entry,
     _register_commands,
@@ -226,83 +226,26 @@ def test_journey_menu(cli: CliRunner) -> None:
 
 
 def test_docs_command(cli: CliRunner) -> None:
+    """Smoke check for the human-readable ``docs`` menu.
+
+    Per-entry content (label/path/audience/description/commands) is covered
+    generically by ``test_docs_command_renders_every_route_entry`` below,
+    which derives its expectations from ``_docs_entries()`` instead of
+    hand-typed literals.
+    """
     result = cli.invoke(app, ["docs"])
     normalized = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
-    assert "For: all readers" in result.stdout
-    assert "For: new users" in result.stdout
-    assert "For: app builders" in result.stdout
-    assert "README.md#cli" in result.stdout
-    assert "base package requirements" in result.stdout
-    assert "extras" in result.stdout
-    assert "env requirements" in result.stdout
-    assert "optional env knobs" in result.stdout
-    assert "generated files" in result.stdout
-    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in result.stdout
-    assert "learn CLI JSON envelopes" in result.stdout
     assert "Commands:" in result.stdout
-    assert "README.md#choose-your-path" in result.stdout
-    assert "right first route" in result.stdout
-    assert "uv run python examples/openai_agents_voice.py" in result.stdout
-    assert "uv run python examples/journal_demo.py" in result.stdout
-    assert "uv run python examples/telephony_helpers.py" in result.stdout
-    assert "uv run easycat init --list-templates" in result.stdout
-    assert "uv run easycat init my-agent" in result.stdout
-    assert "easycat init --list-templates" in result.stdout
-    assert "easycat init --list-templates --json" in result.stdout
-    assert "easycat doctor --json" in result.stdout
-    assert "easycat doctor --env-file .env --json" in result.stdout
-    assert "docker compose -f docker/compose.yaml up --build" in result.stdout
-    assert "docker compose --env-file docker/.env -f docker/compose.yaml up --build" in (
-        result.stdout
-    )
-    assert "easycat validate report .easycat/validation/latest.json" in result.stdout
-    assert "docs/README.md" in result.stdout
-    assert "docs/teaching" in result.stdout
-    assert "docs/teaching/00-hello-audio" in result.stdout
-    assert "examples/README.md" in result.stdout
-    assert "CLAUDE.md" in result.stdout
-    assert "provider registries" in result.stdout
-    assert "AGENTS.md" in result.stdout
-    assert "PR expectations" in result.stdout
-    assert "just guard-templates" in result.stdout
-    assert "docs/public-api.md" in result.stdout
-    assert "CONTRIBUTING.md" in result.stdout
-    assert "docs/onboarding guards" in result.stdout
-    assert "just guard-docs" in result.stdout
-    assert "just guard-contributing" in result.stdout
-    assert "just guard-validation" in result.stdout
-    assert "just guard-contracts" in result.stdout
-    assert "just guard-ops" in result.stdout
-    assert "docs/deployment/docker.md" in result.stdout
-    assert "docs/observability.md" in result.stdout
-    assert "src/easycat/runtime/DURABILITY.md" in result.stdout
-    assert "docs/validation.md" in result.stdout
-    assert ".easycat/validation/latest.json" in result.stdout
-    assert "plan/validation/reference.md" in result.stdout
-    assert "easycat validate report .easycat/validation/latest.json --json" in result.stdout
-    assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
-    assert "https://github.com/yisding/easycat/tree/main/docs/teaching" in result.stdout
-    assert (
-        "https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md"
-        in result.stdout
-    )
     assert "Machine-readable routes, audiences, and command hints: easycat docs --json" in (
         result.stdout
     )
-    assert (
-        "Filtered machine-readable routes: easycat docs --audience learners --json"
-        in result.stdout
-    )
-    assert "Available audiences: all readers, app builders, coding agents, contributors" in (
-        normalized
-    )
-    assert "Available filters: all-readers, app-builders, coding-agents, contributors" in (
-        normalized
-    )
+    assert "Available audiences:" in normalized
+    assert "Available filters:" in normalized
     assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
     assert _DOCS_COMMAND_NOTE in result.stdout
+    # Wrap-guard: long paths must not be hard-wrapped mid-word by Rich.
     assert "DURABILITY.\nmd" not in result.stdout
 
 
@@ -374,6 +317,15 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
 
 
 def test_docs_command_json(cli: CliRunner) -> None:
+    """JSON-envelope shape + drift guard for the ``docs --json`` route map.
+
+    Per-entry content (labels, paths, descriptions, commands, urls) is
+    verified structurally against ``_docs_entries()`` — the same source the
+    command itself reads from — rather than as hand-typed literal copies.
+    This still catches serialization bugs (fields dropped/renamed/reordered)
+    without hard-locking the docs route content itself, which other
+    executors' route-registry tests already guard.
+    """
     result = cli.invoke(app, ["docs", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -384,221 +336,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     assert payload["audience_filter"] is None
     assert payload["available_audience_filters"] == list(_available_docs_audience_filters())
-    assert "app-builders" in payload["available_audience_filters"]
-    assert "coding-agents" in payload["available_audience_filters"]
-    assert "learners" in payload["available_audiences"]
-    assert "operators" in payload["available_audiences"]
-    assert "maintainers" in payload["available_audiences"]
-    assert [entry["label"] for entry in payload["entries"]] == [
-        entry["label"] for entry in _DOCS_LINKS
+    assert payload["available_audiences"] == list(_available_docs_audiences())
+    assert payload["source_url"] == _DOCS_SOURCE_URL
+    assert payload["entries"] == [
+        {**entry, "commands": list(entry.get("commands", ()))} for entry in _docs_entries()
     ]
-    assert [entry["path"] for entry in payload["entries"]] == [
-        entry["path"] for entry in _DOCS_LINKS
-    ]
-    paths = {entry["path"] for entry in payload["entries"]}
-    descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
-    audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
-    assert "README.md#choose-your-path" in paths
-    assert "README.md#cli" in paths
-    assert "docs/README.md" in paths
-    assert "docs/teaching/" in paths
-    assert "docs/teaching/PROGRESS.md" in paths
-    assert "docs/teaching/00-hello-audio/" in paths
-    assert "examples/README.md" in paths
-    assert "CLAUDE.md" in paths
-    assert "AGENTS.md" in paths
-    assert "tests/contracts/README.md" in paths
-    assert "CONTRIBUTING.md" in paths
-    assert "docs/deployment/docker.md" in paths
-    assert "docs/observability.md" in paths
-    assert "src/easycat/runtime/DURABILITY.md" in paths
-    assert ".easycat/validation/latest.json" in descriptions["docs/validation.md"]
-    assert "plan/validation/reference.md" in paths
-    assert all(entry.get("description") for entry in payload["entries"])
-    assert all(entry.get("audience") for entry in payload["entries"])
-    assert all(entry.get("url") for entry in payload["entries"])
-    commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
-    assert commands["docs/README.md"] == [
-        "easycat docs",
-        "easycat docs --audience learners",
-        "easycat docs --audience app-builders",
-        "easycat docs --audience operators",
-        "easycat docs --audience maintainers",
-        "easycat docs --json",
-    ]
-    assert commands["README.md#choose-your-path"] == [
-        "uv sync --extra quickstart --group dev",
-        "uv run easycat doctor",
-        "uv run easycat doctor --json",
-        "uv run easycat doctor --env-file .env",
-        "uv run easycat doctor --env-file .env --json",
-        "uv run --env-file .env python examples/openai_agents_voice.py",
-        "uv run easycat console",
-        "uv run python examples/journal_demo.py",
-        "uv run python docs/teaching/offline_spine.py --run --jobs 4",
-        "uv run easycat init --list-templates",
-        "uv run easycat init my-agent",
-        "uv run easycat docs --audience maintainers",
-        "uv run easycat docs --audience coding-agents",
-        "uv run easycat validate quick",
-        "easycat bundles list",
-        "uv sync --extra debugger --group dev",
-    ]
-    assert "uv run easycat docs --audience maintainers --json" in commands["CLAUDE.md"]
-    assert "uv run easycat docs --audience coding-agents --json" in commands["AGENTS.md"]
-    assert commands["README.md#cli"] == [
-        "easycat console",
-        "easycat console --voice-demo",
-        "easycat init --list-templates",
-        "easycat init --list-templates --json",
-        "easycat init my-agent",
-        "easycat doctor --json",
-        "easycat doctor --env-file .env --json",
-        "easycat docs",
-        "easycat docs --audience learners",
-        "easycat docs --audience learners --json",
-        "easycat docs --audience app-builders",
-        "easycat docs --audience app-builders --json",
-        "easycat docs --audience operators",
-        "easycat docs --audience operators --json",
-        "easycat docs --audience maintainers",
-        "easycat docs --audience maintainers --json",
-        "easycat docs --json",
-        "easycat explain json-schema",
-    ]
-    assert commands["docs/teaching/"][:2] == [
-        "uv sync --extra local --group dev",
-        "uv sync --extra quickstart --group dev",
-    ]
-    assert commands["docs/teaching/PROGRESS.md"] == [
-        "uv run python docs/teaching/00-hello-audio/format_boundaries.py",
-        "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence",
-    ]
-    assert commands["docs/teaching/00-hello-audio/"] == [
-        "uv sync --extra local --group dev",
-        "uv run python docs/teaching/00-hello-audio/main.py",
-    ]
-    assert commands["docs/testing-and-evals.md"] == [
-        "uv run pytest tests/debug/test_testing_helpers.py",
-        "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
-        "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
-        "uv run easycat doctor --env-file .env",
-        "uv run easycat doctor --env-file .env --json",
-        "uv run easycat validate latency --smoke",
-        "uv run --env-file .env easycat validate latency --smoke",
-        "uv run easycat validate live --provider openai",
-        "uv run --env-file .env easycat validate live --provider openai --strict",
-        "uv run easycat validate report .easycat/validation/latest.json",
-    ]
-    assert commands["docs/validation.md"] == [
-        *_DOCS_ONBOARDING_GUARD_COMMANDS,
-        *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-        "uv run easycat validate quick",
-        "uv run easycat validate socket",
-        "uv run easycat validate stress",
-        "uv run easycat validate contracts",
-        "uv run easycat validate latency --smoke",
-        "uv run easycat validate live",
-        "uv run easycat validate release",
-        "uv run easycat validate report .easycat/validation/latest.json",
-        "uv run easycat validate quick --json",
-        "uv run easycat validate contracts --json",
-        "uv run easycat validate release --json",
-        "uv run easycat validate report .easycat/validation/latest.json --json",
-    ]
-    assert commands["docs/public-api.md"] == [
-        "uv run easycat docs",
-        "uv run easycat docs --audience maintainers",
-        "uv run easycat docs --json",
-        "uv run easycat docs --audience maintainers --json",
-        "uv run easycat explain json-schema",
-        "uv run pytest tests/test_public_api.py",
-        "just guard-docs",
-        _DOCS_ONBOARDING_RAW_GUARD_COMMANDS[0],
-    ]
-    assert commands["tests/contracts/README.md"] == [
-        "uv run easycat docs --audience provider-maintainers",
-        "uv run easycat docs --audience provider-maintainers --json",
-        "uv run easycat validate contracts",
-        "uv run easycat validate contracts --json",
-        "uv run pytest tests/contracts",
-        "uv run pytest tests/contracts/test_provider_session_matrix.py",
-    ]
-    assert commands["CONTRIBUTING.md"] == [
-        *_DOCS_ONBOARDING_GUARD_COMMANDS,
-        *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-        "uv run easycat docs --audience contributors",
-        "uv run easycat docs --audience contributors --json",
-        "uv run pytest",
-        "uv run ruff check .",
-        "uv run easycat validate quick",
-        "uv run easycat validate socket",
-        "uv run easycat validate stress",
-        "uv run easycat validate contracts",
-        "uv run easycat validate latency --smoke",
-        "uv run easycat validate live --provider openai",
-        "uv run easycat validate release",
-        "uv run easycat validate report .easycat/validation/latest.json",
-        "uv run easycat validate quick --json",
-        "uv run easycat validate contracts --json",
-        "uv run easycat validate release --json",
-        "uv run easycat validate report .easycat/validation/latest.json --json",
-    ]
-    assert commands["src/easycat/runtime/DURABILITY.md"] == [
-        "uv run easycat docs --audience operators-and-maintainers",
-        "uv run easycat docs --audience operators-and-maintainers --json",
-        "uv run pytest tests/runtime/test_sqlite_journal.py",
-        "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
-        "uv run easycat inspect .easycat/journals/<session_id>.sqlite --json",
-        "uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json",
-    ]
-    descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
-    assert "JSON envelopes" in descriptions["README.md#cli"]
-    assert "base package requirements" in descriptions["README.md#cli"]
-    assert "extras" in descriptions["README.md#cli"]
-    assert "env requirements" in descriptions["README.md#cli"]
-    assert "optional env knobs" in descriptions["README.md#cli"]
-    assert "generated files" in descriptions["README.md#cli"]
-    assert audiences["README.md#choose-your-path"] == "all readers"
-    assert audiences["README.md#install"] == "new users"
-    assert audiences["README.md#cli"] == "app builders"
-    assert audiences["CLAUDE.md"] == "maintainers"
-    assert audiences["AGENTS.md"] == "coding agents"
-    assert audiences["docs/observability.md"] == "operators"
-    assert (
-        "copyable create/preflight/check/fix/docs/json-schema/run commands"
-        in (descriptions["README.md#cli"])
-    )
-    assert "right first route" in descriptions["README.md#choose-your-path"]
-    assert "maintenance" in descriptions["README.md#choose-your-path"]
-    assert "uv run easycat init --list-templates" in commands["README.md#choose-your-path"]
-    assert "uv run easycat init my-agent" in commands["README.md#choose-your-path"]
-    assert "docs/onboarding guards" in descriptions["docs/validation.md"]
-    assert "provider registries" in descriptions["CLAUDE.md"]
-    assert "development commands" in descriptions["AGENTS.md"]
-    assert "docs/onboarding guards" in descriptions["AGENTS.md"]
-    assert "protocol" in descriptions["tests/contracts/README.md"]
-    assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]
-    assert "maintained guide" in descriptions["docs/README.md"]
-    assert "runnable local" in descriptions["examples/README.md"]
-    assert "debugger UI" in descriptions["docs/observability.md"]
-    assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]
-    urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
-    assert urls["README.md#choose-your-path"] == (
-        "https://github.com/yisding/easycat/blob/main/README.md#choose-your-path"
-    )
-    assert urls["README.md#cli"] == "https://github.com/yisding/easycat/blob/main/README.md#cli"
-    assert urls["README.md#install"] == (
-        "https://github.com/yisding/easycat/blob/main/README.md#install"
-    )
-    assert urls["docs/teaching/"] == "https://github.com/yisding/easycat/tree/main/docs/teaching"
-    assert urls["docs/teaching/PROGRESS.md"] == (
-        "https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md"
-    )
-    assert urls["docs/teaching/00-hello-audio/"] == (
-        "https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio"
-    )
-    assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 
 def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:

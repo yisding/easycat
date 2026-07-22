@@ -30,7 +30,14 @@ Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
 _WORKER_EOF = object()
 ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
-LOCK_EXCLUDE_NEWER = "2026-07-19T00:00:00Z"
+LOCK_EXCLUDE_NEWER_BY_FRAMEWORK = {
+    framework: str(
+        tomllib.loads((ENVIRONMENT_ROOT / framework / "uv.lock").read_text())["options"][
+            "exclude-newer"
+        ]
+    )
+    for framework in ("livekit", "pipecat")
+}
 PINS = {
     framework: tuple(
         tomllib.loads((ENVIRONMENT_ROOT / framework / "pyproject.toml").read_text())["project"][
@@ -76,7 +83,7 @@ def worker_specs(
                 "--no-progress",
                 "--no-config",
                 "--exclude-newer",
-                LOCK_EXCLUDE_NEWER,
+                LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework],
                 "--isolated",
                 "--project",
                 str(project),
@@ -100,6 +107,7 @@ def _lock_metadata() -> dict[str, dict[str, str]]:
         metadata[framework] = {
             "path": str(lock_path.relative_to(Path(__file__).parents[1])),
             "sha256": digest,
+            "exclude_newer": LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework],
         }
     return metadata
 

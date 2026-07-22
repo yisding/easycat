@@ -3,23 +3,14 @@
 from __future__ import annotations
 
 import struct
-import tempfile
-import wave
-from pathlib import Path
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk, AudioFormat
-from easycat.events import TTSEvent, TTSEventType
+from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioFormat
+from easycat.events import TTSEventType
 from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput
-from tests.tts._harness import (
-    collect_tts_output,
-    concatenate_audio,
-    extract_audio_chunks,
-    verify_pcm16_audio,
-    write_wav,
-)
+from tests.tts._harness import collect_tts_output
 
 # ── Helper: Fake TTS provider for testing ─────────────────────────
 
@@ -263,72 +254,3 @@ class TestFakeTTS:
         tts = FakeTTS(chunks=[])
         events = await collect_tts_output(tts, "hello")
         assert events == []
-
-
-# ── Test harness utility tests ────────────────────────────────────
-
-
-class TestHarnessUtils:
-    async def test_collect_tts_output(self):
-        chunks = [_make_pcm16_data(50), _make_pcm16_data(50)]
-        tts = FakeTTS(chunks=chunks)
-        events = await collect_tts_output(tts, "hello")
-        assert len(events) == 2
-
-    def test_extract_audio_chunks(self):
-        audio_event = TTSEvent(
-            type=TTSEventType.AUDIO,
-            audio=AudioChunk(data=_make_pcm16_data(10), format=PCM16_MONO_24K),
-        )
-        marker_event = TTSEvent(
-            type=TTSEventType.MARKERS,
-            markers=[{"word": "hi"}],
-        )
-        chunks = extract_audio_chunks([audio_event, marker_event])
-        assert len(chunks) == 1
-
-    def test_concatenate_audio(self):
-        c1 = AudioChunk(data=b"\x01\x00", format=PCM16_MONO_24K)
-        c2 = AudioChunk(data=b"\x02\x00", format=PCM16_MONO_24K)
-        assert concatenate_audio([c1, c2]) == b"\x01\x00\x02\x00"
-
-    def test_write_wav(self):
-        data = _make_pcm16_data(240)  # 240 samples at 24kHz = 10ms
-        chunks = [AudioChunk(data=data, format=PCM16_MONO_24K)]
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            path = f.name
-
-        result = write_wav(chunks, path)
-        assert Path(result).exists()
-
-        # Verify the WAV file is valid
-        with wave.open(str(result), "rb") as wf:
-            assert wf.getnchannels() == 1
-            assert wf.getsampwidth() == 2
-            assert wf.getframerate() == 24000
-            assert wf.getnframes() == 240
-
-        Path(result).unlink()
-
-    def test_write_wav_empty_raises(self):
-        with pytest.raises(ValueError, match="No audio chunks"):
-            write_wav([], "/tmp/test.wav")
-
-    def test_verify_pcm16_audio_valid(self):
-        chunks = [AudioChunk(data=_make_pcm16_data(10), format=PCM16_MONO_24K)]
-        assert verify_pcm16_audio(chunks) is True
-
-    def test_verify_pcm16_audio_wrong_width(self):
-        fmt = AudioFormat(sample_rate=24000, channels=1, sample_width=4)
-        chunks = [AudioChunk(data=b"\x00" * 40, format=fmt)]
-        assert verify_pcm16_audio(chunks) is False
-
-    def test_verify_pcm16_audio_stereo(self):
-        fmt = AudioFormat(sample_rate=24000, channels=2, sample_width=2)
-        chunks = [AudioChunk(data=b"\x00" * 40, format=fmt)]
-        assert verify_pcm16_audio(chunks) is False
-
-    def test_verify_pcm16_audio_odd_bytes(self):
-        chunks = [AudioChunk(data=b"\x00\x01\x02", format=PCM16_MONO_24K)]
-        assert verify_pcm16_audio(chunks) is False

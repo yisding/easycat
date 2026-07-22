@@ -48,103 +48,104 @@ from easycat.events import (
 
 # ── Event dataclass tests ─────────────────────────────────────────
 
+_SHARED_CHUNK = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
 
-def test_audio_in_event():
-    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
-    event = AudioIn(chunk=chunk)
-    assert event.chunk is chunk
+
+def _is_shared_chunk(value: object) -> bool:
+    return value is _SHARED_CHUNK
+
+
+def _markers_len_1(value: object) -> bool:
+    return len(value) == 1  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("make_event", "field_checks"),
+    [
+        pytest.param(
+            lambda: AudioIn(chunk=_SHARED_CHUNK), [("chunk", _is_shared_chunk)], id="audio-in"
+        ),
+        pytest.param(lambda: VADStartSpeaking(), [], id="vad-start-speaking"),
+        pytest.param(lambda: VADStopSpeaking(), [], id="vad-stop-speaking"),
+        pytest.param(lambda: STTPartial(text="hel"), [("text", "hel")], id="stt-partial"),
+        pytest.param(lambda: STTFinal(text="hello"), [("text", "hello")], id="stt-final"),
+        pytest.param(lambda: AgentRequestStarted(), [], id="agent-request-started"),
+        pytest.param(lambda: AgentDelta(text="Hi"), [("text", "Hi")], id="agent-delta"),
+        pytest.param(
+            lambda: AgentFinal(text="Hi there!"), [("text", "Hi there!")], id="agent-final"
+        ),
+        pytest.param(
+            lambda: TTSAudio(chunk=_SHARED_CHUNK), [("chunk", _is_shared_chunk)], id="tts-audio"
+        ),
+        pytest.param(
+            lambda: TTSMarkers(markers=[{"word": "hello", "offset": 0.0}]),
+            [("markers", _markers_len_1)],
+            id="tts-markers",
+        ),
+        pytest.param(lambda: BotStartedSpeaking(), [], id="bot-started-speaking"),
+        pytest.param(lambda: BotStoppedSpeaking(), [], id="bot-stopped-speaking"),
+        pytest.param(lambda: TurnStarted(), [], id="turn-started"),
+        pytest.param(lambda: TurnEnded(), [], id="turn-ended"),
+        pytest.param(lambda: Interruption(), [], id="interruption"),
+        pytest.param(
+            lambda: PlaybackMarkAck(mark_name="m1"),
+            [("mark_name", "m1")],
+            id="playback-mark-ack",
+        ),
+        pytest.param(
+            lambda: ToolCallStarted(tool_name="search", call_id="abc123"),
+            [("tool_name", "search"), ("call_id", "abc123")],
+            id="tool-call-started",
+        ),
+        pytest.param(
+            lambda: ToolCallDelta(call_id="abc123", delta="partial"),
+            [("delta", "partial")],
+            id="tool-call-delta",
+        ),
+        pytest.param(
+            lambda: ToolCallResult(call_id="abc123", result="done"),
+            [("result", "done")],
+            id="tool-call-result",
+        ),
+        pytest.param(
+            lambda: ReconnectAttempt(provider="deepgram", attempt=1),
+            [("provider", "deepgram"), ("attempt", 1)],
+            id="reconnect-attempt",
+        ),
+        pytest.param(
+            lambda: ReconnectSuccess(provider="deepgram"),
+            [("provider", "deepgram")],
+            id="reconnect-success",
+        ),
+        pytest.param(
+            lambda: ReconnectFailure(provider="deepgram", error="timeout"),
+            [("error", "timeout")],
+            id="reconnect-failure",
+        ),
+        pytest.param(lambda: DTMF(digit="5"), [("digit", "5")], id="dtmf"),
+        pytest.param(
+            lambda: DTMFAggregated(sequence="1234#"),
+            [("sequence", "1234#")],
+            id="dtmf-aggregated",
+        ),
+        pytest.param(
+            lambda: VoicemailDetected(result="machine"),
+            [("result", "machine"), ("call_sid", "")],
+            id="voicemail-detected-default-call-sid",
+        ),
+        pytest.param(
+            lambda: VoicemailDetected(result="machine", call_sid="CA123"),
+            [("result", "machine"), ("call_sid", "CA123")],
+            id="voicemail-detected-explicit-call-sid",
+        ),
+    ],
+)
+def test_event_construction_and_fields(make_event, field_checks):
+    event = make_event()
     assert event.timestamp > 0
-
-
-def test_vad_events():
-    start = VADStartSpeaking()
-    stop = VADStopSpeaking()
-    assert start.timestamp > 0
-    assert stop.timestamp > 0
-
-
-def test_stt_events():
-    partial = STTPartial(text="hel")
-    final = STTFinal(text="hello")
-    assert partial.text == "hel"
-    assert final.text == "hello"
-
-
-def test_agent_events():
-    started = AgentRequestStarted()
-    delta = AgentDelta(text="Hi")
-    final = AgentFinal(text="Hi there!")
-    assert started.timestamp > 0
-    assert delta.text == "Hi"
-    assert final.text == "Hi there!"
-
-
-def test_tts_events():
-    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
-    audio = TTSAudio(chunk=chunk)
-    markers = TTSMarkers(markers=[{"word": "hello", "offset": 0.0}])
-    assert audio.chunk is chunk
-    assert len(markers.markers) == 1
-
-
-def test_lifecycle_events():
-    bot_start = BotStartedSpeaking()
-    bot_stop = BotStoppedSpeaking()
-    turn_start = TurnStarted()
-    turn_end = TurnEnded()
-    assert bot_start.timestamp > 0
-    assert bot_stop.timestamp > 0
-    assert turn_start.timestamp > 0
-    assert turn_end.timestamp > 0
-
-
-def test_interruption_event():
-    event = Interruption()
-    assert event.timestamp > 0
-
-
-def test_playback_mark_ack_event():
-    event = PlaybackMarkAck(mark_name="m1")
-    assert event.mark_name == "m1"
-    assert event.timestamp > 0
-
-
-def test_tool_events():
-    started = ToolCallStarted(tool_name="search", call_id="abc123")
-    delta = ToolCallDelta(call_id="abc123", delta="partial")
-    result = ToolCallResult(call_id="abc123", result="done")
-    assert started.tool_name == "search"
-    assert started.call_id == "abc123"
-    assert delta.delta == "partial"
-    assert result.result == "done"
-
-
-def test_reconnect_events():
-    attempt = ReconnectAttempt(provider="deepgram", attempt=1)
-    success = ReconnectSuccess(provider="deepgram")
-    failure = ReconnectFailure(provider="deepgram", error="timeout")
-    assert attempt.provider == "deepgram"
-    assert attempt.attempt == 1
-    assert success.provider == "deepgram"
-    assert failure.error == "timeout"
-
-
-def test_dtmf_events():
-    dtmf = DTMF(digit="5")
-    agg = DTMFAggregated(sequence="1234#")
-    assert dtmf.digit == "5"
-    assert agg.sequence == "1234#"
-
-
-def test_voicemail_detected():
-    event = VoicemailDetected(result="machine")
-    assert event.result == "machine"
-    assert event.call_sid == ""
-
-
-def test_voicemail_detected_accepts_call_sid():
-    event = VoicemailDetected(result="machine", call_sid="CA123")
-    assert event.call_sid == "CA123"
+    for attr, expected in field_checks:
+        actual = getattr(event, attr)
+        assert expected(actual) if callable(expected) else actual == expected
 
 
 def test_telephony_helper_payloads_are_events():
@@ -386,6 +387,33 @@ async def test_eventbus_async_handler():
 
     assert len(received) == 1
     assert received[0].text == "async hello"
+
+
+def test_eventbus_subscribers_snapshot_excludes_globals_and_parents():
+    bus = EventBus()
+
+    def exact(event: STTFinal) -> None: ...
+
+    def global_handler(event: Event) -> None: ...
+
+    bus.subscribe(STTFinal, exact)
+    bus.subscribe_all(global_handler)
+    # A parent-class subscription must not leak into the exact-type snapshot.
+    bus.subscribe(Event, global_handler)
+
+    snapshot = bus.subscribers(STTFinal)
+    assert snapshot == [exact]
+    # Snapshot is a copy: later subscriptions do not mutate it.
+    bus.subscribe(STTFinal, lambda e: None)
+    assert snapshot == [exact]
+    assert len(bus.subscribers(STTFinal)) == 2
+
+
+def test_eventbus_subscribers_empty_for_unknown_type():
+    bus = EventBus()
+    assert bus.subscribers(STTFinal) == []
+    # Querying must not create an empty bucket in the underlying defaultdict.
+    assert STTFinal not in bus._handlers
 
 
 @pytest.mark.asyncio

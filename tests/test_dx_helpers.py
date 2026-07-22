@@ -5,13 +5,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import re
-from pathlib import Path
 
 import pytest
 
-import easycat
-from easycat import EasyConfig, SessionConfig, require_env, run
+from easycat import EasyConfig, require_env, run
 from easycat.config import _resolve_easycat_log_level
 from easycat.config.easy import _EASYCAT_LOG_LEVELS
 from easycat.helpers import _feedback_enabled
@@ -19,8 +16,6 @@ from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # ── EASYCAT_LOG_LEVEL ─────────────────────────────────────────────
 
@@ -151,225 +146,18 @@ def test_preset_still_honors_explicit_overrides(monkeypatch: pytest.MonkeyPatch)
     assert cfg.stt.api_key == "override"
 
 
-def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
-    example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
+def test_session_teardown_surface_has_no_legacy_aliases() -> None:
+    """Session's public teardown surface is ``stop(force=...)`` only.
 
-    assert "uv add 'easycat[quickstart]'" in example
-    assert "uv sync --extra quickstart --group dev" in example
-    assert "# Next, try" in example
-    assert 'stt="deepgram/nova-2"' in example
-    assert "DEEPGRAM_API_KEY + --extra deepgram" in example
-    assert "tools live on YOUR Agent" in example
-    assert "EasyConfig.browser(agent=...)" in example
-    assert "server + --extra webrtc" in example
-    assert 'debug="full"' in example
-    assert "`easycat inspect`" not in example
-    assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in example
-    assert "uv run easycat docs --audience learners" in example
-    assert "docs/teaching/00-hello-audio/" in example
-
-
-def test_package_docstring_leads_with_canonical_quickstart() -> None:
-    doc = easycat.__doc__ or ""
-
-    assert doc.startswith("EasyCat — a voice bot in three lines.")
-    assert "uv add 'easycat[quickstart]'" in doc
-    assert "from agents import Agent" in doc
-    assert "from easycat import EasyConfig, run" in doc
-    assert "run(EasyConfig.mic(agent=Agent(" in doc
-    assert "uv run easycat doctor" in doc
-    assert "uv run easycat doctor --env-file .env" in doc
-    assert "uv run --env-file .env ..." in doc
-    assert "Session.from_providers" in doc
-    assert "hand-build provider instances" in doc
-    before_raw_providers = doc.split("Start here", 1)[1].split("Session.from_providers", 1)[0]
-    assert "create_session" not in before_raw_providers
-
-
-def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
-    config_doc = " ".join((EasyConfig.__doc__ or "").split())
-    mic_doc = " ".join((EasyConfig.mic.__doc__ or "").split())
-    browser_doc = " ".join((EasyConfig.browser.__doc__ or "").split())
-    phone_doc = " ".join((EasyConfig.phone.__doc__ or "").split())
-
-    assert "provider shortcut" in config_doc
-    assert "provider instances" in config_doc
-    assert "VADConfig" in config_doc
-    assert "NoiseReducerConfig" in config_doc
-    assert "EchoCancellationConfig" in config_doc
-    assert "smart_turn" in config_doc
-    assert "smart_turn_sensitivity" in config_doc
-
-    assert "Next:" in mic_doc
-    assert "stt=" in mic_doc and "tts=" in mic_doc
-    assert "shortcut string" in mic_doc
-    assert "config dataclass" in mic_doc
-    assert "provider instance" in mic_doc
-    assert "vad=" in mic_doc
-    assert "browser()" in mic_doc and "phone()" in mic_doc
-    assert "DEEPGRAM_API_KEY" in mic_doc and "easycat[deepgram]" in mic_doc
-
-    assert "Next:" in browser_doc
-    assert "server process" in browser_doc
-    assert "easycat[webrtc]" in browser_doc
-    assert "examples/webrtc_server.py" in browser_doc
-    assert "provider instances" in browser_doc
-    assert "vad=" in browser_doc
-
-    assert "Next:" in phone_doc
-    assert "server process" in phone_doc
-    assert "easycat[telephony]" in phone_doc
-    assert "examples/twilio_app.py" in phone_doc
-    assert "provider instances" in phone_doc
-    assert "vad=" in phone_doc
-
-
-def test_sessionconfig_docstring_steers_to_easyconfig() -> None:
-    doc = SessionConfig.__doc__ or ""
-
-    assert "lowest rung of the ladder" in doc
-    assert "provider *instances*" in doc
-    assert "EasyConfig" in doc
-    assert "Session.from_providers" in doc
-    assert "one rung up" in doc
-    assert "create_session" in doc
-
-
-def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
-    """Keep the DX onramp plan from drifting back to brittle source line refs."""
-    import easycat
-    from easycat.config._factory import _validate_agent_shape, create_session, create_text_session
-    from easycat.config.easy import EasyConfig, _AgentSessionConfig
-    from easycat.errors import EasyCatError, register
-    from easycat.helpers import _wired_summary, run
-
-    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
-        encoding="utf-8"
-    )
-    line_refs = re.findall(r"`?[\w./-]+\.(?:py|md):\d+(?:-\d+)?`?", plan)
-
-    assert not line_refs, "DX onramp plan uses brittle file-line refs: " + ", ".join(line_refs)
-    assert "src/easycat/config.py" not in plan
-    assert "`config.py`" not in plan
-    assert f"{len(easycat.__all__)} flat alphabetical names" in plan
-    assert f"curated {len(easycat.__all__)}" in plan
-    assert f"tested {len(easycat.__all__)}-name `__all__` contract" in plan
-    assert "84 flat alphabetical names" not in plan
-    assert "curated 84" not in plan
-    assert "tested 84-name `__all__` contract" not in plan
-
-    symbol_refs = {
-        "src/easycat/config/easy.py::EasyConfig.__post_init__": EasyConfig.__post_init__,
-        "src/easycat/config/easy.py::EasyConfig._validate": EasyConfig._validate,
-        "src/easycat/config/easy.py::_AgentSessionConfig": _AgentSessionConfig,
-        "src/easycat/config/_factory.py::create_session": create_session,
-        "src/easycat/config/_factory.py::create_text_session": create_text_session,
-        "src/easycat/config/_factory.py::_validate_agent_shape": _validate_agent_shape,
-        "src/easycat/errors.py::EasyCatError.__init__": EasyCatError.__init__,
-        "src/easycat/errors.py::register": register,
-        "src/easycat/helpers.py::run": run,
-        "src/easycat/helpers.py::_wired_summary": _wired_summary,
-    }
-    for symbol_ref, symbol in symbol_refs.items():
-        assert symbol_ref in plan
-        assert callable(symbol)
-
-    landed_statuses = {
-        "5.1": "landed; guarded",
-        "5.2": "landed; guarded",
-        "5.3": "landed; guarded",
-        "5.4": "folded into 5.3",
-        "5.5": "landed; guarded",
-        "5.6": "landed; guarded",
-        "5.7": "landed; guarded",
-        "5.8": "landed; guarded",
-        "5.9": "landed; guarded",
-        "5.10": "landed",
-        "5.11": "landed; guarded",
-        "5.12": "landed Part A; Part B dropped",
-        "5.13": "landed; guarded",
-    }
-    for number, status in landed_statuses.items():
-        pattern = rf"^### {re.escape(number)} .* \*\({re.escape(status)}\)\*$"
-        assert re.search(pattern, plan, re.MULTILINE), f"section {number} status drifted"
-
-
-def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence() -> None:
-    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
-        encoding="utf-8"
-    )
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
-    scaffold = (
-        REPO_ROOT
-        / "src"
-        / "easycat"
-        / "cli"
-        / "scaffold"
-        / "templates"
-        / "openai-agents"
-        / "agent.py"
-    ).read_text(encoding="utf-8")
-    package_doc = easycat.__doc__ or ""
-    quickstart = readme.split("### Quickstart (EasyConfig)", 1)[1].split(
-        "## Install",
-        1,
-    )[0]
-    advanced = readme.split("### Advanced: own the lifecycle", 1)[1].split(
-        "## Telephony",
-        1,
-    )[0]
-    normalized_quickstart = " ".join(quickstart.split())
-
-    assert "### 5.1" in plan
-    assert "*(landed; guarded)*" in plan.split("### 5.1", 1)[1].split("### 5.2", 1)[0]
-    assert "test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence" in (plan)
-
-    assert "run(EasyConfig.mic(agent=Agent(" in package_doc
-    assert "run(\n    EasyConfig.mic(" in quickstart
-    assert "create_session" not in quickstart
-    assert "your-api-key" not in quickstart
-    assert "one canonical shape" in normalized_quickstart
-    assert "examples/openai_agents_voice.py" in quickstart
-    assert "easycat init my-agent" in quickstart
-
-    assert "run(\n    EasyConfig.mic(" in example
-    assert "create_session" not in example
-    assert "run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))" in scaffold
-
-    # The advanced section is now a one-line door into the graduation guide,
-    # which carries the full create_session/run_session lifecycle example.
-    guide = (REPO_ROOT / "docs" / "from-easyconfig-to-session.md").read_text(encoding="utf-8")
-    assert "docs/from-easyconfig-to-session.md" in advanced
-    assert "create_session(...)" in guide
-    assert "from easycat import EasyConfig, STTFinal, create_session" in guide
-    assert "from easycat.helpers import run_session" in guide
-    assert "session = create_session(EasyConfig.mic(agent=agent))" in guide
-    assert "run_session(session)" in guide
-    assert "async with session:" in guide
-
-
-def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> None:
+    Relocated from the now-deleted plan-status test
+    ``test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence``:
+    this is the one piece of that test with real (non-prose) signal —
+    everything else there asserted hand-locked wording in README/AGENTS.md/
+    CLAUDE.md/the plan doc, which is not product behavior.
+    """
     from easycat.session._session import Session
 
-    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
-        encoding="utf-8"
-    )
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    chapter_15 = (
-        REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
-    ).read_text(encoding="utf-8")
-    lifecycle = readme.split("## Session lifecycle", 1)[1].split(
-        "## Pre-TTS output processors",
-        1,
-    )[0]
-    section = plan.split("### 5.11", 1)[1].split("### 5.12", 1)[0]
     stop_signature = inspect.signature(Session.stop)
-
-    assert "*(landed; guarded)*" in section
-    assert "test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence" in section
 
     assert inspect.iscoroutinefunction(Session.__aenter__)
     assert inspect.iscoroutinefunction(Session.__aexit__)
@@ -380,26 +168,6 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     for removed in ("shutdown", "close", "destroy", "_close", "_destroy"):
         assert not hasattr(Session, removed)
     assert callable(Session._finalize_debug_backends)
-
-    run_doc = run.__doc__ or ""
-    assert "async with session:" in run_doc
-    assert "stop(force=True)" in run_doc
-    assert "await session.shutdown()" not in run_doc
-
-    assert "`async with session:` is the preferred public teardown idiom" in lifecycle
-    assert "`await session.stop()` is the single public teardown verb" in lifecycle
-    assert "`await session.wait_closed()`" in lifecycle
-    assert "await session.shutdown()" not in lifecycle
-    for stale in ("session.shutdown()", "session.close()", "session.destroy()"):
-        assert stale not in chapter_15
-
-    for guide in (agents, claude):
-        assert "`await session.stop()` is the single public teardown verb" in guide
-        assert "`async with session:` is the preferred scoped idiom" in guide
-        for removed in ("session.shutdown()", "Session.close()", "Session.destroy()"):
-            assert removed not in guide
-
-    assert "after `stop()`" in chapter_15
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
@@ -443,8 +211,8 @@ def _opt_in_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_debug_full_does_not_auto_launch_without_opt_in(monkeypatch: pytest.MonkeyPatch):
     """``debug='full'`` alone must NOT launch the debugger UI.
 
-    Keeping a durable journal is the default; auto-launch is strictly
-    opt-in so concurrent sessions never race a port bind or pop a tab.
+    Durable capture and auto-launch are separate opt-ins so concurrent
+    sessions never race a port bind or pop a tab.
     """
     from easycat.debugger._autolaunch import maybe_launch_debugger_ui
 

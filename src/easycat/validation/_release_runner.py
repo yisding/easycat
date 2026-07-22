@@ -37,7 +37,7 @@ from easycat.validation.report import (
 DEFAULT_RELEASE_EXTRAS = ("openai", "openai-agents")
 DEFAULT_RELEASE_PROVIDERS = ("openai",)
 DEFAULT_RELEASE_SURFACES = ("stt", "tts")
-RELEASE_SLICES = ("quick", "stress", "contracts")
+RELEASE_SLICES = ("quick", "guard", "stress", "contracts")
 # pytest-xdist is required because the quick slice runs with -n auto.
 RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "pytest-xdist", "hypothesis")
 

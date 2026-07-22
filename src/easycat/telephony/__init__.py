@@ -65,6 +65,7 @@ _LAZY_ATTR: dict[str, str] = {
     "IVRNavigatorConfig": "easycat.telephony.ivr",
     # Compliance / DNC
     "AIDisclosureConfig": "easycat.telephony.compliance",
+    "AsyncDNCStore": "easycat.telephony.compliance",
     "CallBlocked": "easycat.telephony.compliance",
     "DNCList": "easycat.telephony.compliance",
     "DNCStore": "easycat.telephony.compliance",
@@ -85,6 +86,7 @@ __all__ = sorted(_LAZY_ATTR)
 if TYPE_CHECKING:
     from easycat.telephony.compliance import (
         AIDisclosureConfig,
+        AsyncDNCStore,
         CallBlocked,
         DNCList,
         DNCStore,

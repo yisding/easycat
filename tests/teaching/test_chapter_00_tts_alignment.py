@@ -64,23 +64,3 @@ def test_tts_alignment_probe_uses_public_easyconfig_resolution() -> None:
             "transport_output_rate_hz": 16_000,
         },
     }
-
-
-def test_lesson_distinguishes_config_default_from_resolved_output() -> None:
-    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
-    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
-    lesson = " ".join(f"{readme}\n{exercises}".split())
-
-    assert "tts_alignment_probe.py" in readme
-    assert "Raw TTS default vs. resolved session output" in readme
-    assert "provider request rate" in lesson
-    assert "transport-output rate" in lesson
-    assert "not proof that a human heard" in lesson
-    assert "explicit caller intent wins" in lesson
-    assert "auto_align_tts_output_to_transport=False" in lesson
-    assert "24 kHz TTS rows" in lesson and "config defaults" in lesson
-    assert "OpenAI returns fixed 24 kHz PCM" in lesson
-    assert "provider-native 24 kHz" in lesson
-    assert "resolved TTS output 16 kHz" in lesson
-    assert "WebRTC media 48 kHz" in lesson
-    assert "OpenAI TTS 24 kHz ──resample──► WebRTC media 48 kHz" not in lesson

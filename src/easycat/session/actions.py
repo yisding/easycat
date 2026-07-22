@@ -9,7 +9,6 @@ executors.
 
 from __future__ import annotations
 
-import asyncio
 import enum
 import logging
 import threading
@@ -385,9 +384,10 @@ class CoreSessionActionExecutor(SessionActionExecutor):
         swallowed — they propagate so the drain loop reports
         ``SessionActionFailed`` instead of a misleading completed action.
 
-        The store write runs via :func:`asyncio.to_thread`: a ``dnc_list`` may
-        do blocking disk I/O (e.g. :class:`SQLiteDNCList`), which must not run
-        on the session event loop.
+        Native :class:`~easycat.telephony.compliance.AsyncDNCStore`
+        implementations are awaited directly. Sync-only third-party stores
+        are offloaded with :func:`asyncio.to_thread`, so neither path blocks
+        the session event loop.
         """
         verb = "add" if isinstance(action, AddToDNCAction) else "remove"
         number = action.number or _current_caller_number(session)
@@ -407,9 +407,11 @@ class CoreSessionActionExecutor(SessionActionExecutor):
             return SessionActionResult(
                 metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
             )
+        from easycat.telephony.compliance import dnc_add, dnc_remove
+
         if isinstance(action, AddToDNCAction):
-            await asyncio.to_thread(dnc_list.add, number)
+            await dnc_add(dnc_list, number)
         else:
-            await asyncio.to_thread(dnc_list.remove, number)
+            await dnc_remove(dnc_list, number)
         logger.info("Agent updated DNC list (%s %s): reason=%s", verb, number, action.reason)
         return SessionActionResult(metadata={**meta, "applied": True})
