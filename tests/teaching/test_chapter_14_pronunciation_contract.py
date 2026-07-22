@@ -62,7 +62,6 @@ def test_chapter_stack_exposes_the_real_ssml_downgrade() -> None:
 def test_bundled_tts_providers_use_the_plain_text_policy() -> None:
     for provider_type in (OpenAITTS, CartesiaTTS, DeepgramTTS, ElevenLabsTTS):
         assert provider_type.input_policy is TTSBase.input_policy
-        assert provider_type.supports_ssml is TTSBase.supports_ssml
 
 
 def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None:

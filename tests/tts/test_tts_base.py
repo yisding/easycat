@@ -12,7 +12,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.base import TTSBase
-from easycat.tts.input import TTSInput, TTSInputPolicy
+from easycat.tts.input import TTSInput
 from tests.tts._harness import (
     collect_tts_output,
     concatenate_audio,
@@ -68,23 +68,6 @@ class TestTTSBase:
     def test_default_input_policy_is_plain_text(self):
         base = TTSBase()
         assert base.input_policy.accepted_formats == ("plain",)
-        assert base.supports_ssml is False
-
-    def test_supports_ssml_mirrors_input_policy_override(self):
-        class SSMLTTS(TTSBase):
-            @property
-            def input_policy(self) -> TTSInputPolicy:
-                return TTSInputPolicy.native_ssml()
-
-        assert SSMLTTS().supports_ssml is True
-
-    def test_input_policy_mirrors_legacy_supports_ssml_override(self):
-        class LegacySSMLTTS(TTSBase):
-            @property
-            def supports_ssml(self) -> bool:
-                return True
-
-        assert LegacySSMLTTS().input_policy.supports_ssml is True
 
     def test_start_and_end_synthesis(self):
         base = TTSBase()

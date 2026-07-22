@@ -26,12 +26,11 @@ _LAZY: dict[str, tuple[str, str]] = {
     "OpenAISTTConfig": ("easycat.stt.openai_provider", "OpenAISTTConfig"),
     "STTBase": ("easycat.stt.base", "STTBase"),
     "create_stt_provider": ("easycat.stt.factory", "create_stt_provider"),
-    "pcm_to_wav": ("easycat.stt.base", "pcm_to_wav"),
 }
 
 
 if TYPE_CHECKING:
-    from easycat.stt.base import STTBase, pcm_to_wav
+    from easycat.stt.base import STTBase
     from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
     from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
     from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig

@@ -4,13 +4,14 @@
 > much input cleanup happens before speech reaches transcription.
 
 The first three chapters fit inside `VoiceApp`'s high-level fields. Conversation
-timing and signal processing need grouped pipeline policy, so this chapter
+timing and signal processing use `EasyConfig`'s pipeline fields, so this chapter
 builds an `EasyConfig.mic(...)` and hands it back to `VoiceApp`:
 
 ```python
 config = EasyConfig.mic(
     agent=agent,
-    audio_processing=AudioProcessingConfig(...),
+    smart_turn=True,
+    enable_noise_reduction=True,
     turn_taking=TurnManagerConfig(...),
 )
 VoiceApp(config=config).run("local")

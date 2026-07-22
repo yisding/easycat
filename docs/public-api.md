@@ -134,10 +134,7 @@ custom transport.
 
 ### Configuration Helpers
 
-- `AudioProcessingConfig`
-- `ObservabilityConfig`
 - `OutboundCallConfig`
-- `SessionPolicyConfig`
 - `TelephonyConfig`
 - `VoicemailDetectionConfig`
 - `SmartTurnConfig`
@@ -236,6 +233,4 @@ custom transport.
 
 Stable symbols normally carry a machine-visible deprecation signal before
 removal. During the pre-release period, obsolete APIs may be removed directly
-when retaining them would preserve ownership ambiguity. Provider config's
-legacy `settings=` alias currently raises `DeprecationWarning`; new code uses
-`params=`.
+when retaining them would preserve ownership ambiguity.

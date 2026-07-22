@@ -135,24 +135,12 @@ def coerce_tts_input(payload: TTSInput | str) -> TTSInput:
 
 
 def resolve_tts_input_policy(provider: Any) -> TTSInputPolicy:
-    """Return a provider's typed input policy, with legacy SSML fallback.
-
-    Providers that expose ``input_policy`` must return :class:`TTSInputPolicy`.
-    Older providers can keep exposing only ``supports_ssml`` and receive an
-    equivalent policy.
-    """
-    try:
-        policy = provider.input_policy
-    except AttributeError:
-        policy = None
-    if policy is not None:
-        if not isinstance(policy, TTSInputPolicy):
-            raise TypeError(
-                "provider input_policy must be an easycat.tts.input.TTSInputPolicy instance"
-            )
-        return policy
-
-    supports_ssml = bool(getattr(provider, "supports_ssml", False))
-    if supports_ssml:
-        return TTSInputPolicy.native_ssml()
-    return TTSInputPolicy.plain_text()
+    """Return a provider's typed input policy, defaulting to plain text."""
+    policy = getattr(provider, "input_policy", None)
+    if policy is None:
+        return TTSInputPolicy.plain_text()
+    if not isinstance(policy, TTSInputPolicy):
+        raise TypeError(
+            "provider input_policy must be an easycat.tts.input.TTSInputPolicy instance"
+        )
+    return policy

@@ -645,17 +645,15 @@ class VoiceApp:
     def _per_connection_factory(self, mode: VoiceMode) -> Callable[[Any], EasyConfig]:
         """Build the per-transport ``config_factory`` for a per-connection mode.
 
-        Per-connection modes reject a static ``config`` (it cannot be safely
-        cloned per connection — there is no clone helper and
-        ``dataclasses.replace`` shares grouped sub-configs by reference) and
-        REQUIRE ``config_factory``. When the app was constructed with high-level
-        fields, synthesize a factory that builds a *fresh* preset per transport.
+        Per-connection modes reject a static ``config`` because it may contain
+        stateful providers or agent bridges, and require ``config_factory``.
+        High-level fields produce a fresh preset per transport.
         """
         if self._config is not None:
             raise ValueError(
                 f"VoiceApp {mode!r} mode is per-connection and cannot reuse a static "
-                "`config` (it would share grouped sub-configs across concurrent "
-                "sessions). Pass a `config_factory` instead, or construct with "
+                "`config` across concurrent sessions. Pass a `config_factory` "
+                "instead, or construct with "
                 "high-level fields."
             )
         if self._config_factory is not None:

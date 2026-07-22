@@ -1,4 +1,4 @@
-"""Tests for ``easycat.recipes`` and ``easycat.quick`` compatibility.
+"""Tests for ``easycat.recipes``.
 
 These lock in that the teaching helpers resolve API keys from the factory
 provider catalogs (a single source of truth) rather than a hand-maintained
@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-import easycat.quick as quick
 import easycat.recipes as recipes
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.errors import EasyCatError
@@ -24,12 +23,6 @@ from easycat.recipes import _resolve_api_key, speak, transcribe_file
 from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.tts.factory import _CATALOG as _TTS_CATALOG
 from easycat.tts.input import TTSInput
-
-
-def test_quick_reexports_recipe_helpers() -> None:
-    assert quick.speak is recipes.speak
-    assert quick.transcribe_file is recipes.transcribe_file
-    assert quick._resolve_api_key is recipes._resolve_api_key
 
 
 class TestResolveApiKey:

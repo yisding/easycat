@@ -1,7 +1,6 @@
 # EasyConfig Field Reference
 
-This page is the handwritten reference for every `EasyConfig` field, the
-grouped config objects, and the legacy top-level aliases. It is kept honest
+This page is the handwritten reference for every `EasyConfig` field. It is kept honest
 by `tests/docs/test_route_contracts.py::test_easyconfig_reference_tracks_config_fields`,
 which compares each section against the live dataclass fields — the same
 pattern that keeps [public-api.md](../public-api.md) in sync with
@@ -41,11 +40,26 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   agents because an unconfirmed transcript may be cancelled and retried.
 - `wrap_agent` — when `True` (default), plain agents are wrapped in
   `AgentRunner`; set `False` only when passing a fully-constructed bridge.
-- `observability` — grouped `ObservabilityConfig` (journal/debug knobs); see
-  the [Observability Fields](#observability-fields) section.
 - `mcp_servers` — optional list of MCP server URIs (`stdio://`, `sse://`,
   `http://`, `https://`) passed through to agent bridges; frozen per
   session.
+- `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
+  (default; records audio artifacts too). Durable journaling is on by default;
+  set `debug="off"` to opt out.
+- `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
+  `"libsql"`.
+- `journal_retention` — `"archive"` (default) keeps closed journals;
+  `"delete"` removes them.
+- `warmup` — run provider warmup hooks at session start (default `True`).
+- `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
+  interactive terminal (default `False`). The
+  `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.
+- `capture_aec_reference` — opt in to journaling the echo canceller's far-end
+  reference frames (default `False`). The `EASYCAT_CAPTURE_AEC_REFERENCE`
+  env var also enables it.
+- `emergency_export` — opt in to a best-effort debug-bundle export on abnormal
+  process exit (default `False`). The `EASYCAT_EMERGENCY_EXPORT` env var also
+  enables it.
 - `openai_api_key` — explicit OpenAI key for the default STT/TTS chain;
   falls back to the `OPENAI_API_KEY` environment variable.
 - `stt` — speech-to-text selection: a shortcut string such as
@@ -53,9 +67,21 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   instance. Unset → OpenAI realtime STT.
 - `tts` — text-to-speech selection: shortcut string, config dataclass, or
   live `TTSProvider` instance. Unset → OpenAI TTS.
-- `audio_processing` — grouped `AudioProcessingConfig` (VAD, noise
-  reduction, echo cancellation, smart turn); see
-  [Audio Processing Fields](#audio-processing-fields).
+- `vad` — `VADConfig` or a live `VADProvider`; backend auto-resolves
+  Silero → FunASR → TEN → Krisp unless forced via `VADConfig.backend`.
+- `noise_reduction` — `NoiseReducerConfig` or live `NoiseReducer`; backend
+  auto-resolves Krisp → RNNoise → passthrough.
+- `echo_cancellation` — `EchoCancellationConfig` or live `EchoCanceller`;
+  LiveKitAEC when enabled and available, else passthrough.
+- `enable_noise_reduction` — opt into noise reduction with default settings
+  (default `False`).
+- `enable_echo_cancellation` — force AEC on/off; `None` derives a
+  transport-aware default.
+- `smart_turn` — `SmartTurnConfig` or bool enabling semantic endpoint
+  detection. When unset, it defaults on for local-microphone transports and
+  off for server, browser, and telephony transports.
+- `smart_turn_sensitivity` — beginner-facing 0–1 shortcut; higher values end
+  turns on lower completion probabilities (implies `smart_turn=True`).
 - `transport` — where audio comes from and goes to: local microphone
   (default), WebSocket, WebRTC, WebTransport, Twilio, or a live `Transport`
   instance.
@@ -74,89 +100,13 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   side effects (end call, transfer, …).
 - `action_executors` — extra `SessionActionExecutor` implementations for
   custom session actions.
-- `session_policy` — grouped `SessionPolicyConfig` (greeting, DNC,
-  caller-ID exposure); see [Session Policy Fields](#session-policy-fields).
+- `greeting` — text spoken once when the call is answered.
+- `dnc_list` — do-not-call store checked before placing outbound calls.
+- `caller_id_exposure` — how the callee identity reaches the agent:
+  `"off"`, `"system_message"`, or `"tools_only"` (default).
 - `record_to` — directory path; when set, every session exports a
   timestamped debug bundle there on stop/shutdown ("always be recording").
   Requires `debug != "off"`.
-
-## Audio Processing Fields
-
-Group under `audio_processing=AudioProcessingConfig(...)`:
-
-- `vad` — `VADConfig` or a live `VADProvider`; backend auto-resolves
-  Silero → FunASR → TEN → Krisp unless forced via `VADConfig.backend`.
-- `noise_reduction` — `NoiseReducerConfig` or live `NoiseReducer`; backend
-  auto-resolves Krisp → RNNoise → passthrough.
-- `echo_cancellation` — `EchoCancellationConfig` or live `EchoCanceller`;
-  LiveKitAEC when enabled and available, else passthrough.
-- `enable_noise_reduction` — opt into noise reduction with default settings
-  (default `False`).
-- `enable_echo_cancellation` — force AEC on/off; `None` (default) derives a
-  transport-aware default (on for the local mic transport).
-- `smart_turn` — `SmartTurnConfig` or bool enabling ONNX endpoint detection
-  for faster turn handoff. When left unset (`None`), it defaults *on* for the
-  local-microphone transport (and `EasyConfig.mic()`) and *off* for the
-  server/browser/telephony transports; the bundled ONNX model is warmed up at
-  startup so the first turn doesn't cold-stall. Pass `smart_turn=False` to opt
-  the local preset out.
-- `smart_turn_sensitivity` — beginner-facing 0–1 shortcut; higher values end
-  turns on lower completion probabilities (implies `smart_turn=True`).
-
-## Observability Fields
-
-Group under `observability=ObservabilityConfig(...)`:
-
-- `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
-  (default; records audio artifacts too). Durable journaling is on by default
-  so sessions are always recorded; set `debug="off"` to opt out. `"full"`
-  keeps a crash-survivable SQLite journal but never auto-launches the debugger
-  UI on its own — set `debugger_autolaunch` for that.
-- `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
-  `"libsql"`.
-- `journal_retention` — `"archive"` (default) keeps closed journals;
-  `"delete"` removes them.
-- `warmup` — run provider warmup hooks at session start (default `True`).
-- `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
-  interactive terminal (default `False`). Durable journaling does not depend
-  on this; the `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.
-- `capture_aec_reference` — opt in to journaling the echo canceller's far-end
-  reference frames so the debugger can align all three AEC tracks and compute
-  ERLE (default `False`). This adds per-frame write pressure on the live audio
-  loop, so `debug="full"` alone never turns it on; the
-  `EASYCAT_CAPTURE_AEC_REFERENCE` env var also enables it.
-- `emergency_export` — opt in to arming a best-effort debug-bundle export on an
-  abnormal process exit (unhandled exception or unexpected shutdown) so a crash
-  leaves a redacted bundle on disk (default `False`). Arming reassigns
-  `sys.excepthook` and registers an `atexit` hook process-wide, so it is never
-  on by default; the `EASYCAT_EMERGENCY_EXPORT` env var also enables it.
-
-## Session Policy Fields
-
-Group under `session_policy=SessionPolicyConfig(...)`:
-
-- `greeting` — text spoken once when the call is answered.
-- `dnc_list` — do-not-call list checked before placing outbound calls.
-  Agent tools can add or remove numbers at runtime via
-  `SessionActions.add_to_dnc()` / `remove_from_dnc()`. The default
-  `DNCList` is in-memory only (lost on restart); use `SQLiteDNCList(path)`
-  for durable, cross-restart state shared across sessions, or any object
-  satisfying the `DNCStore` protocol. With the `telephony` extra installed,
-  numbers are normalized to E.164 (Google libphonenumber) so formats match
-  across countries; pass `default_region="US"` (etc.) for numbers given
-  without a `+` country code.
-- `caller_id_exposure` — how the callee identity reaches the agent:
-  `"off"`, `"system_message"`, or `"tools_only"` (default).
-
-## Top-Level Aliases
-
-Every grouped field above is also accepted as a top-level keyword for
-convenience — `EasyConfig(debug="full")` is equivalent to
-`EasyConfig(observability=ObservabilityConfig(debug="full"))`, and the same
-holds for the audio-processing and session-policy names. The aliases are
-`InitVar`s: they forward into the grouped object at construction time and
-read/write through to it afterwards. Prefer the grouped form in new code;
-the aliases exist so the common one-knob cases stay one-liners.
 
 ## Related Pages
 

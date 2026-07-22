@@ -134,29 +134,8 @@ class TTSBase:
 
     @property
     def input_policy(self) -> TTSInputPolicy:
-        """Typed input contract for payloads delivered to ``synthesize``.
-
-        Subclasses should prefer overriding this policy instead of the legacy
-        ``supports_ssml`` flag. If a subclass still overrides only
-        ``supports_ssml``, the base policy mirrors that override.
-        """
-        if getattr(type(self), "supports_ssml", None) is not TTSBase.supports_ssml:
-            if self.supports_ssml:
-                return TTSInputPolicy.native_ssml()
+        """Typed input contract for payloads delivered to ``synthesize``."""
         return TTSInputPolicy.plain_text()
-
-    @property
-    def supports_ssml(self) -> bool:
-        """Whether this provider accepts SSML input natively.
-
-        The scheduler (:class:`~easycat.session._tts_scheduler.TTSScheduler`)
-        now reads :attr:`input_policy`; this property remains as a compatibility
-        shim for older custom providers and mirrors subclasses that override
-        ``input_policy``.
-        """
-        if getattr(type(self), "input_policy", None) is not TTSBase.input_policy:
-            return self.input_policy.supports_ssml
-        return False
 
     def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text into streaming TTSEvent objects.

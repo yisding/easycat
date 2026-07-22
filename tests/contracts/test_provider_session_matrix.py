@@ -52,7 +52,7 @@ from easycat.events import (
 from easycat.stt.cartesia_provider import CartesiaSTTConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
-from easycat.stt.factory import _CONFIG_TO_PROVIDER as _STT_CONFIG_TO_PROVIDER
+from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
 from easycat.stt.factory import create_stt_provider_from_config
 from easycat.stt.openai_provider import OpenAISTTConfig
@@ -60,8 +60,8 @@ from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
-from easycat.tts.factory import _CONFIG_TO_PROVIDER as _TTS_CONFIG_TO_PROVIDER
-from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
+from easycat.tts.factory import _CATALOG as _TTS_CATALOG
+from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
 from easycat.tts.factory import create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
@@ -189,13 +189,13 @@ async def test_session_wiring_for_every_provider_pair(
     try:
         # Registry dispatch returned the right concrete class. Strict
         # `type(...) is X` rather than isinstance to catch subclass drift.
-        assert type(real_stt) is _STT_CONFIG_TO_PROVIDER[stt_config_cls], (
+        assert type(real_stt) is _STT_CATALOG.config_to_provider[stt_config_cls], (
             f"STT factory returned {type(real_stt).__name__}, "
-            f"expected {_STT_CONFIG_TO_PROVIDER[stt_config_cls].__name__}"
+            f"expected {_STT_CATALOG.config_to_provider[stt_config_cls].__name__}"
         )
-        assert type(real_tts) is _TTS_CONFIG_TO_PROVIDER[tts_config_cls], (
+        assert type(real_tts) is _TTS_CATALOG.config_to_provider[tts_config_cls], (
             f"TTS factory returned {type(real_tts).__name__}, "
-            f"expected {_TTS_CONFIG_TO_PROVIDER[tts_config_cls].__name__}"
+            f"expected {_TTS_CATALOG.config_to_provider[tts_config_cls].__name__}"
         )
 
         # EventBus was injected into the provider's stored config for

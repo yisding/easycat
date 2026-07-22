@@ -169,7 +169,7 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
     config_text = " ".join(config.split())
 
     for token in (
-        "`ObservabilityConfig`",
+        "`debugger_autolaunch=True`",
         "`warmup=False`",
         "safe debug-bundle config snapshots",
         "structural provider/model `warmup()` hooks",

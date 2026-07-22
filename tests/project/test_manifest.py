@@ -312,8 +312,7 @@ def test_to_easyconfig_resolves_python_agent(
 
 
 def test_to_easyconfig_per_call_builds_fresh_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Each conversion builds a fresh EasyConfig (no shared grouped sub-configs
-    # across connections — the per-connection safety contract).
+    # Each conversion builds a fresh EasyConfig per connection.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
     manifest = parse_manifest(
         {
@@ -325,7 +324,6 @@ def test_to_easyconfig_per_call_builds_fresh_config(monkeypatch: pytest.MonkeyPa
     first = manifest.to_easyconfig("default", resolve_agent=False)
     second = manifest.to_easyconfig("default", resolve_agent=False)
     assert first is not second
-    assert first.audio_processing is not second.audio_processing
 
 
 def test_unknown_profile_raises_e602() -> None:

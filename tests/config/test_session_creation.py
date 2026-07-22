@@ -37,8 +37,6 @@ class _ProviderShapeSTT:
 
 
 class _ProviderShapeTTS:
-    supports_ssml = False
-
     async def synthesize(self, payload):
         if False:
             yield None
@@ -101,8 +99,6 @@ def test_create_session_accepts_custom_provider_instances_without_sessionconfig(
             return {"provider": "custom-stt"}
 
     class _CustomTTS:
-        supports_ssml = False
-
         async def synthesize(self, payload):
             if False:
                 yield None

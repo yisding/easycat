@@ -46,8 +46,6 @@ class _CustomSTT:
 
 
 class _CustomTTS:
-    supports_ssml = False
-
     async def synthesize(self, payload):
         if False:
             yield None

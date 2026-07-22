@@ -189,7 +189,7 @@ class AudioRouter:
         )
 
         # Per-frame AEC reference *journaling* is strictly opt-in (config knob
-        # ``observability.capture_aec_reference`` or the
+        # ``capture_aec_reference`` or the
         # ``EASYCAT_CAPTURE_AEC_REFERENCE`` env override). ``debug="full"`` keeps
         # a durable journal but must NOT add ~50 artifact writes/sec/session of
         # fsync + journal pressure to the live audio loop on its own. Feeding

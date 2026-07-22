@@ -127,20 +127,10 @@ def test_easyconfig_reference_tracks_config_fields() -> None:
     """The handwritten EasyConfig reference must match the live dataclasses."""
     import dataclasses
 
-    from easycat import (
-        AudioProcessingConfig,
-        EasyConfig,
-        ObservabilityConfig,
-        SessionPolicyConfig,
-    )
+    from easycat import EasyConfig
 
     text = (REPO_ROOT / "docs" / "reference" / "easyconfig.md").read_text(encoding="utf-8")
-    expected = {
-        "## Construction Fields": {f.name for f in dataclasses.fields(EasyConfig)},
-        "## Audio Processing Fields": {f.name for f in dataclasses.fields(AudioProcessingConfig)},
-        "## Observability Fields": {f.name for f in dataclasses.fields(ObservabilityConfig)},
-        "## Session Policy Fields": {f.name for f in dataclasses.fields(SessionPolicyConfig)},
-    }
+    expected = {"## Construction Fields": {f.name for f in dataclasses.fields(EasyConfig)}}
 
     problems: list[str] = []
     for heading, names in expected.items():
@@ -152,23 +142,6 @@ def test_easyconfig_reference_tracks_config_fields() -> None:
 
     assert not problems, "docs/reference/easyconfig.md is out of sync:\n" + "\n".join(problems)
 
-    # The grouped fields double as top-level InitVar aliases; the page must say so.
-    from easycat.config.easy import (
-        _AUDIO_PROCESSING_ALIAS_FIELDS,
-        _OBSERVABILITY_ALIAS_FIELDS,
-        _SESSION_POLICY_ALIAS_FIELDS,
-    )
-
-    alias_names = (
-        _AUDIO_PROCESSING_ALIAS_FIELDS | _OBSERVABILITY_ALIAS_FIELDS | _SESSION_POLICY_ALIAS_FIELDS
-    )
-    grouped_documented = (
-        _reference_section_field_names(text, "## Audio Processing Fields")
-        | _reference_section_field_names(text, "## Observability Fields")
-        | _reference_section_field_names(text, "## Session Policy Fields")
-    )
-    assert alias_names == grouped_documented
-    assert "## Top-Level Aliases" in text
     assert "test_easyconfig_reference_tracks_config_fields" in text
 
 

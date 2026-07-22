@@ -735,9 +735,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/reference/easyconfig.md",
         "audience": "app builders",
         "diataxis": "reference",
-        "description": (
-            "Look up every EasyConfig field, grouped config object, and legacy alias."
-        ),
+        "description": "Look up every EasyConfig construction field.",
         "commands": ("uv run easycat docs --audience app-builders",),
     },
     {

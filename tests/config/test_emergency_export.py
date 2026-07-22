@@ -63,13 +63,11 @@ def _isolate_export_registry(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_default_no_opt_in_installs_nothing(monkeypatch: pytest.MonkeyPatch):
-    """Without the env var or observability knob, nothing is armed."""
+    """Without the env var or config knob, nothing is armed."""
     monkeypatch.delenv("EASYCAT_EMERGENCY_EXPORT", raising=False)
 
-    from easycat.config.easy import ObservabilityConfig
-
     class _Cfg:
-        observability = ObservabilityConfig(debug="full")
+        emergency_export = False
 
     assert _factory._emergency_export_enabled(_Cfg()) is False
     # And the global hook is untouched because nothing armed it.
@@ -81,18 +79,16 @@ def test_opt_in_enabled_by_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EASYCAT_EMERGENCY_EXPORT", "1")
 
     class _Cfg:
-        observability = None
+        pass
 
     assert _factory._emergency_export_enabled(_Cfg()) is True
 
 
-def test_opt_in_enabled_by_observability_knob(monkeypatch: pytest.MonkeyPatch):
+def test_opt_in_enabled_by_config_knob(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYCAT_EMERGENCY_EXPORT", raising=False)
 
-    from easycat.config.easy import ObservabilityConfig
-
     class _Cfg:
-        observability = ObservabilityConfig(debug="full", emergency_export=True)
+        emergency_export = True
 
     assert _factory._emergency_export_enabled(_Cfg()) is True
 

@@ -10,20 +10,13 @@ from __future__ import annotations
 
 from array import array
 
-from easycat.debug._pcm import (
-    FULL_SCALE,
-    decode_pcm_mono,
-    full_scale,
-    is_supported_width,
-)
+from easycat.debug._pcm import decode_pcm_mono, full_scale, is_supported_width
 
 
 def test_full_scale_matches_format_ceiling():
     assert full_scale(2) == 32767
     assert full_scale(4) == 2147483647
     assert full_scale(1) == 127
-    # ALL-CAPS alias points at the same callable.
-    assert FULL_SCALE is full_scale
 
 
 def test_full_scale_non_positive_width_is_one():

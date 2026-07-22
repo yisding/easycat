@@ -78,8 +78,6 @@ class _KitSTT:
 
 
 class _KitTTS:
-    supports_ssml = False
-
     async def synthesize(self, payload: object) -> AsyncIterator[TTSEvent]:
         del payload
         yield TTSEvent(

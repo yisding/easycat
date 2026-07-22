@@ -726,9 +726,8 @@ Three things bite every voice agent the instant it ships:
    `<break time="500ms"/>` and `<phoneme>` tags **when the
    provider advertises an `input_policy` that accepts SSML**. *Heads
    up:* none of the providers bundled with EasyCat today (OpenAI,
-   ElevenLabs, Deepgram, Cartesia) return `True` from the legacy
-   `supports_ssml` compatibility property
-   — the `_tts_scheduler` will downgrade SSML to plain text and
+   ElevenLabs, Deepgram, Cartesia) advertise native SSML support,
+   so the `_tts_scheduler` will downgrade SSML to plain text and
    journal `ssml_downgraded: true`. To actually pronounce
    `<break>` you need a custom provider with
    `TTSInputPolicy.native_ssml()`.

@@ -274,12 +274,12 @@ There are three independent knobs, and they control different things:
   `"full"`) — controls the journal (C) and the optional debugger UI. Durable
   journaling is on by default so sessions are always recorded; set
   `debug="off"` to opt out. It is **orthogonal to log level**: `debug=`
-  decides whether and how much is journaled (and, for `"full"`, whether the
-  debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
+  decides whether and how much is journaled; `debugger_autolaunch=True`
+  separately opts into the debugger UI. `EASYCAT_LOG_LEVEL` decides how verbose the human
   console log is. Turning one up does not turn the other up.
 
-- **Advanced observability knobs** live on `ObservabilityConfig` and keep a
-  top-level `EasyConfig` alias for first-run ergonomics: `warmup=False`. The
+- **Advanced observability knobs** are direct `EasyConfig` fields, for example
+  `warmup=False`. The
   value is validated and preserved in safe debug-bundle config snapshots.
   `warmup=True` runs structural provider/model `warmup()` hooks during
   `Session.start()` before audio ingress and emits `warmup_completed` timing

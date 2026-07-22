@@ -273,7 +273,7 @@ as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
 hints, such as `PATH` or `<session_id>`, before running them.
 
 ## Current capabilities
-- Session runtime that wires the audio pipeline (`AudioProcessingConfig` controls optional noise reduction, echo cancellation, VAD, and smart-turn tuning) -> STT -> agent -> TTS
+- Session runtime that wires the configurable audio pipeline (noise reduction, echo cancellation, VAD, and smart-turn tuning) -> STT -> agent -> TTS
 - Typed event system with an EventBus for streaming-first voice events and
   configurable handler-error policy
 - Passive supervisor listen-in via session audio fan-out on the EventBus
@@ -371,7 +371,6 @@ Enable the outbound pipeline via `EasyConfig.telephony`:
 from easycat import (
     EasyConfig,
     OutboundCallConfig,
-    SessionPolicyConfig,
     TelephonyConfig,
     VoicemailDetectionConfig,
     create_session,
@@ -379,9 +378,7 @@ from easycat import (
 
 config = EasyConfig(
     agent=your_agent,
-    session_policy=SessionPolicyConfig(
-        greeting="Hi, this is Lucy from Example Health.",
-    ),
+    greeting="Hi, this is Lucy from Example Health.",
     telephony=TelephonyConfig(
         enable_outbound_call_manager=True,
         outbound=OutboundCallConfig(
@@ -448,8 +445,7 @@ customParameters and emits ``CallAnswered``, so observers like
 same lifecycle.
 
 ### Bot speaks first
-Set `EasyConfig.session_policy.greeting` (or pass
-`session_policy=SessionPolicyConfig(greeting=...)`) to have the bot
+Set `EasyConfig.greeting` (or pass `greeting=...`) to have the bot
 synthesize a greeting on the first `CallAnswered` event.  Works for
 both inbound (stream start) and outbound (callee pickup).  Use this to
 play an AI-disclosure or identification line before the caller's first
@@ -458,7 +454,7 @@ utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
 
 ### Caller-ID exposure policy
 Control whether the LLM sees the caller's number or only tool code
-does via `SessionPolicyConfig.caller_id_exposure`:
+does via `EasyConfig.caller_id_exposure`:
 
 - `"tools_only"` (default): number available at
   `session.call_identity.caller_number` for tools, hidden from the
@@ -471,7 +467,7 @@ does via `SessionPolicyConfig.caller_id_exposure`:
 ```python
 config = EasyConfig(
     agent=your_agent,
-    session_policy=SessionPolicyConfig(caller_id_exposure="system_message"),
+    caller_id_exposure="system_message",
 )
 ```
 
@@ -589,10 +585,8 @@ session = create_session(
 
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
 swap in open-source models for fully local operation. Provider instances are
-accepted by
-`audio_processing=AudioProcessingConfig(vad=..., noise_reduction=..., echo_cancellation=...)`
-when you have custom audio-processing stages; the shorter legacy `vad=`,
-`noise_reduction=`, and `echo_cancellation=` aliases remain supported.
+accepted directly with `vad=`, `noise_reduction=`, and `echo_cancellation=`
+when you have custom audio-processing stages.
 
 ## Inspecting conversation flow
 

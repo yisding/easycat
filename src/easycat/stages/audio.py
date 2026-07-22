@@ -49,16 +49,10 @@ class AudioStage:
     ) -> None:
         self._provider = provider
         self._echo_canceller = echo_canceller
-        # Fallback recording sink used only when ``ctx.journal`` is None
-        # (see ``_journal_ctx``); recording normally flows through ctx.
         self._journal = journal
 
-    def _journal_ctx(self, ctx: RunContext) -> RunContext:
-        """Return *ctx*, substituting the constructor journal as a fallback."""
-        return journal_ctx(ctx, self._journal)
-
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
-        ctx = self._journal_ctx(ctx)
+        ctx = journal_ctx(ctx, self._journal)
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
@@ -164,7 +158,7 @@ class AudioStage:
         simply skipped — no record, no raise.  A capture failure must never
         disturb the live audio delivery path.
         """
-        ctx = self._journal_ctx(ctx)
+        ctx = journal_ctx(ctx, self._journal)
         raw_bytes = getattr(chunk, "data", None) if not isinstance(chunk, bytes) else chunk
         ref = put_artifact(ctx, raw_bytes)
         if ref is None:
@@ -236,4 +230,6 @@ class AudioStage:
         """
         logger.debug("AudioStage received upstream signal: %s", signal)
         if ctx is not None:
-            journal_append_control_signal(self._journal_ctx(ctx), stage=self.name, signal=signal)
+            journal_append_control_signal(
+                journal_ctx(ctx, self._journal), stage=self.name, signal=signal
+            )

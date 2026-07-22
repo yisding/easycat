@@ -188,8 +188,7 @@ def journal_ctx(ctx: RunContext, fallback_journal: Any) -> RunContext:
     Recording normally flows through ``ctx.journal``; when the RunContext
     was built without one but the stage was handed a journal directly
     (direct construction), we record into that fallback so recording is
-    never silently dead.  Every stage wrapper delegates its thin
-    ``_journal_ctx`` to this shared helper.
+    never silently dead.
     """
     if ctx.journal is None and fallback_journal is not None:
         return dataclasses.replace(ctx, journal=fallback_journal)

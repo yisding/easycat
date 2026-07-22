@@ -6,8 +6,6 @@ truncation-bounded tracks) built on top of :mod:`easycat.debugger._aec`, plus
 the VAD what-if input collection. The heavy pure-stdlib signal math lives in
 ``_aec.py``; this module aligns it to journal records and shapes the JSON.
 
-``server.py`` re-exports every name here so the historical
-``from easycat.debugger.server import _helper`` import sites keep resolving.
 """
 
 from __future__ import annotations
@@ -300,14 +298,3 @@ def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
         frames.append((seq, blob))
     frames.sort(key=lambda item: item[0])
     return [blob for _seq, blob in frames]
-
-
-__all__ = [
-    "_AEC_MAX_TRACK_BYTES",
-    "_aec_diagnostics_for_turn",
-    "_aec_interruption_frames",
-    "_aec_track_format",
-    "_limit_aec_track",
-    "_vad_baseline_start_count",
-    "_vad_whatif_frames",
-]

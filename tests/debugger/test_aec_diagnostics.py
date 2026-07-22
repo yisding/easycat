@@ -120,7 +120,7 @@ class _DictSource:
 
 
 def test_vad_whatif_frames_skips_malformed_sequence_values():
-    from easycat.debugger.server import _vad_whatif_frames
+    from easycat.debugger._aec_routes import _vad_whatif_frames
 
     records = [
         {
@@ -240,7 +240,7 @@ def test_frame_rms_series_mulaw_width_one_yields_no_frames():
 
 
 def test_aec_diagnostics_unsupported_for_mulaw_width():
-    from easycat.debugger.server import _aec_diagnostics_for_turn
+    from easycat.debugger._aec_routes import _aec_diagnostics_for_turn
 
     # Mic-in + post-AEC tracks carrying sample_width == 1 (mu-law) must degrade
     # to an unsupported result instead of emitting garbage ERLE numbers.

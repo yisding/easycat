@@ -162,10 +162,8 @@ def _create_stt(config: Any, event_bus: EventBus) -> Any:
 
 
 def _is_tts_provider_instance(value: Any) -> bool:
-    return (
-        not isinstance(value, type)
-        and (hasattr(value, "input_policy") or hasattr(value, "supports_ssml"))
-        and all(callable(getattr(value, name, None)) for name in ("synthesize", "stop", "cancel"))
+    return not isinstance(value, type) and all(
+        callable(getattr(value, name, None)) for name in ("synthesize", "stop", "cancel")
     )
 
 
@@ -550,7 +548,7 @@ def _make_session_config(
         enable_vad=audio.enable_vad,
         enable_noise_reduction=config.enable_noise_reduction,
         enable_echo_cancellation=audio.enable_echo_cancellation,
-        capture_aec_reference=bool(getattr(config.observability, "capture_aec_reference", False)),
+        capture_aec_reference=config.capture_aec_reference,
         auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
         strip_markdown=config.strip_markdown,
         output_processors=config.output_processors,
@@ -651,7 +649,7 @@ def _maybe_launch_debugger(config: EasyConfig, session: Session) -> None:
 
     maybe_launch_debugger_ui(
         session,
-        config_opt_in=bool(getattr(config.observability, "debugger_autolaunch", False)),
+        config_opt_in=config.debugger_autolaunch,
     )
 
 
@@ -718,7 +716,7 @@ def _emergency_export_enabled(config: Any) -> bool:
     """Whether opt-in emergency export should be armed for *config*.
 
     Opt-in only: armed when ``EASYCAT_EMERGENCY_EXPORT`` is truthy in the
-    environment, or an ``observability.emergency_export`` knob is truthy.
+    environment, or the ``emergency_export`` config knob is truthy.
     Defaults off so a normal process never installs ``atexit`` / excepthook
     hooks.
     """
@@ -728,8 +726,7 @@ def _emergency_export_enabled(config: Any) -> bool:
 
     if is_truthy(os.environ.get("EASYCAT_EMERGENCY_EXPORT")):
         return True
-    observability = getattr(config, "observability", None)
-    return bool(getattr(observability, "emergency_export", False))
+    return bool(getattr(config, "emergency_export", False))
 
 
 # Module-level registry shared by every armed session. Chaining many

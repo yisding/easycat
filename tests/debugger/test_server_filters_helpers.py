@@ -7,15 +7,24 @@ pytest.importorskip("aiohttp")
 import json
 import zipfile
 
+from easycat.debug._issues import build_issues as _build_issues
+from easycat.debug._turn_timeline import (
+    build_timeline as _build_timeline,
+)
+from easycat.debug._turn_timeline import (
+    summarise_turns as _summarise_turns,
+)
 from easycat.debug.bundle import RunBundle
 from easycat.debug.export import export_debug_bundle
-from easycat.debugger.server import (
-    _build_issues,
+from easycat.debugger._records import (
+    _SEARCH_MAX_QUERY_LEN,
+    _SEARCH_SCAN_LIMIT,
     _build_transcript,
+    _compile_search_regex,
     _filter_records,
-    _session_source,
-    _summarise_turns,
+    _search_records,
 )
+from easycat.debugger._sources import _session_source
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.records import (
@@ -127,8 +136,8 @@ def test_build_issues_surfaces_errors_empty_stt_and_latency():
     out = _build_issues(records)
 
     codes = {issue["code"] for issue in out["issues"]}
-    # server._build_issues is the extracted easycat.debug._issues engine, which
-    # uses unified codes (any errored record -> record_error; per-stage latency
+    # The shared issue engine uses unified codes (any errored record ->
+    # record_error; per-stage latency
     # -> slow_milestone with the stage in the ``metric`` field).  Its full code
     # surface (barge-in, audio-health, latency) is covered by tests/debug/.
     assert {"record_error", "empty_stt_final", "slow_turn"} <= codes
@@ -470,15 +479,10 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
     """The waterfall math lives once in ``debug/_turn_timeline``.
 
     The debugger endpoints and ``easycat bundles show`` / ``inspect``
-    must compute identical per-turn spans, so the server's helpers are
-    the shared functions and ``turn_waterfall`` decorates the same
-    timeline with milestone deltas for the CLI.
+    must compute identical per-turn spans, and ``turn_waterfall`` decorates
+    the shared timeline with milestone deltas for the CLI.
     """
     from easycat.debug import _turn_timeline
-    from easycat.debugger import server
-
-    assert server._summarise_turns is _turn_timeline.summarise_turns
-    assert server._build_timeline is _turn_timeline.build_timeline
 
     bundle_path = await _build_voice_bundle(tmp_path)
     records = list(RunBundle.load(bundle_path).records())
@@ -536,13 +540,6 @@ async def test_api_timeline_carries_per_turn_milestones(tmp_path):
     )
 
 
-def test_build_issues_is_shared_with_debug_engine():
-    """The server's ``_build_issues`` re-export is the ``debug/_issues`` engine."""
-    from easycat.debug import _issues
-
-    assert _build_issues is _issues.build_issues
-
-
 def test_build_issues_returns_stable_rollup_shape():
     """``/api/issues`` serves the ``{issues, summary, total}`` contract."""
     records = [
@@ -558,8 +555,6 @@ def test_build_issues_returns_stable_rollup_shape():
 
 
 def test_filter_records_negative_offset_raises():
-    from easycat.debugger.server import _filter_records
-
     with pytest.raises(ValueError, match="offset"):
         _filter_records(
             [],
@@ -573,8 +568,6 @@ def test_filter_records_negative_offset_raises():
 
 
 def test_filter_records_zero_limit_raises():
-    from easycat.debugger.server import _filter_records
-
     with pytest.raises(ValueError, match="limit"):
         _filter_records(
             [],
@@ -602,8 +595,6 @@ def _search_sample_records() -> list[dict]:
 
 
 def test_search_records_matches_data_substring():
-    from easycat.debugger.server import _search_records
-
     matched, truncated = _search_records(_search_sample_records(), query="hello")
     assert [r["sequence"] for r in matched] == [1]
     assert matched[0]["_match_fields"] == ["data"]
@@ -611,38 +602,28 @@ def test_search_records_matches_data_substring():
 
 
 def test_search_records_matches_error_fields():
-    from easycat.debugger.server import _search_records
-
     matched, _ = _search_records(_search_sample_records(), query="timed out")
     assert [r["sequence"] for r in matched] == [2]
     assert matched[0]["_match_fields"] == ["error"]
 
 
 def test_search_records_matches_name_and_turn():
-    from easycat.debugger.server import _search_records
-
     matched, _ = _search_records(_search_sample_records(), query="t1")
     assert [r["sequence"] for r in matched] == [1, 2]
     assert all("turn_id" in r["_match_fields"] for r in matched)
 
 
 def test_search_records_regex_matches():
-    from easycat.debugger.server import _search_records
-
     matched, _ = _search_records(_search_sample_records(), query="timeout|pcm", use_regex=True)
     assert [r["sequence"] for r in matched] == [2, 3]
 
 
 def test_search_records_invalid_regex_raises():
-    from easycat.debugger.server import _search_records
-
     with pytest.raises(ValueError, match="invalid regex"):
         _search_records(_search_sample_records(), query="[", use_regex=True)
 
 
 def test_search_records_rejects_catastrophic_regex():
-    from easycat.debugger.server import _search_records
-
     records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
     # Build the nested-repeat pattern from runtime values so the test source
     # holds no static catastrophic-backtracking regex literal for analyzers to
@@ -655,8 +636,6 @@ def test_search_records_rejects_catastrophic_regex():
 
 
 def test_search_records_rejects_quantified_alternation_regex():
-    from easycat.debugger.server import _search_records
-
     records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
     # Constructed at runtime (see above) to avoid a static ReDoS literal;
     # equivalent to ``(a|aa)+$``.
@@ -667,8 +646,6 @@ def test_search_records_rejects_quantified_alternation_regex():
 
 
 def test_search_records_rejects_adjacent_optional_repeats():
-    from easycat.debugger.server import _compile_search_regex
-
     # ``a?`` repeated then an equal run of required ``a`` -- the classic
     # exponential-backtracking shape -- where the repeats are adjacent siblings
     # rather than nested. Built from runtime multiplication so no static ReDoS
@@ -680,8 +657,6 @@ def test_search_records_rejects_adjacent_optional_repeats():
 
 
 def test_search_records_rejects_overlong_query():
-    from easycat.debugger.server import _SEARCH_MAX_QUERY_LEN, _search_records
-
     too_long = "a" * (_SEARCH_MAX_QUERY_LEN + 1)
     with pytest.raises(ValueError, match="query too long"):
         _search_records(_search_sample_records(), query=too_long, use_regex=True)
@@ -690,32 +665,24 @@ def test_search_records_rejects_overlong_query():
 
 
 def test_search_records_empty_query_matches_nothing():
-    from easycat.debugger.server import _search_records
-
     matched, truncated = _search_records(_search_sample_records(), query="")
     assert matched == []
     assert truncated is False
 
 
 def test_search_records_errors_only():
-    from easycat.debugger.server import _search_records
-
     # ``t1`` appears in two records but only the error one survives ``errors_only``.
     matched, _ = _search_records(_search_sample_records(), query="t1", errors_only=True)
     assert [r["sequence"] for r in matched] == [2]
 
 
 def test_search_records_does_not_mutate_source():
-    from easycat.debugger.server import _search_records
-
     records = _search_sample_records()
     _search_records(records, query="hello")
     assert all("_match_fields" not in r for r in records)
 
 
 def test_search_records_sets_scan_truncated_past_limit():
-    from easycat.debugger.server import _SEARCH_SCAN_LIMIT, _search_records
-
     big = [
         {"sequence": i, "name": "x", "data": {"k": "match"}} for i in range(_SEARCH_SCAN_LIMIT + 5)
     ]
@@ -730,8 +697,6 @@ def test_summarise_turns_dedupes_t3_8_interrupt_fanout():
     legacy interruption event).  ``_summarise_turns`` must dedupe by
     ``signal_id`` and report 1.
     """
-    from easycat.debugger.server import _summarise_turns
-
     sig_id = "barge-1"
     records = [
         {
@@ -770,8 +735,6 @@ def test_summarise_turns_dedupes_t3_8_interrupt_fanout():
 def test_summarise_turns_counts_legacy_interruption_when_no_signals():
     """Older bundles have only the legacy ``interruption`` event with
     no ``control_signal`` records.  The counter should still find them."""
-    from easycat.debugger.server import _summarise_turns
-
     records = [
         {
             "sequence": 1,
@@ -790,8 +753,6 @@ def test_build_timeline_skips_control_signal_records_for_spans():
     """``control_signal`` from a barge-in shouldn't generate synthetic
     instant-spans for stages that had no real pipeline activity in
     that turn (e.g. telephony in a pure-WS session)."""
-    from easycat.debugger.server import _build_timeline
-
     records = [
         {
             "sequence": 1,

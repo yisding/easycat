@@ -286,8 +286,7 @@ class CartesiaTTS(_WSTTSBase):
         return request
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
-        # SSML is not supported (``supports_ssml`` is ``False``), so the
-        # scheduler always delivers a plain-text payload here.
+        # The default input policy makes the scheduler deliver plain text here.
         text = coerce_tts_input(payload).text
         if self._persistent_enabled():
             async for event in self._synthesize_persistent(text):

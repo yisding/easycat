@@ -7,10 +7,9 @@ pytest.importorskip("aiohttp")
 from easycat import create_text_session
 from easycat.debug.bundle import RunBundle
 from easycat.debugger import _audio
+from easycat.debugger._audio import _coerce_frames_to_format
+from easycat.debugger._sources import DebuggerSource, _bundle_source
 from easycat.debugger.server import (
-    DebuggerSource,
-    _bundle_source,
-    _coerce_frames_to_format,
     _collect_audio_frames,
     _collect_concat_pcm,
     _make_app,

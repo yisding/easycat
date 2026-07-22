@@ -6,7 +6,6 @@ so example code can stay at 5 lines instead of 25. For production use,
 reach for :func:`easycat.create_stt_provider` /
 :func:`easycat.create_tts_provider` / :func:`easycat.create_session`.
 
-``easycat.quick`` remains as a backwards-compatible import path.
 """
 
 from __future__ import annotations

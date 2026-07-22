@@ -20,11 +20,8 @@ def _register(module: str, *names: str) -> None:
 # Core factories, config, and runtime helpers.
 _register(
     "easycat.config",
-    "AudioProcessingConfig",
     "EasyConfig",
-    "ObservabilityConfig",
     "OutboundCallConfig",
-    "SessionPolicyConfig",
     "TelephonyConfig",
     "VoicemailDetectionConfig",
     "create_session",

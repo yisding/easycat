@@ -16,8 +16,8 @@ from typer.testing import CliRunner
 from easycat.cli._app import app
 from easycat.cli.scaffold import init as init_module
 from easycat.cli.scaffold._schema import available_templates
-from easycat.stt.factory import available_providers as available_stt_providers
-from easycat.tts.factory import available_providers as available_tts_providers
+from easycat.stt.factory import available_stt_providers
+from easycat.tts.factory import available_tts_providers
 from tests._release_artifacts import release_artifact_offenders
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

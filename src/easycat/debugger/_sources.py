@@ -5,8 +5,6 @@ Pure, aiohttp-free adapters split out of :mod:`easycat.debugger.server`
 :class:`RunBundle`, or a live ``Session``, plus the artifact-ref / turn-id
 validators and the replay-kwargs normaliser the routes lean on.
 
-``server.py`` re-exports every name here so the historical
-``from easycat.debugger.server import _helper`` import sites keep resolving.
 """
 
 from __future__ import annotations
@@ -18,10 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
+from easycat.debug._serialize import record_to_dict as _record_to_dict
 from easycat.debug._serialize import safe_config_snapshot_from_session
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._audio import _serialize_frame
-from easycat.debugger._records import _record_to_dict
 
 _SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
 _TURN_ID_OK = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
@@ -386,14 +384,3 @@ def _session_source(session: Any) -> DebuggerSource:
         _replay_fn=None,
         is_live=True,
     )
-
-
-__all__ = [
-    "DebuggerSource",
-    "_bundle_source",
-    "_run_bundle_source",
-    "_safe_ref",
-    "_safe_turn_id",
-    "_session_source",
-    "_validated_replay_kwargs",
-]

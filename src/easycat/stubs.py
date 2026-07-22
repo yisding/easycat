@@ -56,10 +56,6 @@ class NoopTTS:
 
     is_passthrough_provider = True
 
-    @property
-    def supports_ssml(self) -> bool:
-        return True
-
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         _ = coerce_tts_input(payload)
         return
@@ -262,8 +258,6 @@ class ScriptedAgent:
 
 class ScriptedTTS:
     """TTS that returns one or more silent audio chunks for any text."""
-
-    supports_ssml = False
 
     def __init__(self, chunks: int | Sequence[AudioChunk] = 1) -> None:
         self._chunks = _scripted_chunks(chunks, byte_count=640, label="chunks")

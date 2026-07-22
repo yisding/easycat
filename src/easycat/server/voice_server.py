@@ -752,8 +752,8 @@ class VoiceServer:
         )
 
         def _factory(transport: Any) -> EasyConfig:
-            # A fresh EasyConfig per connection (no shared grouped sub-configs),
-            # bound to the already-negotiated connection transport. The manifest's
+            # A fresh EasyConfig bound to the already-negotiated connection
+            # transport. The manifest's
             # transport shortcut only selects the preset (browser/websocket/…) and
             # its provider defaults; ``to_easyconfig`` would otherwise hand back a
             # standalone transport that opens a SECOND listener/peer instead of
