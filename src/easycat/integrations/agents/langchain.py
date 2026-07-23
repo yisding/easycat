@@ -27,6 +27,7 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _plain_chunk_text,
+    close_top_ended_cursors,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
@@ -823,7 +824,7 @@ class LangChainBridge:
         translator; they don't open a cursor.  ``_end`` events that arrive
         out of LIFO order (e.g. ``RunnableParallel`` running two chat
         models concurrently) are deferred via ``ended_runs`` and flushed
-        through ``_close_top_ended_cursors`` so the recorder's strict
+        through ``close_top_ended_cursors`` so the recorder's strict
         stack invariant holds.
         """
         event_type = event.get("event")
@@ -845,34 +846,10 @@ class LangChainBridge:
             run_id = str(event.get("run_id") or "")
             if run_id and run_id in open_cursors:
                 ended_runs.add(run_id)
-                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
+                close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
-
-
-def _close_top_ended_cursors(
-    recorder: AgentRecorder,
-    open_cursors: dict[str, ExecutionCursor],
-    ended_runs: set[str],
-) -> None:
-    """Pop cursors from the top of the stack while they're marked ended.
-
-    LangChain emits start/end events in chronological order, so for
-    parallel branches (``RunnableParallel``, parallel LangGraph nodes)
-    an ``_end`` event can arrive while a sibling cursor is still the
-    top of ``JournalAgentRecorder``'s stack.  We hold each non-top close
-    in ``ended_runs`` and flush them in LIFO order once the obstructing
-    siblings above also end, so the recorder's strict stack invariant
-    is preserved without dropping the cursor.
-    """
-    while open_cursors:
-        last_run_id = next(reversed(open_cursors))
-        if last_run_id not in ended_runs:
-            break
-        cursor = open_cursors.pop(last_run_id)
-        ended_runs.discard(last_run_id)
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
 
 def _rewrite_last_ai_in(messages: list[Any], replacement: str) -> bool:

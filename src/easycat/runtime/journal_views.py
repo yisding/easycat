@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.runtime._journal_codec import _build_slice_where, _row_to_record
-from easycat.runtime.journal import _validate_read_limit
+from easycat.runtime.journal import _read_records, _slice_records, _validate_read_limit
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 
 
@@ -140,11 +140,7 @@ class FrozenJournalSnapshot:
         return -1
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
-        _validate_read_limit(limit)
-        out = [r for r in self._records if r.sequence >= start]
-        if limit is not None:
-            out = out[:limit]
-        return out
+        return _read_records(self._records, start=start, limit=limit)
 
     def slice(
         self,
@@ -155,18 +151,14 @@ class FrozenJournalSnapshot:
         name: str | None = None,
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        out = list(self._records)
-        if kind is not None:
-            out = [r for r in out if r.kind == kind]
-        if session_id is not None:
-            out = [r for r in out if r.session_id == session_id]
-        if turn_id is not None:
-            out = [r for r in out if r.turn_id == turn_id]
-        if name is not None:
-            out = [r for r in out if r.name == name]
-        if tags:
-            out = [r for r in out if tags <= r.tags]
-        return out
+        return _slice_records(
+            self._records,
+            kind=kind,
+            session_id=session_id,
+            turn_id=turn_id,
+            name=name,
+            tags=tags,
+        )
 
     def close(self) -> None:
         pass

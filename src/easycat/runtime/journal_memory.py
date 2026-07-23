@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import _journal_record_for_append
-from easycat.runtime.journal import _validate_read_limit
+from easycat.runtime.journal import _read_records, _slice_records
 from easycat.runtime.journal_views import FrozenJournalSnapshot
 from easycat.runtime.records import (
     BufferOverflow,
@@ -100,12 +100,8 @@ class InMemoryRingBuffer:
             )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
-        _validate_read_limit(limit)
         with self._lock:
-            out = [r for r in self._buf if r.sequence >= start]
-        if limit is not None:
-            out = out[:limit]
-        return out
+            return _read_records(self._buf, start=start, limit=limit)
 
     def slice(
         self,
@@ -117,18 +113,14 @@ class InMemoryRingBuffer:
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         with self._lock:
-            out = list(self._buf)
-        if kind is not None:
-            out = [r for r in out if r.kind == kind]
-        if session_id is not None:
-            out = [r for r in out if r.session_id == session_id]
-        if turn_id is not None:
-            out = [r for r in out if r.turn_id == turn_id]
-        if name is not None:
-            out = [r for r in out if r.name == name]
-        if tags:
-            out = [r for r in out if tags <= r.tags]
-        return out
+            return _slice_records(
+                self._buf,
+                kind=kind,
+                session_id=session_id,
+                turn_id=turn_id,
+                name=name,
+                tags=tags,
+            )
 
     def close(self) -> None:
         pass

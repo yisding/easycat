@@ -44,6 +44,7 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
+    close_top_ended_cursors,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
@@ -59,7 +60,6 @@ from easycat.integrations.agents.base import (
     UnitKind,
     apply_standard_interruption,
 )
-from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
 
 # ``stream_mode`` values whose payloads LangGraph folds into top-level
@@ -1091,7 +1091,7 @@ class LangGraphBridge:
             run_id = str(event.get("run_id") or "")
             if run_id and run_id in open_cursors:
                 ended_runs.add(run_id)
-                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
+                close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
     def _nearest_parent_id(
         self,
