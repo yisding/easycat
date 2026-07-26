@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
+import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -120,13 +123,17 @@ TRANSPORT_EXTENSION_SURFACE = (
 
 AGENT_BRIDGE_EXTENSION_SURFACE = (
     "AgentBridgeEvent",
+    "AgentRecorder",
     "AgentRunner",
     "AgentRunnerConfig",
     "AgentTurnInput",
     "BridgeTemplate",
+    "CancellationMode",
     "ExternalAgentBridge",
+    "FrameworkStateSnapshot",
     "GenericWorkflowBridge",
     "INTERRUPTION_NOTE",
+    "InterruptionPlan",
     "LangChainBridge",
     "LangGraphBridge",
     "LlamaAgentsBridge",
@@ -138,6 +145,57 @@ AGENT_BRIDGE_EXTENSION_SURFACE = (
     "is_reusable_agent_spec",
     "register_agent_detector",
 )
+
+AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
+    "AgentRunner": "(agent: 'Any', config: 'AgentRunnerConfig | None' = None) -> 'None'",
+    "BridgeTemplate": "(*, display_name: 'str | None' = None) -> 'None'",
+    "GenericWorkflowBridge": ("(workflow: 'Any', *, display_name: 'str | None' = None) -> 'None'"),
+    "LangChainBridge": (
+        "(runnable: 'Any', *, display_name: 'str | None' = None, "
+        "input_key: 'str | None' = 'input', history_key: 'str | None' = 'history', "
+        "messages_input: 'bool' = False, include_types: 'Sequence[str] | None' = None, "
+        "session_id: 'str | None' = None, config: 'dict[str, Any] | None' = None) -> 'None'"
+    ),
+    "LangGraphBridge": (
+        "(graph: 'Any', *, thread_id: 'str | None' = None, "
+        "messages_key: 'str | None' = 'messages', display_name: 'str | None' = None, "
+        "include_types: 'Sequence[str] | None' = None) -> 'None'"
+    ),
+    "LlamaAgentsBridge": (
+        "(workflow: 'Any | None' = None, *, client: 'Any | None' = None, "
+        "base_url: 'str | None' = None, workflow_name: 'str | None' = None, "
+        "input_key: 'str' = 'message', context_key: 'str | None' = 'context', "
+        "turn_id_key: 'str | None' = 'turn_id', "
+        "interruption_note_key: 'str | None' = 'easycat_interruption_note', "
+        "preserve_context: 'bool' = True, run_kwargs: 'dict[str, Any] | None' = None, "
+        "start_event_factory: "
+        "'Callable[[AgentTurnInput, dict[str, Any]], Any] | None' = None, "
+        "event_text_extractor: 'Callable[[Any], str | None] | None' = None, "
+        "human_response_event_factory: "
+        "'Callable[[AgentTurnInput], Any] | None' = None, "
+        "human_response_key: 'str' = 'response', "
+        "human_response_step: 'str | None' = None, "
+        "display_name: 'str | None' = None, "
+        "include_internal_events: 'bool' = False) -> 'None'"
+    ),
+    "OpenAIAgentsBridge": (
+        "(agent: 'Any', *, run_config: 'Any' = None, context: 'Any' = None, "
+        "use_previous_response_id: 'bool' = True, max_turns: 'int | None' = None, "
+        "hooks: 'Any' = None, mcp_servers: 'list[Any] | None' = None) -> 'None'"
+    ),
+    "PydanticAIBridge": (
+        "(*, agent: 'Any | None' = None, deps: 'Any' = None, "
+        "model_settings: 'Any' = None, graph: 'Any | None' = None, "
+        "state_factory: 'Callable[[], Any] | None' = None, "
+        "initial_node_factory: 'Callable[[str, Any], Any] | None' = None, "
+        "agents: 'list[Any] | None' = None, mcp_servers: 'list[Any] | None' = None, "
+        "toolsets: 'list[Any] | None' = None) -> 'None'"
+    ),
+    "RemoteResponsesAPIBridge": (
+        "(base_url: 'str', model: 'str', *, api_key: 'str | None' = None, "
+        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None) -> 'None'"
+    ),
+}
 
 
 def test_public_api_snapshot() -> None:
@@ -259,6 +317,27 @@ def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
     assert "from easycat.integrations.agents import PydanticAIBridge" in section
     assert "agent=None" in section
     assert "graph=None" in section
+
+
+def test_agent_bridge_constructor_signatures_are_stable() -> None:
+    import easycat.integrations.agents as agents
+
+    actual = {
+        name: str(inspect.signature(getattr(agents, name)))
+        for name in AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
+    }
+    assert actual == AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
+
+
+def test_shipped_agent_bridges_satisfy_static_consumer_contract() -> None:
+    fixture = Path("tests/typecheck/agent_bridge_consumer.py")
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--no-incremental", str(fixture)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_server_package_owns_standalone_transport_orchestration() -> None:

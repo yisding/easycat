@@ -123,6 +123,10 @@ depend on this surface:
 - `ExternalAgentBridge` — async protocol implemented by every bridge.
 - `AgentTurnInput` — normalized user turn input passed into bridges.
 - `AgentBridgeEvent` — normalized stream event yielded by bridges.
+- `AgentRecorder` — write-side journal protocol passed into bridge turns.
+- `CancellationMode` — supported interruption and drain strategies.
+- `FrameworkStateSnapshot` — JSON-safe framework state captured by bridges.
+- `InterruptionPlan` — planned framework mutation used by interruption handling.
 - `INTERRUPTION_NOTE` — standard history note used when a partial assistant
   response is interrupted.
 - `BridgeTemplate` — starter base class for custom bridge authors; constructor

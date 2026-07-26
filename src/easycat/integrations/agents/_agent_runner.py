@@ -16,9 +16,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -142,7 +142,7 @@ class AgentRunner:
     turn that the inner bridge has already partially committed.
     """
 
-    COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule] = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
     }
 
