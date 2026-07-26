@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -46,25 +47,34 @@ from easycat.runtime.records import (
 logger = logging.getLogger(__name__)
 
 _CRASH_SWEEP_LOCK = threading.Lock()
-_CRASH_SWEPT_ROOTS: set[tuple[int, Path]] = set()
+_CRASH_SWEEP_INTERVAL_SECONDS = 60.0
+_CRASH_SWEEP_MAX_ROOTS = 128
+_CRASH_SWEEP_TIMES: OrderedDict[tuple[int, Path], float] = OrderedDict()
 
 
 def _crash_sweep_key(root: Path) -> tuple[int, Path]:
     return os.getpid(), root.absolute()
 
 
-def _sweep_crashed_journals_once(root: Path, *, skip: Path) -> None:
-    """Run the blocking orphan scan once per process for each journal root."""
+def _sweep_crashed_journals_if_due(root: Path, *, skip: Path) -> None:
+    """Periodically scan *root* without putting an O(n) scan on every open."""
     root_key = _crash_sweep_key(root)
+    now = time.monotonic()
     with _CRASH_SWEEP_LOCK:
-        if root_key in _CRASH_SWEPT_ROOTS:
+        last_sweep = _CRASH_SWEEP_TIMES.get(root_key)
+        elapsed = None if last_sweep is None else now - last_sweep
+        if elapsed is not None and 0 <= elapsed < _CRASH_SWEEP_INTERVAL_SECONDS:
+            _CRASH_SWEEP_TIMES.move_to_end(root_key)
             return
         try:
             sweep_crashed_journals(root, skip=skip)
         except (OSError, sqlite3.DatabaseError):
             logger.debug("Crash-journal sweep failed", exc_info=True)
         finally:
-            _CRASH_SWEPT_ROOTS.add(root_key)
+            _CRASH_SWEEP_TIMES[root_key] = now
+            _CRASH_SWEEP_TIMES.move_to_end(root_key)
+            while len(_CRASH_SWEEP_TIMES) > _CRASH_SWEEP_MAX_ROOTS:
+                _CRASH_SWEEP_TIMES.popitem(last=False)
 
 
 class _SqlJournalBase:
@@ -258,7 +268,7 @@ class SqliteJournal(_SqlJournalBase):
         # same-id recovery path below only fires when *this* session's id is
         # reused; orphaned ids never reopen, so the sweep is what promotes them
         # to crash-dumps/.  Best-effort: never block or fail journal startup.
-        _sweep_crashed_journals_once(root, skip=self._db_path)
+        _sweep_crashed_journals_if_due(root, skip=self._db_path)
 
         touch_private_file(self._db_path)
         self._session_id = session_id

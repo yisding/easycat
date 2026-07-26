@@ -556,10 +556,11 @@ class TestCrashRecovery:
         j1._conn.commit()
         j1._conn.close()
         j1._closed = True
-        # The fixture creates and "crashes" the owner in this process. Reset
-        # the startup sentinel to model the fresh worker that would discover it.
-        journal_sql_module._CRASH_SWEPT_ROOTS.discard(
-            journal_sql_module._crash_sweep_key(tmp_path)
+        # The fixture creates and "crashes" the owner in this process. Expire
+        # the cache entry to model the fresh worker that would discover it.
+        journal_sql_module._CRASH_SWEEP_TIMES.pop(
+            journal_sql_module._crash_sweep_key(tmp_path),
+            None,
         )
 
         j2 = SqliteJournal("fresh", data_dir=tmp_path)

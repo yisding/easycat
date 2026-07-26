@@ -45,7 +45,7 @@ def _crash_one(session_id: str, tmp_path) -> None:
     j._closed = True
 
 
-def test_sqlite_construction_sweeps_each_root_once(
+def test_sqlite_construction_skips_repeat_sweep_within_interval(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -63,6 +63,53 @@ def test_sqlite_construction_sweeps_each_root_once(
     finally:
         first.close()
         second.close()
+
+
+def test_sqlite_construction_rescans_root_after_interval_and_finds_later_crash(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(journal_sql_module.time, "monotonic", lambda: now[0])
+
+    first = SqliteJournal("first", data_dir=tmp_path)
+    first.close()
+
+    # This peer starts after the first scan, then dies while the current
+    # process remains alive. The cached fast path initially leaves it alone.
+    _crash_one("later-peer", tmp_path)
+    before_due = SqliteJournal("before-due", data_dir=tmp_path)
+    before_due.close()
+    assert (tmp_path / "journals" / "later-peer.sqlite").exists()
+
+    now[0] += journal_sql_module._CRASH_SWEEP_INTERVAL_SECONDS
+    after_due = SqliteJournal("after-due", data_dir=tmp_path)
+    try:
+        assert (tmp_path / "crash-dumps" / "later-peer.sqlite").exists()
+        assert not (tmp_path / "journals" / "later-peer.sqlite").exists()
+    finally:
+        after_due.close()
+
+
+def test_crash_sweep_cache_is_bounded(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_sql_module, "_CRASH_SWEEP_MAX_ROOTS", 2)
+    monkeypatch.setattr(journal_sql_module, "sweep_crashed_journals", lambda root, *, skip: 0)
+    journal_sql_module._CRASH_SWEEP_TIMES.clear()
+
+    roots = [tmp_path / f"root-{index}" for index in range(3)]
+    for root in roots:
+        journal_sql_module._sweep_crashed_journals_if_due(
+            root,
+            skip=root / "journals" / "own.sqlite",
+        )
+
+    assert list(journal_sql_module._CRASH_SWEEP_TIMES) == [
+        journal_sql_module._crash_sweep_key(roots[1]),
+        journal_sql_module._crash_sweep_key(roots[2]),
+    ]
 
 
 def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
@@ -171,9 +218,11 @@ def test_sweep_runs_on_next_sqlite_open(tmp_path) -> None:
     # for an orphaned id.
     _crash_one("ghost", tmp_path)
     assert (tmp_path / "journals" / "ghost.sqlite").exists()
-    # Simulate the fresh process that follows the stamped dead owner. A live
-    # process sweeps a root only on its first journal construction.
-    journal_sql_module._CRASH_SWEPT_ROOTS.discard(journal_sql_module._crash_sweep_key(tmp_path))
+    # Simulate the fresh process that follows the stamped dead owner.
+    journal_sql_module._CRASH_SWEEP_TIMES.pop(
+        journal_sql_module._crash_sweep_key(tmp_path),
+        None,
+    )
 
     j2 = SqliteJournal("fresh", data_dir=tmp_path)
     try:
