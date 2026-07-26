@@ -337,6 +337,7 @@ def _emit_provider_versions(
     echo_canceller: Any = None,
 ) -> None:
     """Write a single journal record with version info from all providers."""
+    from easycat.runtime.record_contracts import validate_builtin_record
     from easycat.runtime.records import JournalRecordKind
 
     versions: dict[str, dict[str, str]] = {}
@@ -350,8 +351,10 @@ def _emit_provider_versions(
     ]:
         if provider is not None and hasattr(provider, "version_info"):
             versions[role] = provider.version_info()
+    kind = JournalRecordKind.EVENT
+    validate_builtin_record(name="provider_versions", kind=kind, data=versions)
     journal.append(
-        kind=JournalRecordKind.EVENT,
+        kind=kind,
         name="provider_versions",
         session_id=session_id,
         data=versions,

@@ -55,6 +55,7 @@ from easycat.events import (
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
 from easycat.runtime.journal import ExecutionJournal
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import redact_value
 
@@ -383,6 +384,7 @@ class SessionJournalSink:
     ) -> None:
         if self.journal is None:
             return
+        validate_builtin_record(name=name, kind=kind, data=data)
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
             if input_bytes is not None
@@ -413,6 +415,7 @@ class SessionJournalSink:
             if journal is None:
                 return
             projection = _project_journal_event(event)
+            validate_builtin_record(name=name, kind=kind, data=projection.data)
             journal.append(
                 kind=kind,
                 name=name,

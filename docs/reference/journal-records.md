@@ -85,7 +85,7 @@ remain top-level envelope fields, not `data` keys.
 | `call_screening` | `EVENT` | `call_sid: str`, `platform: str` | - |
 | `error` | `EVENT` | `stage: str`; top-level `error` is present | `provider: str`, `code: str`, `elapsed_ms: number`, `sequence: int`, `record_ref: str` |
 | `interruption` | `CONTROL` | - | - |
-| `playback_mark_ack` | `EVENT` | `mark_name: str` | - |
+| `playback_mark_ack` | `EVENT` | - | `mark_name: str`; older compatible bundles can omit it. |
 | `session_action_completed` | `EVENT` | `action: object`, `executor: str`, `result: object` | Sensitive action/result values can be redacted. |
 | `session_action_failed` | `EVENT` | `action: object`, `error: str` | `executor: str`; sensitive action values can be redacted. |
 | `session_action_requested` | `EVENT` | `action: object` | Sensitive action values can be redacted. |
@@ -97,16 +97,16 @@ remain top-level envelope fields, not `data` keys.
 | `tool_call_delta` | `EVENT` | `call_id: str`, `delta: str` | - |
 | `tool_call_result` | `EVENT` | `call_id: str`, `result: str` | - |
 | `tool_call_started` | `EVENT` | `tool_name: str`, `call_id: str` | - |
-| `transport_degraded` | `EVENT` or `CONTROL` | `provider: str`, `reason: str`, `detail: str`, `fatal: bool` | Fatal records use `CONTROL`; recoverable records use `EVENT`. |
+| `transport_degraded` | `EVENT` or `CONTROL` | `reason: str`, `detail: str`, `fatal: bool` | `provider: str`; fatal records use `CONTROL`; recoverable records use `EVENT`. |
 | `tts_audio` | `EVENT` | `audio_bytes: int`, `duration_ms: number`, `sample_rate: int`, `channels: int`, `sample_width: int`, `encoding: str`, `bypass_gate: bool` | - |
 | `tts_markers` | `EVENT` | `markers: list` | - |
 | `turn_ended` | `EVENT` | - | - |
 | `turn_started` | `EVENT` | - | - |
 | `vad_start_speaking` | `EVENT` | - | - |
 | `vad_stop_speaking` | `EVENT` | - | - |
-| `ws_reconnect_attempt` | `EVENT` | `provider: str`, `attempt: int` | - |
-| `ws_reconnect_failure` | `EVENT` | `provider: str`, `error: str` | - |
-| `ws_reconnect_success` | `EVENT` | `provider: str` | - |
+| `ws_reconnect_attempt` | `EVENT` | - | `provider: str`, `attempt: int`; older compatible bundles can omit both keys. |
+| `ws_reconnect_failure` | `EVENT` | - | `provider: str`, `error: str`; older compatible bundles can omit both keys. |
+| `ws_reconnect_success` | `EVENT` | - | `provider: str`; older compatible bundles can omit it. |
 
 ## Runtime Control Records
 
@@ -151,8 +151,9 @@ Every bridge record includes `run_id: str` in `data`.
 
 ## Contract Guard
 
-`tests/runtime/test_journal_record_contract.py` extracts built-in producer
-names from the source tree and compares them with pinned name, kind, and
-required-data-key snapshots and every catalog row on this page. Adding or
-changing a built-in record therefore requires an intentional contract and
-documentation update.
+`easycat.runtime.record_contracts` defines the built-in names, allowed kinds,
+and required keys enforced at write time.
+`tests/runtime/test_journal_record_contract.py` independently extracts producer
+names from the full source tree and compares the runtime registry with every
+catalog cell on this page. Adding or changing a built-in record therefore
+requires an intentional runtime contract and documentation update.

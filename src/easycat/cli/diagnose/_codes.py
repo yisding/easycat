@@ -289,9 +289,9 @@ read-only postmortem view. Export a replayable bundle with
 PATH`, `easycat inspect PATH`, `easycat replay PATH`, or the debugger
 UI.
 
-Docs route: docs/reference/session-lifecycle.md (`easycat docs
---audience app-builders`, label "Session lifecycle"); operator tooling:
-docs/observability.md.
+Record catalog: docs/reference/journal-records.md; lifecycle and postmortem
+access: docs/reference/session-lifecycle.md (`easycat docs --audience
+app-builders`); operator tooling: docs/observability.md.
 """
 
 _TROUBLESHOOTING_BODY = """\
