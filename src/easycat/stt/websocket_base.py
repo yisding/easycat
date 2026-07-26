@@ -103,7 +103,7 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         if self._ws is not None:
             await self._ws.send(message)
 
-    def _on_websocket_disconnect(
+    async def _on_websocket_disconnect(
         self,
         exc: websockets.exceptions.ConnectionClosed,
     ) -> None:
@@ -114,6 +114,9 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                 detail=str(exc) or "connection closed",
             )
         )
+        # Preserve lifecycle order: observers must see the drop before any
+        # reconnect attempt/success/failure events.
+        await self._drain_emit_tasks()
 
     async def _send_json_control(self, payload: dict[str, Any], *, label: str) -> bool:
         if self._ws is None:
@@ -214,6 +217,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                     EASYCAT_E305(
                         provider=self._provider_error_name,
                         attempts=getattr(ws, "reconnect_attempts_exhausted", None) or 0,
+                        reason=getattr(ws, "reconnect_exhaustion_reason", None)
+                        or "reconnect policy",
                     )
                 )
             # Persistent STT providers keep this receive loop alive while

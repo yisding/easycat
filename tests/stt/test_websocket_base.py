@@ -65,11 +65,16 @@ class _DroppingConnection:
 class _CleanConnection:
     close_code = None
 
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
     def __aiter__(self):
         return self._messages()
 
     async def _messages(self):
-        return
+        self.started.set()
+        await self.release.wait()
         yield  # pragma: no cover - makes this an async generator
 
     async def close(self) -> None:
@@ -101,11 +106,12 @@ async def test_receive_loop_emits_error_on_abnormal_death():
 @pytest.mark.asyncio
 async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
     """The production wrapper boundary reports a transient drop before recovery."""
-    from easycat.events import Error, ErrorStage
+    from easycat.events import Error, ErrorStage, ReconnectAttempt, ReconnectSuccess
 
     probe = _Probe()
     bus = _RecordingBus()
-    connections = iter([_DroppingConnection(), _CleanConnection()])
+    resumed = _CleanConnection()
+    connections = iter([_DroppingConnection(), resumed])
     connect_calls = 0
 
     async def connect_fn(*args: Any, **kwargs: Any) -> Any:
@@ -120,6 +126,9 @@ async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
         connect_fn=connect_fn,
     )
     assert probe._receive_task is not None
+    await resumed.started.wait()
+    await ws.close()
+    resumed.release.set()
     await probe._receive_task
     await probe._drain_emit_tasks()
 
@@ -129,6 +138,13 @@ async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
     assert errors[0].stage is ErrorStage.STT
     assert "1006" in str(errors[0].exception)
     assert "abnormal" in str(errors[0].exception)
+    assert [type(event) for event in bus.events] == [
+        ReconnectAttempt,
+        ReconnectSuccess,
+        Error,
+        ReconnectAttempt,
+        ReconnectSuccess,
+    ]
     assert ws.died_abnormally is False
     assert probe._event_queue.get_nowait() is None
     await ws.close()
@@ -176,6 +192,7 @@ async def test_connect_websocket_emits_e304_then_e305_when_retries_exhausted(mon
     assert "after 2 attempt" in str(errors[1].exception)
     assert ws.died_abnormally is True
     assert ws.reconnect_attempts_exhausted == 2
+    assert ws.reconnect_exhaustion_reason == "failed reconnect attempts"
     assert connect_calls == 3
     assert probe._event_queue.get_nowait() is None
     await ws.close()

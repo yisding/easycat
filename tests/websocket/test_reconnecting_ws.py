@@ -253,6 +253,7 @@ class TestReconnectingWebSocket:
         fake_conn = FakeWSConnection()
         fake_conn._messages = ["msg1", "msg2", b"msg3"]
         ws._ws = fake_conn
+        ws._closed = True
 
         messages = []
         async for msg in ws.recv_iter():
@@ -305,6 +306,9 @@ class TestReconnectingWebSocket:
             messages = []
             async for msg in ws.recv_iter():
                 messages.append(msg)
+                if len(messages) == 4:
+                    break
+            await ws.close()
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
         callback.assert_awaited_once()
@@ -347,6 +351,98 @@ class TestReconnectingWebSocket:
         connect_mock.assert_awaited_once()
         callback.assert_awaited_once()
         assert ws._ws is None
+
+    async def test_normal_peer_close_uses_reconnect_policy(self):
+        disconnect = AsyncMock()
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            on_reconnect=AsyncMock(),
+            on_disconnect=disconnect,
+        )
+        connection = FakeWSConnection()
+        connection.close_code = 1000
+        ws._ws = connection
+
+        assert [message async for message in ws.recv_iter()] == []
+
+        disconnect.assert_awaited_once()
+        assert ws.died_abnormally is True
+        assert ws.reconnect_attempts_exhausted == 0
+        assert ws.reconnect_exhaustion_reason == "successful reconnect cycle budget"
+
+    async def test_disconnect_callback_can_close_without_reconnecting(self):
+        connect_fn = AsyncMock()
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection(FakeWSConnection):
+            async def _aiter(self):
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+                yield  # pragma: no cover
+
+        ws: ReconnectingWebSocket
+
+        async def disconnect(exc):
+            await ws.close()
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            connect_fn=connect_fn,
+            on_reconnect=AsyncMock(),
+            on_disconnect=disconnect,
+        )
+        ws._ws = DroppingConnection()
+
+        assert [message async for message in ws.recv_iter()] == []
+        connect_fn.assert_not_awaited()
+        assert ws._closed is True
+
+    async def test_close_interrupts_cancellation_resistant_connector(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        late_connection = FakeWSConnection()
+
+        async def connect_fn(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await release.wait()
+                return late_connection
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=-1),
+            connect_fn=connect_fn,
+        )
+        connect_task = asyncio.create_task(ws.connect())
+        await started.wait()
+
+        await asyncio.wait_for(ws.close(), timeout=0.1)
+        with pytest.raises(ConnectionError, match="closed during reconnect"):
+            await asyncio.wait_for(connect_task, timeout=0.1)
+
+        release.set()
+        for _ in range(10):
+            if late_connection.close.await_count:
+                break
+            await asyncio.sleep(0)
+        late_connection.close.assert_awaited_once()
+
+    async def test_successful_manual_connect_clears_terminal_reconnect_state(self):
+        ws = self._make_ws(max_retries=0)
+        ws._mark_reconnect_exhausted(0, "successful reconnect cycle budget")
+
+        with patch(
+            "easycat.reconnecting_ws.websockets.connect",
+            new_callable=AsyncMock,
+            return_value=FakeWSConnection(),
+        ):
+            await ws.connect()
+
+        assert ws.died_abnormally is False
+        assert ws.reconnect_attempts_exhausted is None
+        assert ws.reconnect_exhaustion_reason is None
 
     async def test_send_waits_for_in_progress_reconnect(self):
         """A send during a recv_iter-driven reconnect blocks for the new socket.
@@ -632,10 +728,10 @@ class TestReconnectingWebSocket:
             close_task = asyncio.create_task(ws.close())
             await real_sleep(0)
             assert ws._closed is True
-            release_backoff.set()
 
-            assert await receive_task == ["msg1"]
-            await close_task
+            assert await asyncio.wait_for(receive_task, timeout=0.1) == ["msg1"]
+            await asyncio.wait_for(close_task, timeout=0.1)
+            release_backoff.set()
 
         connect_mock.assert_awaited_once()
         disconnect.assert_awaited_once()
@@ -716,6 +812,44 @@ class TestReconnectingWebSocket:
         assert len(failure_events) == 1
         assert failure_events[0].provider == "failing_provider"
         assert "down" in failure_events[0].error
+
+    async def test_strict_failure_observer_cannot_bypass_terminal_state(self):
+        event_bus = EventBus(handler_error_policy="raise")
+
+        async def reject_failure(event):
+            raise RuntimeError("observer failed")
+
+        event_bus.subscribe(ReconnectFailure, reject_failure)
+        config = ReconnectConfig(
+            max_retries=1,
+            base_delay=0.001,
+            max_delay=0.001,
+            jitter_factor=0.0,
+        )
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            event_bus=event_bus,
+            on_reconnect=AsyncMock(),
+        )
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection(FakeWSConnection):
+            async def _aiter(self):
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+                yield  # pragma: no cover
+
+        ws._ws = DroppingConnection()
+        with patch(
+            "easycat.reconnecting_ws.websockets.connect",
+            new_callable=AsyncMock,
+            side_effect=ConnectionError("down"),
+        ):
+            assert [message async for message in ws.recv_iter()] == []
+
+        assert ws.died_abnormally is True
+        assert ws.reconnect_attempts_exhausted == 2
+        assert ws.reconnect_exhaustion_reason == "failed reconnect attempts"
 
     async def test_on_reconnect_callback_called(self):
         callback = AsyncMock()
