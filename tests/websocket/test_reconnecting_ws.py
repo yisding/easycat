@@ -459,6 +459,8 @@ class TestReconnectingWebSocket:
         # Iterator ends cleanly instead of raising — downstream TTS
         # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
+        assert ws.died_abnormally is True
+        assert ws.reconnect_attempts_exhausted == 2
 
     async def test_send_fast_fails_after_recv_iter_gives_up(self):
         """Finding 1: a send after recv_iter gives up fast-fails.

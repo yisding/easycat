@@ -135,6 +135,8 @@ class ReconnectingWebSocket:
         # deliberate close() or a clean end-of-stream. Lets STT/TTS receive loops
         # surface an Error instead of a silent empty transcript.
         self._died_abnormally = False
+        self._last_connect_attempts = 0
+        self._reconnect_attempts_exhausted: int | None = None
         self._connect_lock = asyncio.Lock()
         # Set while a live socket is available, cleared during a reconnect
         # window. ``send()``/``recv()`` await this (with a timeout) so a
@@ -158,6 +160,10 @@ class ReconnectingWebSocket:
     @property
     def died_abnormally(self) -> bool:
         return self._died_abnormally
+
+    @property
+    def reconnect_attempts_exhausted(self) -> int | None:
+        return self._reconnect_attempts_exhausted
 
     async def connect(self) -> None:
         """Establish the WebSocket connection."""
@@ -202,6 +208,8 @@ class ReconnectingWebSocket:
                 logger.debug("WebSocket connected to %s (attempt %d)", self._url, attempt + 1)
                 self._connected.set()
                 self._ever_connected = True
+                self._last_connect_attempts = 0
+                self._reconnect_attempts_exhausted = None
                 await self._emit_reconnect_success()
                 if (notify_reconnect or attempt > 0) and self._on_reconnect:
                     await self._invoke_callback(self._on_reconnect)
@@ -222,6 +230,7 @@ class ReconnectingWebSocket:
                 delay = min(delay * self._config.backoff_factor, self._config.max_delay)
 
         await self._emit_reconnect_failure(str(last_error))
+        self._last_connect_attempts = attempt
         if self._on_give_up:
             await self._invoke_callback(self._on_give_up)
         raise ConnectionError(f"Failed to connect after {attempt} attempts") from last_error
@@ -352,6 +361,7 @@ class ReconnectingWebSocket:
                 close_code,
             )
             self._died_abnormally = True
+            self._reconnect_attempts_exhausted = max(self._config.max_retries, 0)
             self._ws = None
             return False
 
@@ -369,6 +379,7 @@ class ReconnectingWebSocket:
             # instead of waiting out the full reconnect timeout.
             logger.error("Reconnection failed; ending recv_iter")
             self._died_abnormally = True
+            self._reconnect_attempts_exhausted = self._last_connect_attempts
             self._ws = None
             return False
         return True

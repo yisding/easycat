@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+import websockets
 
 from easycat.stt.websocket_base import WebSocketSTTBase, _noop_reconnect
 
@@ -34,13 +35,25 @@ class _RecordingBus:
 class _FakeAbnormalWS:
     """Fake wrapper whose recv_iter ends after a terminal mid-stream death."""
 
-    def __init__(self, died_abnormally: bool) -> None:
+    def __init__(self, died_abnormally: bool, *, attempts: int | None = None) -> None:
         self.died_abnormally = died_abnormally
+        self.reconnect_attempts_exhausted = attempts
 
     async def recv_iter(self):
         # Terminal death mid-utterance: yield nothing then end cleanly (the
         # reconnect budget was exhausted inside ReconnectingWebSocket).
         return
+        yield  # pragma: no cover - makes this an async generator
+
+
+class _FakeClosedWS:
+    """Fake wrapper whose recv_iter surfaces an unrecovered provider close."""
+
+    died_abnormally = False
+
+    async def recv_iter(self):
+        close_frame = websockets.frames.Close(1006, "abnormal")
+        raise websockets.exceptions.ConnectionClosed(close_frame, None)
         yield  # pragma: no cover - makes this an async generator
 
 
@@ -52,7 +65,7 @@ async def test_receive_loop_emits_error_on_abnormal_death():
     probe = _Probe()
     bus = _RecordingBus()
     probe._provider_event_bus = bus
-    probe._ws = _FakeAbnormalWS(died_abnormally=True)  # type: ignore[assignment]
+    probe._ws = _FakeAbnormalWS(died_abnormally=True, attempts=3)  # type: ignore[assignment]
 
     await probe._receive_loop()
     await asyncio.gather(*list(probe._emit_tasks))
@@ -60,7 +73,30 @@ async def test_receive_loop_emits_error_on_abnormal_death():
     errors = [e for e in bus.events if isinstance(e, Error)]
     assert errors, "expected an Error event on abnormal WS death"
     assert errors[0].stage is ErrorStage.STT
+    assert errors[0].code == "EASYCAT_E305"
+    assert "after 3 attempt" in str(errors[0].exception)
     # The None sentinel is still queued last so events() terminates cleanly.
+    assert probe._event_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_emits_e304_when_provider_close_is_not_recovered():
+    """An unrecovered mid-call provider close gets a machine-readable code."""
+    from easycat.events import Error, ErrorStage
+
+    probe = _Probe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _FakeClosedWS()  # type: ignore[assignment]
+
+    await probe._receive_loop()
+    await asyncio.gather(*list(probe._emit_tasks))
+
+    errors = [e for e in bus.events if isinstance(e, Error)]
+    assert errors, "expected an Error event on unrecovered WS close"
+    assert errors[0].stage is ErrorStage.STT
+    assert errors[0].code == "EASYCAT_E304"
+    assert "became unreachable mid-call" in str(errors[0].exception)
     assert probe._event_queue.get_nowait() is None
 
 

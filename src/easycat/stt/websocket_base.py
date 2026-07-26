@@ -10,6 +10,7 @@ from typing import Any
 import websockets
 
 from easycat._provider_helpers import ProviderErrorEmitter
+from easycat.errors import EASYCAT_E304, EASYCAT_E305
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
@@ -189,15 +190,21 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                 if not isinstance(msg, dict):
                     continue
                 self._handle_json_message(msg)
-        except websockets.exceptions.ConnectionClosed:
+        except websockets.exceptions.ConnectionClosed as exc:
             logger.debug("%s WebSocket closed", self._provider_log_label)
+            self._emit_provider_error(
+                EASYCAT_E304(provider=self._provider_error_name, detail=str(exc) or "closed")
+            )
         except Exception:
             logger.exception("Error in %s receive loop", self._provider_log_label)
         finally:
             self._on_receive_loop_end()
             if ws.died_abnormally:
                 self._emit_provider_error(
-                    ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
+                    EASYCAT_E305(
+                        provider=self._provider_error_name,
+                        attempts=getattr(ws, "reconnect_attempts_exhausted", None) or 0,
+                    )
                 )
             # Persistent STT providers keep this receive loop alive while
             # ``start_stream`` replaces the logical per-turn event queue. They
