@@ -388,7 +388,8 @@ class Session:
             noops.append("agent")
         if noops:
             raise ValueError(
-                "SessionConfig must provide non-noop implementations for: " + ", ".join(noops)
+                "SessionConfig must provide non-noop implementations for: "
+                + ", ".join(noops)
             )
 
     @staticmethod
@@ -544,7 +545,9 @@ class Session:
 
     # ── Properties ─────────────────────────────────────────────
 
-    def subscribe_event(self, event_type: type, handler: EventHandler) -> EventSubscription:
+    def subscribe_event(
+        self, event_type: type, handler: EventHandler
+    ) -> EventSubscription:
         """Subscribe to a session event via the underlying EventBus."""
         return self.event_bus.subscribe(event_type, handler)
 
@@ -618,7 +621,11 @@ class Session:
             (STTFinal, user_transcript, lambda cb: lambda e: cb(e.text)),
             (AgentDelta, agent_delta, lambda cb: lambda e: cb(e.text)),
             (AgentFinal, agent_response, lambda cb: lambda e: cb(e.text)),
-            (ToolCallStarted, tool_started, lambda cb: lambda e: cb(e.tool_name, e.call_id)),
+            (
+                ToolCallStarted,
+                tool_started,
+                lambda cb: lambda e: cb(e.tool_name, e.call_id),
+            ),
             (ToolCallResult, tool_result, lambda cb: lambda e: cb(e.call_id, e.result)),
             (TurnStarted, turn_started, lambda cb: lambda _e: cb()),
             (TurnEnded, turn_ended, lambda cb: lambda _e: cb()),
@@ -631,7 +638,9 @@ class Session:
                 lambda cb: (
                     lambda e: cb(
                         e.exception,
-                        f"{e.stage.value}:{e.provider}" if e.provider else e.stage.value,
+                        f"{e.stage.value}:{e.provider}"
+                        if e.provider
+                        else e.stage.value,
                     )
                 ),
             ),
@@ -646,7 +655,9 @@ class Session:
             registrations.append((event_type, handler))
         return registrations
 
-    def unsubscribe_handlers(self, registrations: list[tuple[type, EventHandler]]) -> None:
+    def unsubscribe_handlers(
+        self, registrations: list[tuple[type, EventHandler]]
+    ) -> None:
         """Unsubscribe a batch of event handlers from prior registrations."""
         for event_type, handler in registrations:
             self.event_bus.unsubscribe(event_type, handler)
@@ -737,7 +748,9 @@ class Session:
 
         stage = getattr(self, "_agent_stage", None)
         if stage is not None:
-            stage.set_provider(self._agent)  # keep the wrapper in sync and reset shadow history
+            stage.set_provider(
+                self._agent
+            )  # keep the wrapper in sync and reset shadow history
 
     def _inject_agent_runtime_config(self, agent: Any) -> None:
         """Apply session MCP servers, remote model, and API key to ``agent``.
@@ -890,7 +903,11 @@ class Session:
         ``async with create_session(cfg):`` is a one-liner equivalent to
         ``easycat.run()`` for callers who already own an event loop.
         """
-        if self._runtime_mode != "text_session" and not self._is_running and not self._closed:
+        if (
+            self._runtime_mode != "text_session"
+            and not self._is_running
+            and not self._closed
+        ):
             await self.start()
         return self
 
@@ -992,6 +1009,11 @@ class Session:
             # None of these hooks need the transport connected.
             await self._warmup.run(select=lambda name: name != "transport")
 
+            # Telephony helpers subscribe to lifecycle events emitted while a
+            # preflighted transport applies its deferred start frame.
+            for helper in self.telephony.helpers:
+                helper.start()
+
             await self.transport.connect()
             transport_connected = True
 
@@ -1029,9 +1051,6 @@ class Session:
                     checker.start()
                     self._health_checkers.append(checker)
 
-            for helper in self.telephony.helpers:
-                helper.start()
-
             self._is_running = True
             self._mark_observability_active()
             self._audio_router.start_outbound()
@@ -1052,7 +1071,9 @@ class Session:
             self._is_running = False
             self._mark_observability_inactive()
             try:
-                await self._finish_interrupted_start(transport_connected=transport_connected)
+                await self._finish_interrupted_start(
+                    transport_connected=transport_connected
+                )
             finally:
                 # The binding token belongs to this task's Context, so it
                 # cannot be reset from the protected cleanup task below.
@@ -1384,7 +1405,9 @@ class Session:
                 continue
 
             executor_name = type(executor).__name__
-            await self._emit(SessionActionStarted(action=action, executor=executor_name))
+            await self._emit(
+                SessionActionStarted(action=action, executor=executor_name)
+            )
             try:
                 result = await executor.execute(self, action)
             except Exception as exc:
@@ -1409,7 +1432,9 @@ class Session:
 
         return should_stop
 
-    def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
+    def _find_action_executor(
+        self, action: SessionAction
+    ) -> SessionActionExecutor | None:
         for executor in self._action_executors:
             if executor.supports(action):
                 return executor
@@ -1505,7 +1530,9 @@ class Session:
             raise RuntimeError("Session has been stopped")
         self._mark_observability_active()
         try:
-            with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
+            with observability.span(
+                "easycat.session", {"easycat.surface": "agent_bridge"}
+            ):
                 return await self._turn_runner.send_text(text)
         finally:
             self._mark_observability_inactive()

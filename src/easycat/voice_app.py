@@ -42,7 +42,9 @@ _MODE_ALIASES: dict[str, VoiceMode] = {
     "ws": "websocket",
     "phone": "twilio",
 }
-_CANONICAL_MODES: frozenset[str] = frozenset({"local", "browser", "websocket", "twilio"})
+_CANONICAL_MODES: frozenset[str] = frozenset(
+    {"local", "browser", "websocket", "twilio"}
+)
 
 # High-level ``EasyConfig`` fields ``VoiceApp`` forwards into the chosen preset.
 # These are the ONLY keys forwarded into ``mic()`` / ``browser()`` / ``phone()``
@@ -76,7 +78,9 @@ _SERVER_POLICY_FIELDS: frozenset[str] = frozenset(
 # is owned by ``VoiceApp`` (controls the dev/debugger opt-in) and is NEVER
 # accepted here. Any key outside this allow-list raises a ``ValueError`` so a
 # typo or a misplaced field fails loudly.
-_ALLOWED_CONFIG_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS | _SERVER_POLICY_FIELDS
+_ALLOWED_CONFIG_FIELDS: frozenset[str] = (
+    _FORWARDED_CONFIG_FIELDS | _SERVER_POLICY_FIELDS
+)
 
 # Environment variable for the shared serve token (shipped name — do NOT rename
 # to ``EASYCAT_SERVER_TOKEN`` while migrating ``serve`` through ``VoiceApp``).
@@ -426,7 +430,9 @@ class VoiceApp:
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8080))
-        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions"))
+        max_sessions = kwargs.pop(
+            "max_sessions", self._config_kwargs.get("max_sessions")
+        )
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
             kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
@@ -437,7 +443,9 @@ class VoiceApp:
         # Only override the WebRTCTransportConfig default when a limit is given,
         # keeping that dataclass the single source of the default capacity.
         capacity = {} if max_sessions is None else {"max_sessions": max_sessions}
-        config = WebRTCTransportConfig(host=host, port=port, auth_token=token, **capacity)
+        config = WebRTCTransportConfig(
+            host=host, port=port, auth_token=token, **capacity
+        )
         return config, unsafe_allow_no_auth
 
     def _browser_factory(self) -> Callable[[WebRTCTransport], EasyConfig]:
@@ -446,7 +454,9 @@ class VoiceApp:
     def _run_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
         from easycat.server.webrtc_routes import run_webrtc_config_server
 
-        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(
+            **kwargs
+        )
         # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
         # announced first. Pass ``announce=False`` to suppress the helper's own
         # "Server ready..." line and avoid a duplicate. Callers that already
@@ -463,7 +473,9 @@ class VoiceApp:
     async def _serve_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
         from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 
-        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(
+            **kwargs
+        )
         # Mirror ``_run_browser``: announce the URL ourselves and suppress the
         # helper's plainer "Server ready..." line so the same ``announce`` knob
         # behaves identically across run() and serve(). Delegating to the helper
@@ -484,7 +496,9 @@ class VoiceApp:
 
         host = transport_config.host
         port = transport_config.port
-        display_host = "localhost" if host in {"127.0.0.1", "localhost", "::1"} else host
+        display_host = (
+            "localhost" if host in {"127.0.0.1", "localhost", "::1"} else host
+        )
         base_url = f"http://{display_host}:{port}"
         if not transport_config.auth_token:
             stdout_console.print(f"Open {base_url}")
@@ -494,7 +508,9 @@ class VoiceApp:
         # placeholder so the operator pastes their own token in its place; the
         # bundled client reads the bearer token solely from the ``?token=``
         # query, and ``/config`` / ``/offer`` answer 401 without it.
-        stdout_console.print(f"Open {base_url}/webrtc_client.html?token=<your serve token>")
+        stdout_console.print(
+            f"Open {base_url}/webrtc_client.html?token=<your serve token>"
+        )
         stdout_console.print(
             "Replace <your serve token> with the serve token you configured "
             "(the page reads it from the ?token= query; keep it secret)."
@@ -514,7 +530,9 @@ class VoiceApp:
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8765))
-        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 10))
+        max_sessions = kwargs.pop(
+            "max_sessions", self._config_kwargs.get("max_sessions", 10)
+        )
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
             kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
@@ -527,7 +545,9 @@ class VoiceApp:
         )
         return server_config, unsafe_allow_no_auth
 
-    def _websocket_factory(self) -> Callable[[WebSocketConnectionTransport], EasyConfig]:
+    def _websocket_factory(
+        self,
+    ) -> Callable[[WebSocketConnectionTransport], EasyConfig]:
         return self._per_connection_factory("websocket")
 
     def _run_websocket(self, **kwargs: Any) -> None:
@@ -583,7 +603,9 @@ class VoiceApp:
         media_port = kwargs.pop("media_port", 8766)
         http_host = kwargs.pop("http_host", "0.0.0.0")
         http_port = kwargs.pop("http_port", 8000)
-        stream_url = kwargs.pop("stream_url", None) or os.environ.get("TWILIO_STREAM_URL")
+        stream_url = kwargs.pop("stream_url", None) or os.environ.get(
+            "TWILIO_STREAM_URL"
+        )
         stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
             "TWILIO_STREAM_TOKEN_SECRET"
         )
@@ -604,10 +626,26 @@ class VoiceApp:
                 "true",
                 "yes",
             }
-        unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
+        unsafe_allow_unsigned_webhooks = kwargs.pop(
+            "unsafe_allow_unsigned_webhooks", False
+        )
         max_sessions = kwargs.pop(
             "max_sessions",
-            self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
+            self._config_kwargs.get(
+                "max_sessions", TwilioVoiceServerConfig.max_sessions
+            ),
+        )
+        start_timeout_s = kwargs.pop(
+            "start_timeout_s",
+            float(
+                os.environ.get(
+                    "TWILIO_START_TIMEOUT_S",
+                    TwilioVoiceServerConfig.start_timeout_s,
+                )
+            ),
+        )
+        public_twiml_url = kwargs.pop("public_twiml_url", None) or os.environ.get(
+            "TWILIO_PUBLIC_TWIML_URL"
         )
         self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
@@ -621,6 +659,8 @@ class VoiceApp:
             trust_proxy_headers=bool(trust_proxy_headers),
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
             max_sessions=max_sessions,
+            start_timeout_s=start_timeout_s,
+            public_twiml_url=public_twiml_url,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

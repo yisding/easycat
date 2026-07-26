@@ -23,7 +23,10 @@ from easycat.telephony.server import (
     serve_twilio_voice_app,
 )
 from easycat.transports import TwilioStreamTokenStore
-from easycat.transports.twilio_media import TWILIO_STREAM_TOKEN_PARAMETER, twiml_connect_stream
+from easycat.transports.twilio_media import (
+    TWILIO_STREAM_TOKEN_PARAMETER,
+    twiml_connect_stream,
+)
 from easycat.voice_app import VoiceApp
 
 
@@ -49,7 +52,8 @@ class _FakeTwilioTransport:
         self.ws = ws
         self.config = config
 
-    async def wait_for_start(self) -> bool:
+    async def wait_for_start(self, *, timeout_s: float | None = None) -> bool:
+        assert timeout_s is not None and timeout_s > 0
         events = getattr(self.ws, "_events", None)
         if events is not None:
             events.append("wait_for_start")
@@ -238,7 +242,9 @@ def test_twilio_run_max_sessions_overrides_construction(
     assert captured_twilio["config"].max_sessions == 7
 
 
-def test_run_twilio_voice_app_drives_async_server(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_twilio_voice_app_drives_async_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The sync wrapper owns ``asyncio.run`` and drives ``serve_twilio_voice_app``.
 
     Mirrors ``run_webrtc_config_server`` / ``run_websocket_config_server``: the
@@ -278,7 +284,9 @@ def test_run_twilio_voice_app_is_module_export() -> None:
     assert "run_twilio_voice_app" in server_module.__all__
 
 
-def test_twilio_serve_does_not_call_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_twilio_serve_does_not_call_asyncio_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``serve('twilio')`` is the async entry — only ``run()`` owns the loop."""
     seen: dict[str, Any] = {}
 
@@ -493,7 +501,9 @@ def test_media_listener_closed_when_http_startup_fails(
     assert web.runner_cleaned is True
 
 
-def test_media_listener_disables_permessage_deflate(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_media_listener_disables_permessage_deflate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The Twilio media listener passes ``compression=None`` to ``websockets.serve``.
 
     permessage-deflate must stay off for the raw μ-law media stream; the listener
@@ -527,7 +537,11 @@ def test_twiml_handler_embeds_consumable_stream_token() -> None:
     exactly once; replay and forged tokens are rejected."""
     store = TwilioStreamTokenStore("secret")
     token = store.issue()
-    form_items = [("From", "+15551234567"), ("To", "+15557654321"), ("Direction", "inbound")]
+    form_items = [
+        ("From", "+15551234567"),
+        ("To", "+15557654321"),
+        ("Direction", "inbound"),
+    ]
 
     xml = twiml_connect_stream(
         "wss://example/media",
@@ -560,6 +574,7 @@ class _FakeTwimlRequest:
         self._form = form
         self.headers = headers or {}
         self.path_qs = path_qs
+        self.raw_path = path_qs
         self.scheme = scheme
 
     async def post(self) -> dict[str, str]:
@@ -574,7 +589,9 @@ def test_twiml_handler_returns_application_xml(monkeypatch: pytest.MonkeyPatch) 
 
     async def _body(h: _ServerHarness) -> None:
         handler = h.web.routes["/twiml"]
-        request = _FakeTwimlRequest({"From": "+15551234567", "Direction": "inbound"})
+        request = _FakeTwimlRequest(
+            {"CallSid": "CA1", "From": "+15551234567", "Direction": "inbound"}
+        )
         result["response"] = await handler(request)
 
     # No auth_token: the unsigned-webhook escape hatch keeps the listener open so
@@ -635,7 +652,7 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
 
     harness = _ServerHarness(monkeypatch)
     result: dict[str, Any] = {}
-    form = {"From": "+15551234567", "Direction": "inbound"}
+    form = {"CallSid": "CA1", "From": "+15551234567", "Direction": "inbound"}
     public_url = "https://relay.example/twiml"
     signature = compute_twilio_webhook_signature(
         auth_token="tw-secret", url=public_url, params=list(form.items())
@@ -667,6 +684,68 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["bad"].status == 403
     assert TWILIO_STREAM_TOKEN_PARAMETER not in result["bad"].text
     assert result["missing"].status == 403
+
+
+def test_twiml_signature_uses_raw_encoded_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.telephony.twiml import compute_twilio_webhook_signature
+
+    harness = _ServerHarness(monkeypatch)
+    result: dict[str, Any] = {}
+    form = {"CallSid": "CA1", "From": "+15551234567"}
+    public_url = "https://relay.example/twiml?label=hello%20world"
+    signature = compute_twilio_webhook_signature(
+        auth_token="tw-secret", url=public_url, params=list(form.items())
+    )
+
+    async def _body(h: _ServerHarness) -> None:
+        handler = h.web.routes["/twiml"]
+        request = _FakeTwimlRequest(
+            form,
+            headers={"Host": "relay.example", "X-Twilio-Signature": signature},
+            path_qs="/twiml?label=hello world",
+        )
+        request.raw_path = "/twiml?label=hello%20world"
+        result["response"] = await handler(request)
+
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", twilio_auth_token="tw-secret"
+    )
+    asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, _body))
+
+    assert result["response"].status == 200
+
+
+def test_twiml_signature_accepts_explicit_public_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.telephony.twiml import compute_twilio_webhook_signature
+
+    harness = _ServerHarness(monkeypatch)
+    result: dict[str, Any] = {}
+    form = {"CallSid": "CA1", "From": "+15551234567"}
+    public_url = "https://relay.example/prefix/twiml"
+    signature = compute_twilio_webhook_signature(
+        auth_token="tw-secret", url=public_url, params=list(form.items())
+    )
+
+    async def _body(h: _ServerHarness) -> None:
+        handler = h.web.routes["/twiml"]
+        request = _FakeTwimlRequest(
+            form,
+            headers={"Host": "internal:8000", "X-Twilio-Signature": signature},
+        )
+        result["response"] = await handler(request)
+
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        twilio_auth_token="tw-secret",
+        public_twiml_url=public_url,
+    )
+    asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, _body))
+
+    assert result["response"].status == 200
 
 
 def test_twilio_server_config_reads_auth_token_and_trust_proxy_from_env(

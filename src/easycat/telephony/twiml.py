@@ -168,6 +168,7 @@ async def twilio_form_items_from_request(
     request: Any,
     *,
     auth_token: str | None = None,
+    public_url: str | None = None,
 ) -> list[tuple[str, str]]:
     """Parse a Twilio webhook form body and optionally validate its signature."""
     body = await request.body()
@@ -179,7 +180,7 @@ async def twilio_form_items_from_request(
 
     if auth_token and not validate_twilio_webhook_signature(
         auth_token=auth_token,
-        url=twilio_public_url_from_request(request),
+        url=public_url or twilio_public_url_from_request(request),
         params=form_items,
         signature=_header_value(getattr(request, "headers", {}), "x-twilio-signature"),
     ):
@@ -220,8 +221,26 @@ def compute_twilio_webhook_signature(
         for key, values in sorted(_twilio_signature_values(params).items())
         for value in sorted(set(values))
     )
-    digest = hmac.new(auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1).digest()
+    digest = hmac.new(
+        auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1
+    ).digest()
     return base64.b64encode(digest).decode("ascii")
+
+
+def twilio_webhook_idempotency_key(
+    *,
+    url: str,
+    params: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    signature: str | None,
+) -> str:
+    """Return a stable key for retries of the same Twilio webhook request."""
+    signed_values = "".join(
+        key + value
+        for key, values in sorted(_twilio_signature_values(params).items())
+        for value in sorted(set(values))
+    )
+    material = f"{url}\0{signed_values}\0{(signature or '').strip()}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _twilio_signature_values(
@@ -261,6 +280,21 @@ def _header_value(headers: Any, name: str) -> str | None:
 
 
 def _request_path_with_query(request: Any) -> str:
+    raw_path = getattr(request, "raw_path", None)
+    if isinstance(raw_path, bytes):
+        raw_path = raw_path.decode("ascii")
+    if isinstance(raw_path, str) and raw_path:
+        return raw_path
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, Mapping):
+        raw_path = scope.get("raw_path")
+        query = scope.get("query_string", b"")
+        if isinstance(raw_path, bytes):
+            raw_path = raw_path.decode("ascii")
+        if isinstance(query, bytes):
+            query = query.decode("ascii")
+        if isinstance(raw_path, str) and raw_path:
+            return f"{raw_path}?{query}" if query else raw_path
     url = getattr(request, "url", None)
     path = str(getattr(url, "path", "/"))
     query = getattr(url, "query", "")
