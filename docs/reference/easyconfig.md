@@ -52,8 +52,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
-- `data_dir` — optional root for this session's live journals and artifacts;
-  unset falls back to `EASYCAT_DATA_DIR` or `.easycat`.
+- `data_dir` — optional storage root. With `debug="full"` it contains the
+  session's persistent journal and artifacts; `debug="light"` keeps those
+  resources in memory. Emergency exports and other explicit bundle writes use
+  this root in either mode. Unset falls back to `EASYCAT_DATA_DIR` or
+  `.easycat`.
 - `warmup` — run provider warmup hooks at session start (default `True`).
 - `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
   interactive terminal (default `False`). The

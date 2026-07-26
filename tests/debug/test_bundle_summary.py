@@ -56,12 +56,48 @@ def test_bundle_record_summary_prefers_call_ended_duration() -> None:
                 "session_id": "session-1",
                 "wall_ns": 9_000_000_000,
                 "name": "call_ended",
-                "data": {"duration_s": 45.25},
+                "data": {"call_sid": "CA1", "duration_s": 45.25},
             },
         ]
     )
 
     assert summary.duration_ms == 45_250.0
+
+
+def test_bundle_record_summary_uses_timestamp_bounds_for_multiple_calls() -> None:
+    summary = summarise_bundle_records(
+        [
+            {"wall_ns": 1_000_000_000, "name": "session_started"},
+            {
+                "wall_ns": 3_000_000_000,
+                "name": "call_ended",
+                "data": {"call_sid": "CA1", "duration_s": 1.5},
+            },
+            {
+                "wall_ns": 9_000_000_000,
+                "name": "call_ended",
+                "data": {"call_sid": "CA2", "duration_s": 5.0},
+            },
+        ]
+    )
+
+    assert summary.duration_ms == 8_000.0
+
+
+@pytest.mark.parametrize("duration_s", [float("nan"), float("inf"), 10**1000])
+def test_bundle_record_summary_ignores_non_finite_call_duration(duration_s: float | int) -> None:
+    summary = summarise_bundle_records(
+        [
+            {"wall_ns": 1_000_000_000, "name": "session_started"},
+            {
+                "wall_ns": 4_000_000_000,
+                "name": "call_ended",
+                "data": {"call_sid": "CA1", "duration_s": duration_s},
+            },
+        ]
+    )
+
+    assert summary.duration_ms == 3_000.0
 
 
 def test_annotation_summary_tolerates_untrusted_sidecar_records() -> None:

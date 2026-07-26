@@ -42,6 +42,16 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+
+def _completion_text(accumulated: str, structured_output: Any) -> str:
+    """Prefer streamed text, falling back to a speakable structured result."""
+    if accumulated:
+        return accumulated
+    if structured_output is None:
+        return ""
+    return str(structured_output)
+
+
 _DEFAULT_HISTORY_KEY = "__default__"
 
 
@@ -453,12 +463,9 @@ class PydanticAIBridge:
                     agent.mcp_servers = saved_mcp_servers
 
         if not done_emitted:
-            text = accumulated
-            if not text and raw_output is not None:
-                text = str(raw_output)
             yield AgentBridgeEvent(
                 kind="done",
-                text=text,
+                text=_completion_text(accumulated, raw_output),
                 structured_output=raw_output,
             )
 
@@ -771,7 +778,7 @@ class PydanticAIBridge:
 
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
+            text=_completion_text(accumulated, self._last_output),
             structured_output=self._last_output,
         )
 

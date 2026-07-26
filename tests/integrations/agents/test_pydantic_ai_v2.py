@@ -154,6 +154,10 @@ class _NoOpGraphRun:
         raise StopAsyncIteration
 
 
+class _StructuredOutputGraphRun(_NoOpGraphRun):
+    output = {"utterance": "hello", "intent": "capture"}
+
+
 class _AmbiguousKeywordGraph:
     """Mimic a v2 graph whose `state` parameter is positional-capable."""
 
@@ -172,6 +176,19 @@ class _AmbiguousKeywordGraph:
         self.seen_deps = deps
         self.seen_inputs = inputs
         return _NoOpGraphRun()
+
+
+class _StructuredOutputGraph(_AmbiguousKeywordGraph):
+    def iter(
+        self,
+        state: Any = None,
+        deps: Any = None,
+        inputs: Any = None,
+    ) -> _StructuredOutputGraphRun:
+        self.seen_state = state
+        self.seen_deps = deps
+        self.seen_inputs = inputs
+        return _StructuredOutputGraphRun()
 
 
 class FinalResultEvent:
@@ -330,6 +347,23 @@ async def test_bridge_assigns_raw_mcp_servers_to_legacy_agent_attribute() -> Non
 @pytest.mark.asyncio
 async def test_bridge_speaks_structured_output_when_no_text_parts_stream() -> None:
     bridge = PydanticAIBridge(agent=_StructuredOutputAgent())
+
+    events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [(event.kind, event.text) for event in events] == [
+        ("done", "{'utterance': 'hello', 'intent': 'capture'}")
+    ]
+    assert events[-1].structured_output == {"utterance": "hello", "intent": "capture"}
+
+
+@pytest.mark.asyncio
+async def test_graph_bridge_speaks_structured_output_when_no_text_parts_stream() -> None:
+    state = _GraphStateForSignature()
+    bridge = PydanticAIBridge(
+        graph=_StructuredOutputGraph(),
+        state_factory=lambda: state,
+        initial_node_factory=lambda text, _state: text,
+    )
 
     events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
 

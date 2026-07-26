@@ -81,7 +81,7 @@ class _DummyWebSocket:
 
 
 class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
-    def test_request_exposes_underlying_handshake(self):
+    def test_request_exposes_underlying_handshake(self) -> None:
         ws = _DummyWebSocket()
         transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
 
@@ -310,7 +310,7 @@ class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
 
 
 class TestTwilioConnectionTransport(_UsesPytestTcpPortFactory):
-    def test_request_exposes_underlying_handshake(self):
+    def test_request_exposes_underlying_handshake(self) -> None:
         ws = _DummyTwilioWebSocket()
         transport = TwilioConnectionTransport(ws)  # type: ignore[arg-type]
 

@@ -149,6 +149,7 @@ class Session:
     # hook. Declared (not assigned) so ``getattr(..., default)`` probes keep
     # their runtime behavior.
     _easycat_config: Any
+    _data_dir: str | Path | None
     _emergency_export_unregister: Callable[[], None]
 
     def __init__(self, config: SessionConfig | None = None) -> None:

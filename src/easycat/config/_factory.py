@@ -678,6 +678,7 @@ def _maybe_arm_dev_session(session: Session) -> None:
 def _finalize_audio_session(config: EasyConfig, built: _BuiltAudioSession) -> None:
     session = built.session
     session._easycat_config = _safe_config_ns(config)
+    session._data_dir = config.data_dir
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
     _wire_outbound_pipeline(built)
@@ -1012,6 +1013,7 @@ def create_text_session(
         warmup=config.warmup,
         record_to=record_to,
     )
+    session._data_dir = config.data_dir
     session._agent_model = agent_model
     session._remote_agent_api_key = remote_agent_api_key
     return session

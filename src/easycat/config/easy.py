@@ -156,10 +156,13 @@ def _validate_common(
                     f"Invalid MCP server URI: {uri!r}. "
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
-    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyConfigError(
-            f"session_id must not contain path separators or '..': {session_id!r}"
-        )
+    if session_id is not None:
+        if not session_id.strip():
+            raise EasyConfigError("session_id must not be empty")
+        if "/" in session_id or "\\" in session_id or ".." in session_id:
+            raise EasyConfigError(
+                f"session_id must not contain path separators or '..': {session_id!r}"
+            )
     if isinstance(agent, str):
         from urllib.parse import urlparse
 

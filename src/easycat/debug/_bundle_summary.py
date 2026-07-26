@@ -7,6 +7,7 @@ without depending on CLI presentation code.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -73,6 +74,9 @@ class _BundleRecordAccumulator:
     earliest_wall_ns: int | None = None
     latest_wall_ns: int | None = None
     call_duration_ms: float | None = None
+    call_sid: str | None = None
+    call_duration_observations: int = 0
+    call_duration_ambiguous: bool = False
 
     def observe(self, record: Mapping[str, Any]) -> None:
         """Include one decoded journal record in the projection."""
@@ -111,7 +115,25 @@ class _BundleRecordAccumulator:
             return
         if duration_s < 0:
             return
-        self.call_duration_ms = float(duration_s) * 1000.0
+        try:
+            duration_ms = float(duration_s) * 1000.0
+        except OverflowError:
+            return
+        if not math.isfinite(duration_ms):
+            return
+
+        call_sid_value = data.get("call_sid")
+        call_sid = call_sid_value if isinstance(call_sid_value, str) and call_sid_value else None
+        if self.call_duration_ambiguous:
+            return
+        if self.call_duration_observations:
+            if self.call_sid is None or call_sid is None or call_sid != self.call_sid:
+                self.call_duration_ambiguous = True
+                self.call_duration_ms = None
+                return
+        self.call_duration_observations += 1
+        self.call_sid = call_sid
+        self.call_duration_ms = duration_ms
 
     def _observe_error(self, error: object, turn_id: str | None) -> None:
         if not error:
