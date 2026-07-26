@@ -122,7 +122,7 @@ remain top-level envelope fields, not `data` keys.
 | `task_raised` | `EVENT` | `task_name: str`, `exc_type: str` | - |
 | `task_scheduled` | `EVENT` | `task_name: str` | - |
 | `turn_state_changed` | `EVENT` | `from: str`, `to: str`, `reason: str or null` | - |
-| `warmup_completed` | `EVENT` | `elapsed_ms: number`, `components: list[str]` | - |
+| `warmup_completed` | `EVENT` | `elapsed_ms: number`, `components: list[object]` | Each component object contains `component: str` and `elapsed_ms: number`. |
 | `warmup_failed` | `CONTROL` | `component: str`, `elapsed_ms: number`, `exc_type: str` | - |
 
 ## Agent Bridge Records
@@ -152,7 +152,7 @@ Every bridge record includes `run_id: str` in `data`.
 ## Contract Guard
 
 `tests/runtime/test_journal_record_contract.py` extracts built-in producer
-names from the source tree and compares them with a pinned
-`JOURNAL_RECORD_SNAPSHOT` and every catalog row on this page. Adding or
-renaming a built-in record therefore requires an intentional contract and
+names from the source tree and compares them with pinned name, kind, and
+required-data-key snapshots and every catalog row on this page. Adding or
+changing a built-in record therefore requires an intentional contract and
 documentation update.
