@@ -155,8 +155,7 @@ def _validate_common(
         raise ValueError("capture_audio must be a bool or zero-argument callable")
     predicate_call = type(capture_audio).__call__ if callable(capture_audio) else None
     if callable(capture_audio) and (
-        inspect.iscoroutinefunction(capture_audio)
-        or inspect.iscoroutinefunction(predicate_call)
+        inspect.iscoroutinefunction(capture_audio) or inspect.iscoroutinefunction(predicate_call)
     ):
         raise ValueError("capture_audio predicate must be synchronous")
     if mcp_servers is not None:
