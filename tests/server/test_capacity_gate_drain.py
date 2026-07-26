@@ -167,6 +167,35 @@ async def test_drain_zero_timeout_force_escalates_immediately() -> None:
     assert gate.active_keys() == ()
 
 
+async def test_wait_drained_observes_natural_untrack_before_timeout() -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=2)
+    assert gate.try_acquire()
+    gate.track(1)
+
+    async def release_later() -> None:
+        await asyncio.sleep(0.01)
+        gate.untrack(1)
+        gate.release()
+
+    task = asyncio.create_task(release_later())
+    try:
+        assert await gate.wait_drained(timeout_s=1.0)
+    finally:
+        await task
+    assert gate.active_keys() == ()
+    assert gate.reserved_count == 0
+
+
+async def test_wait_drained_returns_false_when_active_session_survives_timeout() -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=2)
+    assert gate.try_acquire()
+    gate.track(1)
+
+    assert await gate.wait_drained(timeout_s=0.0) is False
+    assert gate.active_keys() == (1,)
+    assert gate.reserved_count == 1
+
+
 async def test_drain_force_timeout_bounds_a_hung_force_stop() -> None:
     # F4: a session whose force-stop ALSO hangs must not block the drain past
     # ~force_timeout_s. The forced phase (the stop(force=True) call and the

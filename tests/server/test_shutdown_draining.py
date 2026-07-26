@@ -183,6 +183,34 @@ async def test_graceful_stop_drains_active_session_without_force() -> None:
 
 
 @pytest.mark.integration_socket
+async def test_await_natural_end_drain_leaves_live_websocket_until_client_closes() -> None:
+    server, sessions = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=2.0,
+            drain_mode="await_natural_end",
+        )
+    )
+    async with websockets.connect(_ws_url(server)) as client:
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+
+        stop_task = asyncio.create_task(server.stop())
+        await asyncio.sleep(0.1)
+
+        assert stop_task.done() is False
+        assert sessions[0].stopped.is_set() is False
+        assert client.close_code is None
+
+        await client.close()
+        await asyncio.wait_for(stop_task, timeout=3)
+
+    assert sessions[0].stopped.is_set()
+    assert sessions[0].force_stopped.is_set() is False
+
+
+@pytest.mark.integration_socket
 async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
     # A session whose graceful stop hangs must be force-stopped after the (small)
     # drain timeout so teardown cannot block forever.
@@ -195,6 +223,26 @@ async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
         await _wait_until(lambda: server._active_sessions == 1)
         # The handler will hang on graceful stop; ``stop`` escalates to force.
         await asyncio.wait_for(server.stop(), timeout=3)
+    assert sessions[0].force_stopped.is_set()
+
+
+@pytest.mark.integration_socket
+async def test_await_natural_end_drain_force_escalates_after_timeout() -> None:
+    server, sessions = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=0.1,
+            drain_mode="await_natural_end",
+        ),
+        hang=True,
+    )
+    async with websockets.connect(_ws_url(server)):
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+
+        await asyncio.wait_for(server.stop(), timeout=3)
+
     assert sessions[0].force_stopped.is_set()
 
 

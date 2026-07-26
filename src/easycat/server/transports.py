@@ -134,6 +134,18 @@ class CapacityGate(Generic[KeyT]):
         """
         self._draining = False
 
+    async def wait_drained(self, *, timeout_s: float, poll_interval_s: float = 0.05) -> bool:
+        """Wait for active connections to disappear without stopping sessions."""
+        if self.active_count == 0:
+            return True
+        deadline = asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+        while self.active_count > 0:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(max(poll_interval_s, 0.001), remaining))
+        return True
+
     async def drain(
         self,
         sessions_for_keys: Callable[[], Iterable[tuple[KeyT, object]]],
