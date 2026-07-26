@@ -101,7 +101,8 @@ class InMemoryRingBuffer:
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
-            return _read_records(self._buf, start=start, limit=limit)
+            records = list(self._buf)
+        return _read_records(records, start=start, limit=limit)
 
     def slice(
         self,
@@ -113,14 +114,15 @@ class InMemoryRingBuffer:
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         with self._lock:
-            return _slice_records(
-                self._buf,
-                kind=kind,
-                session_id=session_id,
-                turn_id=turn_id,
-                name=name,
-                tags=tags,
-            )
+            records = list(self._buf)
+        return _slice_records(
+            records,
+            kind=kind,
+            session_id=session_id,
+            turn_id=turn_id,
+            name=name,
+            tags=tags,
+        )
 
     def close(self) -> None:
         pass

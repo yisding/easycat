@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from easycat._smart_turn_features import (
@@ -100,53 +102,27 @@ def test_spectrogram_padding_modes(
 
 
 def test_whisper_feature_extractor_matches_transformers_reference() -> None:
-    time = np.arange(16000, dtype=np.float64) / 16000.0
+    sampling_rate = 16000
+    time = np.arange(8 * sampling_rate, dtype=np.float64) / sampling_rate
     waveform = (
-        0.37 * np.sin(2 * np.pi * (180 * time + 720 * time**2))
+        0.37 * np.sin(2 * np.pi * (180 * time + 90 * time**2))
         + 0.13 * np.cos(2 * np.pi * 53 * time)
     ).astype(np.float32)
 
-    extractor = _WhisperFeatureExtractorNP(np=np, feature_size=8, chunk_length=1)
-    actual = extractor(waveform, sampling_rate=16000, do_normalize=True)
-
-    # These fixtures come from transformers 5.13.1 WhisperFeatureExtractor's
-    # CPU NumPy path with the same constructor arguments and waveform.
-    expected_leading = np.array(
-        [
-            [1.4091717, 1.4193919, 1.4272149, 1.4341657, 1.4408454, 1.4470471],
-            [0.90528876, 0.3960842, 0.06258935, 0.20557272, 0.10829037, 0.32059222],
-            [0.66646576, 0.15725875, -0.52977824, -0.45915353, -0.52977824, -0.49393713],
-            [0.504266, -0.0051204, -0.52977824, -0.52977824, -0.52977824, -0.52977824],
-        ],
-        dtype=np.float32,
-    )
-    probe_rows = np.array([0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 7])
-    probe_columns = np.array([1, 50, 0, 99, 2, 73, 41, 9, 88, 37, 0, 50, 99])
-    expected_probes = np.array(
-        [
-            1.4193919,
-            1.0466441,
-            0.90528876,
-            0.4020959,
-            -0.52977824,
-            1.3778621,
-            -0.26805425,
-            -0.52977824,
-            -0.52977824,
-            -0.52977824,
-            -0.01369202,
-            -0.52977824,
-            -0.06866372,
-        ],
-        dtype=np.float32,
+    actual = _WhisperFeatureExtractorNP(np=np)(
+        waveform,
+        sampling_rate=sampling_rate,
+        do_normalize=True,
     )
 
-    assert actual.shape == (1, 8, 100)
+    # Full production shape generated with transformers 5.13.1
+    # WhisperFeatureExtractor using the same waveform and default 80-filter,
+    # eight-second configuration. Quantization keeps the digest stable across
+    # equivalent BLAS/FFT implementations while covering every tensor value.
+    quantized = np.round(actual, decimals=5).astype("<f4")
+    digest = hashlib.sha256(quantized.tobytes()).hexdigest()
+
+    assert actual.shape == (1, 80, 800)
     assert actual.dtype == np.float32
-    np.testing.assert_allclose(actual[0, :4, :6], expected_leading, rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(
-        actual[0, probe_rows, probe_columns],
-        expected_probes,
-        rtol=1e-5,
-        atol=1e-5,
-    )
+    assert np.isfinite(actual).all()
+    assert digest == "22f9490892ec2009dba6649ec4ddf727d7b4fcf0282cf4d582ba1817ac901d5f"
