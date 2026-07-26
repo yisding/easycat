@@ -82,6 +82,7 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_CALL_API_TOKEN": "call-token",
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
+            "TWILIO_PUBLIC_TWIML_URL": "https://voice.example.com/prefix/twiml",
         }
     )
 
@@ -91,6 +92,7 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.outbound_calling_enabled is True
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
+    assert settings.public_twiml_url == "https://voice.example.com/prefix/twiml"
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"

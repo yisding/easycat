@@ -43,6 +43,8 @@ def _clear_twilio_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TWILIO_STREAM_TOKEN_SECRET", raising=False)
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    monkeypatch.delenv("TWILIO_START_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("TWILIO_PUBLIC_TWIML_URL", raising=False)
 
 
 class _FakeTwilioTransport:
@@ -58,6 +60,11 @@ class _FakeTwilioTransport:
         if events is not None:
             events.append("wait_for_start")
         return bool(getattr(self.ws, "start_ok", True))
+
+    async def disconnect(self) -> None:
+        events = getattr(self.ws, "_events", None)
+        if events is not None:
+            events.append("disconnect")
 
 
 # ── Shared fake aiohttp.web + server driver ───────────────────────────
@@ -664,6 +671,7 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
             form, headers={"Host": "relay.example", "X-Twilio-Signature": signature}
         )
         result["good"] = await handler(good)
+        result["good_retry"] = await handler(good)
         bad = _FakeTwimlRequest(
             form, headers={"Host": "relay.example", "X-Twilio-Signature": "wrong"}
         )
@@ -680,6 +688,7 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["good"].status == 200
     assert result["good"].content_type == "application/xml"
     assert TWILIO_STREAM_TOKEN_PARAMETER in result["good"].text
+    assert result["good_retry"].text == result["good"].text
     # Forged / missing signature -> 403, no token minted.
     assert result["bad"].status == 403
     assert TWILIO_STREAM_TOKEN_PARAMETER not in result["bad"].text
@@ -755,11 +764,13 @@ def test_twilio_server_config_reads_auth_token_and_trust_proxy_from_env(
     monkeypatch.setenv("TWILIO_AUTH_TOKEN", "env-twilio-secret")
     monkeypatch.setenv("TWILIO_STREAM_URL", "wss://example/media")
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+    monkeypatch.setenv("TWILIO_PUBLIC_TWIML_URL", "https://voice.example.com/prefix/twiml")
 
     config = VoiceApp(agent="a")._twilio_server_config()
 
     assert config.twilio_auth_token == "env-twilio-secret"
     assert config.trust_proxy_headers is True
+    assert config.public_twiml_url == "https://voice.example.com/prefix/twiml"
 
 
 # ── Media lifecycle (fake ServerConnection + stubbed session) ─────────
@@ -891,17 +902,45 @@ def test_media_handler_rejects_invalid_stream_before_building_session(
 
     async def _body(h: _ServerHarness) -> None:
         await h.media_handler(_FakeWs(events, start_ok=False))
+        await h.media_handler(_FakeWs(events))
 
     config = TwilioVoiceServerConfig(
         stream_url="wss://example/media", unsafe_allow_unsigned_webhooks=True
     )
     asyncio.run(harness.run(_factory, config, _body))
 
-    assert events == ["wait_for_start"]
-    assert factory_transports == []
-    assert created == []
-    assert "register" not in manager.events
+    assert events[:2] == ["wait_for_start", "wait_for_start"]
+    assert len(factory_transports) == 1
+    assert len(created) == 1
+    assert "register" in manager.events
     assert "stop_all" in manager.events
+
+
+def test_media_handler_closes_preflighted_transport_when_session_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    import easycat.config as config_mod
+    import easycat.transports.twilio_media as twilio_mod
+
+    def _fail_create_session(_config: Any) -> None:
+        raise RuntimeError("invalid session")
+
+    monkeypatch.setattr(config_mod, "create_session", _fail_create_session)
+    monkeypatch.setattr(twilio_mod, "TwilioConnectionTransport", _FakeTwilioTransport)
+    harness = _ServerHarness(monkeypatch)
+
+    async def _body(h: _ServerHarness) -> None:
+        with pytest.raises(RuntimeError, match="invalid session"):
+            await h.media_handler(_FakeWs(events))
+
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", unsafe_allow_unsigned_webhooks=True
+    )
+    asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, _body))
+
+    assert events == ["wait_for_start", "disconnect"]
 
 
 class _BlockingWs:

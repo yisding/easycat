@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
+from agent import make_agent
 from fastapi import FastAPI, HTTPException, Request, Response
 from websockets.asyncio.server import ServerConnection
 
-from agent import make_agent
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -23,14 +23,14 @@ from easycat import (
 )
 from easycat.telephony import (
     reconstruct_public_url,
-    validate_twilio_webhook_signature,
     twilio_webhook_idempotency_key,
+    validate_twilio_webhook_signature,
 )
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
-def create_app() -> FastAPI:
+def create_app() -> FastAPI:  # noqa: C901, PLR0915
     require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
     twilio_auth_token = require_env("TWILIO_AUTH_TOKEN")
@@ -44,9 +44,7 @@ def create_app() -> FastAPI:
     public_twiml_url = os.getenv("TWILIO_PUBLIC_TWIML_URL", "").strip()
     manager: SessionManager[int] = SessionManager()
     session_slots = asyncio.Semaphore(max_sessions)
-    stream_tokens = TwilioStreamTokenStore(
-        os.getenv("TWILIO_STREAM_TOKEN_SECRET") or None
-    )
+    stream_tokens = TwilioStreamTokenStore(os.getenv("TWILIO_STREAM_TOKEN_SECRET") or None)
 
     async def handle_call(ws: ServerConnection) -> None:
         if session_slots.locked():
@@ -82,9 +80,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         port = int(os.getenv("TWILIO_WS_PORT", "8766"))
-        twilio_ws = await websockets.serve(
-            handle_call, "0.0.0.0", port, compression=None
-        )
+        twilio_ws = await websockets.serve(handle_call, "0.0.0.0", port, compression=None)
         try:
             yield
         finally:
@@ -125,9 +121,7 @@ def create_app() -> FastAPI:
         form = dict(form_items)
         call_sid = form.get("CallSid", "").strip()
         if not call_sid:
-            raise HTTPException(
-                status_code=400, detail="Twilio webhook is missing CallSid"
-            )
+            raise HTTPException(status_code=400, detail="Twilio webhook is missing CallSid")
         parameters: dict[str, str] = {"Direction": form.get("Direction") or "inbound"}
         for name in (
             "From",

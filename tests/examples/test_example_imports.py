@@ -290,7 +290,9 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
     assert "attach_runtime_feedback" not in source
 
 
-def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+def test_twilio_example_missing_openai_key_is_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+):
     import examples.twilio_app as twilio_app
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
