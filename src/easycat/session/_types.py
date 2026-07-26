@@ -155,7 +155,6 @@ class SessionConfig:
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
     audio_gate: Callable[[], bool] | None = None
-    capture_audio: bool | Callable[[], bool] = True
 
     # Pipeline flags
     enable_noise_reduction: bool = False
@@ -240,3 +239,6 @@ class SessionConfig:
     #     identity for DNC handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
+
+    # Keep appended for positional compatibility with older SessionConfig calls.
+    capture_audio: bool | Callable[[], bool] = True

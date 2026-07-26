@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+from dataclasses import replace
+
 import pytest
 
 from easycat import (
@@ -58,6 +62,24 @@ class _ProviderShapeVAD:
             yield None
 
 
+class _BlockingArtifactStore:
+    writes_block = True
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.refs: set[str] = set()
+
+    def put(self, payload: bytes, *, artifact_class: str = "debug_verbose") -> str:
+        self.started.set()
+        self.release.wait()
+        self.refs.add("blocked-ref")
+        return "blocked-ref"
+
+    def delete(self, ref: str) -> None:
+        self.refs.discard(ref)
+
+
 @pytest.mark.asyncio
 async def test_session_audio_capture_policy_and_runtime_override():
     consent = {"enabled": False}
@@ -83,6 +105,11 @@ async def test_session_audio_capture_policy_and_runtime_override():
     assert await put_artifact_async(session._run_ctx, b"paused") is None
     session.set_audio_capture_enabled(True)
     assert await put_artifact_async(session._run_ctx, b"resumed") is not None
+    consent["enabled"] = False
+    assert await put_artifact_async(session._run_ctx, b"revoked") is None
+    session.set_audio_capture_enabled(None)
+    consent["enabled"] = True
+    assert await put_artifact_async(session._run_ctx, b"policy-restored") is not None
 
 
 def test_session_audio_capture_toggle_requires_bool():
@@ -114,6 +141,54 @@ def test_session_audio_capture_predicate_fails_closed():
 
     assert session._is_audio_capture_enabled() is False
     assert session._is_audio_capture_enabled() is False
+
+
+def test_enabling_capture_discards_pre_consent_turn_buffers():
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+
+    consent = {"enabled": False}
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=lambda: consent["enabled"],
+        )
+    )
+    assert session._is_audio_capture_enabled() is False
+    session._turn_manager.on_audio_frame(AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K))
+    assert session._turn_manager._pre_roll_buffer
+
+    consent["enabled"] = True
+    assert session._is_audio_capture_enabled() is True
+    assert not session._turn_manager._pre_roll_buffer
+    assert session._turn_manager.turn_audio == []
+
+
+@pytest.mark.asyncio
+async def test_capture_revocation_fences_in_flight_blocking_write():
+    store = _BlockingArtifactStore()
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=True,
+        )
+    )
+    ctx = replace(session._run_ctx, artifact_store=store)
+    write_task = asyncio.create_task(put_artifact_async(ctx, b"sensitive"))
+    assert await asyncio.wait_for(asyncio.to_thread(store.started.wait), timeout=1)
+
+    session.set_audio_capture_enabled(False)
+    store.release.set()
+
+    assert await write_task is None
+    assert store.refs == set()
 
 
 def test_create_session_binds_custom_identity_sink_capability():

@@ -12,6 +12,7 @@ telephony stack.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -152,6 +153,12 @@ def _validate_common(
         )
     if not isinstance(capture_audio, bool) and not callable(capture_audio):
         raise ValueError("capture_audio must be a bool or zero-argument callable")
+    predicate_call = type(capture_audio).__call__ if callable(capture_audio) else None
+    if callable(capture_audio) and (
+        inspect.iscoroutinefunction(capture_audio)
+        or inspect.iscoroutinefunction(predicate_call)
+    ):
+        raise ValueError("capture_audio predicate must be synchronous")
     if mcp_servers is not None:
         for uri in mcp_servers:
             if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):

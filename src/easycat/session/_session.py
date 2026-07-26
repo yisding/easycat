@@ -9,6 +9,7 @@ sentence boundaries for low-latency playback.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -206,6 +207,8 @@ class Session:
         self._audio_capture_policy = cfg.capture_audio
         self._audio_capture_override: bool | None = None
         self._audio_capture_policy_failed = False
+        self._last_audio_capture_enabled: bool | None = None
+        self._audio_capture_epoch = 0
 
         # ── Turn manager (single source of truth for turn state) ──
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -546,11 +549,20 @@ class Session:
         return self._audio_gate is not None and self._audio_gate()
 
     def _is_audio_capture_enabled(self) -> bool:
-        if self._audio_capture_override is not None:
-            return self._audio_capture_override
         policy = self._audio_capture_policy
         if isinstance(policy, bool):
-            return policy
+            decision = self._audio_capture_override
+            if decision is None:
+                decision = policy
+            return self._observe_audio_capture_decision(decision)
+        decision = self._evaluate_audio_capture_predicate(policy)
+        # A callable is the consent ceiling: a runtime pause can disable
+        # capture, but resuming cannot override a predicate that was revoked.
+        if self._audio_capture_override is False:
+            decision = False
+        return self._observe_audio_capture_decision(decision)
+
+    def _evaluate_audio_capture_predicate(self, policy: Callable[[], bool]) -> bool:
         try:
             decision = policy()
         except Exception:
@@ -563,6 +575,10 @@ class Session:
             return False
         if isinstance(decision, bool):
             return decision
+        if inspect.isawaitable(decision):
+            close = getattr(decision, "close", None)
+            if callable(close):
+                close()
         if not self._audio_capture_policy_failed:
             self._audio_capture_policy_failed = True
             logger.warning(
@@ -572,11 +588,26 @@ class Session:
             )
         return False
 
-    def set_audio_capture_enabled(self, enabled: bool) -> None:
-        """Enable or disable audio artifact persistence for this session."""
-        if not isinstance(enabled, bool):
-            raise TypeError("enabled must be a bool")
+    def _observe_audio_capture_decision(self, enabled: bool) -> bool:
+        if not enabled and self._last_audio_capture_enabled is True:
+            self._audio_capture_epoch += 1
+        if enabled and self._last_audio_capture_enabled is False:
+            self._turn_manager.discard_buffered_audio()
+            audio_router = getattr(self, "_audio_router", None)
+            if audio_router is not None:
+                audio_router.discard_pending_capture_audio()
+        self._last_audio_capture_enabled = enabled
+        return enabled
+
+    def _audio_capture_epoch_value(self) -> int:
+        return self._audio_capture_epoch
+
+    def set_audio_capture_enabled(self, enabled: bool | None) -> None:
+        """Pause/resume audio capture, or clear the runtime override with ``None``."""
+        if enabled is not None and not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool or None")
         self._audio_capture_override = enabled
+        self._is_audio_capture_enabled()
 
     # ── Properties ─────────────────────────────────────────────
 

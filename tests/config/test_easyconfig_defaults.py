@@ -90,6 +90,12 @@ def test_capture_audio_rejects_invalid_policy():
     with pytest.raises(ValueError, match="capture_audio"):
         EasyConfig(openai_api_key="test-key", capture_audio="yes")  # type: ignore[arg-type]
 
+    async def async_policy() -> bool:
+        return True
+
+    with pytest.raises(ValueError, match="synchronous"):
+        EasyConfig(openai_api_key="test-key", capture_audio=async_policy)
+
 
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
     monkeypatch: pytest.MonkeyPatch,
