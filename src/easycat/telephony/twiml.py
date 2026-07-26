@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape, quoteattr
 
@@ -454,21 +454,34 @@ def twiml_hangup() -> str:
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
-def twiml_reject(reason: str = "rejected") -> str:
+def twiml_reject(reason: Literal["rejected", "busy"] = "rejected") -> str:
     """Generate TwiML to reject an inbound call before answering it.
 
-    Twilio accepts ``"rejected"`` and ``"busy"`` as reject reasons; the value is
-    escaped rather than normalized so tests and applications can see exactly
-    what they passed.
+    Twilio accepts only ``"rejected"`` and ``"busy"`` as reject reasons.
+
+    Raises:
+        ValueError: If *reason* is not accepted by Twilio.
     """
+    if reason not in {"rejected", "busy"}:
+        raise ValueError("reason must be 'rejected' or 'busy'")
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response><Reject reason={quoteattr(reason)}/></Response>"
     )
 
 
-def twiml_redirect(url: str, *, method: str | None = None) -> str:
-    """Generate TwiML to redirect call handling to another TwiML URL."""
+def twiml_redirect(
+    url: str,
+    *,
+    method: Literal["GET", "POST"] | None = None,
+) -> str:
+    """Generate TwiML to redirect call handling to another TwiML URL.
+
+    Raises:
+        ValueError: If *method* is not ``"GET"``, ``"POST"``, or ``None``.
+    """
+    if method is not None and method not in {"GET", "POST"}:
+        raise ValueError("method must be 'GET' or 'POST'")
     method_attr = f" method={quoteattr(method)}" if method else ""
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'

@@ -204,19 +204,27 @@ process host (systemd unit, EC2 instance, Kubernetes `Deployment`), not just
 containers.
 
 For continuous off-host replication instead of periodic filesystem backups,
-set `journal_backend="sqlite+litestream"` or `journal_backend="libsql"` on
-`EasyConfig`/`SessionConfig` and configure the replica target through
-environment variables (`EASYCAT_JOURNAL_LITESTREAM_REPLICA`,
-`EASYCAT_LIBSQL_URL` / `EASYCAT_LIBSQL_AUTH_TOKEN`) — see
-[docker.md's "Litestream and libSQL replicas in a container"](docker.md#litestream-and-libsql-replicas-in-a-container)
-for the sidecar-vs-bundled-binary tradeoff and the crash-recovery gap on the
-libSQL backend.
+choose a replication topology explicitly. The in-process
+`journal_backend="sqlite+litestream"` backend uses
+`EASYCAT_JOURNAL_LITESTREAM_REPLICA` and starts one `litestream replicate`
+subprocess plus one stderr thread for each live session. It is convenient for
+single-call demos or tightly bounded workers, but operators must account for
+that per-session process/thread cost.
 
-The in-process `sqlite+litestream` backend starts one `litestream replicate`
-subprocess and one stderr thread for each live session. That is convenient for
-single-call demos or tightly bounded workers, but multi-call deployments should
-usually keep EasyCat on `journal_backend="sqlite"` and run Litestream as a
-sidecar against the shared journal volume.
+An external Litestream sidecar may instead share a volume with
+`journal_backend="sqlite"`, but it is not a turnkey multi-call topology:
+EasyCat creates a new SQLite database for each session, while a static
+Litestream configuration enumerates database paths at startup and does not
+discover future databases from a wildcard. Continuous sidecar replication
+therefore requires a deployment-specific controller that detects each new
+database and relaunches Litestream with an explicit entry for it. EasyCat does
+not provide that controller. Without one, use the in-process backend or
+consistent volume snapshots rather than assuming every session is replicated.
+
+The `journal_backend="libsql"` alternative uses `EASYCAT_LIBSQL_URL` and
+`EASYCAT_LIBSQL_AUTH_TOKEN`; see
+[docker.md's "Litestream and libSQL replicas in a container"](docker.md#litestream-and-libsql-replicas-in-a-container)
+for container wiring and the crash-recovery gap on the libSQL backend.
 
 **Readiness probes.** `VoiceServer` (the process layer behind
 `run_webrtc_config_server()` and `VoiceServer.from_app(...)`) serves

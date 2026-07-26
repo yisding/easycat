@@ -225,17 +225,21 @@ the OS dirty-page writeback window.
 The `litestream` binary itself is **not** bundled in this image (keeping the
 runtime stage minimal). `LitestreamSqliteJournal` degrades to plain SQLite
 with a log warning if the binary is missing, and the entrypoint now prints
-the same warning at container start so a missing sidecar is caught
-immediately instead of silently losing replication. Two ways to add it:
+the same warning at container start so missing replication is visible.
+Available topologies are:
 
-- **Sidecar container** (recommended — keeps the app image slim): keep the app
-  on plain `journal_backend="sqlite"`. Run the official
-  `litestream/litestream` image as a second compose service, pointed at the
-  same `easycat-journal` volume, running
-  `litestream replicate -config /etc/litestream.yml` against
-  `/app/.easycat/journals/*.sqlite`. Put the replica URL in the sidecar's
-  Litestream config, not `EASYCAT_JOURNAL_LITESTREAM_REPLICA` on the app. This
-  also lets you rotate S3/replica credentials without rebuilding the app image.
+- **Externally managed sidecar/controller**: keep the app on plain
+  `journal_backend="sqlite"` and mount the same `easycat-journal` volume into
+  the Litestream service. EasyCat creates
+  `/app/.easycat/journals/{session_id}.sqlite` as sessions start. A static
+  `litestream.yml` enumerates database paths when Litestream starts; a
+  `*.sqlite` path is not a discovery mechanism for databases created later.
+  The deployment must therefore run a controller that detects each new file,
+  regenerates explicit database entries, and relaunches Litestream with the
+  updated configuration. EasyCat does not ship that controller. Put replica
+  URLs and credentials in that controller/sidecar, not
+  `EASYCAT_JOURNAL_LITESTREAM_REPLICA` on the app. Without such orchestration,
+  use the bundled-binary topology below or consistent volume snapshots.
 - **Bundle the binary**: add `litestream` to the runtime stage in a fork of the
   Dockerfile (download the static binary in the `runtime` stage before `USER
   easycat`), select `journal_backend="sqlite+litestream"`, and set:

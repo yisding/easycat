@@ -472,11 +472,16 @@ class TestTwimlReject:
         assert reject is not None
         assert reject.attrib == {"reason": "rejected"}
 
-    def test_reject_reason_escapes_attribute_value(self) -> None:
-        result = twiml_reject('busy" x="1')
+    def test_busy_reject_reason(self) -> None:
+        result = twiml_reject("busy")
         reject = ET.fromstring(result).find("Reject")
         assert reject is not None
-        assert reject.attrib == {"reason": 'busy" x="1'}
+        assert reject.attrib == {"reason": "busy"}
+
+    @pytest.mark.parametrize("reason", ["", "temporary", "Busy", 'busy" x="1'])
+    def test_rejects_unsupported_reason(self, reason: str) -> None:
+        with pytest.raises(ValueError, match="reason must be 'rejected' or 'busy'"):
+            twiml_reject(reason)  # type: ignore[arg-type]
 
 
 class TestTwimlRedirect:
@@ -489,11 +494,17 @@ class TestTwimlRedirect:
         assert redirect.text == "https://voice.example.com/overflow?x=1&y=2"
         assert redirect.attrib == {}
 
-    def test_redirect_method_escapes_attribute_value(self) -> None:
-        result = twiml_redirect("/overflow", method='GET" bad="1')
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    def test_redirect_method(self, method: str) -> None:
+        result = twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
         redirect = ET.fromstring(result).find("Redirect")
         assert redirect is not None
-        assert redirect.attrib == {"method": 'GET" bad="1'}
+        assert redirect.attrib == {"method": method}
+
+    @pytest.mark.parametrize("method", ["", "get", "PUT", 'GET" bad="1'])
+    def test_rejects_unsupported_method(self, method: str) -> None:
+        with pytest.raises(ValueError, match="method must be 'GET' or 'POST'"):
+            twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
 
 
 # ── Finding 1: DTMF charset validation shared across both output paths ──
