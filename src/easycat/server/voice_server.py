@@ -40,7 +40,7 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate
+from easycat.server.transports import CapacityGate, _await_with_hard_timeout
 from easycat.session_manager import SessionManager
 
 if TYPE_CHECKING:
@@ -390,13 +390,16 @@ class VoiceServer:
             # Bound the forced phase so a session that hangs even in its
             # force-stop is abandoned rather than blocking ``stop()`` forever.
             force_timeout_s=self.config.force_shutdown_timeout_s,
+            stop_for_key=self._stop_managed_session,
         )
 
         # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
         # already force-stopped the sessions; cancelling the surviving handler
         # tasks unblocks the raw-ws ``Server._close`` waiter so the bounded
         # ``wait_closed`` below cannot deadlock.
-        await self._cancel_ws_handler_tasks()
+        await self._cancel_ws_handler_tasks(
+            timeout_s=self.config.force_shutdown_timeout_s,
+        )
 
         # Now all handlers can return (closed connections + forced sessions +
         # cancelled hung handlers), so awaiting the raw-ws server completes
@@ -404,12 +407,11 @@ class VoiceServer:
         # backstop: even a pathological handler that resists cancellation cannot
         # make ``stop()`` block forever.
         if ws_server is not None:
-            try:
-                await asyncio.wait_for(
-                    ws_server.wait_closed(),
-                    timeout=self.config.force_shutdown_timeout_s,
-                )
-            except TimeoutError:
+            closed = await _await_with_hard_timeout(
+                ws_server.wait_closed(),
+                timeout_s=self.config.force_shutdown_timeout_s,
+            )
+            if not closed:
                 logger.warning(
                     "VoiceServer: raw-ws listener did not close within "
                     "force_shutdown_timeout_s=%ss; abandoning the wait",
@@ -422,7 +424,9 @@ class VoiceServer:
         # otherwise outlive ``stop`` and leak. Mirrors the serve helper's
         # ``cancel_cleanup_tasks``.
         if self._webrtc_routes is not None:
-            await self._webrtc_routes.cancel_cleanup_tasks()
+            await self._webrtc_routes.cancel_cleanup_tasks(
+                timeout_s=self.config.force_shutdown_timeout_s,
+            )
             self._webrtc_routes = None
 
         # (7) final hard sweep of the bare registry, then reset the shared gate
@@ -435,12 +439,11 @@ class VoiceServer:
         # retries it after the handler has unwound. Bound the sweep with
         # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
         # block server teardown.
-        try:
-            await asyncio.wait_for(
-                self._manager.stop_all(force=True),
-                timeout=self.config.force_shutdown_timeout_s,
-            )
-        except TimeoutError:
+        swept = await _await_with_hard_timeout(
+            self._manager.stop_all(force=True),
+            timeout_s=self.config.force_shutdown_timeout_s,
+        )
+        if not swept:
             logger.warning(
                 "VoiceServer: SessionManager.stop_all did not finish within "
                 "force_shutdown_timeout_s=%ss; abandoning the hard sweep",
@@ -491,12 +494,11 @@ class VoiceServer:
             asyncio.create_task(ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON))
             for ws in connections
         ]
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*close_tasks, return_exceptions=True),
-                timeout=max(self.config.force_shutdown_timeout_s, 0.0),
-            )
-        except TimeoutError:
+        closed = await _await_with_hard_timeout(
+            asyncio.gather(*close_tasks, return_exceptions=True),
+            timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
+        )
+        if not closed:
             logger.warning(
                 "VoiceServer: raw-ws connections did not close within "
                 "force_shutdown_timeout_s=%ss; cancelling handlers",
@@ -521,7 +523,7 @@ class VoiceServer:
         self._gate.stop_draining()
         self._ws_connections.clear()
 
-    async def _cancel_ws_handler_tasks(self) -> None:
+    async def _cancel_ws_handler_tasks(self, *, timeout_s: float | None = None) -> None:
         """Cancel + await any ``/ws`` handler task still running.
 
         Called during :meth:`stop` after the drain so a handler hung in
@@ -536,8 +538,11 @@ class VoiceServer:
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._ws_handler_tasks.clear()
+            gathered = asyncio.gather(*tasks, return_exceptions=True)
+            if timeout_s is None:
+                await gathered
+            else:
+                await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -546,6 +551,10 @@ class VoiceServer:
             for key in self._gate.active_keys()
             if key in self._active_session_objs
         ]
+
+    async def _stop_managed_session(self, key: int, force: bool) -> None:
+        """Route drain teardown through the manager's keyed stop ownership."""
+        await self._manager.remove(key, force=force)
 
     async def health(self) -> VoiceServerHealth:
         """Build a :class:`VoiceServerHealth` snapshot from live state.

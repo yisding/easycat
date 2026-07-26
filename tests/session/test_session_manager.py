@@ -222,7 +222,42 @@ async def test_cancelled_remove_retains_session_for_force_sweep() -> None:
         await remove_task
 
     assert manager.get("call") is session
+    assert manager._stop_tasks["call"][1].done() is False
     await manager.stop_all(force=True)
+    assert session.forced is True
+    assert manager.get("call") is None
+
+
+@pytest.mark.asyncio
+async def test_force_sweep_runs_when_graceful_cancellation_raises() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    class FailingCancellationSession:
+        def __init__(self) -> None:
+            self.graceful_started = asyncio.Event()
+            self.forced = False
+
+        async def start(self) -> None:
+            return
+
+        async def stop(self, *, force: bool = False) -> None:
+            if force:
+                self.forced = True
+                return
+            self.graceful_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as exc:
+                raise RuntimeError("graceful cancellation failed") from exc
+
+    session = FailingCancellationSession()
+    await manager.add("call", session)  # type: ignore[arg-type]
+    graceful = asyncio.create_task(manager.remove("call"))
+    await session.graceful_started.wait()
+
+    await manager.stop_all(force=True)
+    await asyncio.gather(graceful, return_exceptions=True)
+
     assert session.forced is True
     assert manager.get("call") is None
 
