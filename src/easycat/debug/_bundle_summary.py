@@ -75,7 +75,7 @@ class _BundleRecordAccumulator:
     latest_wall_ns: int | None = None
     call_duration_ms: float | None = None
     call_sid: str | None = None
-    call_duration_observations: int = 0
+    call_end_observations: int = 0
     call_duration_ambiguous: bool = False
 
     def observe(self, record: Mapping[str, Any]) -> None:
@@ -110,6 +110,18 @@ class _BundleRecordAccumulator:
         data = record.get("data")
         if not isinstance(data, Mapping):
             return
+        call_sid_value = data.get("call_sid")
+        call_sid = call_sid_value if isinstance(call_sid_value, str) and call_sid_value else None
+        if self.call_end_observations:
+            if self.call_sid is None or call_sid is None or call_sid != self.call_sid:
+                self.call_duration_ambiguous = True
+                self.call_duration_ms = None
+        else:
+            self.call_sid = call_sid
+        self.call_end_observations += 1
+        if self.call_duration_ambiguous:
+            return
+
         duration_s = data.get("duration_s")
         if isinstance(duration_s, bool) or not isinstance(duration_s, (int, float)):
             return
@@ -122,17 +134,6 @@ class _BundleRecordAccumulator:
         if not math.isfinite(duration_ms):
             return
 
-        call_sid_value = data.get("call_sid")
-        call_sid = call_sid_value if isinstance(call_sid_value, str) and call_sid_value else None
-        if self.call_duration_ambiguous:
-            return
-        if self.call_duration_observations:
-            if self.call_sid is None or call_sid is None or call_sid != self.call_sid:
-                self.call_duration_ambiguous = True
-                self.call_duration_ms = None
-                return
-        self.call_duration_observations += 1
-        self.call_sid = call_sid
         self.call_duration_ms = duration_ms
 
     def _observe_error(self, error: object, turn_id: str | None) -> None:

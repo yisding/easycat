@@ -9,6 +9,7 @@ sentence boundaries for low-latency playback.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from collections.abc import Callable
@@ -690,9 +691,13 @@ class Session:
         self._record_to_exported = True
         try:
             record_to.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
             safe_session_id = _recording_filename_session_id(self.session_id)
-            path = record_to / f"{safe_session_id}-{stamp}.zip"
+            session_digest = hashlib.blake2s(
+                self.session_id.encode("utf-8", errors="surrogatepass"),
+                digest_size=4,
+            ).hexdigest()
+            path = record_to / f"{safe_session_id}-{session_digest}-{stamp}.zip"
             self.export_debug_bundle(str(path))
             logger.info("Recorded debug bundle to %s", path)
         except Exception:

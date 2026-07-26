@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -33,7 +34,11 @@ from easycat.runtime._private_files import (
     mkdir_private,
     touch_private_file,
 )
-from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
+from easycat.runtime.crash_sweep import (
+    _copy_journal_to_crash_dump,
+    _pid_alive,
+    sweep_crashed_journals,
+)
 from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
@@ -44,6 +49,11 @@ from easycat.runtime.records import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LIVE_SQLITE_JOURNALS_LOCK = threading.Lock()
+_LIVE_SQLITE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = (
+    weakref.WeakValueDictionary()
+)
 
 
 class _SqlJournalBase:
@@ -260,6 +270,43 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
+        self._claim_live_journal()
+        try:
+            self._initialize_live_journal(session_id, existed=existed)
+        except BaseException:
+            self._release_live_journal()
+            self._conn.close()
+            raise
+
+    # ── Startup phases ────────────────────────────────────────────
+
+    def _claim_live_journal(self) -> None:
+        """Reject a second live writer for this process/path identity."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            current = _LIVE_SQLITE_JOURNALS.get(key)
+            if current is not None and not current._closed:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+
+            row = self._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            if row is not None and row[0] not in (None, ""):
+                try:
+                    live_pid = int(row[0])
+                except (TypeError, ValueError):
+                    live_pid = 0
+                if live_pid != os.getpid() and _pid_alive(live_pid):
+                    raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
+            _LIVE_SQLITE_JOURNALS[key] = self
+
+    def _release_live_journal(self) -> None:
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            if _LIVE_SQLITE_JOURNALS.get(key) is self:
+                _LIVE_SQLITE_JOURNALS.pop(key, None)
+
+    def _initialize_live_journal(self, session_id: str, *, existed: bool) -> None:
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
         # After reconcile the live table is empty (prior rows were promoted
         # or truncated), so the pre-v2 backfill only stamps the version.
@@ -295,8 +342,6 @@ class SqliteJournal(_SqlJournalBase):
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
             self._insert_recovery_marker(session_id, prior_count)
-
-    # ── Startup phases ────────────────────────────────────────────
 
     def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -469,6 +514,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.close()
             except sqlite3.ProgrammingError:
                 pass  # already closed
+        self._release_live_journal()
         # Run retention opportunistically — never block a turn.
         try:
             run_retention(self._root, mode=self._retention_mode, skip=self._db_path)

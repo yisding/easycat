@@ -73,11 +73,14 @@ def test_create_text_session_rejects_config_plus_loose_data_dir(tmp_path):
         create_text_session(config, data_dir=tmp_path)
 
 
-@pytest.mark.parametrize("session_id", ["", "   "])
-def test_text_session_config_rejects_empty_session_id(session_id: str):
+@pytest.mark.parametrize(
+    "session_id",
+    ["", "   ", "contains space", "contains\x00nul", "a" * 129, "../escape"],
+)
+def test_text_session_config_rejects_invalid_session_id(session_id: str):
     from easycat.config import EasyConfigError, TextSessionConfig
 
-    with pytest.raises(EasyConfigError, match="must not be empty"):
+    with pytest.raises(EasyConfigError, match="session_id must"):
         TextSessionConfig(agent=_DummyAgent(), session_id=session_id)
 
 

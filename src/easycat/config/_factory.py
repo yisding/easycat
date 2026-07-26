@@ -894,6 +894,7 @@ def create_text_session(
     mcp_servers: list[str] | None = None,
     record_to: str | Path | None = None,
     data_dir: str | Path | None = None,
+    emergency_export: bool = False,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -930,6 +931,7 @@ def create_text_session(
         mcp_servers=mcp_servers,
         record_to=record_to,
         data_dir=data_dir,
+        emergency_export=emergency_export,
     )
 
     agent = config.agent
@@ -1016,4 +1018,6 @@ def create_text_session(
     session._data_dir = config.data_dir
     session._agent_model = agent_model
     session._remote_agent_api_key = remote_agent_api_key
+    if debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
     return session

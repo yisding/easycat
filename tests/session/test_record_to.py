@@ -357,3 +357,38 @@ async def test_record_to_sanitizes_low_level_windows_drive_session_id(
     assert len(bundles) == 1
     assert bundles[0].parent == target
     assert ":" not in bundles[0].name
+
+
+@pytest.mark.asyncio
+async def test_record_to_distinguishes_ids_with_same_sanitized_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    import easycat.session._session as session_module
+
+    class _FixedDateTime:
+        @classmethod
+        def now(cls, tz):
+            return datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+
+    monkeypatch.setattr(session_module, "datetime", _FixedDateTime)
+    sessions = [
+        Session(
+            SessionConfig(
+                journal=InMemoryRingBuffer(),
+                record_to=tmp_path,
+                session_id=session_id,
+                runtime_mode="text_session",
+            )
+        )
+        for session_id in ("tenant:a", "tenant-a")
+    ]
+
+    for session in sessions:
+        await session.stop()
+
+    bundles = _bundles(tmp_path, "tenant-a")
+    assert len(bundles) == 2
+    assert len({bundle.name for bundle in bundles}) == 2

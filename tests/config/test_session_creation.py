@@ -294,6 +294,11 @@ async def test_create_session_binds_twilio_connection_identity_sink():
                     "FromState": "CA",
                     "FromZip": "94105",
                     "FromCountry": "US",
+                    "caller_name": "Alias Name",
+                    "from_city": "ALIAS CITY",
+                    "from_state": "ZZ",
+                    "from_zip": "00000",
+                    "from_country": "ZZ",
                 },
             },
         }
@@ -308,6 +313,7 @@ async def test_create_session_binds_twilio_connection_identity_sink():
     assert session.call_identity.state == "CA"
     assert session.call_identity.zip_code == "94105"
     assert session.call_identity.country == "US"
+    assert session.call_identity.custom_fields == {}
 
 
 @pytest.mark.asyncio

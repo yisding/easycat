@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -112,6 +113,7 @@ _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def _require_positive(name: str, value: float) -> None:
@@ -159,9 +161,10 @@ def _validate_common(
     if session_id is not None:
         if not session_id.strip():
             raise EasyConfigError("session_id must not be empty")
-        if "/" in session_id or "\\" in session_id or ".." in session_id:
+        if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
             raise EasyConfigError(
-                f"session_id must not contain path separators or '..': {session_id!r}"
+                "session_id must be 1-128 ASCII letters, digits, '.', '_', or '-', "
+                f"starting with a letter or digit: {session_id!r}"
             )
     if isinstance(agent, str):
         from urllib.parse import urlparse
@@ -792,6 +795,7 @@ class TextSessionConfig(_AgentSessionConfig):
         mcp_servers: list[str] | None = None,
         record_to: str | Path | None = None,
         data_dir: str | Path | None = None,
+        emergency_export: bool = False,
     ) -> TextSessionConfig:
         """Resolve the config-or-loose-kwargs calling convention to one config.
 
@@ -818,6 +822,7 @@ class TextSessionConfig(_AgentSessionConfig):
                 "mcp_servers": (mcp_servers, None),
                 "record_to": (record_to, None),
                 "data_dir": (data_dir, None),
+                "emergency_export": (emergency_export, False),
             }
             supplied = [name for name, (value, default) in loose.items() if value != default]
             if supplied:
@@ -841,4 +846,5 @@ class TextSessionConfig(_AgentSessionConfig):
             mcp_servers=mcp_servers,
             record_to=record_to,
             data_dir=data_dir,
+            emergency_export=emergency_export,
         )

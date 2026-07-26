@@ -191,6 +191,25 @@ class _StructuredOutputGraph(_AmbiguousKeywordGraph):
         return _StructuredOutputGraphRun()
 
 
+class _SequenceOutputGraph(_AmbiguousKeywordGraph):
+    def __init__(self, outputs: list[Any]) -> None:
+        super().__init__()
+        self.outputs = iter(outputs)
+
+    def iter(
+        self,
+        state: Any = None,
+        deps: Any = None,
+        inputs: Any = None,
+    ) -> _NoOpGraphRun:
+        self.seen_state = state
+        self.seen_deps = deps
+        self.seen_inputs = inputs
+        run = _NoOpGraphRun()
+        run.output = next(self.outputs)
+        return run
+
+
 class FinalResultEvent:
     tool_name = "final"
     tool_call_id = "tc-final"
@@ -371,6 +390,40 @@ async def test_graph_bridge_speaks_structured_output_when_no_text_parts_stream()
         ("done", "{'utterance': 'hello', 'intent': 'capture'}")
     ]
     assert events[-1].structured_output == {"utterance": "hello", "intent": "capture"}
+
+
+@pytest.mark.asyncio
+async def test_graph_bridge_does_not_replay_prior_session_output() -> None:
+    bridge = PydanticAIBridge(
+        graph=_SequenceOutputGraph([{"utterance": "first"}, None]),
+        state_factory=_GraphStateForSignature,
+        initial_node_factory=lambda text, _state: text,
+    )
+    first_recorder = _recorder()
+    second_recorder = JournalAgentRecorder(
+        journal=InMemoryRingBuffer(capacity=1000),
+        artifact_store=None,
+        context=RecorderContext(run_id="r2", session_id="s2", turn_id="t2"),
+    )
+
+    first = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("first"),
+            first_recorder,
+        )
+    ]
+    second = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("second"),
+            second_recorder,
+        )
+    ]
+
+    assert first[-1].structured_output == {"utterance": "first"}
+    assert second[-1].text == ""
+    assert second[-1].structured_output is None
 
 
 def test_graph_iter_prefers_inputs_keyword_when_state_is_positional_capable() -> None:

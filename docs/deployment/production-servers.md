@@ -253,11 +253,12 @@ For public Twilio deployments:
 
 `debug="full"` (opt in — the `EasyConfig` default is the in-memory
 `debug="light"`, which writes nothing to disk) writes a crash-durable SQLite
-journal per session under `EASYCAT_DATA_DIR` (default `.easycat`) — see
+journal per session under `EasyConfig.data_dir` when set, otherwise
+`EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
 for the exact durability guarantees and storage layout. That promise only
-holds if `EASYCAT_DATA_DIR` is a **persistent** path: a container without a
-volume mounted there, or a process directory that gets wiped on redeploy,
+holds if the resolved data directory is a **persistent** path: a container
+without a volume mounted there, or a process directory that gets wiped on redeploy,
 silently discards every journal. The Docker-specific version of this guidance
 — including the image's `VOLUME` declaration and named-volume compose
 config — lives in
@@ -314,9 +315,10 @@ walkthrough.
 - **Shutdown:** fail readiness first, stop accepting new connections, give live
   calls a bounded drain window, then force-stop remaining sessions before the
   process manager's graceful-shutdown timeout expires.
-- **Persistence:** mount a persistent volume/path at `EASYCAT_DATA_DIR` before
-  running with `debug="full"` in production — see "Journal persistence,
-  replication, and metrics scraping" above.
+- **Persistence:** mount the resolved data root before running with
+  `debug="full"` in production. `EasyConfig.data_dir` takes precedence over
+  `EASYCAT_DATA_DIR`; when neither is set, the root is `.easycat`. See
+  "Journal persistence, replication, and metrics scraping" above.
 - **Health probes:** point liveness/readiness checks at `/health/live` /
   `/health/ready` for `VoiceServer`-based servers; fall back to a TCP connect
   for WebSocket-only servers with no HTTP surface.
