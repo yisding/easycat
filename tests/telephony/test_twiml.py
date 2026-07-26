@@ -17,6 +17,12 @@ from easycat.telephony import (
     twilio_stream_parameters_from_form,
     validate_twilio_webhook_signature,
 )
+from easycat.telephony import (
+    twiml_redirect as exported_twiml_redirect,
+)
+from easycat.telephony import (
+    twiml_reject as exported_twiml_reject,
+)
 from easycat.telephony.twiml import (
     parse_gather_webhook,
     sanitize_dtmf_digits,
@@ -25,6 +31,8 @@ from easycat.telephony.twiml import (
     twiml_gather,
     twiml_hangup,
     twiml_play_digits,
+    twiml_redirect,
+    twiml_reject,
 )
 
 
@@ -68,6 +76,8 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         "https://voice.example.com/twiml"
     )
     assert issubclass(TwilioWebhookSignatureError, ValueError)
+    assert exported_twiml_redirect("/overflow").startswith("<?xml")
+    assert exported_twiml_reject().startswith("<?xml")
 
 
 def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
@@ -451,6 +461,39 @@ class TestTwimlHangup:
         assert "<Hangup/>" in result
         assert "<Response>" in result
         assert result.startswith('<?xml version="1.0"')
+
+
+class TestTwimlReject:
+    """Tests for twiml_reject."""
+
+    def test_default_reject_reason(self) -> None:
+        result = twiml_reject()
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": "rejected"}
+
+    def test_reject_reason_escapes_attribute_value(self) -> None:
+        result = twiml_reject('busy" x="1')
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": 'busy" x="1'}
+
+
+class TestTwimlRedirect:
+    """Tests for twiml_redirect."""
+
+    def test_redirect_url(self) -> None:
+        result = twiml_redirect("https://voice.example.com/overflow?x=1&y=2")
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.text == "https://voice.example.com/overflow?x=1&y=2"
+        assert redirect.attrib == {}
+
+    def test_redirect_method_escapes_attribute_value(self) -> None:
+        result = twiml_redirect("/overflow", method='GET" bad="1')
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.attrib == {"method": 'GET" bad="1'}
 
 
 # ── Finding 1: DTMF charset validation shared across both output paths ──

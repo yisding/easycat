@@ -454,6 +454,28 @@ def twiml_hangup() -> str:
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
+def twiml_reject(reason: str = "rejected") -> str:
+    """Generate TwiML to reject an inbound call before answering it.
+
+    Twilio accepts ``"rejected"`` and ``"busy"`` as reject reasons; the value is
+    escaped rather than normalized so tests and applications can see exactly
+    what they passed.
+    """
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Reject reason={quoteattr(reason)}/></Response>"
+    )
+
+
+def twiml_redirect(url: str, *, method: str | None = None) -> str:
+    """Generate TwiML to redirect call handling to another TwiML URL."""
+    method_attr = f" method={quoteattr(method)}" if method else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Redirect{method_attr}>{escape(url)}</Redirect></Response>"
+    )
+
+
 def twiml_say_and_hangup(text: str) -> str:
     """Generate TwiML to say text and then hang up the call."""
     return (

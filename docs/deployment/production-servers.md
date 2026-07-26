@@ -212,6 +212,12 @@ environment variables (`EASYCAT_JOURNAL_LITESTREAM_REPLICA`,
 for the sidecar-vs-bundled-binary tradeoff and the crash-recovery gap on the
 libSQL backend.
 
+The in-process `sqlite+litestream` backend starts one `litestream replicate`
+subprocess and one stderr thread for each live session. That is convenient for
+single-call demos or tightly bounded workers, but multi-call deployments should
+usually keep EasyCat on `journal_backend="sqlite"` and run Litestream as a
+sidecar against the shared journal volume.
+
 **Readiness probes.** `VoiceServer` (the process layer behind
 `run_webrtc_config_server()` and `VoiceServer.from_app(...)`) serves
 `GET /health/live` (loop responsiveness), `GET /health/ready` (draining /

@@ -35,6 +35,8 @@ _LAZY_ATTR: dict[str, str] = {
     "twiml_gather": "easycat.telephony.twiml",
     "twiml_hangup": "easycat.telephony.twiml",
     "twiml_play_digits": "easycat.telephony.twiml",
+    "twiml_redirect": "easycat.telephony.twiml",
+    "twiml_reject": "easycat.telephony.twiml",
     "twiml_say_and_hangup": "easycat.telephony.twiml",
     "validate_twilio_webhook_signature": "easycat.telephony.twiml",
     # Twilio app settings
@@ -143,6 +145,8 @@ if TYPE_CHECKING:
         twiml_gather,
         twiml_hangup,
         twiml_play_digits,
+        twiml_redirect,
+        twiml_reject,
         twiml_say_and_hangup,
         validate_twilio_webhook_signature,
     )
