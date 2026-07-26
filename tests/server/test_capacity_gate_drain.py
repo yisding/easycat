@@ -48,9 +48,9 @@ class _HangUntilForceSession:
 class _GuardedSession:
     """Replicates the real ``Session._stopping`` guard.
 
-    A graceful stop sets ``_stopping`` and hangs forever; a subsequent
-    ``stop(force=True)`` is a NO-OP (the real early-return). The drain must rely
-    on cancelling the graceful task, not on a force preempting it.
+    A graceful stop sets ``_stopping`` and hangs forever; a concurrent
+    ``stop(force=True)`` is a NO-OP (the real early-return). The drain must
+    cancel and reap the graceful task before it can enter the force path.
     """
 
     def __init__(self) -> None:
@@ -63,11 +63,14 @@ class _GuardedSession:
         if self._stopping:
             return
         self._stopping = True
-        if force:
-            self.force_path_ran = True
-            return
-        self.graceful_started.set()
-        await self._release.wait()
+        try:
+            if force:
+                self.force_path_ran = True
+                return
+            self.graceful_started.set()
+            await self._release.wait()
+        finally:
+            self._stopping = False
 
 
 class _HangEvenInForceSession:
@@ -133,8 +136,8 @@ async def test_drain_force_escalates_hung_session_after_timeout() -> None:
 
 async def test_drain_does_not_deadlock_against_real_stopping_guard() -> None:
     # The regression: a session that mirrors the real guard. The drain starts the
-    # single graceful stop (hangs), times out, and — because force is a no-op
-    # against the guard — CANCELS the graceful task so the drain returns.
+    # single graceful stop (hangs), times out, cancels it so the guard clears,
+    # and then enters the force path.
     s = _GuardedSession()
     sessions: dict[int, object] = {1: s}
     gate = _make_gate(sessions)
@@ -145,9 +148,7 @@ async def test_drain_does_not_deadlock_against_real_stopping_guard() -> None:
     )
 
     assert s.graceful_started.is_set()
-    # The force path is a no-op against the guard (as in the real Session) — the
-    # contract is that drain RETURNS and the key is untracked, not that force ran.
-    assert s.force_path_ran is False
+    assert s.force_path_ran is True
     assert gate.active_keys() == ()
 
 

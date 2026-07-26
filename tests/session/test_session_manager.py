@@ -193,6 +193,41 @@ async def test_session_manager_stop_all() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_remove_retains_session_for_force_sweep() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    class BlockingSession:
+        def __init__(self) -> None:
+            self.started = 0
+            self.graceful_started = asyncio.Event()
+            self.forced = False
+
+        async def start(self) -> None:
+            self.started += 1
+
+        async def stop(self, *, force: bool = False) -> None:
+            if force:
+                self.forced = True
+                return
+            self.graceful_started.set()
+            await asyncio.Event().wait()
+
+    session = BlockingSession()
+    await manager.add("call", session)  # type: ignore[arg-type]
+    remove_task = asyncio.create_task(manager.remove("call"))
+    await session.graceful_started.wait()
+
+    remove_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await remove_task
+
+    assert manager.get("call") is session
+    await manager.stop_all(force=True)
+    assert session.forced is True
+    assert manager.get("call") is None
+
+
+@pytest.mark.asyncio
 async def test_session_manager_connection_can_attach_runtime_feedback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -34,6 +34,10 @@ class SessionManager(Generic[TKey]):
       sessions that may be in active ``connection`` blocks, coordinate
       cancellation at the call site (e.g. cancel the tasks running those
       blocks) before invoking ``stop_all``.
+    - A key remains registered until its stop completes successfully. If a
+      caller awaiting :meth:`remove` or :meth:`stop_all` is cancelled, the
+      retained entry can be retried with ``force=True`` after the original stop
+      coroutine has unwound.
     """
 
     def __init__(self) -> None:
@@ -62,21 +66,33 @@ class SessionManager(Generic[TKey]):
             raise
         return session
 
-    async def remove(self, key: TKey) -> None:
+    async def remove(self, key: TKey, *, force: bool = False) -> None:
+        """Stop one session, dropping its key only after successful teardown."""
         async with self._lock:
-            session = self._sessions.pop(key, None)
+            session = self._sessions.get(key)
         if session is None:
             return
-        await session.stop()
+        if force:
+            await session.stop(force=True)
+        else:
+            await session.stop()
+        async with self._lock:
+            if self._sessions.get(key) is session:
+                self._sessions.pop(key)
 
-    async def stop_all(self) -> None:
+    async def stop_all(self, *, force: bool = False) -> None:
+        """Stop all sessions, retaining entries whose teardown did not finish."""
         async with self._lock:
             sessions = list(self._sessions.items())
-            self._sessions.clear()
         results = await asyncio.gather(
-            *(session.stop() for _, session in sessions), return_exceptions=True
+            *(session.stop(force=True) if force else session.stop() for _, session in sessions),
+            return_exceptions=True,
         )
-        for (key, _), result in zip(sessions, results):
+        async with self._lock:
+            for (key, session), result in zip(sessions, results):
+                if result is None and self._sessions.get(key) is session:
+                    self._sessions.pop(key)
+        for (key, _session), result in zip(sessions, results):
             if isinstance(result, Exception):
                 logger.error("Failed to stop session %s: %s", key, result)
 

@@ -176,13 +176,12 @@ class CapacityGate(Generic[KeyT]):
            ``session.stop()`` task for each.
         2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
            they all complete in time, the drain stayed graceful (no force).
-        3. For any session whose graceful stop did NOT finish, call
-           ``session.stop(force=True)`` (the force path runs for an
-           idempotency-free session; for a real ``Session`` whose graceful stop
-           is hung, the guard makes it a no-op — handled by step 4) and then
-           CANCEL the still-pending graceful task so a genuinely-hung teardown
-           cannot block the caller forever.
-        4. Untrack every drained key.
+        3. For any session whose graceful stop did NOT finish, CANCEL and reap
+           the still-pending graceful task first. This clears the real
+           ``Session._stopping`` guard before force escalation.
+        4. Call ``session.stop(force=True)`` after the cancelled graceful task
+           has unwound, so the force path can perform backend teardown.
+        5. Untrack every drained key.
 
         ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace
         window to zero so every session is force-escalated immediately.
@@ -236,26 +235,25 @@ async def _escalate_graceful_stop(
     """Reap, force-escalate, or cancel one session's graceful-stop task.
 
     * Graceful already completed (``task.done()``) — reap it, no escalation.
-    * Still pending and ``force_after`` — call ``stop(force=True)`` then cancel
-      the pending graceful task so a hung teardown cannot block forever.
+    * Still pending and ``force_after`` — cancel and reap the pending graceful
+      task, then call ``stop(force=True)`` after its ``_stopping`` guard clears.
     * Still pending and NOT ``force_after`` — cancel it rather than block on a
       teardown that may never complete.
 
-    ``force_timeout_s`` bounds the FORCED phase: the ``stop(force=True)`` call
-    and the follow-on cancel-await are each bounded by it (``None`` = unbounded),
-    so a session that hangs even in its force-stop is abandoned rather than
-    blocking the drain forever.
+    ``force_timeout_s`` bounds the cancellation reap and the subsequent
+    ``stop(force=True)`` call (``None`` = unbounded), so a session that hangs
+    even in its force-stop is abandoned rather than blocking the drain forever.
     """
     if task is not None and task.done():
         await _safe_await(task)
         return
+    if task is not None:
+        task.cancel()
+        await _safe_await(task, timeout_s=force_timeout_s)
     if force_after:
         stop = getattr(session, "stop", None)
         if stop is not None:
             await _safe_await_stop(stop, force=True, timeout_s=force_timeout_s)
-    if task is not None:
-        task.cancel()
-        await _safe_await(task, timeout_s=force_timeout_s)
 
 
 async def _safe_await_stop(

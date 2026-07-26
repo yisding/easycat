@@ -344,13 +344,9 @@ class VoiceServer:
            stop — see :meth:`_teardown_ws_session`); the drain starts the single
            graceful ``session.stop()`` per session and waits ``drain_timeout_s``.
         5. The drain escalates any session whose graceful stop did NOT finish in
-           the grace window by calling ``session.stop(force=True)`` and then
-           cancelling the still-pending graceful task. Because the DRAIN (not the
-           handler) starts the graceful stop, this is the single ``_stopping``
-           lineage: a fast graceful stays graceful, and a hung graceful is
-           cancelled so it cannot block teardown. The real :class:`Session`
-           ``_stopping`` guard makes a force-after-graceful a no-op, so the
-           cancellation — not the force call — is what unblocks a hung teardown.
+           the grace window by cancelling and reaping the still-pending graceful
+           task, then calling ``session.stop(force=True)`` after the real
+           :class:`Session` ``_stopping`` guard has cleared.
         6. Cancel any handler task still hung in ``ws.wait_closed()`` (e.g. a
            client that never completed the close handshake) so the raw-ws
            ``Server._close`` waiter — which ``asyncio.wait``s on its handlers
@@ -432,13 +428,16 @@ class VoiceServer:
         # (7) final hard sweep of the bare registry, then reset the shared gate
         # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
         # their own untrack/release (the drain owns teardown), so reset the gate
-        # here once no handler can still run. The drain already owns the single
-        # effective stop per session; this sweep is an idempotent backstop, so
-        # bound it with ``force_shutdown_timeout_s`` — a session that hangs even
-        # here (e.g. a force-stop that never returns) must not block teardown.
+        # here once no handler can still run. The drain normally owns the single
+        # effective stop per session. A natural disconnect can instead have a
+        # handler-owned graceful removal cancelled at the deadline; because the
+        # manager retains that entry until teardown succeeds, this force sweep
+        # retries it after the handler has unwound. Bound the sweep with
+        # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
+        # block server teardown.
         try:
             await asyncio.wait_for(
-                self._manager.stop_all(),
+                self._manager.stop_all(force=True),
                 timeout=self.config.force_shutdown_timeout_s,
             )
         except TimeoutError:
@@ -991,17 +990,20 @@ class VoiceServer:
     async def _teardown_ws_session(self, key: int) -> None:
         """Tear down one ``/ws`` session, deferring to the drain when draining.
 
-        When NOT draining (a normal client disconnect), drop the session from
-        the registry, which stops it GRACEFULLY. When draining, leave the
+        When NOT draining (a normal client disconnect), stop the session
+        GRACEFULLY and only then drop it from the registry. When draining, leave the
         session in the active set and registry untouched so the shared
         :meth:`CapacityGate.drain` owns the single stop. The drain starts the
-        sole graceful ``session.stop()`` itself and force-escalates / cancels it
+        sole graceful ``session.stop()`` itself and cancels / force-escalates it
         on timeout — keeping the teardown effective against the real
         :class:`Session` ``_stopping`` idempotency guard (a graceful stop already
         in progress turns a later ``force=True`` into a no-op, so a handler that
-        started its OWN graceful stop could never be force-preempted). The final
-        :meth:`SessionManager.stop_all` hard sweep in :meth:`stop` then clears
-        the registry entry (idempotent against the already-stopped session).
+        started its OWN graceful stop could never be force-preempted). During a
+        natural-end drain the handler may begin graceful removal after caller
+        hangup; ``SessionManager.remove`` retains that entry until stop succeeds.
+        If the drain deadline cancels the handler, the final force sweep can
+        therefore retry the still-registered session and complete backend
+        teardown.
         """
         if self._gate.is_draining and not self._await_natural_end_drain:
             return
