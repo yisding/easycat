@@ -46,6 +46,8 @@ def create_app() -> FastAPI:
                 ws,
                 config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
             )
+            if not await transport.wait_for_start():
+                return
             config = EasyConfig(
                 transport=transport,
                 telephony=TelephonyConfig(

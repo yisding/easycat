@@ -59,6 +59,16 @@ def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
     return msg
 
 
+def _decode_twilio_raw(raw: str | bytes) -> str | None:
+    if isinstance(raw, str):
+        return raw
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        logger.warning("Ignoring non-UTF-8 Twilio message")
+        return None
+
+
 class TwilioStreamTokenStore:
     """Issue and consume signed one-time Twilio ``<Stream>`` tokens.
 
@@ -556,7 +566,7 @@ class _TwilioProtocolMixin:
     async def _handle_connected(self, msg: dict[str, Any]) -> None:
         logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
 
-    async def _handle_start(self, msg: dict[str, Any]) -> None:
+    async def _accept_start(self, msg: dict[str, Any], *, token_prevalidated: bool) -> bool:
         """Extract stream metadata from the ``start`` message.
 
         Twilio's Media Streams ``start`` payload carries streamSid /
@@ -588,13 +598,13 @@ class _TwilioProtocolMixin:
         start = msg.get("start", {})
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
-            return
-        if not _twilio_stream_token_valid(start, self._config):
+            return False
+        if not token_prevalidated and not _twilio_stream_token_valid(start, self._config):
             logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             ws = self._current_ws()
             if ws is not None:
                 await ws.close(4003, "Missing or invalid stream token")
-            return
+            return False
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
@@ -622,6 +632,10 @@ class _TwilioProtocolMixin:
             caller,
             called,
         )
+        return True
+
+    async def _handle_start(self, msg: dict[str, Any]) -> None:
+        await self._accept_start(msg, token_prevalidated=False)
 
     async def _handle_media(self, msg: dict[str, Any]) -> None:
         """Decode mulaw audio from a ``media`` message and enqueue as PCM16."""
@@ -1041,6 +1055,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._call_ended_emitted = False
         self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
+        self._pending_start_message: dict[str, Any] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
         self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
 
@@ -1056,6 +1071,16 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._connected = True
         self._reset_audio_queue()
         self._client_connected.set()
+        pending_start = self._pending_start_message
+        self._pending_start_message = None
+        if pending_start is not None and not await self._accept_start(
+            pending_start,
+            token_prevalidated=True,
+        ):
+            self._connected = False
+            self._client_connected.clear()
+            self._enqueue_sentinel()
+            return
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def disconnect(self) -> None:
@@ -1075,6 +1100,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._call_identity = None
         self._answered_at = None
         self._call_ended_emitted = False
+        self._pending_start_message = None
         self._diagnostics.reset()
         try:
             await self._ws.close()
@@ -1140,6 +1166,62 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
 
     async def send_playback_mark(self, name: str | None = None) -> str:
         return await self.send_mark(name=name)
+
+    async def _store_prevalidated_start(self, msg: dict[str, Any]) -> bool | None:
+        start = msg.get("start", {})
+        if not isinstance(start, dict):
+            logger.debug("Ignoring Twilio start with non-object payload")
+            return None
+        if not _twilio_stream_token_valid(start, self._config):
+            logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
+            await self._ws.close(4003, "Missing or invalid stream token")
+            return False
+        self._pending_start_message = msg
+        return True
+
+    async def _handle_pre_start_message(self, msg: dict[str, Any]) -> bool | None:
+        event = msg.get("event")
+        if event == "start":
+            return await self._store_prevalidated_start(msg)
+
+        handler = self._MESSAGE_HANDLERS.get(event) if isinstance(event, str) else None
+        if handler is None:
+            logger.debug("Unknown Twilio event: %s", event)
+            return None
+        await handler(self, msg)
+        return None
+
+    async def wait_for_start(self) -> bool:
+        """Read through the first authenticated Twilio ``start`` message.
+
+        ``serve_twilio_voice_app`` uses this before creating an EasyCat session
+        so invalid media sockets never compile provider configuration. The
+        one-time token is consumed here; the accepted ``start`` frame is stored
+        and applied during ``connect()`` after Session has attached the event
+        bus and caller-identity sink.
+        """
+        if self._stream_sid is not None or self._pending_start_message is not None:
+            return True
+        if self._connected:
+            return self._stream_sid is not None
+
+        ws = self._ws
+        try:
+            async for raw in ws:
+                raw = _decode_twilio_raw(raw)
+                if raw is None:
+                    continue
+                msg = _parse_twilio_message(raw)
+                if msg is None:
+                    continue
+                result = await self._handle_pre_start_message(msg)
+                if result is not None:
+                    return result
+        except websockets.exceptions.ConnectionClosed as exc:
+            logger.info("Twilio Media Streams disconnected before start")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("twilio stream closed abnormally before start")
+        return False
 
     async def _receive_loop(self) -> None:
         ws = self._ws

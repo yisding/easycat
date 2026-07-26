@@ -49,6 +49,12 @@ class _FakeTwilioTransport:
         self.ws = ws
         self.config = config
 
+    async def wait_for_start(self) -> bool:
+        events = getattr(self.ws, "_events", None)
+        if events is not None:
+            events.append("wait_for_start")
+        return bool(getattr(self.ws, "start_ok", True))
+
 
 # ── Shared fake aiohttp.web + server driver ───────────────────────────
 
@@ -681,8 +687,9 @@ def test_twilio_server_config_reads_auth_token_and_trust_proxy_from_env(
 
 
 class _FakeWs:
-    def __init__(self, events: list[str]) -> None:
+    def __init__(self, events: list[str], *, start_ok: bool = True) -> None:
         self._events = events
+        self.start_ok = start_ok
 
     async def wait_closed(self) -> None:
         self._events.append("wait_closed")
@@ -763,9 +770,9 @@ def test_media_handler_creates_and_tears_down_session(
     # The factory saw the transport built from the fake ws.
     assert len(factory_transports) == 1
     assert isinstance(factory_transports[0], _FakeTwilioTransport)
-    # Full lifecycle: create -> register -> start -> wait_closed -> unregister -> stop.
+    # Full lifecycle: preflight -> create -> register -> start -> wait_closed -> unregister.
     combined = events + manager.events
-    assert events[0] == "create_session"
+    assert events[:2] == ["wait_for_start", "create_session"]
     assert "register" in manager.events
     assert "start" in combined
     assert "wait_closed" in combined
@@ -773,6 +780,48 @@ def test_media_handler_creates_and_tears_down_session(
     assert "stop" in combined
     # Server teardown closes the media listener and stops all sessions.
     assert harness.media_server.closed is True
+    assert "stop_all" in manager.events
+
+
+def test_media_handler_rejects_invalid_stream_before_building_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed Twilio start preflight exits before config_factory/create_session."""
+    events: list[str] = []
+    factory_transports: list[Any] = []
+    created: list[Any] = []
+    manager = _FakeManager()
+
+    def _fake_create_session(config: Any) -> _FakeSession:
+        created.append(config)
+        return _FakeSession(config, events)
+
+    import easycat.config as config_mod
+    import easycat.session_manager as sm_mod
+    import easycat.transports.twilio_media as twilio_mod
+
+    monkeypatch.setattr(config_mod, "create_session", _fake_create_session)
+    monkeypatch.setattr(sm_mod, "SessionManager", lambda: manager)
+    monkeypatch.setattr(twilio_mod, "TwilioConnectionTransport", _FakeTwilioTransport)
+
+    harness = _ServerHarness(monkeypatch)
+
+    def _factory(transport: Any) -> EasyConfig:
+        factory_transports.append(transport)
+        return EasyConfig.phone(transport=transport, agent="a")
+
+    async def _body(h: _ServerHarness) -> None:
+        await h.media_handler(_FakeWs(events, start_ok=False))
+
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", unsafe_allow_unsigned_webhooks=True
+    )
+    asyncio.run(harness.run(_factory, config, _body))
+
+    assert events == ["wait_for_start"]
+    assert factory_transports == []
+    assert created == []
+    assert "register" not in manager.events
     assert "stop_all" in manager.events
 
 

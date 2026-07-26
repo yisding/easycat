@@ -67,14 +67,13 @@ class TwilioVoiceServerConfig:
     TLS-terminating proxy/load balancer so the public URL Twilio signed is
     reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
 
-    ``max_sessions`` caps concurrent media sessions. The media listener defaults
-    to a public bind (``host="0.0.0.0"``) and builds a full EasyCat session per
-    accepted WebSocket *before* the first ``start`` frame's one-time stream
-    token is validated, so an unauthenticated client could otherwise open
-    idle/invalid sockets and exhaust provider connections or block real calls.
-    The gate bounds that blast radius (mirroring the WebRTC/WebSocket session
-    servers); over-limit connections are rejected with WebSocket close code
-    ``1013`` (Try Again Later).
+    ``max_sessions`` caps concurrent media sockets and sessions. The media
+    listener defaults to a public bind (``host="0.0.0.0"``), so each connection
+    is held behind this gate while its first ``start`` frame's one-time stream
+    token is validated. Invalid sockets never build an EasyCat session; valid
+    sessions and idle pre-start sockets are bounded by the same gate. Over-limit
+    connections are rejected with WebSocket close code ``1013`` (Try Again
+    Later).
     """
 
     host: str = "0.0.0.0"
@@ -177,12 +176,9 @@ async def serve_twilio_voice_app(
     session_slots = asyncio.Semaphore(config.max_sessions)
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
-        # Gate before building/starting a session: this handler spins up a full
-        # EasyCat session (provider connections included) for every accepted
-        # WebSocket, and the one-time stream token is only validated once the
-        # first ``start`` frame arrives inside the transport. Cap concurrency so
-        # an unauthenticated client cannot exhaust provider connections or block
-        # real calls by opening idle/invalid sockets.
+        # Gate before validating the first Twilio ``start`` frame. Invalid
+        # sockets never reach config_factory/create_session, while idle pre-start
+        # sockets and valid sessions are both bounded.
         if session_slots.locked():
             await ws.close(code=1013, reason="Server is at the configured session limit")
             return
@@ -191,6 +187,8 @@ async def serve_twilio_voice_app(
                 ws,
                 config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
             )
+            if not await transport.wait_for_start():
+                return
             session = create_session(config_factory(transport))
             async with manager.connection(id(ws), session, runtime_feedback=True):
                 await ws.wait_closed()
