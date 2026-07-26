@@ -344,15 +344,18 @@ class OpenAIAgentsBridge:
                 self._message_history = _drop_dangling_function_calls(history)
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
+            last_agent = getattr(result, "last_agent", None)
+            handed_off = last_agent is not None and last_agent is not self._agent
             await record_usage_from_result(
                 recorder,
                 result,
                 provider="openai_agents",
-                model=self._model_name(),
+                # The SDK reports aggregate run usage. Once a handoff occurs,
+                # attributing that total to either agent's model is misleading.
+                model=None if handed_off else self._model_name(),
             )
             if not cursor_exited:
-                last_agent = getattr(result, "last_agent", None)
-                if last_agent is not None and last_agent is not self._agent:
+                if handed_off:
                     # Record handoff.
                     old_name = getattr(self._agent, "name", "unknown")
                     new_name = getattr(last_agent, "name", "unknown")

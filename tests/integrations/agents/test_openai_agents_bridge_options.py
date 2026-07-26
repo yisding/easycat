@@ -139,6 +139,39 @@ async def test_invoke_records_sdk_usage(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handoff_usage_omits_ambiguous_model(monkeypatch):
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    source_agent = _Agent("source")
+    source_agent.model = "gpt-source"
+    target_agent = _Agent("target")
+    target_agent.model = "gpt-target"
+    result = _RunResult(
+        last_agent=target_agent,
+        usage=SimpleNamespace(input_tokens=18, output_tokens=7),
+    )
+    monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner([result]))
+    journal = InMemoryRingBuffer(capacity=1000)
+    bridge = OpenAIAgentsBridge(source_agent)
+
+    _ = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("hello"),
+            _recorder(journal),
+        )
+    ]
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data == {
+        "run_id": "r1",
+        "provider": "openai_agents",
+        "input_tokens": 18,
+        "output_tokens": 7,
+    }
+
+
+@pytest.mark.asyncio
 async def test_constructor_options_forwarded_and_mcp_restored_after_success(monkeypatch):
     import easycat.integrations.agents.openai_agents as openai_agents_module
 
