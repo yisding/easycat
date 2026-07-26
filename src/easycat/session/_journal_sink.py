@@ -65,8 +65,10 @@ _JOURNAL_ATTRS = (
     "result",
     "action",
     "executor",
+    "provider",
     "tool_name",
     "call_id",
+    "attempt",
     "call_sid",
     "answered_by",
     "platform",
@@ -78,6 +80,7 @@ _JOURNAL_ATTRS = (
     "listener_id",
     "queue_size",
     "dropped_frames",
+    "mark_name",
     "reason",
     "error",
     "structured_output",
@@ -90,6 +93,7 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
+_NONEMPTY_ATTRS = frozenset({"provider"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 _REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
 _REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"
@@ -271,7 +275,7 @@ def _event_attributes(event: Event) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for attr in _JOURNAL_ATTRS:
         value = getattr(event, attr, None)
-        if value is not None:
+        if value is not None and (attr not in _NONEMPTY_ATTRS or value):
             data[attr] = _journal_attr_value(attr, value)
     return data
 
