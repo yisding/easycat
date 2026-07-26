@@ -126,6 +126,7 @@ AGENT_BRIDGE_EXTENSION_SURFACE = (
     "BridgeTemplate",
     "ExternalAgentBridge",
     "GenericWorkflowBridge",
+    "INTERRUPTION_NOTE",
     "LangChainBridge",
     "LangGraphBridge",
     "LlamaAgentsBridge",
@@ -133,6 +134,8 @@ AGENT_BRIDGE_EXTENSION_SURFACE = (
     "PydanticAIBridge",
     "RemoteResponsesAPIBridge",
     "auto_adapt_agent",
+    "clear_agent_detectors",
+    "is_reusable_agent_spec",
     "register_agent_detector",
 )
 
@@ -248,8 +251,8 @@ def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
             "docs/public-api.md is missing the Agent Bridge Extension Surface section"
         ) from exc
 
+    assert tuple(agents.__all__) == AGENT_BRIDGE_EXTENSION_SURFACE
     for name in AGENT_BRIDGE_EXTENSION_SURFACE:
-        assert name in agents.__all__, f"easycat.integrations.agents.__all__ missing {name}"
         assert getattr(agents, name) is not None
         assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
 

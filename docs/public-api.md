@@ -123,10 +123,14 @@ depend on this surface:
 - `ExternalAgentBridge` — async protocol implemented by every bridge.
 - `AgentTurnInput` — normalized user turn input passed into bridges.
 - `AgentBridgeEvent` — normalized stream event yielded by bridges.
+- `INTERRUPTION_NOTE` — standard history note used when a partial assistant
+  response is interrupted.
 - `BridgeTemplate` — starter base class for custom bridge authors; constructor
   `BridgeTemplate(*, display_name=None)`.
-- `register_agent_detector` / `auto_adapt_agent` — registry hooks for adapting
-  framework-native agent objects.
+- `register_agent_detector` / `clear_agent_detectors` / `auto_adapt_agent` —
+  registry hooks for adapting framework-native agent objects.
+- `is_reusable_agent_spec` — reports whether an agent specification can be
+  shared safely across sessions.
 - `AgentRunner` / `AgentRunnerConfig` — wrapper for plain async `run(text)`
   agents; constructor `AgentRunner(agent, config=None)`.
 - `OpenAIAgentsBridge` — constructor `OpenAIAgentsBridge(agent, *,
