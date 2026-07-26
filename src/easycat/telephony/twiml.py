@@ -478,8 +478,12 @@ def twiml_redirect(
     """Generate TwiML to redirect call handling to another TwiML URL.
 
     Raises:
-        ValueError: If *method* is not ``"GET"``, ``"POST"``, or ``None``.
+        ValueError: If *url* is blank or *method* is not ``"GET"``, ``"POST"``,
+            or ``None``.
     """
+    if not url.strip():
+        raise ValueError("url must be non-empty")
+    url = url.strip()
     if method is not None and method not in {"GET", "POST"}:
         raise ValueError("method must be 'GET' or 'POST'")
     method_attr = f" method={quoteattr(method)}" if method else ""

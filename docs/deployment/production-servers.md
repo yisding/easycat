@@ -212,14 +212,13 @@ single-call demos or tightly bounded workers, but operators must account for
 that per-session process/thread cost.
 
 An external Litestream sidecar may instead share a volume with
-`journal_backend="sqlite"`, but it is not a turnkey multi-call topology:
-EasyCat creates a new SQLite database for each session, while a static
-Litestream configuration enumerates database paths at startup and does not
-discover future databases from a wildcard. Continuous sidecar replication
-therefore requires a deployment-specific controller that detects each new
-database and relaunches Litestream with an explicit entry for it. EasyCat does
-not provide that controller. Without one, use the in-process backend or
-consistent volume snapshots rather than assuming every session is replicated.
+`journal_backend="sqlite"`. Current Litestream releases support
+[watched directory replication](https://litestream.io/guides/directory-watcher/):
+configure the journal directory with `dir`, `pattern: "*.sqlite"`, and
+`watch: true`. Litestream discovers databases created after startup and
+namespaces each remote replica by its relative path. Pin the sidecar image to a
+tested release rather than `latest`; [docker.md](docker.md#litestream-and-libsql-replicas-in-a-container)
+shows a complete configuration.
 
 The `journal_backend="libsql"` alternative uses `EASYCAT_LIBSQL_URL` and
 `EASYCAT_LIBSQL_AUTH_TOKEN`; see

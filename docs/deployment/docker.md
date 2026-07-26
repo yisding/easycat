@@ -228,18 +228,26 @@ with a log warning if the binary is missing, and the entrypoint now prints
 the same warning at container start so missing replication is visible.
 Available topologies are:
 
-- **Externally managed sidecar/controller**: keep the app on plain
+- **Directory-watcher sidecar**: keep the app on plain
   `journal_backend="sqlite"` and mount the same `easycat-journal` volume into
   the Litestream service. EasyCat creates
-  `/app/.easycat/journals/{session_id}.sqlite` as sessions start. A static
-  `litestream.yml` enumerates database paths when Litestream starts; a
-  `*.sqlite` path is not a discovery mechanism for databases created later.
-  The deployment must therefore run a controller that detects each new file,
-  regenerates explicit database entries, and relaunches Litestream with the
-  updated configuration. EasyCat does not ship that controller. Put replica
-  URLs and credentials in that controller/sidecar, not
-  `EASYCAT_JOURNAL_LITESTREAM_REPLICA` on the app. Without such orchestration,
-  use the bundled-binary topology below or consistent volume snapshots.
+  `/app/.easycat/journals/{session_id}.sqlite` as sessions start. Pin a
+  Litestream release that supports the
+  [directory watcher](https://litestream.io/guides/directory-watcher/)
+  (for example `litestream/litestream:0.5.14`) and configure:
+
+  ```yaml
+  dbs:
+    - dir: /app/.easycat/journals
+      pattern: "*.sqlite"
+      watch: true
+      replica:
+        url: s3://your-bucket/easycat-journals
+  ```
+
+  The sidecar discovers databases created after startup and namespaces each
+  remote replica by the database's relative path. Put replica credentials in
+  the sidecar, not `EASYCAT_JOURNAL_LITESTREAM_REPLICA` on the app.
 - **Bundle the binary**: add `litestream` to the runtime stage in a fork of the
   Dockerfile (download the static binary in the `runtime` stage before `USER
   easycat`), select `journal_backend="sqlite+litestream"`, and set:

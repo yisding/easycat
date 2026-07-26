@@ -501,6 +501,11 @@ class TestTwimlRedirect:
         assert redirect is not None
         assert redirect.attrib == {"method": method}
 
+    @pytest.mark.parametrize("url", ["", " ", "\n\t"])
+    def test_rejects_blank_url(self, url: str) -> None:
+        with pytest.raises(ValueError, match="url must be non-empty"):
+            twiml_redirect(url)
+
     @pytest.mark.parametrize("method", ["", "get", "PUT", 'GET" bad="1'])
     def test_rejects_unsupported_method(self, method: str) -> None:
         with pytest.raises(ValueError, match="method must be 'GET' or 'POST'"):
