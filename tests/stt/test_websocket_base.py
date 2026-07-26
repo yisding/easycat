@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 import websockets
 
+from easycat.reconnecting_ws import ReconnectConfig
 from easycat.stt.websocket_base import WebSocketSTTBase, _noop_reconnect
 
 
@@ -46,15 +47,33 @@ class _FakeAbnormalWS:
         yield  # pragma: no cover - makes this an async generator
 
 
-class _FakeClosedWS:
-    """Fake wrapper whose recv_iter surfaces an unrecovered provider close."""
+class _DroppingConnection:
+    close_code = None
 
-    died_abnormally = False
+    def __aiter__(self):
+        return self._messages()
 
-    async def recv_iter(self):
+    async def _messages(self):
         close_frame = websockets.frames.Close(1006, "abnormal")
         raise websockets.exceptions.ConnectionClosed(close_frame, None)
         yield  # pragma: no cover - makes this an async generator
+
+    async def close(self) -> None:
+        return None
+
+
+class _CleanConnection:
+    close_code = None
+
+    def __aiter__(self):
+        return self._messages()
+
+    async def _messages(self):
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -80,24 +99,86 @@ async def test_receive_loop_emits_error_on_abnormal_death():
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_emits_e304_when_provider_close_is_not_recovered():
-    """An unrecovered mid-call provider close gets a machine-readable code."""
+async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
+    """The production wrapper boundary reports a transient drop before recovery."""
     from easycat.events import Error, ErrorStage
 
     probe = _Probe()
     bus = _RecordingBus()
-    probe._provider_event_bus = bus
-    probe._ws = _FakeClosedWS()  # type: ignore[assignment]
+    connections = iter([_DroppingConnection(), _CleanConnection()])
+    connect_calls = 0
 
-    await probe._receive_loop()
-    await asyncio.gather(*list(probe._emit_tasks))
+    async def connect_fn(*args: Any, **kwargs: Any) -> Any:
+        nonlocal connect_calls
+        connect_calls += 1
+        return next(connections)
 
+    ws = await probe._connect_websocket(
+        url="wss://probe.invalid",
+        headers={},
+        event_bus=bus,
+        connect_fn=connect_fn,
+    )
+    assert probe._receive_task is not None
+    await probe._receive_task
+    await probe._drain_emit_tasks()
+
+    assert connect_calls == 2
     errors = [e for e in bus.events if isinstance(e, Error)]
-    assert errors, "expected an Error event on unrecovered WS close"
+    assert [error.code for error in errors] == ["EASYCAT_E304"]
     assert errors[0].stage is ErrorStage.STT
-    assert errors[0].code == "EASYCAT_E304"
-    assert "became unreachable mid-call" in str(errors[0].exception)
+    assert "1006" in str(errors[0].exception)
+    assert "abnormal" in str(errors[0].exception)
+    assert ws.died_abnormally is False
     assert probe._event_queue.get_nowait() is None
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_connect_websocket_emits_e304_then_e305_when_retries_exhausted(monkeypatch):
+    """A real drop is recoverable E304 until reconnect attempts are exhausted."""
+    from easycat.events import Error
+
+    def reconnect_config(**kwargs: Any) -> ReconnectConfig:
+        return ReconnectConfig(
+            max_retries=1,
+            base_delay=0.001,
+            max_delay=0.001,
+            jitter_factor=0.0,
+            extra_headers=kwargs["extra_headers"],
+        )
+
+    monkeypatch.setattr("easycat.stt.websocket_base.ReconnectConfig", reconnect_config)
+
+    probe = _Probe()
+    bus = _RecordingBus()
+    connect_calls = 0
+
+    async def connect_fn(*args: Any, **kwargs: Any) -> Any:
+        nonlocal connect_calls
+        connect_calls += 1
+        if connect_calls == 1:
+            return _DroppingConnection()
+        raise ConnectionError("provider unavailable")
+
+    ws = await probe._connect_websocket(
+        url="wss://probe.invalid",
+        headers={},
+        event_bus=bus,
+        connect_fn=connect_fn,
+    )
+    assert probe._receive_task is not None
+    await probe._receive_task
+    await probe._drain_emit_tasks()
+
+    errors = [event for event in bus.events if isinstance(event, Error)]
+    assert [error.code for error in errors] == ["EASYCAT_E304", "EASYCAT_E305"]
+    assert "after 2 attempt" in str(errors[1].exception)
+    assert ws.died_abnormally is True
+    assert ws.reconnect_attempts_exhausted == 2
+    assert connect_calls == 3
+    assert probe._event_queue.get_nowait() is None
+    await ws.close()
 
 
 @pytest.mark.asyncio
@@ -123,6 +204,7 @@ async def test_connect_websocket_defaults_to_present_on_reconnect(monkeypatch):
     class _FakeWS:
         def __init__(self, *args, **kwargs):
             captured["on_reconnect"] = kwargs.get("on_reconnect")
+            captured["on_disconnect"] = kwargs.get("on_disconnect")
 
         async def connect(self) -> None:
             pass
@@ -139,6 +221,7 @@ async def test_connect_websocket_defaults_to_present_on_reconnect(monkeypatch):
     await probe._connect_websocket(url="wss://x", headers={})
 
     assert captured["on_reconnect"] is _noop_reconnect
+    assert captured["on_disconnect"] == probe._on_websocket_disconnect
 
 
 @pytest.mark.asyncio

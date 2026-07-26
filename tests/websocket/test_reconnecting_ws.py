@@ -569,6 +569,81 @@ class TestReconnectingWebSocket:
 
         assert messages == ["msg1"]
 
+    async def test_close_during_reconnect_backoff_is_not_abnormal_exhaustion(
+        self,
+        monkeypatch,
+    ):
+        """Deliberate shutdown interrupts recovery without producing E305 state."""
+        reconnect = AsyncMock()
+        disconnect = AsyncMock()
+        config = ReconnectConfig(
+            base_delay=0.01,
+            max_delay=0.01,
+            max_retries=2,
+            jitter_factor=0.0,
+        )
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            on_reconnect=reconnect,
+            on_disconnect=disconnect,
+        )
+
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection:
+            close_code = None
+
+            def __init__(self):
+                self.close = AsyncMock()
+
+            def __aiter__(self):
+                return self._iter()
+
+            async def _iter(self):
+                yield "msg1"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+
+        old_conn = DroppingConnection()
+        self._attach_live(ws, old_conn)
+
+        real_sleep = asyncio.sleep
+        backoff_started = asyncio.Event()
+        release_backoff = asyncio.Event()
+
+        async def controlled_sleep(delay: float) -> None:
+            assert delay == config.base_delay
+            backoff_started.set()
+            await release_backoff.wait()
+
+        monkeypatch.setattr("easycat.reconnecting_ws.asyncio.sleep", controlled_sleep)
+
+        async def consume() -> list[str | bytes]:
+            return [message async for message in ws.recv_iter()]
+
+        with patch(
+            "easycat.reconnecting_ws.websockets.connect",
+            new_callable=AsyncMock,
+            side_effect=ConnectionError("provider unavailable"),
+        ) as connect_mock:
+            receive_task = asyncio.create_task(consume())
+            await backoff_started.wait()
+
+            close_task = asyncio.create_task(ws.close())
+            await real_sleep(0)
+            assert ws._closed is True
+            release_backoff.set()
+
+            assert await receive_task == ["msg1"]
+            await close_task
+
+        connect_mock.assert_awaited_once()
+        disconnect.assert_awaited_once()
+        reconnect.assert_not_awaited()
+        old_conn.close.assert_awaited_once()
+        assert ws.died_abnormally is False
+        assert ws.reconnect_attempts_exhausted is None
+
     # ── Additional tests: jitter, event bus, callbacks ───────
 
     async def test_jitter_applies_to_delay(self):

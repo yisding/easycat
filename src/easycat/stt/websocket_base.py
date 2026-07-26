@@ -91,6 +91,7 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             provider_name=self._provider_name,
             connect_fn=connect_fn,
             on_reconnect=on_reconnect or _noop_reconnect,
+            on_disconnect=self._on_websocket_disconnect,
         )
         self._ws = ws
         self._provider_event_bus = event_bus
@@ -101,6 +102,18 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
     async def _send_ws(self, message: str | bytes) -> None:
         if self._ws is not None:
             await self._ws.send(message)
+
+    def _on_websocket_disconnect(
+        self,
+        exc: websockets.exceptions.ConnectionClosed,
+    ) -> None:
+        """Surface a live provider drop before reconnect policy handles it."""
+        self._emit_provider_error(
+            EASYCAT_E304(
+                provider=self._provider_error_name,
+                detail=str(exc) or "connection closed",
+            )
+        )
 
     async def _send_json_control(self, payload: dict[str, Any], *, label: str) -> bool:
         if self._ws is None:
@@ -190,11 +203,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                 if not isinstance(msg, dict):
                     continue
                 self._handle_json_message(msg)
-        except websockets.exceptions.ConnectionClosed as exc:
+        except websockets.exceptions.ConnectionClosed:
             logger.debug("%s WebSocket closed", self._provider_log_label)
-            self._emit_provider_error(
-                EASYCAT_E304(provider=self._provider_error_name, detail=str(exc) or "closed")
-            )
         except Exception:
             logger.exception("Error in %s receive loop", self._provider_log_label)
         finally:

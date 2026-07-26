@@ -20,8 +20,12 @@ from websockets.asyncio.client import ClientConnection
 
 logger = logging.getLogger(__name__)
 
-# Callback types for reconnection hooks
-ReconnectCallback = Callable[[], Coroutine[Any, Any, None]] | Callable[[], None]
+# Callback types for connection lifecycle hooks.
+ReconnectCallback = Callable[[], Coroutine[Any, Any, None] | None]
+DisconnectCallback = Callable[
+    [websockets.exceptions.ConnectionClosed],
+    Coroutine[Any, Any, None] | None,
+]
 
 
 @dataclass
@@ -120,6 +124,7 @@ class ReconnectingWebSocket:
         connect_fn: Callable[..., Coroutine[Any, Any, ClientConnection]] | None = None,
         on_reconnect: ReconnectCallback | None = None,
         on_give_up: ReconnectCallback | None = None,
+        on_disconnect: DisconnectCallback | None = None,
     ) -> None:
         self._url = url
         self._config = config or ReconnectConfig()
@@ -128,6 +133,7 @@ class ReconnectingWebSocket:
         self._connect_fn = connect_fn
         self._on_reconnect = on_reconnect
         self._on_give_up = on_give_up
+        self._on_disconnect = on_disconnect
         self._ws: ClientConnection | None = None
         self._closed = False
         # Set when recv_iter ends because the reconnect budget was exhausted or a
@@ -215,6 +221,8 @@ class ReconnectingWebSocket:
                     await self._invoke_callback(self._on_reconnect)
                 return
             except Exception as exc:
+                if self._closed:
+                    raise ConnectionError("WebSocket closed during reconnect") from exc
                 last_error = exc
                 attempt += 1
                 if max_attempts is not None and attempt >= max_attempts:
@@ -346,6 +354,9 @@ class ReconnectingWebSocket:
         if self._closed:
             return False
 
+        if self._on_disconnect is not None:
+            await self._invoke_disconnect_callback(self._on_disconnect, exc)
+
         close_code = self._connection_closed_code(exc)
         if self._on_reconnect is None:
             logger.warning(
@@ -373,6 +384,8 @@ class ReconnectingWebSocket:
             async with self._connect_lock:
                 await self._connect_with_retry(notify_reconnect=True)
         except ConnectionError:
+            if self._closed:
+                return False
             # Reconnect is exhausted and the socket is terminally dead.
             # Null ``_ws`` (it still references the closed connection)
             # so a later send()/recv() fast-fails in ``_await_connected``
@@ -440,3 +453,16 @@ class ReconnectingWebSocket:
                 await result
         except Exception:
             logger.exception("Error in reconnect callback %s", callback)
+
+    async def _invoke_disconnect_callback(
+        self,
+        callback: DisconnectCallback,
+        exc: websockets.exceptions.ConnectionClosed,
+    ) -> None:
+        """Invoke a sync or async disconnect observer."""
+        try:
+            result = callback(exc)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception("Error in disconnect callback %s", callback)
