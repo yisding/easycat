@@ -118,6 +118,24 @@ TRANSPORT_EXTENSION_SURFACE = (
     "TransportDegraded",
 )
 
+AGENT_BRIDGE_EXTENSION_SURFACE = (
+    "AgentBridgeEvent",
+    "AgentRunner",
+    "AgentRunnerConfig",
+    "AgentTurnInput",
+    "BridgeTemplate",
+    "ExternalAgentBridge",
+    "GenericWorkflowBridge",
+    "LangChainBridge",
+    "LangGraphBridge",
+    "LlamaAgentsBridge",
+    "OpenAIAgentsBridge",
+    "PydanticAIBridge",
+    "RemoteResponsesAPIBridge",
+    "auto_adapt_agent",
+    "register_agent_detector",
+)
+
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
@@ -214,6 +232,30 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
 
     assert transports_transport_degraded is events_transport_degraded
     assert "extending/" in section
+
+
+def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
+    """`easycat.integrations.agents` exposes the supported bridge seam."""
+    import easycat.integrations.agents as agents
+
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Agent Bridge Extension Surface", 1)[1].split(
+            "## Top-Level Allowlist", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Agent Bridge Extension Surface section"
+        ) from exc
+
+    for name in AGENT_BRIDGE_EXTENSION_SURFACE:
+        assert name in agents.__all__, f"easycat.integrations.agents.__all__ missing {name}"
+        assert getattr(agents, name) is not None
+        assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
+
+    assert "from easycat.integrations.agents import PydanticAIBridge" in section
+    assert "agent=None" in section
+    assert "graph=None" in section
 
 
 def test_server_package_owns_standalone_transport_orchestration() -> None:

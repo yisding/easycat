@@ -114,6 +114,49 @@ See the [extending guides](extending/) for complete custom provider and
 transport walkthroughs, and `examples/custom_transport.py` for a runnable
 custom transport.
 
+## Agent Bridge Extension Surface
+
+Agent framework bridges are public from `easycat.integrations.agents`, not from
+the top-level `easycat` package. Application compilers and bridge authors can
+depend on this surface:
+
+- `ExternalAgentBridge` — async protocol implemented by every bridge.
+- `AgentTurnInput` — normalized user turn input passed into bridges.
+- `AgentBridgeEvent` — normalized stream event yielded by bridges.
+- `BridgeTemplate` — starter base class for custom bridge authors; constructor
+  `BridgeTemplate(*, display_name=None)`.
+- `register_agent_detector` / `auto_adapt_agent` — registry hooks for adapting
+  framework-native agent objects.
+- `AgentRunner` / `AgentRunnerConfig` — wrapper for plain async `run(text)`
+  agents; constructor `AgentRunner(agent, config=None)`.
+- `OpenAIAgentsBridge` — constructor `OpenAIAgentsBridge(agent, *,
+  run_config=None, context=None, use_previous_response_id=True, max_turns=None,
+  hooks=None, mcp_servers=None)`.
+- `PydanticAIBridge` — constructor `PydanticAIBridge(*, agent=None, deps=None,
+  model_settings=None, graph=None, state_factory=None, initial_node_factory=None,
+  agents=None, mcp_servers=None, toolsets=None)`.
+- `RemoteResponsesAPIBridge` — constructor
+  `RemoteResponsesAPIBridge(base_url, model, *, api_key=None, timeout=120.0,
+  metadata=None)`.
+- `GenericWorkflowBridge` — constructor
+  `GenericWorkflowBridge(workflow, *, display_name=None)`.
+- `LangChainBridge` — constructor `LangChainBridge(runnable, *,
+  display_name=None, input_key="input", history_key="history",
+  messages_input=False, include_types=..., session_id=None, config=None)`.
+- `LangGraphBridge` — constructor `LangGraphBridge(graph, *, thread_id=None,
+  messages_key="messages", display_name=None, include_types=...)`.
+- `LlamaAgentsBridge` — constructor `LlamaAgentsBridge(workflow=None, *,
+  client=None, base_url=None, workflow_name=None, input_key="message",
+  context_key="context", turn_id_key="turn_id",
+  interruption_note_key="easycat_interruption_note", preserve_context=True,
+  run_kwargs=None, start_event_factory=None, event_text_extractor=None,
+  human_response_event_factory=None, human_response_key="response",
+  human_response_step=None, display_name=None, include_internal_events=False)`.
+
+```python
+from easycat.integrations.agents import PydanticAIBridge
+```
+
 ## Top-Level Allowlist
 
 ### App Construction
