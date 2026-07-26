@@ -730,11 +730,11 @@ class TurnRunner:
                     await self._emit(
                         AgentFinal(text=accumulated_text, structured_output=structured_output)
                     )
+                await self._maybe_speak_agent_failure_fallback(st, agent_error)
             finally:
                 st.agent_output_settled.set()
 
             await self._await_tts_task_recording_cancel(st, tts_task)
-            await self._maybe_speak_agent_failure_fallback(st, agent_error)
         except BaseException:
             # Cancellation or a strict event-handler failure can land after
             # the agent wait but before the guarded TTS wait. Keep both spawned
@@ -819,18 +819,11 @@ class TurnRunner:
         )
         try:
             payload = self._tts.prepare(text, is_streaming=False, is_final=True)
-            task = await self._tts.begin_synthesis_with_bot_start(
-                payload,
-                st.token,
-                is_active=lambda: (
-                    self._turn.current is st.turn
-                    and self._turn.generation == st.turn_gen
-                    and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                ),
-            )
-            st.synth_started = True
-            st.playback_started = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-            result = await self._await_owned_first_synthesis(task)
+            try:
+                result = await self._synthesize_first_payload(st, payload)
+            finally:
+                st.synth_started = True
+            assert result is not None
             st.chunks.append(
                 TtsChunk(
                     _text_for_estimation_timeline(payload),
@@ -840,11 +833,6 @@ class TurnRunner:
             )
             if result.first_audio_time is not None:
                 st.turn.first_tts_audio_time = result.first_audio_time
-            if self._turn.current is st.turn and st.playback_started:
-                st.should_stop = await self._tts.finalize_speaking_turn(
-                    st.turn,
-                    turn_generation=st.turn_gen,
-                )
         except asyncio.CancelledError:
             raise
         except Exception as fallback_error:
@@ -893,7 +881,6 @@ class TurnRunner:
     async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
         """Drain the payload queue through the synthesizer until the sentinel."""
         while True:
-            first_synthesis_task = None
             payload = await st.queue.get()
             if payload is None:
                 st.first_tts_lifecycle_ready.set()
@@ -914,30 +901,17 @@ class TurnRunner:
                 # it live later would tear down the turn pointer the gated
                 # replay still needs for mark accounting.
                 try:
-                    st.gated = self._is_gated()
-                    if not st.gated:
-                        first_synthesis_task = await self._tts.begin_synthesis_with_bot_start(
-                            payload,
-                            st.token,
-                            is_active=lambda: (
-                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                            ),
-                            lifecycle_ready=st.first_tts_payload_ready,
-                        )
-                        st.playback_started = (
-                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                        )
-                    elif not await asyncio.shield(st.first_tts_payload_ready):
-                        st.chunks.append(
-                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
-                        )
-                        break
+                    result = await self._synthesize_first_payload(
+                        st,
+                        payload,
+                        lifecycle_ready=st.first_tts_payload_ready,
+                    )
                 finally:
                     st.synth_started = True
                     st.first_tts_lifecycle_ready.set()
-
-            if first_synthesis_task is not None:
-                result = await self._await_owned_first_synthesis(first_synthesis_task)
+                if result is None:
+                    st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
+                    break
             else:
                 result = await self._tts.synthesizer.synthesize(
                     payload,
@@ -957,6 +931,33 @@ class TurnRunner:
             )
             if result.first_audio_time is not None and st.turn.first_tts_audio_time is None:
                 st.turn.first_tts_audio_time = result.first_audio_time
+
+    async def _synthesize_first_payload(
+        self,
+        st: _StreamingTtsState,
+        payload: TTSInput,
+        *,
+        lifecycle_ready: asyncio.Future[bool] | None = None,
+    ) -> TTSSynthResult | None:
+        """Admit the first payload through the shared classification gate."""
+        st.gated = self._is_gated()
+        if st.gated:
+            if lifecycle_ready is not None and not await asyncio.shield(lifecycle_ready):
+                return None
+            return await self._tts.synthesizer.synthesize(
+                payload,
+                st.token,
+                is_active=None,
+            )
+
+        task = await self._tts.begin_synthesis_with_bot_start(
+            payload,
+            st.token,
+            is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+            lifecycle_ready=lifecycle_ready,
+        )
+        st.playback_started = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        return await self._await_owned_first_synthesis(task)
 
     @staticmethod
     async def _await_owned_first_synthesis(
@@ -1074,7 +1075,7 @@ class TurnRunner:
         agent_task: asyncio.Task[None],
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
-        """Await the agent under its timeout; cancel both tasks on failure."""
+        """Await the agent under its timeout while preserving TTS settlement."""
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
                 await with_agent_timeout(
@@ -1087,7 +1088,11 @@ class TurnRunner:
             await self._cancel_and_drain(agent_task, tts_task)
             raise
         except Exception as exc:
-            await self._cancel_and_drain(agent_task, tts_task)
+            # The TTS consumer owns turn settlement and may already be waiting
+            # for ``agent_output_settled`` after receiving its sentinel. Keep
+            # that ownership alive so a configured failure fallback can be
+            # admitted before the consumer finalizes or resets the turn.
+            await self._cancel_and_drain(agent_task)
             if isinstance(exc, AgentTimeoutError):
                 # Drain the shielded agent before dispatching handlers so its
                 # cleanup is complete before the turn can advance.
