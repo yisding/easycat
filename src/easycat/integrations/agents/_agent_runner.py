@@ -185,9 +185,9 @@ class AgentRunner:
 
     @staticmethod
     def _validate_plain_turn_input(turn_input: AgentTurnInput) -> None:
-        if turn_input.role != "user" or turn_input.context:
+        if turn_input.role != "user":
             raise ValueError(
-                "AgentTurnInput role/context require an ExternalAgentBridge; "
+                "system application prompts require an ExternalAgentBridge; "
                 "plain async run(text) agents cannot represent them"
             )
 

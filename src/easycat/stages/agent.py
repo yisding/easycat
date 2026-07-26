@@ -379,7 +379,6 @@ class AgentStage:
                     and self._provider is bridge
                     and self._history_epoch == history_epoch
                     and final_text
-                    and input_role != "system"
                 ):
                     # Record the turn in shadow history so the next
                     # ``invoke()`` forwards it as ``turn_input.context``

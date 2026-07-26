@@ -1140,8 +1140,8 @@ class TurnRunner:
         """Signal prompt cancellation and wait only briefly for cleanup.
 
         Returns whether the prompt finished within the bound. Cancellation-
-        resistant provider cleanup remains owned by ``RuntimeScope`` and its
-        public prompt caller, but cannot stall barge-in, reset, or force stop.
+        resistant provider cleanup remains owned by its public prompt caller,
+        but cannot stall barge-in, reset, or force stop.
         """
         previous = self._active_application_prompt
         if previous is None or previous.done():
@@ -1155,6 +1155,7 @@ class TurnRunner:
         if previous in done:
             self._runtime_scope.discard(previous)
             return True
+        self._runtime_scope.discard(previous)
         return False
 
     async def send_text(self, text: str) -> str:

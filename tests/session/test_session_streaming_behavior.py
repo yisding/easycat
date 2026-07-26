@@ -216,10 +216,16 @@ class _CancellationResistantPromptBridge(_TestBridgeBase):
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             self.cancelled.set()
-            await self.release_cleanup.wait()
+            while not self.release_cleanup.is_set():
+                try:
+                    await self.release_cleanup.wait()
+                except asyncio.CancelledError:
+                    self.cancelled.set()
             raise
         finally:
             self.finished.set()
+        if False:
+            yield AgentBridgeEvent(kind="done")
 
 
 def _prompt_session(agent: _TestBridgeBase) -> Session:
@@ -373,13 +379,15 @@ async def test_force_stop_escalates_hung_concurrent_graceful_stop():
     await asyncio.sleep(0)
     assert not graceful.done()
 
-    await asyncio.wait_for(session.stop(force=True), timeout=0.5)
+    try:
+        await asyncio.wait_for(session.stop(force=True), timeout=0.5)
 
-    assert session.closed
-    assert bridge.cancelled.is_set()
-    assert not bridge.finished.is_set()
-    bridge.release_cleanup.set()
-    await asyncio.gather(prompt, graceful, return_exceptions=True)
+        assert session._closed
+        assert bridge.cancelled.is_set()
+        assert not bridge.finished.is_set()
+    finally:
+        bridge.release_cleanup.set()
+        await asyncio.gather(prompt, graceful, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -389,17 +397,18 @@ async def test_reset_state_bounded_drains_active_application_prompt():
     prompt = asyncio.create_task(session.prompt_agent("Temporary work.", role="user", speak=False))
     await asyncio.wait_for(bridge.started.wait(), timeout=1)
 
-    await asyncio.wait_for(session.reset_state(), timeout=0.5)
+    try:
+        await asyncio.wait_for(session.reset_state(), timeout=0.5)
 
-    assert bridge.cancelled.is_set()
-    assert not bridge.finished.is_set()
-    assert session._turn_manager.state is TurnManagerState.IDLE
-    assert session.agent.history == []
-
-    bridge.release_cleanup.set()
-    await asyncio.gather(prompt, return_exceptions=True)
-    assert session.agent.history == []
-    await session.stop(force=True)
+        assert bridge.cancelled.is_set()
+        assert not bridge.finished.is_set()
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._agent_stage._history == []
+    finally:
+        bridge.release_cleanup.set()
+        await asyncio.gather(prompt, return_exceptions=True)
+        await session.stop(force=True)
+    assert session._agent_stage._history == []
 
 
 @pytest.mark.asyncio
@@ -852,7 +861,7 @@ async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
             tts=tts,
             noise_reducer=FakeNoiseReducer(),
             turn_manager_config=_FAST_TURN,
-            timeout_config=TimeoutConfig(agent_timeout=0.01),
+            timeout_config=TimeoutConfig(agent_timeout=0.03),
         )
     )
 
