@@ -7,6 +7,7 @@ from easycat import (
     create_session,
 )
 from easycat.session._types import CallIdentity
+from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport
 from easycat.tts.input import TTSInputPolicy
@@ -55,6 +56,64 @@ class _ProviderShapeVAD:
     async def process(self, chunk):
         if False:
             yield None
+
+
+@pytest.mark.asyncio
+async def test_session_audio_capture_policy_and_runtime_override():
+    consent = {"enabled": False}
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            debug="light",
+            capture_audio=lambda: consent["enabled"],
+        )
+    )
+
+    assert await put_artifact_async(session._run_ctx, b"before-consent") is None
+    consent["enabled"] = True
+    captured_ref = await put_artifact_async(session._run_ctx, b"after-consent")
+    assert captured_ref is not None
+    assert session._artifact_store.get(captured_ref) == b"after-consent"
+
+    session.set_audio_capture_enabled(False)
+    assert await put_artifact_async(session._run_ctx, b"paused") is None
+    session.set_audio_capture_enabled(True)
+    assert await put_artifact_async(session._run_ctx, b"resumed") is not None
+
+
+def test_session_audio_capture_toggle_requires_bool():
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+        )
+    )
+
+    with pytest.raises(TypeError, match="bool"):
+        session.set_audio_capture_enabled(1)  # type: ignore[arg-type]
+
+
+def test_session_audio_capture_predicate_fails_closed():
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=lambda: "yes",  # type: ignore[arg-type,return-value]
+        )
+    )
+
+    assert session._is_audio_capture_enabled() is False
+    assert session._is_audio_capture_enabled() is False
 
 
 def test_create_session_binds_custom_identity_sink_capability():

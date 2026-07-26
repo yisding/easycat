@@ -178,7 +178,11 @@ def put_artifact(
     the store silently rejects the write (over size cap).  Callers
     should treat the ref as optional and fall back to inline ``data``.
     """
-    if ctx.artifact_store is None or not payload:
+    if (
+        ctx.artifact_store is None
+        or not payload
+        or (ctx.audio_capture_enabled is not None and not ctx.audio_capture_enabled())
+    ):
         return None
     ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
     return ref or None
@@ -208,13 +212,18 @@ async def put_artifact_async(
     journal record appended afterwards never references an artifact that
     was not written.
     """
-    if ctx.artifact_store is None or not payload:
+    if (
+        ctx.artifact_store is None
+        or not payload
+        or (ctx.audio_capture_enabled is not None and not ctx.audio_capture_enabled())
+    ):
         return None
     store = ctx.artifact_store
     if _writes_block(store):
         ref = await asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
         return ref or None
-    return put_artifact(ctx, payload, artifact_class=artifact_class)
+    ref = store.put(payload, artifact_class=artifact_class)
+    return ref or None
 
 
 def _writes_block(store: Any) -> bool:

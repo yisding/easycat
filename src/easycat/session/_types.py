@@ -155,6 +155,7 @@ class SessionConfig:
     outbound_queue: BoundedAudioQueue | None = None
     telephony_helpers: Sequence[SessionHelper] = ()
     audio_gate: Callable[[], bool] | None = None
+    capture_audio: bool | Callable[[], bool] = True
 
     # Pipeline flags
     enable_noise_reduction: bool = False

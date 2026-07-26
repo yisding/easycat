@@ -688,7 +688,14 @@ class AudioRouter:
                 exc_info=True,
             )
             return
-        if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
+        if (
+            self._capture_aec_reference
+            and self._run_ctx.artifact_store is not None
+            and (
+                self._run_ctx.audio_capture_enabled is None
+                or self._run_ctx.audio_capture_enabled()
+            )
+        ):
             await self._maybe_record_aec_reference(chunk, turn)
 
     async def _feed_transport_aec_reference(

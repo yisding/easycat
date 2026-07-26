@@ -557,6 +557,7 @@ def _make_session_config(
         enable_noise_reduction=config.enable_noise_reduction,
         enable_echo_cancellation=audio.enable_echo_cancellation,
         capture_aec_reference=config.capture_aec_reference,
+        capture_audio=config.capture_audio,
         auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
         strip_markdown=config.strip_markdown,
         output_processors=config.output_processors,
@@ -891,6 +892,7 @@ def create_text_session(
     remote_agent_api_key: str | None = None,
     mcp_servers: list[str] | None = None,
     record_to: str | Path | None = None,
+    capture_audio: bool | Callable[[], bool] = True,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -926,6 +928,7 @@ def create_text_session(
         remote_agent_api_key=remote_agent_api_key,
         mcp_servers=mcp_servers,
         record_to=record_to,
+        capture_audio=capture_audio,
     )
 
     agent = config.agent
@@ -986,6 +989,7 @@ def create_text_session(
                 event_bus=event_bus,
                 journal=journal,
                 artifact_store=artifact_store,
+                capture_audio=config.capture_audio,
                 warmup=config.warmup,
                 record_to=record_to,
                 session_id=sid,
@@ -1005,6 +1009,7 @@ def create_text_session(
         debug=debug,
         journal_backend=journal_backend,
         journal_retention=journal_retention,
+        capture_audio=config.capture_audio,
         warmup=config.warmup,
         record_to=record_to,
     )

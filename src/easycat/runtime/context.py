@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -26,6 +27,7 @@ class RunContext:
     runtime_mode: Literal["chained_pipeline", "text_session"]
     journal: Any = None  # ExecutionJournal | None
     artifact_store: Any = None  # ArtifactStore | None
+    audio_capture_enabled: Callable[[], bool] | None = None
     config_snapshot: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

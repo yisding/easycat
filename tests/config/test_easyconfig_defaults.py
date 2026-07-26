@@ -75,6 +75,22 @@ def test_capture_aec_reference_opt_in():
     assert config.capture_aec_reference is True
 
 
+def test_capture_audio_defaults_on_and_accepts_predicate():
+    consent = False
+    config = EasyConfig(
+        openai_api_key="test-key",
+        capture_audio=lambda: consent,
+    )
+
+    assert callable(config.capture_audio)
+    assert config.capture_audio() is False
+
+
+def test_capture_audio_rejects_invalid_policy():
+    with pytest.raises(ValueError, match="capture_audio"):
+        EasyConfig(openai_api_key="test-key", capture_audio="yes")  # type: ignore[arg-type]
+
+
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

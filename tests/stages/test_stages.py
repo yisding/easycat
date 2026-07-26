@@ -15,6 +15,7 @@ from easycat.integrations.agents.base import (
     NullAgentRecorder,
 )
 from easycat.runtime import InMemoryRingBuffer
+from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
@@ -503,6 +504,25 @@ class TestStageExecuteRecording:
         assert "stage_complete" in names
         complete = next(r for r in records if r.name == "stage_complete")
         assert complete.data["elapsed_ms"] >= 0
+
+    async def test_stt_stage_keeps_journal_without_audio_artifact(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: False,
+        )
+
+        await STTStage(_StubSTT(), journal=journal).execute(b"chunk", ctx, _make_turn())
+
+        records = journal.read()
+        assert [record.name for record in records] == ["stage_start", "stage_complete"]
+        assert records[0].input_ref is None
+        assert artifacts._current_bytes == 0
 
     async def test_agent_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)

@@ -56,6 +56,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
   interactive terminal (default `False`). The
   `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.
+- `capture_audio` — persist live STT, TTS, VAD, transport, and AEC audio
+  artifacts when `True` (default). Pass `False` to keep journal events and
+  transcripts without audio blobs, or a zero-argument predicate for a dynamic
+  consent policy. `session.set_audio_capture_enabled(...)` can change the
+  decision while a session is running.
 - `capture_aec_reference` — opt in to journaling the echo canceller's far-end
   reference frames (default `False`). The `EASYCAT_CAPTURE_AEC_REFERENCE`
   env var also enables it.

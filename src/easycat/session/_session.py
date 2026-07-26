@@ -203,6 +203,9 @@ class Session:
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._audio_gate = cfg.audio_gate
+        self._audio_capture_policy = cfg.capture_audio
+        self._audio_capture_override: bool | None = None
+        self._audio_capture_policy_failed = False
 
         # ── Turn manager (single source of truth for turn state) ──
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -541,6 +544,39 @@ class Session:
     def _is_gated(self) -> bool:
         """Whether the classification gate is currently buffering TTS audio."""
         return self._audio_gate is not None and self._audio_gate()
+
+    def _is_audio_capture_enabled(self) -> bool:
+        if self._audio_capture_override is not None:
+            return self._audio_capture_override
+        policy = self._audio_capture_policy
+        if isinstance(policy, bool):
+            return policy
+        try:
+            decision = policy()
+        except Exception:
+            if not self._audio_capture_policy_failed:
+                self._audio_capture_policy_failed = True
+                logger.warning(
+                    "capture_audio predicate failed; audio artifact capture is disabled",
+                    exc_info=True,
+                )
+            return False
+        if isinstance(decision, bool):
+            return decision
+        if not self._audio_capture_policy_failed:
+            self._audio_capture_policy_failed = True
+            logger.warning(
+                "capture_audio predicate returned %s instead of bool; "
+                "audio artifact capture is disabled",
+                type(decision).__name__,
+            )
+        return False
+
+    def set_audio_capture_enabled(self, enabled: bool) -> None:
+        """Enable or disable audio artifact persistence for this session."""
+        if not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool")
+        self._audio_capture_override = enabled
 
     # ── Properties ─────────────────────────────────────────────
 

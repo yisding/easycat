@@ -59,6 +59,18 @@ def test_create_text_session_kwargs_still_supported():
     assert session is not None
 
 
+def test_create_text_session_accepts_shared_capture_policy():
+    from easycat.config import create_text_session
+
+    session = create_text_session(
+        agent=_DummyAgent(),
+        debug="off",
+        capture_audio=False,
+    )
+
+    assert session._is_audio_capture_enabled() is False
+
+
 def test_text_session_config_validates_debug():
     from easycat.config import TextSessionConfig
 

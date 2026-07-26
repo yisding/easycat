@@ -39,6 +39,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "debug",
         "warmup",
         # Pipeline flags
+        "capture_audio",
         "enable_noise_reduction",
         "enable_echo_cancellation",
         "enable_vad",

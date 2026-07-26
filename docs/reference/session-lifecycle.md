@@ -66,6 +66,8 @@ Between start and stop, the session exposes turn-level controls:
 
 - `session.cancel_turn()` — cancel the in-flight turn (agent + TTS) without
   stopping the session.
+- `session.set_audio_capture_enabled(enabled)` — start or stop persisting audio
+  artifacts while leaving transcripts and journal events enabled.
 - `session.reset_state()` — clear turn state and conversation pointers.
 - `session.send_text(text)` — inject a user turn without audio (text-first
   flows and tests).
