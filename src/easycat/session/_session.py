@@ -127,6 +127,14 @@ def _validate_application_record_name(name: str) -> None:
         raise ValueError("Application journal record names must use the 'app.<name>' namespace")
 
 
+def _validate_application_record_tags(tags: frozenset[str]) -> None:
+    for tag in tags:
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("Application journal record tags must be non-empty strings")
+        if "," in tag:
+            raise ValueError("Application journal record tags must not contain commas")
+
+
 _HelperT = TypeVar("_HelperT")
 
 
@@ -895,6 +903,7 @@ class Session:
         if self._closed:
             raise RuntimeError("Session has been stopped")
         _validate_application_record_name(name)
+        _validate_application_record_tags(tags)
         self._journal_sink.append_record(
             name=name,
             kind=JournalRecordKind.EVENT,
