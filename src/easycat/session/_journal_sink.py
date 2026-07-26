@@ -381,6 +381,7 @@ class SessionJournalSink:
         output_bytes: bytes | None = None,
         input_artifact_class: ArtifactClass = "debug_verbose",
         output_artifact_class: ArtifactClass = "debug_verbose",
+        tags: frozenset[str] = frozenset(),
     ) -> None:
         if self.journal is None:
             return
@@ -402,6 +403,7 @@ class SessionJournalSink:
             session_id=self.session_id,
             turn_id=resolved_turn_id,
             data=data,
+            tags=tags,
             input_ref=input_ref,
             output_ref=output_ref,
         )

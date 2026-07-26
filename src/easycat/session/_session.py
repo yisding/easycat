@@ -71,6 +71,7 @@ from easycat.runtime.capabilities import (
     is_passthrough_provider,
 )
 from easycat.runtime.journal import JournalView
+from easycat.runtime.records import BUILTIN_JOURNAL_RECORD_NAMES, JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
@@ -115,6 +116,15 @@ def _recording_filename_session_id(session_id: str) -> str:
     safe = sub(r"[:\\/]+", "-", session_id)
     safe = safe.replace("..", "__").strip(". ")
     return safe or "session"
+
+
+def _validate_application_record_name(name: str) -> None:
+    if not isinstance(name, str):
+        raise ValueError("Application journal record name must be a string")
+    if name in BUILTIN_JOURNAL_RECORD_NAMES:
+        raise ValueError(f"Journal record name {name!r} is reserved by EasyCat")
+    if not name.startswith("app.") or not name.removeprefix("app.").strip():
+        raise ValueError("Application journal record names must use the 'app.<name>' namespace")
 
 
 _HelperT = TypeVar("_HelperT")
@@ -866,6 +876,32 @@ class Session:
         backend with a read-only snapshot.
         """
         return self._journal_view
+
+    def record(
+        self,
+        name: str,
+        *,
+        data: dict[str, Any],
+        turn_id: str | None = None,
+        tags: frozenset[str] = frozenset(),
+    ) -> None:
+        """Append an application event to the live session journal.
+
+        Application names must use the ``app.`` namespace and cannot collide
+        with EasyCat's built-in record vocabulary. Writes use the same
+        redaction filter as runtime records. The read surface remains available
+        separately through :attr:`journal`.
+        """
+        if self._closed:
+            raise RuntimeError("Session has been stopped")
+        _validate_application_record_name(name)
+        self._journal_sink.append_record(
+            name=name,
+            kind=JournalRecordKind.EVENT,
+            turn_id=turn_id,
+            data=data,
+            tags=tags,
+        )
 
     @property
     def cancel_token(self) -> CancelToken | None:
