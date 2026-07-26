@@ -30,6 +30,7 @@ from easycat.events import (
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, AgentTurnInput
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
@@ -56,6 +57,103 @@ from tests.session._session_streaming_helpers import (
     TimeoutThenRecoverTTS,
     _chunk,
 )
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_runs_journaled_spoken_turn():
+    bridge = ContextCapturingBridge(response_prefix="app")
+    tts = FakeTTS()
+    transport = FakeTransport()
+    journal = InMemoryRingBuffer(capacity=1000)
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=bridge,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            journal=journal,
+        )
+    )
+    lifecycle: list[Event] = []
+    for event_type in (TurnStarted, AgentFinal, BotStartedSpeaking, BotStoppedSpeaking):
+        session.event_bus.subscribe(event_type, lifecycle.append)
+
+    await session.start()
+    try:
+        response = await session.prompt_agent("Switch to message capture.")
+    finally:
+        await session.stop(force=True)
+
+    assert response == "app:Switch to message capture."
+    assert tts.synthesized_texts == ["app:Switch to message capture."]
+    assert transport.sent
+    assert any(
+        item["role"] == "system" and "Switch to message capture." in item["content"]
+        for item in bridge.contexts[0]
+    )
+    assert [type(event) for event in lifecycle] == [
+        TurnStarted,
+        BotStartedSpeaking,
+        AgentFinal,
+        BotStoppedSpeaking,
+    ]
+    stage_records = [
+        record
+        for record in journal.read()
+        if record.name in ("stage_start", "stage_complete") and record.data.get("stage") == "agent"
+    ]
+    assert [record.name for record in stage_records] == ["stage_start", "stage_complete"]
+    assert stage_records[0].turn_id is not None
+    assert stage_records[0].turn_id == stage_records[1].turn_id
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_can_run_silently_before_audio_start():
+    bridge = ContextCapturingBridge(response_prefix="silent")
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=bridge,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+    response = await session.prompt_agent(
+        "Classify this call.",
+        role="user",
+        speak=False,
+    )
+
+    assert response == "silent:Classify this call."
+    assert bridge.contexts == [[]]
+    assert tts.synthesized_texts == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_validates_surface_and_lifecycle():
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=ContextCapturingBridge(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+    with pytest.raises(ValueError, match="non-empty"):
+        await session.prompt_agent(" ", speak=False)
+    with pytest.raises(ValueError, match="role"):
+        await session.prompt_agent("hello", role="assistant", speak=False)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="started"):
+        await session.prompt_agent("hello")
 
 
 @pytest.mark.asyncio

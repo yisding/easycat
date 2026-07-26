@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from re import sub
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -1129,6 +1129,17 @@ class Session:
                     await text_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            prompt_token = self._turn_runner.application_prompt_cancel_token
+            if prompt_token:
+                prompt_token.cancel()
+            prompt_task = self._turn_runner.active_application_prompt
+            if (
+                prompt_task is not None
+                and prompt_task is not current_task
+                and not prompt_task.done()
+            ):
+                prompt_task.cancel()
+                await asyncio.gather(prompt_task, return_exceptions=True)
 
             # Speculative plain-agent work is not part of the confirmed turn
             # task yet. Drain it explicitly before either teardown path can
@@ -1279,6 +1290,9 @@ class Session:
         turn = self._turn
         if turn:
             turn.cancel_token.cancel()
+        prompt_token = self._turn_runner.application_prompt_cancel_token
+        if prompt_token is not None:
+            prompt_token.cancel()
 
         # Stamp the barge-in initiation time so the cutoff-latency histogram
         # can measure the elapsed wall time until playback is actually cleared
@@ -1481,6 +1495,39 @@ class Session:
                 )
 
     # ── Text mode ──────────────────────────────────────────────
+
+    async def prompt_agent(
+        self,
+        text: str,
+        *,
+        role: Literal["system", "user"] = "system",
+        speak: bool = True,
+    ) -> str:
+        """Run an application-initiated agent turn and optionally speak it."""
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a non-empty string")
+        if role not in ("system", "user"):
+            raise ValueError("role must be 'system' or 'user'")
+        if not isinstance(speak, bool):
+            raise TypeError("speak must be a bool")
+        if self._closed:
+            raise RuntimeError("Session has been stopped")
+        if speak and self._runtime_mode == "text_session":
+            raise RuntimeError("speak=True is unavailable in text_session mode")
+        if speak and not self._is_running:
+            raise RuntimeError("Session must be started before speak=True")
+        if self._turn is not None or self._turn_manager.state != TurnManagerState.IDLE:
+            await self.cancel_turn()
+        self._mark_observability_active()
+        try:
+            with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
+                return await self._turn_runner.prompt_agent(
+                    text.strip(),
+                    role=role,
+                    speak=speak,
+                )
+        finally:
+            self._mark_observability_inactive()
 
     async def send_text(self, text: str) -> str:
         """Send text input and return the agent response.

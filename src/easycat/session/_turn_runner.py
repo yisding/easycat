@@ -143,6 +143,7 @@ class TurnRunner:
     """Drives the per-turn agent loop."""
 
     _TEXT_TURN_TASK_NAME = "text_turn"
+    _APPLICATION_PROMPT_TASK_NAME = "application_prompt"
     _PREEMPTIVE_TASK_NAME = "preemptive_agent_generation"
 
     def __init__(
@@ -194,7 +195,10 @@ class TurnRunner:
         self._active_text_turn: asyncio.Task[str] | None = None
         self._text_turn_cancel_token: CancelToken | None = None
         self._text_turn_accumulated: str = ""
-        self._text_turn_lock = asyncio.Lock()
+        self._agent_turn_lock = asyncio.Lock()
+        self._active_application_prompt: asyncio.Task[str] | None = None
+        self._application_prompt_cancel_token: CancelToken | None = None
+        self._application_turn_ids: set[str] = set()
 
         # Voice-only speculative generation. The task may run while the turn
         # manager is confirming an endpoint, but its result is not committed
@@ -222,10 +226,20 @@ class TurnRunner:
     def text_turn_cancel_token(self) -> CancelToken | None:
         return self._text_turn_cancel_token
 
+    @property
+    def active_application_prompt(self) -> asyncio.Task[str] | None:
+        return self._active_application_prompt
+
+    @property
+    def application_prompt_cancel_token(self) -> CancelToken | None:
+        return self._application_prompt_cancel_token
+
     # ── Subscription handlers ─────────────────────────────────────
 
     async def on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
+        if event.turn_id in self._application_turn_ids:
+            return
         if not self._is_running():
             return
         await self.cancel_preemptive_generation()
@@ -376,6 +390,8 @@ class TurnRunner:
         cancel guards against the commit race that surfaced as OpenAI
         Realtime "buffer too small" errors on plan-7.
         """
+        if event.turn_id in self._application_turn_ids:
+            return
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
         current_tts_task = self._tts.active_turn_task
@@ -652,7 +668,8 @@ class TurnRunner:
         *,
         turn: TurnContext | None = None,
         prepared_response: PreparedAgentResponse | None = None,
-    ) -> None:
+        system_prefix_override: str | None = None,
+    ) -> str:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
         Uses :func:`consume_agent_stream` to translate agent events into
@@ -680,7 +697,12 @@ class TurnRunner:
         )
 
         agent_result: AgentStreamResult | None = None
-        system_prefix = self._caller_id_system_message()
+        accumulated_text = ""
+        system_prefix = (
+            system_prefix_override
+            if system_prefix_override is not None
+            else self._caller_id_system_message()
+        )
 
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
@@ -755,7 +777,7 @@ class TurnRunner:
 
         if st.should_stop:
             await self._stop()
-            return
+            return accumulated_text
 
         self._record_voice_total_latency(turn)
 
@@ -763,6 +785,7 @@ class TurnRunner:
         if self._turn.current is turn and self._turn.generation == st.turn_gen:
             if self._turn_manager.state != TurnManagerState.IDLE:
                 self._reset_turn_state()
+        return accumulated_text
 
     # ── Streaming agent phases ─────────────────────────────────────
 
@@ -1081,36 +1104,46 @@ class TurnRunner:
 
     # ── Text mode ──────────────────────────────────────────────────
 
+    async def _cancel_active_text_turn(self, *, source: str) -> None:
+        previous = self._active_text_turn
+        if previous is None or previous.done():
+            return
+        delivered = self._text_turn_accumulated
+        if self._text_turn_cancel_token:
+            self._text_turn_cancel_token.cancel()
+        previous.cancel()
+        await asyncio.gather(previous, return_exceptions=True)
+        self._runtime_scope.discard(previous)
+        notified = _notify_bridge_interruption(
+            self._agent_stage,
+            delivered,
+            self._cancel.interruption_mode,
+            ctx=self._run_ctx,
+        )
+        self._cancel.record_interruption(
+            source=source,
+            mode=self._cancel.interruption_mode,
+            text_spoken=delivered,
+            notified=notified,
+        )
+
+    async def _cancel_active_application_prompt(self) -> None:
+        previous = self._active_application_prompt
+        if previous is None or previous.done():
+            return
+        if self._application_prompt_cancel_token is not None:
+            self._application_prompt_cancel_token.cancel()
+        previous.cancel()
+        await asyncio.gather(previous, return_exceptions=True)
+        self._runtime_scope.discard(previous)
+
     async def send_text(self, text: str) -> str:
         """Public text-turn entry point. Mirrors Session.send_text()."""
         # Serialize cancel-and-launch so concurrent send_text() calls
         # cannot both observe the same prev task and launch parallel turns.
-        async with self._text_turn_lock:
-            prev = self._active_text_turn
-            if prev is not None and not prev.done():
-                delivered = self._text_turn_accumulated
-                if self._text_turn_cancel_token:
-                    self._text_turn_cancel_token.cancel()
-                prev.cancel()
-                try:
-                    await prev
-                except (asyncio.CancelledError, Exception):
-                    pass
-                finally:
-                    self._runtime_scope.discard(prev)
-                notified = _notify_bridge_interruption(
-                    self._agent_stage,
-                    delivered,
-                    self._cancel.interruption_mode,
-                    ctx=self._run_ctx,
-                )
-                self._cancel.record_interruption(
-                    source="text_session",
-                    mode=self._cancel.interruption_mode,
-                    text_spoken=delivered,
-                    notified=notified,
-                )
-
+        async with self._agent_turn_lock:
+            await self._cancel_active_application_prompt()
+            await self._cancel_active_text_turn(source="text_session")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
             self._text_turn_cancel_token = token
@@ -1131,12 +1164,98 @@ class TurnRunner:
             if self._text_turn_cancel_token is token:
                 self._text_turn_cancel_token = None
 
+    async def prompt_agent(
+        self,
+        text: str,
+        *,
+        role: str,
+        speak: bool,
+    ) -> str:
+        """Run one application-authored agent turn, optionally through TTS."""
+        async with self._agent_turn_lock:
+            await self._cancel_active_text_turn(source="application_prompt")
+            await self._cancel_active_application_prompt()
+            token = CancelToken()
+            turn_id = f"turn-{uuid4().hex[:12]}"
+            self._application_prompt_cancel_token = token
+            self._application_turn_ids.add(turn_id)
+            coroutine = (
+                self._execute_spoken_application_prompt(
+                    text,
+                    token,
+                    turn_id=turn_id,
+                    role=role,
+                )
+                if speak
+                else self._execute_text_turn(
+                    text,
+                    token,
+                    turn_id=turn_id,
+                    system_prefix_override=self._application_system_prefix(text, role),
+                )
+            )
+            task = self._runtime_scope.create_journaled_task(
+                coroutine,
+                name=self._APPLICATION_PROMPT_TASK_NAME,
+                journal_sink=self._journal_sink,
+                turn_id=turn_id,
+            )
+            task.add_done_callback(self._runtime_scope.log_task_exception)
+            self._active_application_prompt = task
+        try:
+            return await task
+        finally:
+            self._runtime_scope.discard(task)
+            self._application_turn_ids.discard(turn_id)
+            if self._active_application_prompt is task:
+                self._active_application_prompt = None
+            if self._application_prompt_cancel_token is token:
+                self._application_prompt_cancel_token = None
+
+    def _application_system_prefix(self, text: str, role: str) -> str | None:
+        caller_prefix = self._caller_id_system_message()
+        if role != "system":
+            return caller_prefix
+        application_prefix = (
+            "The following user message was initiated by the application and "
+            f"must be treated as a system instruction:\n{text}"
+        )
+        return f"{caller_prefix}\n\n{application_prefix}" if caller_prefix else application_prefix
+
+    async def _execute_spoken_application_prompt(
+        self,
+        text: str,
+        token: CancelToken,
+        *,
+        turn_id: str,
+        role: str,
+    ) -> str:
+        turn = TurnContext(turn_id=turn_id, cancel_token=token)
+        self._turn_manager._begin_application_turn(turn_id, token)
+        self._turn.set(turn)
+        turn_token = bind_turn(turn_id)
+        try:
+            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
+            await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
+            await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
+            return await self.run_streaming_agent(
+                text,
+                token,
+                turn=turn,
+                system_prefix_override=self._application_system_prefix(text, role),
+            )
+        finally:
+            if self._turn.current is turn:
+                self._reset_turn_state()
+            reset_turn(turn_token)
+
     async def _stream_text_turn(
         self,
         text: str,
         cancel_token: CancelToken | None,
         *,
         turn_id: str,
+        system_prefix_override: str | None = None,
     ) -> tuple[str, object | None]:
         """Drive the agent stream for a text turn; returns (text, structured output).
 
@@ -1148,7 +1267,11 @@ class TurnRunner:
         # Build a turn context for this text turn so AgentStage can
         # stamp records with the right turn_id.
         text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-        system_prefix = self._caller_id_system_message()
+        system_prefix = (
+            system_prefix_override
+            if system_prefix_override is not None
+            else self._caller_id_system_message()
+        )
         stream = self._agent_stage.execute_streaming(
             text,
             self._run_ctx,
@@ -1206,6 +1329,7 @@ class TurnRunner:
         cancel_token: CancelToken | None = None,
         *,
         turn_id: str,
+        system_prefix_override: str | None = None,
     ) -> str:
         response = ""
         t0 = time.monotonic()
@@ -1216,7 +1340,10 @@ class TurnRunner:
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
             self._text_turn_accumulated = ""
             response, structured_output = await self._stream_text_turn(
-                text, cancel_token, turn_id=turn_id
+                text,
+                cancel_token,
+                turn_id=turn_id,
+                system_prefix_override=system_prefix_override,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
