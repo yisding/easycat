@@ -1208,10 +1208,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         ws = self._ws
         try:
             async for raw in ws:
-                raw = _decode_twilio_raw(raw)
-                if raw is None:
+                decoded = _decode_twilio_raw(raw)
+                if decoded is None:
                     continue
-                msg = _parse_twilio_message(raw)
+                msg = _parse_twilio_message(decoded)
                 if msg is None:
                     continue
                 result = await self._handle_pre_start_message(msg)
