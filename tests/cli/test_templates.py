@@ -138,15 +138,12 @@ def test_template_catalog_metadata_covers_available_templates(
     stale_base_extras = sorted(set(_TEMPLATE_BASE_EXTRAS) - set(templates))
 
     assert not missing, "Template catalog missing metadata for: " + ", ".join(missing)
-    assert not stale, "Template catalog references missing templates: " + ", ".join(
-        stale
+    assert not stale, "Template catalog references missing templates: " + ", ".join(stale)
+    assert not missing_base_extras, "Template catalog missing base extras for: " + ", ".join(
+        missing_base_extras
     )
-    assert not missing_base_extras, (
-        "Template catalog missing base extras for: " + ", ".join(missing_base_extras)
-    )
-    assert not stale_base_extras, (
-        "Template base extras reference missing templates: "
-        + ", ".join(stale_base_extras)
+    assert not stale_base_extras, "Template base extras reference missing templates: " + ", ".join(
+        stale_base_extras
     )
 
     for name in templates:
@@ -164,9 +161,7 @@ def test_template_catalog_metadata_covers_available_templates(
         assert entry["description"], f"{name} catalog entry missing description"
         env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
         for env_var in entry["required_env"]:
-            assert env_var.isupper(), (
-                f"{name} catalog env var is not uppercase: {env_var}"
-            )
+            assert env_var.isupper(), f"{name} catalog env var is not uppercase: {env_var}"
             assert f"{env_var}=" in env_example, (
                 f"{name} catalog required_env {env_var} missing from .env.example"
             )
@@ -188,9 +183,7 @@ def test_template_catalog_metadata_covers_available_templates(
         assert entry["base_extras"] == _TEMPLATE_BASE_EXTRAS[name]
         assert entry["base_requirement"] == _base_requirement(name)
         assert entry["files"] == _template_file_names(name)
-        assert entry["next_step_commands"] == _next_step_commands(
-            Path("my-agent"), name
-        )
+        assert entry["next_step_commands"] == _next_step_commands(Path("my-agent"), name)
         assert entry["run_command"]
         assert entry["check_command"]
         assert entry["fix_command"]
@@ -225,9 +218,8 @@ def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
             if "openai_api_key=" in source:
                 stale.append(f"{template}/{filename}")
 
-    assert not stale, (
-        "Scaffold templates should let EasyConfig read OPENAI_API_KEY: "
-        + ", ".join(stale)
+    assert not stale, "Scaffold templates should let EasyConfig read OPENAI_API_KEY: " + ", ".join(
+        stale
     )
 
 
@@ -250,9 +242,7 @@ def test_template_catalog_env_covers_template_code(name: str) -> None:
     missing_required = sorted(code_required - catalog_required)
     required_marked_optional = sorted(code_required & catalog_optional)
 
-    assert not missing, (
-        f"{name} catalog missing env vars read by template code: {missing}"
-    )
+    assert not missing, f"{name} catalog missing env vars read by template code: {missing}"
     assert not missing_required, (
         f"{name} catalog required_env missing required template env vars: {missing_required}"
     )
@@ -293,9 +283,7 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
     ]
     expected_sequence = expected_prefix + expected_middle + [str(entry["run_command"])]
     if next_step_commands != expected_sequence:
-        problems.append(
-            f"{name}: next_step_commands are not the canonical post-create sequence"
-        )
+        problems.append(f"{name}: next_step_commands are not the canonical post-create sequence")
 
     check_tokens = shlex.split(str(entry["check_command"]))
     if check_tokens[:4] != ["uv", "run", "ruff", "check"]:
@@ -306,16 +294,12 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
 
     fix_tokens = shlex.split(str(entry["fix_command"]))
     if fix_tokens[:5] != ["uv", "run", "ruff", "check", "--fix"]:
-        problems.append(
-            f"{name}: fix_command is not a repo-local ruff auto-fix command"
-        )
+        problems.append(f"{name}: fix_command is not a repo-local ruff auto-fix command")
     for target in fix_tokens[5:]:
         if target not in files:
             problems.append(f"{name}: fix_command target {target} is not generated")
     if fix_tokens[:4] == check_tokens[:4] and fix_tokens[5:] != check_tokens[4:]:
-        problems.append(
-            f"{name}: fix_command targets do not match check_command targets"
-        )
+        problems.append(f"{name}: fix_command targets do not match check_command targets")
 
     run_tokens = shlex.split(str(entry["run_command"]))
     if run_tokens[:4] != ["uv", "run", "--env-file", ".env"]:
@@ -350,9 +334,7 @@ def test_template_catalog_commands_are_copyable_and_resolve() -> None:
     for entry in _available_template_catalog():
         problems.extend(_catalog_command_problems(entry))
 
-    assert not problems, "Template catalog command hints are stale:\n" + "\n".join(
-        problems
-    )
+    assert not problems, "Template catalog command hints are stale:\n" + "\n".join(problems)
 
 
 def test_template_catalog_command_validator_checks_generated_targets() -> None:
@@ -371,19 +353,14 @@ def test_template_catalog_command_validator_checks_generated_targets() -> None:
 
     assert "broken: create_command is not installed CLI form" in problems
     assert "broken: repo_create_command is not repo-local CLI form" in problems
-    assert (
-        "broken: next_step_commands are not the canonical post-create sequence"
-        in problems
-    )
+    assert "broken: next_step_commands are not the canonical post-create sequence" in problems
     assert "broken: check_command target missing.py is not generated" in problems
     assert "broken: fix_command target missing.py is not generated" in problems
     assert "broken: run_command Python target missing.py is not generated" in problems
 
 
 def test_scaffold_dependency_floor_tracks_project_version() -> None:
-    pyproject = tomllib.loads(
-        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert _easycat_version_floor() == pyproject["project"]["version"]
 
@@ -550,9 +527,7 @@ def test_agent_py_within_budget(name: str) -> None:
     budget = _LINE_BUDGETS[name]
     agent = _template_dir(name) / "agent.py"
     lines = agent.read_text(encoding="utf-8").splitlines()
-    assert len(lines) <= budget, (
-        f"{name}/agent.py has {len(lines)} lines, budget is {budget}"
-    )
+    assert len(lines) <= budget, f"{name}/agent.py has {len(lines)} lines, budget is {budget}"
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -765,21 +740,15 @@ def test_text_chat_template_keeps_first_code_readable() -> None:
 
     assert '"""Text-mode EasyCat agent for prompt iteration."""' in agent
     assert "import asyncio" in agent
-    assert (
-        'agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS")' in agent
-    )
+    assert 'agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS")' in agent
     assert "create_text_session(agent=agent)" in agent
     assert "create_text_session(agent=Agent(" not in agent
     assert "asyncio.run(main())" in agent
 
 
 def test_pydantic_templates_keep_first_code_readable() -> None:
-    single_agent = (_template_dir("pydantic-ai") / "agent.py").read_text(
-        encoding="utf-8"
-    )
-    workflow = (_template_dir("pydantic-ai-workflow") / "agent.py").read_text(
-        encoding="utf-8"
-    )
+    single_agent = (_template_dir("pydantic-ai") / "agent.py").read_text(encoding="utf-8")
+    workflow = (_template_dir("pydantic-ai-workflow") / "agent.py").read_text(encoding="utf-8")
 
     assert "from datetime import datetime" in single_agent
     assert "def current_time" in single_agent
@@ -787,16 +756,10 @@ def test_pydantic_templates_keep_first_code_readable() -> None:
         "def current_time"
     )
     assert "\n\n@agent.tool_plain\n" in single_agent
-    assert (
-        "from datetime import datetime"
-        not in single_agent.split("def current_time", 1)[1]
-    )
+    assert "from datetime import datetime" not in single_agent.split("def current_time", 1)[1]
     assert "\n\nclass SupportWorkflow:\n" in workflow
     assert workflow.index("TECH_TERMS") < workflow.index("class SupportWorkflow")
-    assert (
-        'key = "technical" if any(word in text.lower() for word in TECH_TERMS)'
-        in workflow
-    )
+    assert 'key = "technical" if any(word in text.lower() for word in TECH_TERMS)' in workflow
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -814,9 +777,7 @@ def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None
 def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     """Every template's pyproject.toml declares an easycat extras dep."""
     pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
-    rendered = _render_text(
-        pyproject, _substitutions(InitConfig(template=name), "demo")
-    )
+    rendered = _render_text(pyproject, _substitutions(InitConfig(template=name), "demo"))
     parsed = tomllib.loads(rendered)
 
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
@@ -853,9 +814,7 @@ def test_env_example_renders_for_doctor_env_file(name: str, tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
-def test_voice_env_example_renders_selected_provider_keys(
-    name: str, tmp_path: Path
-) -> None:
+def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: Path) -> None:
     cfg = InitConfig(
         template=name,
         stt="deepgram/flux",
@@ -879,9 +838,7 @@ def test_pydantic_ai_readme_points_to_workflow_template() -> None:
 
 
 def test_pydantic_ai_template_v2_requirement_matches_project_extra() -> None:
-    pyproject = tomllib.loads(
-        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2"]
     specs = [dep for dep in deps if dep.startswith("pydantic-ai>=")]
     assert len(specs) == 1
@@ -893,9 +850,7 @@ def test_pydantic_ai_template_v2_requirement_matches_project_extra() -> None:
 
 def test_openai_agents_deepgram_swap_mentions_extra_key_and_sync() -> None:
     readme = (_template_dir("openai-agents") / "README.md").read_text(encoding="utf-8")
-    env_example = (_template_dir("openai-agents") / ".env.example").read_text(
-        encoding="utf-8"
-    )
+    env_example = (_template_dir("openai-agents") / ".env.example").read_text(encoding="utf-8")
 
     for text in (readme, env_example):
         assert "deepgram" in text
@@ -916,9 +871,7 @@ def test_no_placeholder_leak_in_non_templated_files() -> None:
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_gitignore_covers_local_artifacts(name: str) -> None:
     """Generated projects should not invite local env/cache artifacts into git."""
-    patterns = (
-        (_template_dir(name) / ".gitignore").read_text(encoding="utf-8").splitlines()
-    )
+    patterns = (_template_dir(name) / ".gitignore").read_text(encoding="utf-8").splitlines()
 
     for pattern in GENERATED_PROJECT_GITIGNORE_PATTERNS:
         assert pattern in patterns, f"{name}/.gitignore missing {pattern!r}"
@@ -997,9 +950,7 @@ def test_template_sources_skip_generated_artifacts(
         path = template / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("generated\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "easycat.cli.scaffold.init._templates_root", lambda: templates_root
-    )
+    monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
 
     assert _template_sources("demo") == [kept]
 
@@ -1013,9 +964,7 @@ def test_template_sources_skip_ignored_top_level_template(
     template.mkdir(parents=True)
     leaked = template / "settings.local.json"
     leaked.write_text('{"secret":"sentinel"}\n', encoding="utf-8")
-    monkeypatch.setattr(
-        "easycat.cli.scaffold.init._templates_root", lambda: templates_root
-    )
+    monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
 
     assert _template_sources(".claude") == []
 
@@ -1038,9 +987,7 @@ def test_pyproject_carries_sources_block_placeholder(name: str) -> None:
 def test_pyproject_renders_uv_sources_for_local_checkout(name: str) -> None:
     template_text = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
 
-    published = _render_text(
-        template_text, _substitutions(InitConfig(template=name), "demo")
-    )
+    published = _render_text(template_text, _substitutions(InitConfig(template=name), "demo"))
     assert "$EASYCAT_SOURCES_BLOCK" not in published
     assert "[tool.uv.sources]" not in published
     tomllib.loads(published)
@@ -1066,9 +1013,7 @@ def test_template_readme_explains_local_source_block(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_ships_offline_agent_tests(name: str) -> None:
     """Every scaffold ships a key-free test exercising the real turn pipeline."""
-    source = (_template_dir(name) / "tests" / "test_agent.py").read_text(
-        encoding="utf-8"
-    )
+    source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
 
     assert "from easycat.debug.testing import" in source
     assert "run_text_turn" in source
@@ -1098,10 +1043,7 @@ def test_template_ships_agents_md_guide(name: str) -> None:
     assert "assert_llm_judge" in agents_md
     # The run/check hints must match the catalog's post-create commands.
     entry = catalog[name]
-    assert (
-        entry["run_command"].removeprefix("uv run --env-file .env ").split()[0]
-        in agents_md
-    )
+    assert entry["run_command"].removeprefix("uv run --env-file .env ").split()[0] in agents_md
     assert entry["run_command"] in agents_md
     assert entry["check_command"] in agents_md
     assert entry["fix_command"] in agents_md
@@ -1109,9 +1051,7 @@ def test_template_ships_agents_md_guide(name: str) -> None:
 
 def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
     server = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
-    env_example = (_template_dir("twilio-phone") / ".env.example").read_text(
-        encoding="utf-8"
-    )
+    env_example = (_template_dir("twilio-phone") / ".env.example").read_text(encoding="utf-8")
     readme = (_template_dir("twilio-phone") / "README.md").read_text(encoding="utf-8")
 
     assert 'require_env("TWILIO_AUTH_TOKEN")' in server

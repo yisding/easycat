@@ -42,9 +42,7 @@ class TwilioAppSettings:
 
     @property
     def outbound_calling_enabled(self) -> bool:
-        return bool(
-            self.account_sid and self.auth_token and self.voice_from and self.twiml_url
-        )
+        return bool(self.account_sid and self.auth_token and self.voice_from and self.twiml_url)
 
     @property
     def twilio_actions_enabled(self) -> bool:

@@ -75,16 +75,12 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
             validate_start = stream_tokens.consume_start
             transport = TwilioConnectionTransport(
                 ws,
-                config=TwilioTransportConfig(
-                    stream_token_start_validator=validate_start
-                ),
+                config=TwilioTransportConfig(stream_token_start_validator=validate_start),
             )
             if not await transport.wait_for_start(timeout_s=settings.start_timeout_s):
                 return
 
-            agent = Agent(
-                name="assistant", instructions="You are a helpful voice assistant."
-            )
+            agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
             telephony = TelephonyConfig(
                 enable_dtmf_aggregator=True, enable_voicemail_detector=True
             )
@@ -142,9 +138,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        twilio_server = await websockets.serve(
-            handle_twilio_connection, "0.0.0.0", 8766
-        )
+        twilio_server = await websockets.serve(handle_twilio_connection, "0.0.0.0", 8766)
         try:
             yield
         finally:
@@ -162,13 +156,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         form = dict(form_items)
         call_sid = form.get("CallSid", "").strip()
         if not call_sid:
-            raise HTTPException(
-                status_code=400, detail="Twilio webhook is missing CallSid"
-            )
+            raise HTTPException(status_code=400, detail="Twilio webhook is missing CallSid")
         parameters = twilio_stream_parameters_from_form(form_items)
-        public_url = settings.public_twiml_url or twilio_public_url_from_request(
-            request
-        )
+        public_url = settings.public_twiml_url or twilio_public_url_from_request(request)
         xml = twiml_connect_stream(
             settings.stream_url,
             parameters=parameters,

@@ -221,9 +221,7 @@ def compute_twilio_webhook_signature(
         for key, values in sorted(_twilio_signature_values(params).items())
         for value in sorted(set(values))
     )
-    digest = hmac.new(
-        auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1
-    ).digest()
+    digest = hmac.new(auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1).digest()
     return base64.b64encode(digest).decode("ascii")
 
 

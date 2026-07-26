@@ -119,19 +119,13 @@ class TwilioStreamTokenStore:
         """
         self._prune_expired()
         normalized_claims = tuple(
-            sorted(
-                (str(name), str(value))
-                for name, value in (claims or {}).items()
-                if value
-            )
+            sorted((str(name), str(value)) for name, value in (claims or {}).items() if value)
         )
         if idempotency_key:
             existing = self._idempotent.get(idempotency_key)
             if existing is not None:
                 if existing.claims != normalized_claims:
-                    raise ValueError(
-                        "idempotency_key cannot be reused with different claims"
-                    )
+                    raise ValueError("idempotency_key cannot be reused with different claims")
                 return existing.token
 
         nonce = secrets.token_urlsafe(24)
@@ -188,21 +182,15 @@ class TwilioStreamTokenStore:
         return _twilio_grant_claims_match(grant.claims, start)
 
     def _signature(self, payload: str) -> str:
-        digest = hmac.new(
-            self._secret, payload.encode("utf-8"), hashlib.sha256
-        ).digest()
+        digest = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).digest()
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     def _prune_expired(self) -> None:
         now = self._now()
-        expired = [
-            nonce for nonce, grant in self._pending.items() if grant.expires_at < now
-        ]
+        expired = [nonce for nonce, grant in self._pending.items() if grant.expires_at < now]
         for nonce in expired:
             self._pending.pop(nonce, None)
-        expired_keys = [
-            key for key, grant in self._idempotent.items() if grant.expires_at < now
-        ]
+        expired_keys = [key for key, grant in self._idempotent.items() if grant.expires_at < now]
         for key in expired_keys:
             self._idempotent.pop(key, None)
 
@@ -230,9 +218,7 @@ def _twilio_grant_claims_match(
 class TwilioTransportConfig:
     """Configuration for :class:`TwilioTransport`."""
 
-    preferred_tts_output_format: ClassVar[AudioFormat] = (
-        TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
-    )
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     host: str = "0.0.0.0"
     port: int = 8766
@@ -257,8 +243,7 @@ def _parse_twilio_start_identity(
     if isinstance(raw_params, dict):
         for key, value in raw_params.items():
             if isinstance(key, str) and (
-                isinstance(value, str)
-                or (isinstance(value, int) and not isinstance(value, bool))
+                isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
             ):
                 params[key] = str(value)
     for name in excluded_parameter_names or set():
@@ -276,9 +261,7 @@ def _parse_twilio_start_identity(
     else:
         direction = "unknown"
 
-    from_number = _clean_twilio_parameter(
-        params.pop("From", "") or params.pop("from", "")
-    )
+    from_number = _clean_twilio_parameter(params.pop("From", "") or params.pop("from", ""))
     to_number = _clean_twilio_parameter(params.pop("To", "") or params.pop("to", ""))
     if direction == "outbound":
         caller = to_number
@@ -289,15 +272,9 @@ def _parse_twilio_start_identity(
     display_name = _clean_twilio_parameter(
         params.pop("CallerName", None) or params.pop("caller_name", None)
     )
-    city = _clean_twilio_parameter(
-        params.pop("FromCity", "") or params.pop("from_city", "")
-    )
-    state = _clean_twilio_parameter(
-        params.pop("FromState", "") or params.pop("from_state", "")
-    )
-    zip_code = _clean_twilio_parameter(
-        params.pop("FromZip", "") or params.pop("from_zip", "")
-    )
+    city = _clean_twilio_parameter(params.pop("FromCity", "") or params.pop("from_city", ""))
+    state = _clean_twilio_parameter(params.pop("FromState", "") or params.pop("from_state", ""))
+    zip_code = _clean_twilio_parameter(params.pop("FromZip", "") or params.pop("from_zip", ""))
     country = _clean_twilio_parameter(
         params.pop("FromCountry", "") or params.pop("from_country", "")
     )
@@ -327,9 +304,7 @@ def _clean_twilio_parameter(value: Any) -> str:
     return text
 
 
-def _twilio_stream_token_valid(
-    start: dict[str, Any], config: TwilioTransportConfig
-) -> bool:
+def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
     start_validator = config.stream_token_start_validator
     validator = config.stream_token_validator
     if start_validator is None and validator is None:
@@ -667,9 +642,7 @@ class _TwilioProtocolMixin:
     async def _handle_connected(self, msg: dict[str, Any]) -> None:
         logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
 
-    async def _accept_start(
-        self, msg: dict[str, Any], *, token_prevalidated: bool
-    ) -> bool:
+    async def _accept_start(self, msg: dict[str, Any], *, token_prevalidated: bool) -> bool:
         """Extract stream metadata from the ``start`` message.
 
         Twilio's Media Streams ``start`` payload carries streamSid /
@@ -702,12 +675,8 @@ class _TwilioProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return False
-        if not token_prevalidated and not _twilio_stream_token_valid(
-            start, self._config
-        ):
-            logger.warning(
-                "Rejecting Twilio stream start with missing or invalid stream token"
-            )
+        if not token_prevalidated and not _twilio_stream_token_valid(start, self._config):
+            logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             ws = self._current_ws()
             if ws is not None:
                 await ws.close(4003, "Missing or invalid stream token")
@@ -730,9 +699,7 @@ class _TwilioProtocolMixin:
                 logger.debug("Identity sink raised on start", exc_info=True)
 
         if self._event_bus is not None and self._call_sid:
-            await self._event_bus.emit(
-                CallAnswered(call_sid=self._call_sid, answered_by="human")
-            )
+            await self._event_bus.emit(CallAnswered(call_sid=self._call_sid, answered_by="human"))
 
         logger.info(
             "Twilio stream started: streamSid=%s callSid=%s from=%s to=%s",
@@ -829,9 +796,7 @@ class _TwilioProtocolMixin:
             self._diagnostics.observe_sequence(msg)
             await _emit_parsed_twilio_dtmf(msg, self._event_bus)
 
-    _MessageHandler = Callable[
-        ["_TwilioProtocolMixin", dict[str, Any]], Awaitable[None]
-    ]
+    _MessageHandler = Callable[["_TwilioProtocolMixin", dict[str, Any]], Awaitable[None]]
     _MESSAGE_HANDLERS: ClassVar[dict[str, _MessageHandler]] = {
         "connected": _handle_connected,
         "start": _handle_start,
@@ -875,9 +840,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
     inbound_stt_track = "inbound"
     # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
     # so send_audio only performs the final companding step.
-    preferred_tts_output_format: ClassVar[AudioFormat] = (
-        TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
-    )
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     def __init__(
         self,
@@ -1079,9 +1042,7 @@ def _mulaw_decode(mulaw_data: bytes) -> bytes:
     """Decode G.711 mu-law bytes into PCM16 little-endian bytes."""
     if not mulaw_data:
         return b""
-    return struct.pack(
-        f"<{len(mulaw_data)}h", *map(_MULAW_DECODE_LUT.__getitem__, mulaw_data)
-    )
+    return struct.pack(f"<{len(mulaw_data)}h", *map(_MULAW_DECODE_LUT.__getitem__, mulaw_data))
 
 
 def _mulaw_encode(pcm_data: bytes) -> bytes:
@@ -1091,9 +1052,7 @@ def _mulaw_encode(pcm_data: bytes) -> bytes:
     if not pcm_data:
         return b""
     count = len(pcm_data) // 2
-    return bytes(
-        map(_MULAW_ENCODE_LUT.__getitem__, struct.unpack(f"<{count}H", pcm_data))
-    )
+    return bytes(map(_MULAW_ENCODE_LUT.__getitem__, struct.unpack(f"<{count}H", pcm_data)))
 
 
 def _mulaw_decode_sample(value: int) -> int:
@@ -1151,9 +1110,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
     inbound_stt_track = "inbound"
     # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
     # so send_audio only performs the final companding step.
-    preferred_tts_output_format: ClassVar[AudioFormat] = (
-        TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
-    )
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     def __init__(
         self,
@@ -1221,9 +1178,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         try:
             await self._ws.close()
         except Exception:
-            logger.debug(
-                "Error closing Twilio WebSocket after connect failure", exc_info=True
-            )
+            logger.debug("Error closing Twilio WebSocket after connect failure", exc_info=True)
 
     async def disconnect(self) -> None:
         self._connection_generation += 1
@@ -1280,9 +1235,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         if self._stream_sid is None:
             return
         try:
-            await self._ws.send(
-                json.dumps({"event": "clear", "streamSid": self._stream_sid})
-            )
+            await self._ws.send(json.dumps({"event": "clear", "streamSid": self._stream_sid}))
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot clear audio: Twilio disconnected")
 
@@ -1320,9 +1273,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
             logger.debug("Ignoring Twilio start with non-object payload")
             return None
         if not _twilio_stream_token_valid(start, self._config):
-            logger.warning(
-                "Rejecting Twilio stream start with missing or invalid stream token"
-            )
+            logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             await self._ws.close(4003, "Missing or invalid stream token")
             return False
         self._pending_start_message = msg
@@ -1381,9 +1332,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         except websockets.exceptions.ConnectionClosed as exc:
             logger.info("Twilio Media Streams disconnected before start")
             if isinstance(exc, websockets.exceptions.ConnectionClosedError):
-                self._record_transport_disconnect(
-                    "twilio stream closed abnormally before start"
-                )
+                self._record_transport_disconnect("twilio stream closed abnormally before start")
         return False
 
     async def _receive_loop(self) -> None:
@@ -1484,8 +1433,7 @@ def twiml_connect_stream(
 
     if not merged:
         stream = (
-            f"    <Stream url={quoteattr(websocket_url)} "
-            f"track={quoteattr(track)}{status_attr} />"
+            f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}{status_attr} />"
         )
     else:
         param_lines = "\n".join(
@@ -1536,9 +1484,7 @@ def twiml_stream(
     if stream_token is not None:
         merged[TWILIO_STREAM_TOKEN_PARAMETER] = stream_token
     if not merged:
-        stream = (
-            f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)} />"
-        )
+        stream = f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)} />"
     else:
         param_lines = "\n".join(
             f"      <Parameter name={quoteattr(str(name))} value={quoteattr(str(value))}/>"
