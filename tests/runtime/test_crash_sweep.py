@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import select
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
@@ -13,8 +17,16 @@ from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _crashed_state,
+    is_journal_live,
 )
 from easycat.runtime.records import JournalRecordKind
+
+
+@pytest.fixture(autouse=True)
+def _reset_sweep_coordination():
+    journal_sql_module._clear_crash_sweep_states()
+    yield
+    journal_sql_module._clear_crash_sweep_states()
 
 
 def _dead_pid() -> int:
@@ -97,7 +109,6 @@ def test_crash_sweep_cache_is_bounded(
 ) -> None:
     monkeypatch.setattr(journal_sql_module, "_CRASH_SWEEP_MAX_ROOTS", 2)
     monkeypatch.setattr(journal_sql_module, "sweep_crashed_journals", lambda root, *, skip: 0)
-    journal_sql_module._CRASH_SWEEP_TIMES.clear()
 
     roots = [tmp_path / f"root-{index}" for index in range(3)]
     for root in roots:
@@ -106,10 +117,175 @@ def test_crash_sweep_cache_is_bounded(
             skip=root / "journals" / "own.sqlite",
         )
 
-    assert list(journal_sql_module._CRASH_SWEEP_TIMES) == [
+    assert list(journal_sql_module._CRASH_SWEEP_STATES) == [
         journal_sql_module._crash_sweep_key(roots[1]),
         journal_sql_module._crash_sweep_key(roots[2]),
     ]
+
+
+def test_sweep_runs_eventually_without_a_third_opener(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_sql_module, "_CRASH_SWEEP_INTERVAL_SECONDS", 0.02)
+    first = SqliteJournal("first", data_dir=tmp_path)
+    first.close()
+
+    _crash_one("later-peer", tmp_path)
+    crash_path = tmp_path / "crash-dumps" / "later-peer.sqlite"
+    journal_path = tmp_path / "journals" / "later-peer.sqlite"
+    deadline = time.monotonic() + 2.0
+    while (not crash_path.exists() or journal_path.exists()) and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert crash_path.exists()
+    assert not journal_path.exists()
+
+
+def test_failed_sweep_retries_without_caching_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = threading.Event()
+    calls = 0
+
+    def sweep(_root, *, skip):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("transient")
+        completed.set()
+        return 0
+
+    monkeypatch.setattr(journal_sql_module, "_CRASH_SWEEP_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(journal_sql_module, "sweep_crashed_journals", sweep)
+
+    journal_sql_module._sweep_crashed_journals_if_due(
+        tmp_path,
+        skip=tmp_path / "journals" / "own.sqlite",
+    )
+
+    assert completed.wait(2.0)
+    state = journal_sql_module._CRASH_SWEEP_STATES[journal_sql_module._crash_sweep_key(tmp_path)]
+    assert calls == 2
+    assert state.last_success is not None
+
+
+def test_successful_sweep_timestamps_completion_not_start(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [10.0]
+
+    def sweep(_root, *, skip):
+        now[0] = 25.0
+        return 0
+
+    monkeypatch.setattr(journal_sql_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(journal_sql_module, "sweep_crashed_journals", sweep)
+
+    journal_sql_module._sweep_crashed_journals_if_due(
+        tmp_path,
+        skip=tmp_path / "journals" / "own.sqlite",
+    )
+
+    state = journal_sql_module._CRASH_SWEEP_STATES[journal_sql_module._crash_sweep_key(tmp_path)]
+    assert state.last_success == 25.0
+
+
+def test_sweeps_for_distinct_roots_do_not_block_each_other(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slow_root = tmp_path / "slow"
+    fast_root = tmp_path / "fast"
+    slow_entered = threading.Event()
+    release_slow = threading.Event()
+    fast_completed = threading.Event()
+
+    def sweep(root, *, skip):
+        if root == slow_root.absolute():
+            slow_entered.set()
+            assert release_slow.wait(2.0)
+        if root == fast_root.absolute():
+            fast_completed.set()
+        return 0
+
+    monkeypatch.setattr(journal_sql_module, "sweep_crashed_journals", sweep)
+    thread = threading.Thread(
+        target=journal_sql_module._sweep_crashed_journals_if_due,
+        args=(slow_root,),
+        kwargs={"skip": slow_root / "journals" / "own.sqlite"},
+    )
+    thread.start()
+    assert slow_entered.wait(2.0)
+    try:
+        journal_sql_module._sweep_crashed_journals_if_due(
+            fast_root,
+            skip=fast_root / "journals" / "own.sqlite",
+        )
+        assert fast_completed.is_set()
+    finally:
+        release_slow.set()
+        thread.join(2.0)
+    assert not thread.is_alive()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_sweep_coordination_lock_is_reset_after_fork(tmp_path) -> None:
+    read_fd, write_fd = os.pipe()
+    state = journal_sql_module._crash_sweep_state(tmp_path.absolute())
+    state.lock.acquire()
+    journal_sql_module._CRASH_SWEEP_STATE_LOCK.acquire()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            journal_sql_module._crash_sweep_state(tmp_path.absolute())
+            os.write(write_fd, b"ok")
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    journal_sql_module._CRASH_SWEEP_STATE_LOCK.release()
+    state.lock.release()
+    try:
+        ready, _, _ = select.select([read_fd], [], [], 2.0)
+        assert ready and os.read(read_fd, 2) == b"ok"
+    finally:
+        os.close(read_fd)
+        waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+        if waited_pid == 0:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+
+
+def test_pid_reuse_does_not_keep_stale_owner_live(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = SqliteJournal("reused", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="reused")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        (str(os.getpid()),),
+    )
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+        ("prior-process",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    monkeypatch.setattr(
+        "easycat.runtime.crash_sweep._process_birth_identity",
+        lambda pid: "current-process",
+    )
+
+    db_path = tmp_path / "journals" / "reused.sqlite"
+    assert _crashed_state(db_path) == "crashed"
+    assert is_journal_live(db_path) is False
 
 
 def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
@@ -219,10 +395,7 @@ def test_sweep_runs_on_next_sqlite_open(tmp_path) -> None:
     _crash_one("ghost", tmp_path)
     assert (tmp_path / "journals" / "ghost.sqlite").exists()
     # Simulate the fresh process that follows the stamped dead owner.
-    journal_sql_module._CRASH_SWEEP_TIMES.pop(
-        journal_sql_module._crash_sweep_key(tmp_path),
-        None,
-    )
+    journal_sql_module._clear_crash_sweep_states()
 
     j2 = SqliteJournal("fresh", data_dir=tmp_path)
     try:

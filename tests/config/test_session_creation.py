@@ -8,6 +8,7 @@ from easycat import (
     EasyConfig,
     create_session,
 )
+from easycat.config import _factory as config_factory
 from easycat.session._types import CallIdentity
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport
@@ -57,6 +58,33 @@ class _ProviderShapeVAD:
     async def process(self, chunk):
         if False:
             yield None
+
+
+def test_create_session_closes_vad_when_later_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vad = _ProviderShapeVAD()
+    vad.closed = False
+    vad.close = lambda: setattr(vad, "closed", True)
+    monkeypatch.setattr(config_factory, "_create_vad", lambda config: vad)
+    monkeypatch.setattr(
+        config_factory,
+        "_resolve_agent",
+        lambda config, mcp_servers: (_ for _ in ()).throw(RuntimeError("agent failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="agent failed"):
+        create_session(
+            EasyConfig(
+                stt=_ProviderShapeSTT(),
+                tts=_ProviderShapeTTS(),
+                vad=_ProviderShapeVAD(),
+                transport=_IdentitySinkTransport(),
+                agent=_DummyAgent(),
+            )
+        )
+
+    assert vad.closed is True
 
 
 @pytest.mark.asyncio

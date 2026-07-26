@@ -418,37 +418,50 @@ def _create_debug_resources(config: EasyConfig, session_id: str) -> _DebugResour
     return _DebugResources(artifact_store=artifact_store, journal=journal)
 
 
-def _resolve_audio_pipeline(config: EasyConfig, event_bus: EventBus) -> _AudioPipeline:
-    stt = _create_stt(config.stt, event_bus)
-    tts = _create_tts(config.tts, event_bus)
-    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-    enable_vad = not auto_turn_from_stt_final
-    vad = _create_vad(config.vad) if enable_vad else None
-    noise_reducer = (
-        _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
-        if config.enable_noise_reduction or config.noise_reduction is not None
-        else None
-    )
-    # EasyConfig fills this default while preserving pre-built providers.
-    echo_config_or_provider = config.echo_cancellation
-    assert echo_config_or_provider is not None
-    echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
-    enable_echo_cancellation = (
-        echo_config_or_provider.enabled
-        if isinstance(echo_config_or_provider, EchoCancellationConfig)
-        else False
-    )
-    return _AudioPipeline(
-        stt=stt,
-        tts=tts,
-        vad=vad,
-        noise_reducer=noise_reducer,
-        echo_canceller=echo_canceller,
-        transport=_create_transport(config.transport, event_bus),
-        auto_turn_from_stt_final=auto_turn_from_stt_final,
-        enable_vad=enable_vad,
-        enable_echo_cancellation=enable_echo_cancellation,
-    )
+def _register_close(rollback: ExitStack, resource: Any) -> Any:
+    close = getattr(resource, "close", None)
+    if callable(close):
+        rollback.callback(close)
+    return resource
+
+
+def _resolve_audio_pipeline(
+    config: EasyConfig,
+    event_bus: EventBus,
+) -> _AudioPipeline:
+    with ExitStack() as rollback:
+        stt = _create_stt(config.stt, event_bus)
+        tts = _create_tts(config.tts, event_bus)
+        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+        enable_vad = not auto_turn_from_stt_final
+        vad = _register_close(rollback, _create_vad(config.vad)) if enable_vad else None
+        noise_reducer = (
+            _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+            if config.enable_noise_reduction or config.noise_reduction is not None
+            else None
+        )
+        # EasyConfig fills this default while preserving pre-built providers.
+        echo_config_or_provider = config.echo_cancellation
+        assert echo_config_or_provider is not None
+        echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
+        enable_echo_cancellation = (
+            echo_config_or_provider.enabled
+            if isinstance(echo_config_or_provider, EchoCancellationConfig)
+            else False
+        )
+        pipeline = _AudioPipeline(
+            stt=stt,
+            tts=tts,
+            vad=vad,
+            noise_reducer=noise_reducer,
+            echo_canceller=echo_canceller,
+            transport=_create_transport(config.transport, event_bus),
+            auto_turn_from_stt_final=auto_turn_from_stt_final,
+            enable_vad=enable_vad,
+            enable_echo_cancellation=enable_echo_cancellation,
+        )
+        rollback.pop_all()
+        return pipeline
 
 
 def _resolve_agent(config: EasyConfig, mcp_servers: tuple[str, ...]) -> Any | None:
@@ -583,9 +596,12 @@ def _build_audio_session(
     config: EasyConfig,
     session_id: str,
     debug: _DebugResources,
+    rollback: ExitStack,
 ) -> _BuiltAudioSession:
     event_bus = EventBus()
     audio = _resolve_audio_pipeline(config, event_bus)
+    if audio.vad is not None:
+        _register_close(rollback, audio.vad)
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
     agent = _resolve_agent(config, mcp_servers)
     if debug.journal is not None:
@@ -714,7 +730,7 @@ def create_session(config: EasyConfig) -> Session:
         close_journal = getattr(debug.journal, "close", None)
         if callable(close_journal):
             rollback.callback(close_journal)
-        built = _build_audio_session(config, session_id, debug)
+        built = _build_audio_session(config, session_id, debug, rollback)
         _finalize_audio_session(config, built)
         rollback.pop_all()
         return built.session

@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -34,7 +35,11 @@ from easycat.runtime._private_files import (
     mkdir_private,
     touch_private_file,
 )
-from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
+from easycat.runtime.crash_sweep import (
+    _copy_journal_to_crash_dump,
+    _process_birth_identity,
+    sweep_crashed_journals,
+)
 from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
@@ -46,35 +51,115 @@ from easycat.runtime.records import (
 
 logger = logging.getLogger(__name__)
 
-_CRASH_SWEEP_LOCK = threading.Lock()
 _CRASH_SWEEP_INTERVAL_SECONDS = 60.0
+_CRASH_SWEEP_RETRY_SECONDS = 1.0
 _CRASH_SWEEP_MAX_ROOTS = 128
-_CRASH_SWEEP_TIMES: OrderedDict[tuple[int, Path], float] = OrderedDict()
+_CRASH_SWEEP_STATE_LOCK = threading.Lock()
 
 
-def _crash_sweep_key(root: Path) -> tuple[int, Path]:
-    return os.getpid(), root.absolute()
+@dataclass
+class _CrashSweepState:
+    lock: threading.Lock
+    last_success: float | None = None
+    timer: threading.Timer | None = None
+
+
+_CRASH_SWEEP_STATES: OrderedDict[Path, _CrashSweepState] = OrderedDict()
+
+
+def _crash_sweep_key(root: Path) -> Path:
+    return root.absolute()
+
+
+def _reset_crash_sweep_state_after_fork() -> None:
+    global _CRASH_SWEEP_STATE_LOCK, _CRASH_SWEEP_STATES
+    _CRASH_SWEEP_STATE_LOCK = threading.Lock()
+    _CRASH_SWEEP_STATES = OrderedDict()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_crash_sweep_state_after_fork)
+
+
+def _clear_crash_sweep_states() -> None:
+    """Cancel scheduled scans and clear process-local coordination state."""
+    with _CRASH_SWEEP_STATE_LOCK:
+        states = list(_CRASH_SWEEP_STATES.values())
+        _CRASH_SWEEP_STATES.clear()
+    for state in states:
+        if state.timer is not None:
+            state.timer.cancel()
+
+
+def _crash_sweep_state(root_key: Path) -> _CrashSweepState:
+    with _CRASH_SWEEP_STATE_LOCK:
+        state = _CRASH_SWEEP_STATES.get(root_key)
+        if state is None:
+            state = _CrashSweepState(lock=threading.Lock())
+            _CRASH_SWEEP_STATES[root_key] = state
+        else:
+            _CRASH_SWEEP_STATES.move_to_end(root_key)
+
+        while len(_CRASH_SWEEP_STATES) > _CRASH_SWEEP_MAX_ROOTS:
+            old_key, old_state = next(iter(_CRASH_SWEEP_STATES.items()))
+            if old_state.timer is not None:
+                old_state.timer.cancel()
+            del _CRASH_SWEEP_STATES[old_key]
+        return state
+
+
+def _schedule_crash_sweep(root_key: Path, state: _CrashSweepState, delay: float) -> None:
+    if state.timer is not None:
+        return
+    timer = threading.Timer(
+        max(0.0, delay),
+        _run_scheduled_crash_sweep,
+        args=(root_key, state),
+    )
+    timer.daemon = True
+    state.timer = timer
+    timer.start()
+
+
+def _run_scheduled_crash_sweep(root_key: Path, state: _CrashSweepState) -> None:
+    with _CRASH_SWEEP_STATE_LOCK:
+        if _CRASH_SWEEP_STATES.get(root_key) is not state:
+            return
+    with state.lock:
+        state.timer = None
+        _run_crash_sweep(root_key, state, skip=None)
+
+
+def _run_crash_sweep(root: Path, state: _CrashSweepState, *, skip: Path | None) -> None:
+    try:
+        sweep_crashed_journals(root, skip=skip)
+    except (OSError, sqlite3.DatabaseError):
+        logger.debug("Crash-journal sweep failed", exc_info=True)
+        _schedule_crash_sweep(root, state, _CRASH_SWEEP_RETRY_SECONDS)
+        return
+
+    state.last_success = time.monotonic()
+    _schedule_crash_sweep(root, state, _CRASH_SWEEP_INTERVAL_SECONDS)
 
 
 def _sweep_crashed_journals_if_due(root: Path, *, skip: Path) -> None:
     """Periodically scan *root* without putting an O(n) scan on every open."""
     root_key = _crash_sweep_key(root)
-    now = time.monotonic()
-    with _CRASH_SWEEP_LOCK:
-        last_sweep = _CRASH_SWEEP_TIMES.get(root_key)
-        elapsed = None if last_sweep is None else now - last_sweep
+    state = _crash_sweep_state(root_key)
+    with state.lock:
+        now = time.monotonic()
+        elapsed = None if state.last_success is None else now - state.last_success
         if elapsed is not None and 0 <= elapsed < _CRASH_SWEEP_INTERVAL_SECONDS:
-            _CRASH_SWEEP_TIMES.move_to_end(root_key)
+            _schedule_crash_sweep(
+                root_key,
+                state,
+                _CRASH_SWEEP_INTERVAL_SECONDS - elapsed,
+            )
             return
-        try:
-            sweep_crashed_journals(root, skip=skip)
-        except (OSError, sqlite3.DatabaseError):
-            logger.debug("Crash-journal sweep failed", exc_info=True)
-        finally:
-            _CRASH_SWEEP_TIMES[root_key] = now
-            _CRASH_SWEEP_TIMES.move_to_end(root_key)
-            while len(_CRASH_SWEEP_TIMES) > _CRASH_SWEEP_MAX_ROOTS:
-                _CRASH_SWEEP_TIMES.popitem(last=False)
+        if state.timer is not None:
+            state.timer.cancel()
+            state.timer = None
+        _run_crash_sweep(root_key, state, skip=skip)
 
 
 class _SqlJournalBase:
@@ -296,17 +381,25 @@ class SqliteJournal(_SqlJournalBase):
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
-        # Stamp our PID as a liveness marker (committed so a separate
+        # Stamp our PID and process-birth identity as liveness markers
+        # (committed so a separate
         # crash-sweep connection can read it).  An idle WAL journal between
         # turns holds no write lock, so the orphan sweep cannot tell "live
         # but idle" from "crashed" by lock alone; the PID lets it skip a
-        # journal whose owning process is still running.  Cleared on clean
-        # close so a cleanly-closed (or crashed-then-PID-reused) file never
-        # masquerades as live.
+        # journal whose owning process is still running. The birth identity
+        # distinguishes that process from a later process that reuses its PID.
         self._conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
             (str(os.getpid()),),
         )
+        process_birth = _process_birth_identity(os.getpid())
+        if process_birth is not None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+                (process_birth,),
+            )
+        else:
+            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
         self._conn.commit()
 
         # Recover sequence counter from any existing records.  Both the
@@ -484,7 +577,9 @@ class SqliteJournal(_SqlJournalBase):
                 )
                 # Drop the liveness marker: the process is shutting down, so
                 # the journal is no longer "live" for the crash sweep.
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -535,7 +630,9 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._conn.commit()
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import select
 import struct
 from unittest.mock import MagicMock
 
@@ -70,6 +72,74 @@ def test_silero_onnx_session_is_cached_while_recurrent_state_is_not(
     assert first._state is not second._state
     first.close()
     assert second._session is runtime.sessions[0]
+    entry = next(iter(vad_silero_module._ONNX_SESSION_CACHE.values()))
+    assert entry.owners == 1
+    second.close()
+    assert vad_silero_module._ONNX_SESSION_CACHE == {}
+
+
+def test_silero_onnx_cache_releases_failed_model_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BrokenNumpy:
+        float32 = object()
+
+        @staticmethod
+        def zeros(*_args, **_kwargs):
+            raise RuntimeError("state allocation failed")
+
+    class _SessionOptions:
+        inter_op_num_threads = 0
+        intra_op_num_threads = 0
+
+    class _FakeOnnxRuntime:
+        SessionOptions = _SessionOptions
+
+        @staticmethod
+        def get_available_providers() -> list[str]:
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def InferenceSession(*_args, **_kwargs):  # noqa: N802
+            return object()
+
+    monkeypatch.setattr(
+        vad_silero_module,
+        "require_module",
+        lambda name, **_kwargs: _BrokenNumpy if name == "numpy" else _FakeOnnxRuntime,
+    )
+    monkeypatch.setattr(vad_silero_module, "_ONNX_SESSION_CACHE", {})
+
+    with pytest.raises(RuntimeError, match="state allocation failed"):
+        vad_silero_module._SileroOnnxModel("model.onnx")
+
+    assert vad_silero_module._ONNX_SESSION_CACHE == {}
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_silero_cache_lock_is_reset_after_fork() -> None:
+    read_fd, write_fd = os.pipe()
+    vad_silero_module._ONNX_SESSION_CACHE_LOCK.acquire()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            with vad_silero_module._ONNX_SESSION_CACHE_LOCK:
+                os.write(write_fd, b"ok")
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    vad_silero_module._ONNX_SESSION_CACHE_LOCK.release()
+    try:
+        ready, _, _ = select.select([read_fd], [], [], 2.0)
+        assert ready and os.read(read_fd, 2) == b"ok"
+    finally:
+        os.close(read_fd)
+        waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+        if waited_pid == 0:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
 
 
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):

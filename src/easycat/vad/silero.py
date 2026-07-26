@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,26 @@ _SILERO_DEFAULT_RATE = 16000
 _SILERO_FRAME_SAMPLES_AT: dict[int, int] = {8000: 256, 16000: 512}
 _SILERO_CONTEXT_SAMPLES_AT: dict[int, int] = {8000: 32, 16000: 64}
 _SILERO_ONNX_MODEL = Path(__file__).parent.parent / "models" / "silero_vad.onnx"
-_ONNX_SESSION_CACHE: dict[tuple[int, str], Any] = {}
+
+
+@dataclass
+class _OnnxSessionEntry:
+    session: Any
+    owners: int
+
+
+_ONNX_SESSION_CACHE: dict[tuple[int, str], _OnnxSessionEntry] = {}
 _ONNX_SESSION_CACHE_LOCK = threading.Lock()
+
+
+def _reset_onnx_session_cache_after_fork() -> None:
+    global _ONNX_SESSION_CACHE, _ONNX_SESSION_CACHE_LOCK
+    _ONNX_SESSION_CACHE = {}
+    _ONNX_SESSION_CACHE_LOCK = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_onnx_session_cache_after_fork)
 
 
 def _silero_backend_override() -> str | None:
@@ -53,13 +72,14 @@ def _silero_onnx_model_path() -> str:
     return str(_SILERO_ONNX_MODEL)
 
 
-def _shared_onnx_session(model_path: str, onnxruntime: Any) -> Any:
+def _acquire_onnx_session(model_path: str, onnxruntime: Any) -> tuple[tuple[int, str], Any]:
     """Load each immutable ONNX graph once while keeping VAD state per instance."""
     cache_key = (os.getpid(), model_path)
     with _ONNX_SESSION_CACHE_LOCK:
         cached = _ONNX_SESSION_CACHE.get(cache_key)
         if cached is not None:
-            return cached
+            cached.owners += 1
+            return cache_key, cached.session
 
         opts = onnxruntime.SessionOptions()
         opts.inter_op_num_threads = 1
@@ -78,8 +98,18 @@ def _shared_onnx_session(model_path: str, onnxruntime: Any) -> Any:
                 providers=providers,
                 sess_options=opts,
             )
-        _ONNX_SESSION_CACHE[cache_key] = session
-        return session
+        _ONNX_SESSION_CACHE[cache_key] = _OnnxSessionEntry(session=session, owners=1)
+        return cache_key, session
+
+
+def _release_onnx_session(cache_key: tuple[int, str], session: Any) -> None:
+    with _ONNX_SESSION_CACHE_LOCK:
+        cached = _ONNX_SESSION_CACHE.get(cache_key)
+        if cached is None or cached.session is not session:
+            return
+        cached.owners -= 1
+        if cached.owners <= 0:
+            del _ONNX_SESSION_CACHE[cache_key]
 
 
 class _SileroOnnxModel:
@@ -88,9 +118,15 @@ class _SileroOnnxModel:
     def __init__(self, model_path: str) -> None:
         numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
         onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
-        self._session = _shared_onnx_session(model_path, onnxruntime)
+        self._cache_key: tuple[int, str] | None = None
+        self._session: Any = None
         self._numpy = numpy
-        self.reset_states()
+        try:
+            self._cache_key, self._session = _acquire_onnx_session(model_path, onnxruntime)
+            self.reset_states()
+        except Exception:
+            self.close()
+            raise
 
     def reset_states(self) -> None:
         np = self._numpy
@@ -100,6 +136,11 @@ class _SileroOnnxModel:
 
     def close(self) -> None:
         """Release the onnxruntime InferenceSession handle."""
+        cache_key = getattr(self, "_cache_key", None)
+        session = getattr(self, "_session", None)
+        if cache_key is not None and session is not None:
+            _release_onnx_session(cache_key, session)
+        self._cache_key = None
         self._session = None
 
     def __del__(self) -> None:
