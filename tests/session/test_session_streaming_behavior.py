@@ -203,6 +203,47 @@ async def test_agent_timeout_uses_spoken_failure_fallback():
 
 
 @pytest.mark.asyncio
+async def test_agent_timeout_drops_unfinished_fragment_before_fallback():
+    class PartialTimeoutAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return text
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="text_delta", text="unfinished fragment")
+            await asyncio.Event().wait()
+
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=PartialTimeoutAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+            on_agent_failure="Please try again.",
+        )
+    )
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
+
+    await session.start()
+    await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Please try again."]
+
+
+@pytest.mark.asyncio
 async def test_agent_failure_fallback_is_skipped_after_response_audio():
     class PartialResponseAgent(_TestBridgeBase):
         async def run(self, text: str) -> str:

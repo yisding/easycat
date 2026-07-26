@@ -997,6 +997,26 @@ async def test_agent_failure_fallback_keeps_turn_owned_until_tts_settles() -> No
     assert session._turn_manager.state == TurnManagerState.IDLE
 
 
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_respects_playback_suppression() -> None:
+    tts = FakeTTS()
+    session = Session(
+        _config(
+            agent=_FailingStreamingAgent(),
+            tts=tts,
+            on_agent_failure="Please try again.",
+        )
+    )
+    turn = TurnContext("turn-suppressed-fallback", CancelToken())
+    session._turn_runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    session._tts_scheduler.set_playback_suppressed(True)
+
+    await session._turn_runner.run_streaming_agent("hello", turn.cancel_token)
+
+    assert tts.synthesized_texts == []
+
+
 class _Gate:
     """Stateful classification gate: buffering until flushed."""
 
