@@ -21,6 +21,9 @@ from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import (
     aclose_quietly,
+    bridge_version_info,
+    record_usage_from_result,
+    resolve_model_name,
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
@@ -185,6 +188,22 @@ class PydanticAIBridge:
         return state
 
     # ── ExternalAgentBridge interface ─────────────────────────────
+
+    def version_info(self) -> dict[str, str]:
+        """Return model and SDK metadata for journal reproducibility."""
+        return bridge_version_info(
+            provider="pydantic_ai",
+            model=self._model_name(),
+            distribution="pydantic-ai",
+        )
+
+    def _model_name(self) -> str | None:
+        candidates = [self._agent, *(self._agents or [])]
+        for agent in candidates:
+            model = resolve_model_name(getattr(agent, "model", None))
+            if model is not None:
+                return model
+        return None
 
     async def invoke(
         self,
@@ -446,7 +465,12 @@ class PydanticAIBridge:
                         yield ev
                     raw_output = self._last_output
                 else:
-                    inner = self._stream_via_run_stream(turn_input, cancel_token, history_key)
+                    inner = self._stream_via_run_stream(
+                        turn_input,
+                        recorder,
+                        cancel_token,
+                        history_key,
+                    )
                     async for ev in inner:
                         if ev.kind == "text_delta":
                             accumulated += ev.text
@@ -509,10 +533,17 @@ class PydanticAIBridge:
 
             self._set_history_for_key(history_key, await _run_new_messages(agent_run))
             self._last_output = await _run_output(agent_run)
+            await record_usage_from_result(
+                recorder,
+                agent_run,
+                provider="pydantic_ai",
+                model=self._model_name(),
+            )
 
     async def _stream_via_run_stream(
         self,
         turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None,
         history_key: str,
     ) -> AsyncIterator[AgentBridgeEvent]:
@@ -533,6 +564,12 @@ class PydanticAIBridge:
 
             self._set_history_for_key(history_key, await _run_new_messages(result))
             self._last_output = await _run_output(result)
+            await record_usage_from_result(
+                recorder,
+                result,
+                provider="pydantic_ai",
+                model=self._model_name(),
+            )
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:
@@ -707,6 +744,12 @@ class PydanticAIBridge:
                 self._last_output = output
                 if isinstance(output, str):
                     accumulated = accumulated or output
+            await record_usage_from_result(
+                recorder,
+                graph_run,
+                provider="pydantic_ai",
+                model=self._model_name(),
+            )
 
             # Capture graph run history as a state snapshot record.
             run_history = getattr(graph_run, "history", None)

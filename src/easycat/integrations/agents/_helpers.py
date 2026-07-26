@@ -9,14 +9,128 @@ text.
 from __future__ import annotations
 
 import contextlib
+import inspect
+import logging
 from collections.abc import Sequence
 from typing import Any
+
+from easycat._provider_helpers import get_package_version
+from easycat.integrations.agents.base import AgentRecorder
+
+logger = logging.getLogger(__name__)
 
 # Shared constant used by bridges when recording an end-of-turn
 # interruption in message history.
 INTERRUPTION_NOTE = (
     "[The user interrupted the assistant's response and may not have heard all of it.]"
 )
+
+
+def resolve_model_name(candidate: Any) -> str | None:
+    """Return a model identifier from common string and SDK object shapes."""
+    if isinstance(candidate, str):
+        model = candidate.strip()
+        return model or None
+    for attr in ("model", "model_name", "name"):
+        value = getattr(candidate, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def bridge_version_info(
+    *,
+    provider: str,
+    model: str | None,
+    distribution: str,
+) -> dict[str, str]:
+    """Build the stable provider metadata shape for an agent bridge."""
+    return {
+        "provider": provider,
+        "model": model or "unknown",
+        "api_version": "unknown",
+        "sdk_version": get_package_version(distribution),
+    }
+
+
+async def record_usage_from_result(
+    recorder: AgentRecorder,
+    result: Any,
+    *,
+    provider: str,
+    model: str | None,
+) -> None:
+    """Best-effort token usage extraction across optional agent SDK versions."""
+    try:
+        usage = await _resolve_usage(result)
+        if usage is None:
+            return
+        input_tokens = _usage_int(usage, "input_tokens", "request_tokens")
+        output_tokens = _usage_int(usage, "output_tokens", "response_tokens")
+        cached_input_tokens = _usage_int(
+            usage,
+            "cached_input_tokens",
+            "cache_read_tokens",
+        )
+        if cached_input_tokens is None:
+            details = _usage_value(
+                usage,
+                "input_tokens_details",
+                "request_tokens_details",
+                "details",
+            )
+            cached_input_tokens = _usage_int(
+                details,
+                "cached_tokens",
+                "cache_read_tokens",
+                "cached_input_tokens",
+            )
+        if input_tokens is None and output_tokens is None and cached_input_tokens is None:
+            return
+        record_usage = getattr(recorder, "record_usage", None)
+        if record_usage is None:
+            return
+        record_usage(
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+        )
+    except Exception:
+        logger.debug("Unable to record agent token usage", exc_info=True)
+
+
+async def _resolve_usage(result: Any) -> Any:
+    candidates = [
+        getattr(result, "usage", None),
+        getattr(getattr(result, "context_wrapper", None), "usage", None),
+        getattr(getattr(result, "ctx", None), "usage", None),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        value = candidate() if callable(candidate) else candidate
+        if inspect.isawaitable(value):
+            value = await value
+        if value is not None:
+            return value
+    return None
+
+
+def _usage_value(usage: Any, *names: str) -> Any:
+    if usage is None:
+        return None
+    for name in names:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _usage_int(usage: Any, *names: str) -> int | None:
+    value = _usage_value(usage, *names)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 async def aclose_quietly(agen: Any) -> None:

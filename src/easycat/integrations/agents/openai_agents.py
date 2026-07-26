@@ -16,7 +16,11 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
-from easycat.integrations.agents._helpers import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import (
+    bridge_version_info,
+    record_usage_from_result,
+    split_replacement_by_original_parts,
+)
 from easycat.integrations.agents._openai_agents_events import (
     extract_text_delta,
     extract_tool_delta,
@@ -178,6 +182,24 @@ class OpenAIAgentsBridge:
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
+    def version_info(self) -> dict[str, str]:
+        """Return model and SDK metadata for journal reproducibility."""
+        return bridge_version_info(
+            provider="openai_agents",
+            model=self._model_name(),
+            distribution="openai-agents",
+        )
+
+    def _model_name(self) -> str | None:
+        for candidate in (
+            getattr(self._run_config, "model", None),
+            getattr(self._agent, "model", None),
+        ):
+            resolved = _resolve_model_id(candidate)
+            if resolved is not None:
+                return resolved
+        return None
+
     async def invoke(
         self,
         turn_input: AgentTurnInput,
@@ -322,6 +344,12 @@ class OpenAIAgentsBridge:
                 self._message_history = _drop_dangling_function_calls(history)
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
+            await record_usage_from_result(
+                recorder,
+                result,
+                provider="openai_agents",
+                model=self._model_name(),
+            )
             if not cursor_exited:
                 last_agent = getattr(result, "last_agent", None)
                 if last_agent is not None and last_agent is not self._agent:

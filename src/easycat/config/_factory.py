@@ -329,12 +329,13 @@ def _emit_provider_versions(
     journal: Any,
     session_id: str,
     *,
-    stt: Any,
-    tts: Any,
-    transport: Any,
+    stt: Any = None,
+    tts: Any = None,
+    transport: Any = None,
     vad: Any = None,
     noise_reducer: Any = None,
     echo_canceller: Any = None,
+    agent: Any = None,
 ) -> None:
     """Write a single journal record with version info from all providers."""
     from easycat.runtime.record_contracts import validate_builtin_record
@@ -348,6 +349,7 @@ def _emit_provider_versions(
         ("vad", vad),
         ("noise_reducer", noise_reducer),
         ("echo_canceller", echo_canceller),
+        ("agent", agent),
     ]:
         if provider is not None and hasattr(provider, "version_info"):
             versions[role] = provider.version_info()
@@ -602,6 +604,7 @@ def _build_audio_session(
             vad=audio.vad,
             noise_reducer=audio.noise_reducer,
             echo_canceller=audio.echo_canceller,
+            agent=agent,
         )
     telephony = _resolve_telephony(config, event_bus)
     session_config = _make_session_config(
@@ -981,6 +984,8 @@ def create_text_session(
         if wrap_agent and not isinstance(adapted, AgentRunner):
             runner_cfg = agent_runner or AgentRunnerConfig()
             adapted = AgentRunner(adapted, runner_cfg)
+        if journal is not None:
+            _emit_provider_versions(journal, sid, agent=adapted)
 
         # Text sessions use noop providers — validation is skipped because
         # runtime_mode="text_session" never enters the audio pipeline.

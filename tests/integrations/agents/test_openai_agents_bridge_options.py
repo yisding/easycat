@@ -30,6 +30,7 @@ def _recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder
 class _Agent:
     def __init__(self, name: str = "Agent", mcp_servers: list[Any] | None = None) -> None:
         self.name = name
+        self.model = "gpt-test"
         self.mcp_servers = [] if mcp_servers is None else mcp_servers
 
 
@@ -42,12 +43,14 @@ class _RunResult:
         final_output: Any = "final",
         message_history: list[Any] | None = None,
         stream_error: Exception | None = None,
+        usage: Any = None,
     ) -> None:
         self.last_agent = last_agent
         self.last_response_id = last_response_id
         self.final_output = final_output
         self._message_history = message_history or []
         self._stream_error = stream_error
+        self.context_wrapper = SimpleNamespace(usage=usage)
 
     async def stream_events(self) -> AsyncIterator[Any]:
         if self._stream_error is not None:
@@ -97,6 +100,42 @@ class _FakeRunner:
         if self._call_error is not None:
             raise self._call_error
         return self._results.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_invoke_records_sdk_usage(monkeypatch):
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    agent = _Agent()
+    result = _RunResult(
+        last_agent=agent,
+        usage=SimpleNamespace(
+            input_tokens=18,
+            output_tokens=7,
+            input_tokens_details=SimpleNamespace(cached_tokens=5),
+        ),
+    )
+    monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner([result]))
+    journal = InMemoryRingBuffer(capacity=1000)
+    bridge = OpenAIAgentsBridge(agent)
+
+    _ = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("hello"),
+            _recorder(journal),
+        )
+    ]
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data == {
+        "run_id": "r1",
+        "provider": "openai_agents",
+        "model": "gpt-test",
+        "input_tokens": 18,
+        "output_tokens": 7,
+        "cached_input_tokens": 5,
+    }
 
 
 @pytest.mark.asyncio

@@ -102,6 +102,30 @@ class _StructuredOutputRun(_EmptyAgentRun):
     output = {"utterance": "hello", "intent": "capture"}
 
 
+class _UsageAgentRun(_EmptyAgentRun):
+    def usage(self) -> dict[str, int]:
+        return {
+            "request_tokens": 23,
+            "response_tokens": 9,
+            "cache_read_tokens": 6,
+        }
+
+
+class _UsageAgent:
+    name = "usage"
+    model = "test-model"
+
+    def iter(
+        self,
+        text: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> _UsageAgentRun:
+        return _UsageAgentRun()
+
+
 class _LegacyMCPAgent:
     name = "legacy"
 
@@ -424,6 +448,30 @@ async def test_graph_bridge_does_not_replay_prior_session_output() -> None:
     assert first[-1].structured_output == {"utterance": "first"}
     assert second[-1].text == ""
     assert second[-1].structured_output is None
+
+
+@pytest.mark.asyncio
+async def test_bridge_records_v2_usage_accessor() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    bridge = PydanticAIBridge(agent=_UsageAgent())
+
+    _ = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("hi"),
+            _recorder(journal),
+        )
+    ]
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data == {
+        "run_id": "r1",
+        "provider": "pydantic_ai",
+        "model": "test-model",
+        "input_tokens": 23,
+        "output_tokens": 9,
+        "cached_input_tokens": 6,
+    }
 
 
 def test_graph_iter_prefers_inputs_keyword_when_state_is_positional_capable() -> None:

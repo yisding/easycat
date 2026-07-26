@@ -82,6 +82,29 @@ class TestRecorderLifecycle:
         assert records[0].error.type == "RuntimeError"
         assert records[0].data["run_id"] == "r1"
 
+    def test_agent_usage_records_available_counts_only(self, recorder, journal):
+        recorder.record_usage(
+            provider="openai_agents",
+            model="gpt-test",
+            input_tokens=12,
+            cached_input_tokens=4,
+        )
+
+        [record] = journal.read()
+        assert record.name == "agent_usage"
+        assert record.data == {
+            "run_id": "r1",
+            "provider": "openai_agents",
+            "model": "gpt-test",
+            "input_tokens": 12,
+            "cached_input_tokens": 4,
+        }
+
+    def test_agent_usage_without_counts_is_not_recorded(self, recorder, journal):
+        recorder.record_usage(provider="openai_agents", model="gpt-test")
+
+        assert journal.read() == []
+
     def test_state_snapshot_recorded(self, recorder, journal):
         recorder.record_state_snapshot(ref="abc123")
         records = journal.read()

@@ -40,6 +40,10 @@ def test_create_text_session_defaults_build_memory_journal(
         assert session.journal is not None
         assert isinstance(session._journal, InMemoryRingBuffer)
         assert not isinstance(session._journal, SqliteJournal)
+        [versions] = [
+            record for record in session.journal.read() if record.name == "provider_versions"
+        ]
+        assert versions.data["agent"]["provider"] == "_DummyAgent"
     finally:
         session._journal.close()
 

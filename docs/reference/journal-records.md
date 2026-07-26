@@ -52,9 +52,10 @@ reader may inspect.
 | Name | Kind | Required `data` keys | Optional or variant `data` keys |
 |---|---|---|---|
 | `aec_reference_frame` | `EVENT` | `stage: str`, `audio_bytes: int` | `sample_rate: int`, `channels: int`, `sample_width: int`, `encoding: str`, `duration_ms: number` |
+| `agent_usage` | `EVENT` | `run_id: str`; at least one token-count key | `provider: str`, `model: str`, `input_tokens: int`, `output_tokens: int`, `cached_input_tokens: int` |
 | `interruption_note` | `EVENT` | `stage: str`, `note: str` | - |
 | `markdown_stripped` | `EVENT` | `phase: str`, `changed: bool`, `original_text: str`, `stripped_text: str` | - |
-| `provider_versions` | `EVENT` | - | Dynamic provider-role keys such as `stt`, `tts`, `transport`, `vad`, `noise_reducer`, and `echo_canceller`; each value is a version-info mapping. |
+| `provider_versions` | `EVENT` | - | Dynamic provider-role keys such as `stt`, `tts`, `transport`, `vad`, `noise_reducer`, `echo_canceller`, and `agent`; each value is a version-info mapping. |
 | `replace_last_assistant_text` | `EVENT` | `stage: str`, `text: str` | - |
 | `stage_complete` | `EVENT` | `stage: str` | `state_before: str`, `state_after: str`, `elapsed_ms: number`, `response: str`, `audio_bytes: int`, audio-format keys, `delivered: bool`, `events: list`, `prediction: Any`, `probability: number`, `frame_count: int`, `total_bytes: int` |
 | `stage_error` | `EVENT` | `stage: str`, `error: str`, `elapsed_ms: number` | `state_before: str`, `input_sequence: int`, `input_record_ref: str` |
