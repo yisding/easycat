@@ -92,6 +92,69 @@ unauthenticated `0.0.0.0` WebSocket voice endpoint. The **only** escape hatch is
 the structured `unsafe_allow_no_auth=True` field (on the auth policy and mirrored
 on `VoiceServerConfig`); never bypass it with prose-only config.
 
+### Binding a typed principal
+
+`AuthResult` is deliberately only a verdict. Keep tenant and caller identity in
+an application-owned type, and use one verifier in both places that need it:
+the `AuthPolicy` rejects invalid credentials before session construction, then
+the session factory reads the accepted handshake from the transport and
+re-verifies it to recover the typed principal.
+
+```python
+from dataclasses import dataclass
+
+from easycat import EasyConfig
+from easycat.server import VoiceServer, VoiceServerConfig
+from easycat.server.auth import AuthResult, RequestLike, from_websocket
+from easycat.transports import WebSocketConnectionTransport
+
+
+@dataclass(frozen=True)
+class CallPrincipal:
+    tenant_id: str
+    agent_version_id: str
+    call_id: str
+
+
+class CallContextAuth:
+    def authenticate(self, request: RequestLike) -> CallPrincipal | None:
+        # Application code verifies the signature, expiry, audience, and claims.
+        return verify_call_context(request.authorization_header)
+
+    def authorize(self, request: RequestLike) -> AuthResult:
+        principal = self.authenticate(request)
+        reason = "allowed" if principal is not None else "invalid"
+        return AuthResult(allowed=principal is not None, reason=reason)
+
+
+auth = CallContextAuth()
+
+
+def session_factory(transport: WebSocketConnectionTransport) -> EasyConfig:
+    request = transport.request
+    if request is None:
+        raise RuntimeError("accepted WebSocket request is unavailable")
+    principal = auth.authenticate(from_websocket(request.headers, request.path))
+    if principal is None:
+        raise RuntimeError("accepted credentials no longer validate")
+    return EasyConfig(
+        transport=transport,
+        agent=build_agent(principal.tenant_id, principal.agent_version_id),
+        session_id=principal.call_id,
+    )
+
+
+server = VoiceServer(
+    VoiceServerConfig(host="0.0.0.0", auth=auth),
+    session_factory=session_factory,
+)
+```
+
+Do not parse a token without verifying it in the factory. Re-verification keeps
+the factory correct even when credentials can expire or be revoked between the
+accept check and session construction. For WebRTC, use the same pattern with
+`transport.offer_request` and `from_aiohttp_request(...)`.
+
 ## Graceful shutdown
 
 `VoiceServer.stop()` (and `stop(force=True)`) drain through the shared

@@ -314,6 +314,11 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         """The current audio format for this transport."""
         return self._audio_format
 
+    @property
+    def request(self) -> Any | None:
+        """Accepted WebSocket handshake request, when exposed by ``websockets``."""
+        return getattr(self._ws, "request", None)
+
     async def connect(self) -> None:
         if self._connected:
             return

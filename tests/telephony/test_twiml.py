@@ -258,13 +258,20 @@ def test_twilio_stream_parameters_from_form_defaults_and_copies_caller_fields() 
             ("Direction", "outbound-api"),
             ("From", "+15551234567"),
             ("To", "+15557654321"),
+            ("CallerId", "+15550001111"),
+            ("ForwardedFrom", "+15559990000"),
             ("CallerName", ""),
             ("Ignored", "value"),
-        ]
+            ("X-Carrier", "pstn"),
+        ],
+        extra_fields=("X-Carrier",),
     ) == {
         "Direction": "outbound-api",
         "From": "+15551234567",
         "To": "+15557654321",
+        "CallerId": "+15550001111",
+        "ForwardedFrom": "+15559990000",
+        "X-Carrier": "pstn",
     }
 
 

@@ -48,6 +48,22 @@ def test_bundle_record_summary_uses_timestamp_bounds_for_out_of_order_records() 
     }
 
 
+def test_bundle_record_summary_prefers_call_ended_duration() -> None:
+    summary = summarise_bundle_records(
+        [
+            {"session_id": "session-1", "wall_ns": 1_000_000_000, "name": "session_started"},
+            {
+                "session_id": "session-1",
+                "wall_ns": 9_000_000_000,
+                "name": "call_ended",
+                "data": {"duration_s": 45.25},
+            },
+        ]
+    )
+
+    assert summary.duration_ms == 45_250.0
+
+
 def test_annotation_summary_tolerates_untrusted_sidecar_records() -> None:
     summary = summarise_annotations(
         {

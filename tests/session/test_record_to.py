@@ -109,6 +109,49 @@ def _restore_easycat_logger():
 
 
 @pytest.mark.asyncio
+async def test_easy_config_session_id_and_data_dir_drive_runtime_storage(tmp_path: Path) -> None:
+    data_dir = tmp_path / "tenant-a"
+    session = create_session(
+        EasyConfig(
+            agent=_DummyAgent(),
+            stt=_CustomSTT(),
+            tts=_CustomTTS(),
+            vad=_CustomVAD(),
+            transport=_CustomTransport(),
+            debug="full",
+            session_id="call-tenant-a-1",
+            data_dir=data_dir,
+        )
+    )
+
+    try:
+        assert session.session_id == "call-tenant-a-1"
+        assert (data_dir / "journals" / "call-tenant-a-1.sqlite").is_file()
+        assert not (tmp_path / "journals").exists()
+    finally:
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_text_session_config_data_dir_drives_runtime_storage(tmp_path: Path) -> None:
+    data_dir = tmp_path / "text-root"
+    session = create_text_session(
+        TextSessionConfig(
+            agent=_DummyAgent(),
+            debug="full",
+            session_id="text-session-a",
+            data_dir=data_dir,
+        )
+    )
+
+    try:
+        assert session.session_id == "text-session-a"
+        assert (data_dir / "journals" / "text-session-a.sqlite").is_file()
+    finally:
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_record_to_exports_on_stop(tmp_path: Path) -> None:
     session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 

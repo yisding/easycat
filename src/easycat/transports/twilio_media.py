@@ -490,6 +490,11 @@ class _TwilioProtocolMixin:
     # ── Read-only accessors ───────────────────────────────────────
 
     @property
+    def request(self) -> Any | None:
+        """Accepted Twilio Media Streams WebSocket handshake request, when available."""
+        return getattr(self._current_ws(), "request", None)
+
+    @property
     def call_identity(self) -> Any | None:
         """Latest :class:`CallIdentity` parsed from the Twilio start event."""
         return self._call_identity

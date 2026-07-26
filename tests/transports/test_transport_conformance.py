@@ -8,7 +8,7 @@ import pytest
 
 from easycat.events import EventBus
 from easycat.transports.local import LocalTransport
-from easycat.transports.twilio_media import TwilioTransport
+from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
@@ -24,6 +24,9 @@ _make_chunk = make_chunk
 class _FakeServerWS:
     """Minimal stand-in for a live server WebSocket connection."""
 
+    def __init__(self) -> None:
+        self.request = object()
+
     async def close(self, code: int = 1000, reason: str = "") -> None:
         return None
 
@@ -38,6 +41,17 @@ def _make_connection_transports() -> dict[str, object]:
         "webtransport_connection": WebTransportConnectionTransport(),
         "local": LocalTransport(),
     }
+
+
+def test_connection_transports_expose_handshake_request() -> None:
+    ws = _FakeServerWS()
+
+    assert WebSocketConnectionTransport(ws).request is ws.request
+    assert TwilioConnectionTransport(ws).request is ws.request
+
+
+def test_webrtc_transport_offer_request_defaults_to_none() -> None:
+    assert WebRTCTransport().offer_request is None
 
 
 class TestEmitTaskDrain:

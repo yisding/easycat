@@ -453,9 +453,12 @@ class PydanticAIBridge:
                     agent.mcp_servers = saved_mcp_servers
 
         if not done_emitted:
+            text = accumulated
+            if not text and raw_output is not None:
+                text = str(raw_output)
             yield AgentBridgeEvent(
                 kind="done",
-                text=accumulated,
+                text=text,
                 structured_output=raw_output,
             )
 

@@ -190,18 +190,27 @@ async def twilio_form_items_from_request(
 
 def twilio_stream_parameters_from_form(
     form: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    *,
+    extra_fields: Sequence[str] = (),
 ) -> dict[str, str]:
-    """Build caller/call metadata parameters for ``twiml_connect_stream``."""
+    """Build caller/call metadata parameters for ``twiml_connect_stream``.
+
+    The returned fields become Twilio ``start.customParameters``. EasyCat
+    preserves unrecognized parameters in ``CallIdentity.custom_fields``.
+    """
     values = _form_values(form)
     parameters = {"Direction": values.get("Direction") or "inbound"}
     for name in (
         "From",
         "To",
+        "CallerId",
         "CallerName",
+        "ForwardedFrom",
         "FromCity",
         "FromState",
         "FromZip",
         "FromCountry",
+        *extra_fields,
     ):
         if values.get(name):
             parameters[name] = values[name]

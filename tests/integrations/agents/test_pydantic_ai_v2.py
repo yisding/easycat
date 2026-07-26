@@ -98,6 +98,10 @@ class _EmptyAgentRun:
         return []
 
 
+class _StructuredOutputRun(_EmptyAgentRun):
+    output = {"utterance": "hello", "intent": "capture"}
+
+
 class _LegacyMCPAgent:
     name = "legacy"
 
@@ -115,6 +119,18 @@ class _LegacyMCPAgent:
     ) -> _EmptyAgentRun:
         self.seen_mcp_servers = list(self.mcp_servers)
         return _EmptyAgentRun()
+
+
+class _StructuredOutputAgent:
+    def iter(
+        self,
+        text: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> _StructuredOutputRun:
+        return _StructuredOutputRun()
 
 
 class _GraphStateForSignature:
@@ -309,6 +325,18 @@ async def test_bridge_assigns_raw_mcp_servers_to_legacy_agent_attribute() -> Non
     assert agent.mcp_servers == ["original"]
     assert events[-1].kind == "done"
     assert events[-1].structured_output == "done"
+
+
+@pytest.mark.asyncio
+async def test_bridge_speaks_structured_output_when_no_text_parts_stream() -> None:
+    bridge = PydanticAIBridge(agent=_StructuredOutputAgent())
+
+    events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [(event.kind, event.text) for event in events] == [
+        ("done", "{'utterance': 'hello', 'intent': 'capture'}")
+    ]
+    assert events[-1].structured_output == {"utterance": "hello", "intent": "capture"}
 
 
 def test_graph_iter_prefers_inputs_keyword_when_state_is_positional_capable() -> None:

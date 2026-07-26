@@ -366,6 +366,7 @@ class WebRTCRoutes:
                 self._gate.release()
                 return response
 
+            transport._offer_request = request
             await self._register_session(key, transport)
             session_started = True
             return response
