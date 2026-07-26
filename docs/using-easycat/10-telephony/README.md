@@ -64,8 +64,10 @@ accept a `StreamTokenContext` parameter instead of a raw token string; EasyCat
 passes the token, `CallSid`, `StreamSid`, and stream custom parameters, and any
 mapping returned by the validator is merged into `session.call_identity.custom_fields`.
 An explicit `StreamTokenContext` annotation opts in regardless of the parameter
-name. Other explicit annotations retain the raw-token contract; unannotated
-parameters named `context`, `ctx`, `stream_context`, or `token_context` also opt in.
+name (including aliases of that type). Every other case — other explicit
+annotations and unannotated parameters — retains the raw-token contract,
+whatever the parameter is named. The reserved stream-token parameter is
+stripped from returned claims and never lands in `custom_fields`.
 
 ## Validate the public URL Twilio signed
 

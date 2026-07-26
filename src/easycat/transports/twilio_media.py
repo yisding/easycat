@@ -19,7 +19,7 @@ import struct
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, ClassVar, get_type_hints
+from typing import Any, ClassVar, cast, get_type_hints
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -273,26 +273,35 @@ def _stream_token_validator_parameter(
         signature = inspect.signature(validator)
     except (TypeError, ValueError):
         return None, False
-    for parameter in signature.parameters.values():
-        if parameter.kind not in (
+    try:
+        hints = get_type_hints(validator)
+    except (NameError, TypeError):
+        hints = {}
+    parameters = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind
+        in (
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
-        ):
-            continue
-        try:
-            annotation = get_type_hints(validator).get(parameter.name, parameter.annotation)
-        except (NameError, TypeError):
-            annotation = parameter.annotation
-        if (
-            annotation is StreamTokenContext
-            or annotation == "StreamTokenContext"
-            or (isinstance(annotation, str) and annotation.endswith(".StreamTokenContext"))
-            or getattr(annotation, "__name__", None) == "StreamTokenContext"
-        ):
-            return parameter, True
-        return parameter, False
-    return None, False
+        )
+    ]
+    parameter = next(
+        (candidate for candidate in parameters if candidate.default is inspect.Parameter.empty),
+        parameters[0] if parameters else None,
+    )
+    if parameter is None:
+        return None, False
+    annotation = hints.get(parameter.name, parameter.annotation)
+    if (
+        annotation is StreamTokenContext
+        or annotation == "StreamTokenContext"
+        or (isinstance(annotation, str) and annotation.endswith(".StreamTokenContext"))
+        or getattr(annotation, "__name__", None) == "StreamTokenContext"
+    ):
+        return parameter, True
+    return parameter, False
 
 
 def _call_stream_token_validator(
@@ -345,9 +354,20 @@ async def _twilio_stream_token_claims(
     )
     try:
         async with asyncio.timeout(config.stream_token_validation_timeout_s):
-            result = await _maybe_await_stream_token_result(
-                _call_stream_token_validator(validator, token=token, context=context)
-            )
+            if inspect.iscoroutinefunction(validator):
+                result_or_awaitable = _call_stream_token_validator(
+                    cast(StreamTokenValidator, validator),
+                    token=token,
+                    context=context,
+                )
+            else:
+                result_or_awaitable = await asyncio.to_thread(
+                    _call_stream_token_validator,
+                    validator,
+                    token=token,
+                    context=context,
+                )
+            result = await _maybe_await_stream_token_result(result_or_awaitable)
         claims = _coerce_stream_token_claims(result)
         if claims is not None:
             claims.pop(config.stream_token_parameter, None)

@@ -7,6 +7,8 @@ import base64
 import json
 import logging
 import struct
+import threading
+import time
 
 import pytest
 import websockets
@@ -183,6 +185,24 @@ class TestTwilioStreamTokenStore:
 
 
 class TestTwilioStreamTokenValidation:
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"stream_token_parameter": ""}, "stream_token_parameter must be non-empty"),
+            (
+                {"stream_token_validation_timeout_s": 0},
+                "stream_token_validation_timeout_s must be positive",
+            ),
+        ],
+    )
+    def test_config_rejects_invalid_token_validation_settings(
+        self,
+        kwargs: dict[str, object],
+        message: str,
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            TwilioTransportConfig(**kwargs)  # type: ignore[arg-type]
+
     @pytest.mark.asyncio
     async def test_server_transport_consumes_token_and_hides_parameter(self) -> None:
         store = TwilioStreamTokenStore("secret")
@@ -433,6 +453,33 @@ class TestTwilioStreamTokenValidation:
         assert seen[0].stream_sid == "STREAM1"
 
     @pytest.mark.asyncio
+    async def test_required_context_parameter_follows_optional_parameter(self) -> None:
+        seen: list[StreamTokenContext] = []
+
+        def validator(
+            verbose: bool = False,
+            *,
+            context: StreamTokenContext,
+        ) -> bool:
+            assert not verbose
+            seen.append(context)
+            return True
+
+        transport = TwilioTransport(
+            TwilioTransportConfig(stream_token_validator=validator)  # type: ignore[arg-type]
+        )
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+            )
+        )
+
+        assert seen[0].token == "token-1"
+        assert transport.stream_sid == "STREAM1"
+
+    @pytest.mark.asyncio
     async def test_rejects_conflicting_stream_sid_before_validation(self) -> None:
         ws = _DummyTwilioWebSocket()
         called = False
@@ -490,6 +537,60 @@ class TestTwilioStreamTokenValidation:
                 stream_token_validator=validator,
                 stream_token_validation_timeout_s=0.01,
             ),
+        )
+
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+            )
+        )
+
+        assert transport.stream_sid is None
+        assert ws.closed_with == (4003, "Missing or invalid stream token")
+
+    @pytest.mark.asyncio
+    async def test_sync_validator_timeout_rejects_without_blocking_event_loop(self) -> None:
+        release = threading.Event()
+
+        def validator(_token: str) -> bool:
+            release.wait(timeout=0.2)
+            return True
+
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(
+                stream_token_validator=validator,
+                stream_token_validation_timeout_s=0.01,
+            ),
+        )
+        started = time.monotonic()
+        try:
+            await transport._handle_message(
+                _twilio_start_msg(
+                    "STREAM1",
+                    "CALL1",
+                    custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+                )
+            )
+        finally:
+            release.set()
+
+        assert time.monotonic() - started < 0.15
+        assert transport.stream_sid is None
+        assert ws.closed_with == (4003, "Missing or invalid stream token")
+
+    @pytest.mark.asyncio
+    async def test_raising_validator_rejects_stream(self) -> None:
+        def validator(_token: str) -> bool:
+            raise RuntimeError("validator unavailable")
+
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=validator),
         )
 
         await transport._handle_message(
