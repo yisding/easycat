@@ -45,6 +45,27 @@ from easycat.runtime.records import (
 
 logger = logging.getLogger(__name__)
 
+_CRASH_SWEEP_LOCK = threading.Lock()
+_CRASH_SWEPT_ROOTS: set[tuple[int, Path]] = set()
+
+
+def _crash_sweep_key(root: Path) -> tuple[int, Path]:
+    return os.getpid(), root.absolute()
+
+
+def _sweep_crashed_journals_once(root: Path, *, skip: Path) -> None:
+    """Run the blocking orphan scan once per process for each journal root."""
+    root_key = _crash_sweep_key(root)
+    with _CRASH_SWEEP_LOCK:
+        if root_key in _CRASH_SWEPT_ROOTS:
+            return
+        try:
+            sweep_crashed_journals(root, skip=skip)
+        except (OSError, sqlite3.DatabaseError):
+            logger.debug("Crash-journal sweep failed", exc_info=True)
+        finally:
+            _CRASH_SWEPT_ROOTS.add(root_key)
+
 
 class _SqlJournalBase:
     """Shared implementation for the SQL-backed journals.
@@ -237,10 +258,7 @@ class SqliteJournal(_SqlJournalBase):
         # same-id recovery path below only fires when *this* session's id is
         # reused; orphaned ids never reopen, so the sweep is what promotes them
         # to crash-dumps/.  Best-effort: never block or fail journal startup.
-        try:
-            sweep_crashed_journals(root, skip=self._db_path)
-        except (OSError, sqlite3.DatabaseError):
-            logger.debug("Crash-journal sweep failed", exc_info=True)
+        _sweep_crashed_journals_once(root, skip=self._db_path)
 
         touch_private_file(self._db_path)
         self._session_id = session_id

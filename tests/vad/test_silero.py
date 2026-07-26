@@ -31,6 +31,47 @@ def test_silero_onnx_model_path_uses_bundled_asset():
     assert model_path.endswith("src/easycat/models/silero_vad.onnx")
 
 
+def test_silero_onnx_session_is_cached_while_recurrent_state_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    numpy = pytest.importorskip("numpy")
+
+    class _SessionOptions:
+        inter_op_num_threads = 0
+        intra_op_num_threads = 0
+
+    class _FakeOnnxRuntime:
+        SessionOptions = _SessionOptions
+
+        def __init__(self) -> None:
+            self.sessions: list[object] = []
+
+        def get_available_providers(self) -> list[str]:
+            return ["CPUExecutionProvider"]
+
+        def InferenceSession(self, *_args, **_kwargs):  # noqa: N802
+            session = object()
+            self.sessions.append(session)
+            return session
+
+    runtime = _FakeOnnxRuntime()
+    monkeypatch.setattr(
+        vad_silero_module,
+        "require_module",
+        lambda name, **_kwargs: numpy if name == "numpy" else runtime,
+    )
+    monkeypatch.setattr(vad_silero_module, "_ONNX_SESSION_CACHE", {})
+
+    first = vad_silero_module._SileroOnnxModel("model.onnx")
+    second = vad_silero_module._SileroOnnxModel("model.onnx")
+
+    assert len(runtime.sessions) == 1
+    assert first._session is second._session
+    assert first._state is not second._state
+    first.close()
+    assert second._session is runtime.sessions[0]
+
+
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should reject the remote-code-executing torch backend."""
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch",))

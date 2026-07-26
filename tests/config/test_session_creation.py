@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from easycat import (
@@ -55,6 +57,29 @@ class _ProviderShapeVAD:
     async def process(self, chunk):
         if False:
             yield None
+
+
+@pytest.mark.asyncio
+async def test_create_session_is_safe_to_construct_off_loop(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        debug="full",
+    )
+
+    session = await asyncio.to_thread(create_session, config)
+    try:
+        assert session.session_id
+        assert session._journal is not None
+    finally:
+        await session.stop(force=True)
 
 
 def test_create_session_binds_custom_identity_sink_capability():

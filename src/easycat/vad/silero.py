@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from collections.abc import AsyncIterator
 from importlib.metadata import version
@@ -28,6 +29,8 @@ _SILERO_DEFAULT_RATE = 16000
 _SILERO_FRAME_SAMPLES_AT: dict[int, int] = {8000: 256, 16000: 512}
 _SILERO_CONTEXT_SAMPLES_AT: dict[int, int] = {8000: 32, 16000: 64}
 _SILERO_ONNX_MODEL = Path(__file__).parent.parent / "models" / "silero_vad.onnx"
+_ONNX_SESSION_CACHE: dict[tuple[int, str], Any] = {}
+_ONNX_SESSION_CACHE_LOCK = threading.Lock()
 
 
 def _silero_backend_override() -> str | None:
@@ -50,12 +53,13 @@ def _silero_onnx_model_path() -> str:
     return str(_SILERO_ONNX_MODEL)
 
 
-class _SileroOnnxModel:
-    """Small ONNX-only Silero wrapper that mirrors the recurrent model contract."""
-
-    def __init__(self, model_path: str) -> None:
-        numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
-        onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
+def _shared_onnx_session(model_path: str, onnxruntime: Any) -> Any:
+    """Load each immutable ONNX graph once while keeping VAD state per instance."""
+    cache_key = (os.getpid(), model_path)
+    with _ONNX_SESSION_CACHE_LOCK:
+        cached = _ONNX_SESSION_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
         opts = onnxruntime.SessionOptions()
         opts.inter_op_num_threads = 1
@@ -67,11 +71,24 @@ class _SileroOnnxModel:
             providers = ["CPUExecutionProvider"]
 
         if providers is None:
-            self._session = onnxruntime.InferenceSession(model_path, sess_options=opts)
+            session = onnxruntime.InferenceSession(model_path, sess_options=opts)
         else:
-            self._session = onnxruntime.InferenceSession(
-                model_path, providers=providers, sess_options=opts
+            session = onnxruntime.InferenceSession(
+                model_path,
+                providers=providers,
+                sess_options=opts,
             )
+        _ONNX_SESSION_CACHE[cache_key] = session
+        return session
+
+
+class _SileroOnnxModel:
+    """Small ONNX-only Silero wrapper that mirrors the recurrent model contract."""
+
+    def __init__(self, model_path: str) -> None:
+        numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
+        onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
+        self._session = _shared_onnx_session(model_path, onnxruntime)
         self._numpy = numpy
         self.reset_states()
 

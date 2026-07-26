@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
+from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _crashed_state,
@@ -42,6 +43,26 @@ def _crash_one(session_id: str, tmp_path) -> None:
     j._conn.commit()
     j._conn.close()
     j._closed = True
+
+
+def test_sqlite_construction_sweeps_each_root_once(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, object]] = []
+    monkeypatch.setattr(
+        journal_sql_module,
+        "sweep_crashed_journals",
+        lambda root, *, skip: calls.append((root, skip)),
+    )
+
+    first = SqliteJournal("first", data_dir=tmp_path)
+    second = SqliteJournal("second", data_dir=tmp_path)
+    try:
+        assert len(calls) == 1
+    finally:
+        first.close()
+        second.close()
 
 
 def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
@@ -150,6 +171,9 @@ def test_sweep_runs_on_next_sqlite_open(tmp_path) -> None:
     # for an orphaned id.
     _crash_one("ghost", tmp_path)
     assert (tmp_path / "journals" / "ghost.sqlite").exists()
+    # Simulate the fresh process that follows the stamped dead owner. A live
+    # process sweeps a root only on its first journal construction.
+    journal_sql_module._CRASH_SWEPT_ROOTS.discard(journal_sql_module._crash_sweep_key(tmp_path))
 
     j2 = SqliteJournal("fresh", data_dir=tmp_path)
     try:

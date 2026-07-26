@@ -27,6 +27,7 @@ from easycat.runtime import (
     create_journal,
     run_retention,
 )
+from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecordKind,
@@ -555,6 +556,11 @@ class TestCrashRecovery:
         j1._conn.commit()
         j1._conn.close()
         j1._closed = True
+        # The fixture creates and "crashes" the owner in this process. Reset
+        # the startup sentinel to model the fresh worker that would discover it.
+        journal_sql_module._CRASH_SWEPT_ROOTS.discard(
+            journal_sql_module._crash_sweep_key(tmp_path)
+        )
 
         j2 = SqliteJournal("fresh", data_dir=tmp_path)
         try:
