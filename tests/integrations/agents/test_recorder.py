@@ -105,6 +105,13 @@ class TestRecorderLifecycle:
 
         assert journal.read() == []
 
+    def test_agent_usage_omits_zero_and_inconsistent_cached_counts(self, recorder, journal):
+        recorder.record_usage(input_tokens=0, output_tokens=0, cached_input_tokens=0)
+        recorder.record_usage(input_tokens=2, cached_input_tokens=3)
+
+        [record] = journal.read()
+        assert record.data == {"run_id": "r1", "input_tokens": 2}
+
     def test_state_snapshot_recorded(self, recorder, journal):
         recorder.record_state_snapshot(ref="abc123")
         records = journal.read()

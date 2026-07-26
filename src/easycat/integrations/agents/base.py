@@ -330,18 +330,6 @@ class AgentRecorder(Protocol):
 
     def record_framework_error(self, error: ErrorInfo) -> None: ...
 
-    def record_usage(
-        self,
-        *,
-        provider: str | None = None,
-        model: str | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        cached_input_tokens: int | None = None,
-    ) -> None:
-        """Write provider-reported token counts for one agent invocation."""
-        ...
-
     def record_state_committed(
         self,
         mutation_kind: str,
@@ -360,6 +348,20 @@ class AgentRecorder(Protocol):
     ) -> None:
         """Write an ``InterruptionApplyFailed`` record on mutation failure."""
         ...
+
+
+class UsageRecorder(Protocol):
+    """Optional recorder capability for provider-reported token counts."""
+
+    def record_usage(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+    ) -> None: ...
 
 
 class NullAgentRecorder:

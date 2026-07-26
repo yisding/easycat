@@ -338,6 +338,31 @@ async def test_graph_event_handler_accepts_v2_stream_signature() -> None:
     assert handler.accumulated_text == "hello"
 
 
+@pytest.mark.asyncio
+async def test_graph_event_handler_records_context_usage_and_model() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    handler = _GraphEventHandler(_recorder(journal))
+    ctx = type(
+        "GraphRunContext",
+        (),
+        {
+            "usage": {"request_tokens": 11, "response_tokens": 4},
+            "model": "graph-model",
+        },
+    )()
+
+    async def events():
+        if False:
+            yield None
+
+    await handler(ctx, events())
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data["model"] == "graph-model"
+    assert usage.data["input_tokens"] == 11
+    assert usage.data["output_tokens"] == 4
+
+
 def test_bridge_passes_explicit_v2_toolset_objects_to_agent_kwargs() -> None:
     pytest.importorskip("pydantic_ai")
     from pydantic_ai import Agent

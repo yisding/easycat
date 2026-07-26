@@ -277,8 +277,14 @@ class JournalAgentRecorder:
             for key, value in raw_counts.items()
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0
         }
-        if not counts:
+        if not counts or not any(counts.values()):
             return
+        if (
+            "cached_input_tokens" in counts
+            and "input_tokens" in counts
+            and counts["cached_input_tokens"] > counts["input_tokens"]
+        ):
+            counts.pop("cached_input_tokens")
         data: dict[str, Any] = dict(counts)
         if provider:
             data["provider"] = provider

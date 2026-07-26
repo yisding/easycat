@@ -87,6 +87,15 @@ async def record_usage_from_result(
             )
         if input_tokens is None and output_tokens is None and cached_input_tokens is None:
             return
+        counts = (input_tokens, output_tokens, cached_input_tokens)
+        if all(value in (None, 0) for value in counts):
+            return
+        if (
+            cached_input_tokens is not None
+            and input_tokens is not None
+            and cached_input_tokens > input_tokens
+        ):
+            cached_input_tokens = None
         record_usage = getattr(recorder, "record_usage", None)
         if record_usage is None:
             return
@@ -102,20 +111,40 @@ async def record_usage_from_result(
 
 
 async def _resolve_usage(result: Any) -> Any:
-    candidates = [
-        getattr(result, "usage", None),
-        getattr(getattr(result, "context_wrapper", None), "usage", None),
-        getattr(getattr(result, "ctx", None), "usage", None),
-    ]
+    candidates: list[Any] = []
+    for owner, attribute in (
+        (result, "usage"),
+        (_safe_attr(result, "context_wrapper"), "usage"),
+        (_safe_attr(result, "ctx"), "usage"),
+    ):
+        candidate = _safe_attr(owner, attribute)
+        if candidate is not None:
+            candidates.append(candidate)
     for candidate in candidates:
         if candidate is None:
             continue
-        value = candidate() if callable(candidate) else candidate
+        try:
+            if inspect.iscoroutinefunction(candidate):
+                continue
+            value = candidate() if callable(candidate) else candidate
+        except Exception:
+            logger.debug("Agent usage accessor raised", exc_info=True)
+            continue
         if inspect.isawaitable(value):
-            value = await value
+            if inspect.iscoroutine(value):
+                value.close()
+            continue
         if value is not None:
             return value
     return None
+
+
+def _safe_attr(value: Any, name: str) -> Any:
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        logger.debug("Agent usage attribute raised", exc_info=True)
+        return None
 
 
 def _usage_value(usage: Any, *names: str) -> Any:
