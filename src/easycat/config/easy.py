@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -126,6 +126,15 @@ def _require_non_negative(name: str, value: float) -> None:
     """Raise ``ValueError`` if ``value`` is negative."""
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_on_agent_failure(
+    policy: str | Callable[[Exception], str] | None,
+) -> None:
+    if policy is not None and not (isinstance(policy, str) or callable(policy)):
+        raise ValueError("on_agent_failure must be text, a callable, or None")
+    if isinstance(policy, str) and not policy.strip():
+        raise ValueError("on_agent_failure text must not be empty")
 
 
 def _validate_common(
@@ -537,6 +546,7 @@ class EasyConfig(_AgentSessionConfig):
     greeting: str | None = None
     dnc_list: DNCStore | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+    on_agent_failure: str | Callable[[Exception], str] | None = None
     session_id: str | None = None
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
@@ -555,6 +565,7 @@ class EasyConfig(_AgentSessionConfig):
             agent=self.agent,
             agent_model=self.agent_model,
         )
+        _validate_on_agent_failure(self.on_agent_failure)
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
         # ``EasyConfig(agent=...)`` works when the env var is set —

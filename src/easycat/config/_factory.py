@@ -564,6 +564,7 @@ def _make_session_config(
         auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
         strip_markdown=config.strip_markdown,
         output_processors=config.output_processors,
+        on_agent_failure=config.on_agent_failure,
         session_actions=config.session_actions,
         action_executors=telephony.action_executors,
         audio_gate=_audio_gate_for(telephony.outbound_state_machine),

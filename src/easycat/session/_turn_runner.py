@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -160,6 +161,7 @@ class TurnRunner:
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
+        on_agent_failure: str | Callable[[Exception], str] | None,
         turn_handle: TurnHandle,
         stt_stage: STTStage,
         session_id: str,
@@ -176,6 +178,7 @@ class TurnRunner:
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
+        self._on_agent_failure = on_agent_failure
         self._turn = turn_handle
         self._stt_stage = stt_stage
         self._stt_provider = wiring.stt
@@ -731,6 +734,7 @@ class TurnRunner:
                 st.agent_output_settled.set()
 
             await self._await_tts_task_recording_cancel(st, tts_task)
+            await self._maybe_speak_agent_failure_fallback(st, agent_error)
         except BaseException:
             # Cancellation or a strict event-handler failure can land after
             # the agent wait but before the guarded TTS wait. Keep both spawned
@@ -765,6 +769,94 @@ class TurnRunner:
                 self._reset_turn_state()
 
     # ── Streaming agent phases ─────────────────────────────────────
+
+    async def _maybe_speak_agent_failure_fallback(
+        self,
+        st: _StreamingTtsState,
+        error: Exception | None,
+    ) -> None:
+        if (
+            error is None
+            or st.error is not None
+            or st.turn.audio_bytes_sent > 0
+            or (st.token and st.token.is_cancelled)
+            or self._turn.current is not st.turn
+            or self._turn.generation != st.turn_gen
+            or self._turn_manager.state != TurnManagerState.PROCESSING
+        ):
+            return
+        await self._speak_agent_failure_fallback(st, error)
+
+    def _resolve_agent_failure_fallback(self, error: Exception) -> str | None:
+        policy = self._on_agent_failure
+        if policy is None:
+            return None
+        try:
+            text = policy(error) if callable(policy) else policy
+        except Exception:
+            logger.warning("on_agent_failure callback raised; fallback skipped", exc_info=True)
+            return None
+        if not isinstance(text, str) or not text.strip():
+            logger.warning("on_agent_failure must resolve to non-empty text; fallback skipped")
+            return None
+        return text.strip()
+
+    async def _speak_agent_failure_fallback(
+        self,
+        st: _StreamingTtsState,
+        error: Exception,
+    ) -> None:
+        text = self._resolve_agent_failure_fallback(error)
+        if text is None:
+            return
+        self._journal_sink.append_record(
+            name="agent_failure_fallback",
+            turn_id=st.turn.id,
+            data={
+                "text": text,
+                "error_type": type(error).__name__,
+            },
+        )
+        try:
+            payload = self._tts.prepare(text, is_streaming=False, is_final=True)
+            task = await self._tts.begin_synthesis_with_bot_start(
+                payload,
+                st.token,
+                is_active=lambda: (
+                    self._turn.current is st.turn
+                    and self._turn.generation == st.turn_gen
+                    and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ),
+            )
+            st.synth_started = True
+            st.playback_started = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+            result = await self._await_owned_first_synthesis(task)
+            st.chunks.append(
+                TtsChunk(
+                    _text_for_estimation_timeline(payload),
+                    result.audio_bytes,
+                    result.completed,
+                )
+            )
+            if result.first_audio_time is not None:
+                st.turn.first_tts_audio_time = result.first_audio_time
+            if self._turn.current is st.turn and st.playback_started:
+                st.should_stop = await self._tts.finalize_speaking_turn(
+                    st.turn,
+                    turn_generation=st.turn_gen,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as fallback_error:
+            st.error = fallback_error
+            logger.exception("Agent failure fallback TTS failed")
+            await self._emit(
+                Error(
+                    exception=fallback_error,
+                    stage=ErrorStage.TTS,
+                    turn_id=st.turn.id,
+                )
+            )
 
     async def _consume_tts_payloads(self, st: _StreamingTtsState) -> None:
         """TTS consumer task: synthesize queued payloads, then settle the turn."""
