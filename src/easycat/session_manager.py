@@ -145,9 +145,9 @@ class SessionManager(Generic[TKey]):
             *(self.remove(key, force=force) for key in keys),
             return_exceptions=True,
         )
-        for key, result in zip(keys, results):
-            if isinstance(result, Exception):
-                logger.error("Failed to stop session %s: %s", key, result)
+        # _finish_stop() consumes and logs each owned task's exception. Avoid
+        # emitting the same failure again from this aggregate wait.
+        _ = results
 
     def _finish_stop(
         self,
