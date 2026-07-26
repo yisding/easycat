@@ -11,13 +11,14 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import secrets
 import struct
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar
 
 import websockets
@@ -133,6 +134,29 @@ class TwilioStreamTokenStore:
             self._pending.pop(nonce, None)
 
 
+@dataclass(frozen=True, slots=True)
+class StreamTokenContext:
+    """Twilio stream-token validation context from the ``start`` frame."""
+
+    token: str
+    call_sid: str | None
+    stream_sid: str | None
+    parameters: Mapping[str, str]
+
+
+StreamTokenClaims = Mapping[str, Any]
+StreamTokenValidatorResult = bool | StreamTokenClaims | None
+StreamTokenValidator = (
+    Callable[[str], StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]]
+    | Callable[
+        [StreamTokenContext], StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]
+    ]
+)
+_STREAM_TOKEN_CONTEXT_PARAMETER_NAMES = frozenset(
+    {"context", "ctx", "stream_context", "token_context"}
+)
+
+
 @dataclass
 class TwilioTransportConfig:
     """Configuration for :class:`TwilioTransport`."""
@@ -143,7 +167,10 @@ class TwilioTransportConfig:
     port: int = 8766
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
-    stream_token_validator: Callable[[str], bool] | None = None
+    # Legacy validators receive the raw token string. Validators whose first
+    # parameter is named/annotated as StreamTokenContext receive the Twilio
+    # start-frame context and may return claims to merge into CallIdentity.
+    stream_token_validator: StreamTokenValidator | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
 
 
@@ -222,21 +249,85 @@ def _clean_twilio_parameter(value: Any) -> str:
     return text
 
 
-def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
-    validator = config.stream_token_validator
-    if validator is None:
-        return True
+def _stream_token_parameters(start: dict[str, Any]) -> dict[str, str] | None:
     raw_params = start.get("customParameters") or {}
     if not isinstance(raw_params, dict):
-        return False
-    token = raw_params.get(config.stream_token_parameter)
-    if not isinstance(token, str) or not token:
-        return False
+        return None
+    parameters: dict[str, str] = {}
+    for key, value in raw_params.items():
+        if isinstance(key, str) and (
+            isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
+        ):
+            parameters[key] = str(value)
+    return parameters
+
+
+def _stream_token_validator_wants_context(validator: StreamTokenValidator) -> bool:
     try:
-        return bool(validator(token))
+        signature = inspect.signature(validator)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind not in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            continue
+        annotation = parameter.annotation
+        if (
+            annotation is StreamTokenContext
+            or annotation == "StreamTokenContext"
+            or getattr(annotation, "__name__", None) == "StreamTokenContext"
+        ):
+            return True
+        return parameter.name in _STREAM_TOKEN_CONTEXT_PARAMETER_NAMES
+    return False
+
+
+async def _maybe_await_stream_token_result(
+    result: StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult],
+) -> StreamTokenValidatorResult:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _coerce_stream_token_claims(result: StreamTokenValidatorResult) -> dict[str, str] | None:
+    if isinstance(result, Mapping):
+        return {str(key): str(value) for key, value in result.items() if value is not None}
+    return {} if bool(result) else None
+
+
+async def _twilio_stream_token_claims(
+    start: dict[str, Any], config: TwilioTransportConfig
+) -> dict[str, str] | None:
+    validator = config.stream_token_validator
+    if validator is None:
+        return {}
+    parameters = _stream_token_parameters(start)
+    if parameters is None:
+        return None
+    token = parameters.get(config.stream_token_parameter)
+    if not isinstance(token, str) or not token:
+        return None
+    context = StreamTokenContext(
+        token=token,
+        call_sid=start.get("callSid") if isinstance(start.get("callSid"), str) else None,
+        stream_sid=start.get("streamSid") if isinstance(start.get("streamSid"), str) else None,
+        parameters=parameters,
+    )
+    try:
+        argument = context if _stream_token_validator_wants_context(validator) else token
+        result = await _maybe_await_stream_token_result(validator(argument))  # type: ignore[arg-type]
+        return _coerce_stream_token_claims(result)
     except Exception:
         logger.warning("Twilio stream token validator raised", exc_info=True)
-        return False
+        return None
+
+
+async def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
+    return await _twilio_stream_token_claims(start, config) is not None
 
 
 def _parse_twilio_int(value: Any) -> int | None:
@@ -589,7 +680,8 @@ class _TwilioProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return
-        if not _twilio_stream_token_valid(start, self._config):
+        token_claims = await _twilio_stream_token_claims(start, self._config)
+        if token_claims is None:
             logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             ws = self._current_ws()
             if ws is not None:
@@ -605,6 +697,11 @@ class _TwilioProtocolMixin:
             self._call_sid,
             excluded_parameter_names={self._config.stream_token_parameter},
         )
+        if token_claims:
+            identity = replace(
+                identity,
+                custom_fields={**identity.custom_fields, **token_claims},
+            )
         self._call_identity = identity
         if self._identity_sink is not None:
             try:

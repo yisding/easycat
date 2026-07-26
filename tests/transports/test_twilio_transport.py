@@ -17,6 +17,7 @@ from easycat.transports.twilio_media import (
     _DEGRADED_TWILIO_SEQUENCE_GAP,
     _DEGRADED_TWILIO_TIMESTAMP_GAP,
     TWILIO_STREAM_TOKEN_PARAMETER,
+    StreamTokenContext,
     TwilioConnectionTransport,
     TwilioStreamTokenStore,
     TwilioTransport,
@@ -247,6 +248,60 @@ class TestTwilioStreamTokenValidation:
         assert transport.stream_sid == "STREAM1"
         assert transport.call_sid == "CALL1"
         assert ws.closed_with is None
+
+    @pytest.mark.asyncio
+    async def test_context_validator_receives_start_fields_and_merges_claims(self) -> None:
+        seen: list[StreamTokenContext] = []
+
+        def validator(context: StreamTokenContext) -> dict[str, object]:
+            seen.append(context)
+            return {"tenant_id": "verified-tenant", "attempt": 3}
+
+        transport = TwilioTransport(TwilioTransportConfig(stream_token_validator=validator))
+
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={
+                    TWILIO_STREAM_TOKEN_PARAMETER: "token-1",
+                    "tenant_id": "spoofed-tenant",
+                    "crm_account_id": "ACC-42",
+                },
+            )
+        )
+
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+        assert len(seen) == 1
+        assert seen[0].token == "token-1"
+        assert seen[0].stream_sid == "STREAM1"
+        assert seen[0].call_sid == "CALL1"
+        assert seen[0].parameters[TWILIO_STREAM_TOKEN_PARAMETER] == "token-1"
+        assert transport.call_identity.custom_fields == {
+            "tenant_id": "verified-tenant",
+            "crm_account_id": "ACC-42",
+            "attempt": "3",
+        }
+
+    @pytest.mark.asyncio
+    async def test_async_context_validator_is_awaited(self) -> None:
+        async def validator(ctx: StreamTokenContext) -> bool:
+            await asyncio.sleep(0)
+            return ctx.call_sid == "CALL1"
+
+        transport = TwilioTransport(TwilioTransportConfig(stream_token_validator=validator))
+
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+            )
+        )
+
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
 
 
 class TestTwilioDtmfParsingInTransports:
