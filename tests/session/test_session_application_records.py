@@ -104,6 +104,88 @@ def test_record_inherits_the_active_turn_when_turn_id_is_omitted() -> None:
     assert record.turn_id == "turn-current"
 
 
+def test_record_explicit_none_does_not_inherit_active_turn() -> None:
+    session, journal = _session_with_journal()
+    session._turn = TurnContext("turn-current", CancelToken())
+
+    session.record("app.session_fact", data={}, turn_id=None)
+
+    assert journal.read()[0].turn_id is None
+
+
+@pytest.mark.parametrize("turn_id", ["", " ", 123])
+def test_record_rejects_invalid_turn_id(turn_id) -> None:
+    session, journal = _session_with_journal()
+
+    with pytest.raises(ValueError, match="turn_id"):
+        session.record("app.invalid_turn", data={}, turn_id=turn_id)
+
+    assert journal.read() == []
+
+
+@pytest.mark.parametrize("tags", [{"tenant:a"}, ["tenant:a"], ("tenant:a",)])
+def test_record_canonicalizes_tag_iterables(tags) -> None:
+    session, journal = _session_with_journal()
+
+    session.record("app.tags", data={}, tags=tags)
+
+    assert journal.read()[0].tags == frozenset({"tenant:a"})
+
+
+@pytest.mark.parametrize("tags", ["tenant:a", None, [""]])
+def test_record_rejects_invalid_tag_collections(tags) -> None:
+    session, journal = _session_with_journal()
+
+    with pytest.raises(ValueError, match="tags"):
+        session.record("app.tags", data={}, tags=tags)
+
+    assert journal.read() == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        None,
+        [],
+        {"bytes": b"abc"},
+        {"set": {"a"}},
+        {"nan": float("nan")},
+        {1: "non-string-key"},
+    ],
+)
+def test_record_rejects_non_json_payloads(data) -> None:
+    session, journal = _session_with_journal()
+
+    with pytest.raises(ValueError, match="Application journal record"):
+        session.record("app.invalid_data", data=data)
+
+    assert journal.read() == []
+    assert not journal.degraded
+
+
+def test_record_rejects_cycles_without_degrading_journal() -> None:
+    session, journal = _session_with_journal()
+    data: dict[str, object] = {}
+    data["self"] = data
+
+    with pytest.raises(ValueError, match="cycle"):
+        session.record("app.cycle", data=data)
+
+    session.record("app.after_cycle", data={"ok": True})
+    assert [record.name for record in journal.read()] == ["app.after_cycle"]
+    assert not journal.degraded
+
+
+def test_mutating_read_result_does_not_rewrite_memory_journal() -> None:
+    session, journal = _session_with_journal()
+    session.record("app.immutable_read", data={"nested": {"value": "before"}})
+
+    first = journal.read()[0]
+    first.data["nested"]["value"] = "after"
+
+    assert journal.read()[0].data == {"nested": {"value": "before"}}
+
+
 @pytest.mark.parametrize("name", ["stt_final", "call_ended"])
 def test_record_rejects_builtin_names(name: str) -> None:
     session, journal = _session_with_journal()
@@ -130,7 +212,7 @@ async def test_record_rejects_writes_after_stop() -> None:
     session.record("app.before_stop", data={"phase": "live"})
     await session.stop()
 
-    with pytest.raises(RuntimeError, match="Session has been stopped"):
+    with pytest.raises(RuntimeError, match="stopping or has been stopped"):
         session.record("app.after_stop", data={"phase": "postmortem"})
 
     assert [record.name for record in journal.read()] == ["app.before_stop"]

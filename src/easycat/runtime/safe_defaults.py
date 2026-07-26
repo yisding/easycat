@@ -358,9 +358,14 @@ def apply_write_filter(record: JournalRecord) -> JournalRecord:
     if not isinstance(redacted_data, dict):
         redacted_data = {}
     redacted_error = _redact_error(record.error)
-    # ``redact_value`` recursively rebuilds mappings and sequences. Keep that
-    # snapshot even when it compares equal to the caller's input so later
-    # mutations cannot rewrite an in-memory journal record.
+    if (
+        not record.name.startswith("app.")
+        and redacted_data == record.data
+        and redacted_error == record.error
+    ):
+        return record
+    # Application records retain the rebuilt snapshot even when equal to the
+    # input so later caller mutations cannot rewrite an in-memory fact.
     return replace(record, data=redacted_data, error=redacted_error)
 
 

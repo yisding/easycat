@@ -155,8 +155,11 @@ Every bridge record includes `run_id: str` in `data`.
 Use `session.record("app.<name>", data={...})` to append application facts to
 the same live journal as EasyCat's runtime records. The method forces
 `JournalRecordKind.EVENT`, accepts optional `turn_id` and `tags`, and applies
-the journal's normal write-time redaction unchanged. Tags must be non-empty
-strings and cannot contain commas.
+the journal's normal write-time redaction unchanged. Payloads must contain
+JSON-native values with finite numbers and are snapshotted at the call
+boundary. Tags are canonicalized to a `frozenset`; each tag must be non-empty
+and cannot contain commas. An omitted `turn_id` inherits the active turn while
+explicit `None` keeps the record session-scoped.
 
 The `app.` namespace is required. Built-in names are rejected, and calls after
 `session.stop()` raise `RuntimeError` because the preserved postmortem journal

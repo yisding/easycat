@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import copy
 import logging
 import threading
 import time
@@ -105,7 +106,7 @@ class InMemoryRingBuffer:
             out = [r for r in self._buf if r.sequence >= start]
         if limit is not None:
             out = out[:limit]
-        return out
+        return copy.deepcopy(out)
 
     def slice(
         self,
@@ -128,7 +129,7 @@ class InMemoryRingBuffer:
             out = [r for r in out if r.name == name]
         if tags:
             out = [r for r in out if tags <= r.tags]
-        return out
+        return copy.deepcopy(out)
 
     def close(self) -> None:
         pass
@@ -143,7 +144,7 @@ class InMemoryRingBuffer:
         """Return a read-only copy of the current buffer contents."""
         with self._lock:
             return FrozenJournalSnapshot(
-                list(self._buf),
+                copy.deepcopy(list(self._buf)),
                 degraded=self._degraded,
                 latest_sequence=self._seq,
             )
