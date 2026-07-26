@@ -262,11 +262,14 @@ def _stream_token_parameters(start: dict[str, Any]) -> dict[str, str] | None:
     return parameters
 
 
-def _stream_token_validator_wants_context(validator: StreamTokenValidator) -> bool:
+def _stream_token_validator_parameter(
+    validator: StreamTokenValidator,
+) -> tuple[inspect.Parameter | None, bool]:
+    """Return the validator parameter and whether it opts into context."""
     try:
         signature = inspect.signature(validator)
     except (TypeError, ValueError):
-        return False
+        return None, False
     for parameter in signature.parameters.values():
         if parameter.kind not in (
             inspect.Parameter.POSITIONAL_ONLY,
@@ -280,9 +283,27 @@ def _stream_token_validator_wants_context(validator: StreamTokenValidator) -> bo
             or annotation == "StreamTokenContext"
             or getattr(annotation, "__name__", None) == "StreamTokenContext"
         ):
-            return True
-        return parameter.name in _STREAM_TOKEN_CONTEXT_PARAMETER_NAMES
-    return False
+            return parameter, True
+        # An explicit annotation preserves the legacy raw-token contract unless
+        # it positively identifies StreamTokenContext. Parameter names are only
+        # a compatibility heuristic for unannotated callables.
+        if annotation is not inspect.Parameter.empty:
+            return parameter, False
+        return parameter, parameter.name in _STREAM_TOKEN_CONTEXT_PARAMETER_NAMES
+    return None, False
+
+
+def _call_stream_token_validator(
+    validator: StreamTokenValidator,
+    *,
+    token: str,
+    context: StreamTokenContext,
+) -> StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]:
+    parameter, wants_context = _stream_token_validator_parameter(validator)
+    argument = context if wants_context else token
+    if parameter is not None and parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+        return validator(**{parameter.name: argument})  # type: ignore[call-arg]
+    return validator(argument)  # type: ignore[arg-type]
 
 
 async def _maybe_await_stream_token_result(
@@ -318,8 +339,9 @@ async def _twilio_stream_token_claims(
         parameters=parameters,
     )
     try:
-        argument = context if _stream_token_validator_wants_context(validator) else token
-        result = await _maybe_await_stream_token_result(validator(argument))  # type: ignore[arg-type]
+        result = await _maybe_await_stream_token_result(
+            _call_stream_token_validator(validator, token=token, context=context)
+        )
         return _coerce_stream_token_claims(result)
     except Exception:
         logger.warning("Twilio stream token validator raised", exc_info=True)

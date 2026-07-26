@@ -63,6 +63,9 @@ For multi-tenant or shared-worker media listeners, `stream_token_validator` can
 accept a `StreamTokenContext` parameter instead of a raw token string; EasyCat
 passes the token, `CallSid`, `StreamSid`, and stream custom parameters, and any
 mapping returned by the validator is merged into `session.call_identity.custom_fields`.
+An explicit `StreamTokenContext` annotation opts in regardless of the parameter
+name. Other explicit annotations retain the raw-token contract; unannotated
+parameters named `context`, `ctx`, `stream_context`, or `token_context` also opt in.
 
 ## Validate the public URL Twilio signed
 
