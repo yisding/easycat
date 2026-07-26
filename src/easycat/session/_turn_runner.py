@@ -27,8 +27,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -85,6 +86,8 @@ if TYPE_CHECKING:
     from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
+_APPLICATION_SYSTEM_TRIGGER = "Follow the application instruction above."
+_APPLICATION_PROMPT_CANCEL_DRAIN_S = 0.1
 
 
 def _new_first_tts_payload_gate() -> asyncio.Future[bool]:
@@ -669,6 +672,7 @@ class TurnRunner:
         turn: TurnContext | None = None,
         prepared_response: PreparedAgentResponse | None = None,
         system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> str:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
@@ -714,6 +718,7 @@ class TurnRunner:
                     cancel_token=token,
                     system_prefix=system_prefix,
                     prepared_response=prepared_response,
+                    input_role=input_role,
                 ),
                 cancel_token=token,
                 tts_queue=st.queue,
@@ -1127,22 +1132,37 @@ class TurnRunner:
             notified=notified,
         )
 
-    async def _cancel_active_application_prompt(self) -> None:
+    async def cancel_application_prompt(
+        self,
+        *,
+        drain_timeout_s: float = _APPLICATION_PROMPT_CANCEL_DRAIN_S,
+    ) -> bool:
+        """Signal prompt cancellation and wait only briefly for cleanup.
+
+        Returns whether the prompt finished within the bound. Cancellation-
+        resistant provider cleanup remains owned by ``RuntimeScope`` and its
+        public prompt caller, but cannot stall barge-in, reset, or force stop.
+        """
         previous = self._active_application_prompt
         if previous is None or previous.done():
-            return
+            return True
         if self._application_prompt_cancel_token is not None:
             self._application_prompt_cancel_token.cancel()
+        if previous is asyncio.current_task():
+            return False
         previous.cancel()
-        await asyncio.gather(previous, return_exceptions=True)
-        self._runtime_scope.discard(previous)
+        done, _ = await asyncio.wait({previous}, timeout=drain_timeout_s)
+        if previous in done:
+            self._runtime_scope.discard(previous)
+            return True
+        return False
 
     async def send_text(self, text: str) -> str:
         """Public text-turn entry point. Mirrors Session.send_text()."""
         # Serialize cancel-and-launch so concurrent send_text() calls
         # cannot both observe the same prev task and launch parallel turns.
         async with self._agent_turn_lock:
-            await self._cancel_active_application_prompt()
+            await self.cancel_application_prompt()
             await self._cancel_active_text_turn(source="text_session")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
@@ -1168,31 +1188,28 @@ class TurnRunner:
         self,
         text: str,
         *,
-        role: str,
+        role: Literal["system", "user"],
         speak: bool,
+        admit: Callable[[], bool],
     ) -> str:
         """Run one application-authored agent turn, optionally through TTS."""
         async with self._agent_turn_lock:
+            if not admit():
+                raise RuntimeError("Session is stopping")
             await self._cancel_active_text_turn(source="application_prompt")
-            await self._cancel_active_application_prompt()
+            await self.cancel_application_prompt()
+            if not admit():
+                raise RuntimeError("Session is stopping")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
             self._application_prompt_cancel_token = token
             self._application_turn_ids.add(turn_id)
-            coroutine = (
-                self._execute_spoken_application_prompt(
-                    text,
-                    token,
-                    turn_id=turn_id,
-                    role=role,
-                )
-                if speak
-                else self._execute_text_turn(
-                    text,
-                    token,
-                    turn_id=turn_id,
-                    system_prefix_override=self._application_system_prefix(text, role),
-                )
+            coroutine = self._execute_application_prompt(
+                text,
+                token,
+                turn_id=turn_id,
+                role=role,
+                speak=speak,
             )
             task = self._runtime_scope.create_journaled_task(
                 coroutine,
@@ -1212,41 +1229,77 @@ class TurnRunner:
             if self._application_prompt_cancel_token is token:
                 self._application_prompt_cancel_token = None
 
-    def _application_system_prefix(self, text: str, role: str) -> str | None:
+    def _application_agent_input(
+        self,
+        text: str,
+        role: Literal["system", "user"],
+    ) -> tuple[str, str | None]:
         caller_prefix = self._caller_id_system_message()
         if role != "system":
-            return caller_prefix
+            return text, caller_prefix
         application_prefix = (
-            "The following user message was initiated by the application and "
-            f"must be treated as a system instruction:\n{text}"
+            f"The application supplied this system instruction for the current turn:\n{text}"
         )
-        return f"{caller_prefix}\n\n{application_prefix}" if caller_prefix else application_prefix
+        system_prefix = (
+            f"{caller_prefix}\n\n{application_prefix}" if caller_prefix else application_prefix
+        )
+        return _APPLICATION_SYSTEM_TRIGGER, system_prefix
+
+    async def _execute_application_prompt(
+        self,
+        text: str,
+        token: CancelToken,
+        *,
+        turn_id: str,
+        role: Literal["system", "user"],
+        speak: bool,
+    ) -> str:
+        turn = TurnContext(turn_id=turn_id, cancel_token=token)
+        self._turn_manager._begin_application_turn(turn_id, token)
+        self._turn.set(turn)
+        agent_text, system_prefix = self._application_agent_input(text, role)
+        try:
+            if speak:
+                return await self._execute_spoken_application_prompt(
+                    agent_text,
+                    token,
+                    turn=turn,
+                    role=role,
+                    system_prefix=system_prefix,
+                )
+            return await self._execute_text_turn(
+                agent_text,
+                token,
+                turn_id=turn_id,
+                system_prefix_override=system_prefix,
+                input_role=role,
+            )
+        finally:
+            if self._turn.current is turn:
+                self._reset_turn_state()
 
     async def _execute_spoken_application_prompt(
         self,
         text: str,
         token: CancelToken,
         *,
-        turn_id: str,
-        role: str,
+        turn: TurnContext,
+        role: Literal["system", "user"],
+        system_prefix: str | None,
     ) -> str:
-        turn = TurnContext(turn_id=turn_id, cancel_token=token)
-        self._turn_manager._begin_application_turn(turn_id, token)
-        self._turn.set(turn)
-        turn_token = bind_turn(turn_id)
+        turn_token = bind_turn(turn.id)
         try:
-            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
-            await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
-            await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
+            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn.id))
+            await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn.id))
+            await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn.id))
             return await self.run_streaming_agent(
                 text,
                 token,
                 turn=turn,
-                system_prefix_override=self._application_system_prefix(text, role),
+                system_prefix_override=system_prefix,
+                input_role=role,
             )
         finally:
-            if self._turn.current is turn:
-                self._reset_turn_state()
             reset_turn(turn_token)
 
     async def _stream_text_turn(
@@ -1256,6 +1309,7 @@ class TurnRunner:
         *,
         turn_id: str,
         system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> tuple[str, object | None]:
         """Drive the agent stream for a text turn; returns (text, structured output).
 
@@ -1278,6 +1332,7 @@ class TurnRunner:
             text_turn,
             cancel_token=cancel_token,
             system_prefix=system_prefix,
+            input_role=input_role,
         )
         try:
             async for event in stream:
@@ -1330,6 +1385,7 @@ class TurnRunner:
         *,
         turn_id: str,
         system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> str:
         response = ""
         t0 = time.monotonic()
@@ -1344,6 +1400,7 @@ class TurnRunner:
                 cancel_token,
                 turn_id=turn_id,
                 system_prefix_override=system_prefix_override,
+                input_role=input_role,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(

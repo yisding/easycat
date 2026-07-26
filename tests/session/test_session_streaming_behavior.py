@@ -35,6 +35,7 @@ from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
 from easycat.tts.input import TTSInput
+from easycat.turn_manager import TurnManagerState
 from tests._bridge_helpers import _TestBridgeBase
 from tests.session._session_streaming_helpers import (
     _FAST_TURN,
@@ -86,8 +87,8 @@ async def test_prompt_agent_runs_journaled_spoken_turn():
     finally:
         await session.stop(force=True)
 
-    assert response == "app:Switch to message capture."
-    assert tts.synthesized_texts == ["app:Switch to message capture."]
+    assert response == "app:Follow the application instruction above."
+    assert tts.synthesized_texts == ["app:Follow the application instruction above."]
     assert transport.sent
     assert any(
         item["role"] == "system" and "Switch to message capture." in item["content"]
@@ -107,6 +108,314 @@ async def test_prompt_agent_runs_journaled_spoken_turn():
     assert [record.name for record in stage_records] == ["stage_start", "stage_complete"]
     assert stage_records[0].turn_id is not None
     assert stage_records[0].turn_id == stage_records[1].turn_id
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_stays_out_of_user_history_on_follow_up():
+    bridge = ContextCapturingBridge()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=bridge,
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+    await session.prompt_agent("Keep answers concise.", speak=False)
+    await session.prompt_agent("What is the status?", role="user", speak=False)
+
+    assert bridge.inputs[0].role == "system"
+    assert bridge.inputs[0].text == "Follow the application instruction above."
+    assert any(
+        item["role"] == "system" and "Keep answers concise." in item["content"]
+        for item in bridge.contexts[0]
+    )
+    assert all(
+        not (item["role"] == "user" and "Keep answers concise." in item["content"])
+        for context in bridge.contexts
+        for item in context
+    )
+    assert bridge.contexts[1] == []
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_rejects_plain_async_run_agent_explicitly():
+    class PlainAgent:
+        async def run(self, text: str) -> str:
+            return text.upper()
+
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=PlainAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+    with pytest.raises(ValueError, match="plain async run"):
+        await session.prompt_agent("System instruction.", speak=False)
+
+    assert await session.prompt_agent("user message", role="user", speak=False) == "USER MESSAGE"
+
+
+class _BlockingPromptBridge(_TestBridgeBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.active = 0
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder
+        self.active += 1
+        self.started.set()
+        try:
+            while not self.release.is_set():
+                if cancel_token is not None and cancel_token.is_cancelled:
+                    self.cancelled.set()
+                    return
+                await asyncio.sleep(0)
+            yield AgentBridgeEvent(kind="done", text="finished")
+        finally:
+            if cancel_token is not None and cancel_token.is_cancelled:
+                self.cancelled.set()
+            self.active -= 1
+            self.finished.set()
+
+
+class _CancellationResistantPromptBridge(_TestBridgeBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+        self.finished = asyncio.Event()
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            await self.release_cleanup.wait()
+            raise
+        finally:
+            self.finished.set()
+
+
+def _prompt_session(agent: _TestBridgeBase) -> Session:
+    return Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=agent,
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_silent_prompt_owns_turn_until_voice_barge_in_drains_it():
+    bridge = _BlockingPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    assert session._turn_manager.state is TurnManagerState.PROCESSING
+    assert bridge.active == 1
+
+    await session._turn_manager.start_turn()
+
+    assert bridge.finished.is_set()
+    assert bridge.cancelled.is_set()
+    assert bridge.active == 0
+    assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+    await asyncio.gather(prompt, return_exceptions=True)
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_voice_barge_in_does_not_wait_for_resistant_prompt_cleanup():
+    bridge = _CancellationResistantPromptBridge()
+    transport = FakeTransport()
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=bridge,
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.start_turn(), timeout=0.5)
+
+    assert bridge.cancelled.is_set()
+    assert not bridge.finished.is_set()
+    assert transport.clear_count == 1
+    assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+
+    bridge.release_cleanup.set()
+    await asyncio.gather(prompt, return_exceptions=True)
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_drains_application_prompt():
+    bridge = _BlockingPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Finish the workflow.", role="user", speak=False)
+    )
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    stopping = asyncio.create_task(session.stop())
+    await asyncio.sleep(0.01)
+
+    assert not stopping.done()
+    assert not bridge.cancelled.is_set()
+    bridge.release.set()
+
+    assert await prompt == "finished"
+    await asyncio.wait_for(stopping, timeout=1)
+    assert bridge.finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_rejects_new_application_prompt_during_drain():
+    bridge = _BlockingPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Finish the workflow.", role="user", speak=False)
+    )
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    stopping = asyncio.create_task(session.stop())
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="stopping"):
+        await session.prompt_agent("Start another workflow.", role="user", speak=False)
+
+    bridge.release.set()
+    assert await prompt == "finished"
+    await asyncio.wait_for(stopping, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_prompt_waiting_for_turn_lock_cannot_launch_after_stop():
+    bridge = ContextCapturingBridge()
+    session = _prompt_session(bridge)
+    lock = session._turn_runner._agent_turn_lock
+    await lock.acquire()
+    prompt = asyncio.create_task(session.prompt_agent("late prompt", role="user", speak=False))
+    await asyncio.sleep(0)
+
+    await session.stop(force=True)
+    lock.release()
+
+    with pytest.raises(RuntimeError, match="stopping"):
+        await prompt
+    assert bridge.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_force_stop_cancels_application_prompt():
+    bridge = _BlockingPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(session.prompt_agent("Do not drain.", role="user", speak=False))
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+    assert bridge.finished.is_set()
+    assert bridge.cancelled.is_set()
+    assert bridge.active == 0
+    [outcome] = await asyncio.gather(prompt, return_exceptions=True)
+    assert isinstance(outcome, asyncio.CancelledError)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_escalates_hung_concurrent_graceful_stop():
+    bridge = _CancellationResistantPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(session.prompt_agent("Graceful work.", role="user", speak=False))
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    graceful = asyncio.create_task(session.stop())
+    await asyncio.sleep(0)
+    assert not graceful.done()
+
+    await asyncio.wait_for(session.stop(force=True), timeout=0.5)
+
+    assert session.closed
+    assert bridge.cancelled.is_set()
+    assert not bridge.finished.is_set()
+    bridge.release_cleanup.set()
+    await asyncio.gather(prompt, graceful, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_reset_state_bounded_drains_active_application_prompt():
+    bridge = _CancellationResistantPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(session.prompt_agent("Temporary work.", role="user", speak=False))
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.reset_state(), timeout=0.5)
+
+    assert bridge.cancelled.is_set()
+    assert not bridge.finished.is_set()
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session.agent.history == []
+
+    bridge.release_cleanup.set()
+    await asyncio.gather(prompt, return_exceptions=True)
+    assert session.agent.history == []
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("speak", [False, True])
+async def test_application_prompt_emits_balanced_turn_lifecycle(speak: bool):
+    session = _prompt_session(ContextCapturingBridge())
+    lifecycle: list[type[Event]] = []
+    session.event_bus.subscribe(TurnStarted, lambda event: lifecycle.append(type(event)))
+    session.event_bus.subscribe(TurnEnded, lambda event: lifecycle.append(type(event)))
+    if speak:
+        await session.start()
+
+    await session.prompt_agent("Run workflow.", role="user", speak=speak)
+
+    assert lifecycle == [TurnStarted, TurnEnded]
+    await session.stop(force=True)
 
 
 @pytest.mark.asyncio

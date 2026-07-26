@@ -183,6 +183,14 @@ class AgentRunner:
         """Maximum speculative attempts allowed for one voice turn."""
         return max(1, self._config.preemptive_max_retries)
 
+    @staticmethod
+    def _validate_plain_turn_input(turn_input: AgentTurnInput) -> None:
+        if turn_input.role != "user" or turn_input.context:
+            raise ValueError(
+                "AgentTurnInput role/context require an ExternalAgentBridge; "
+                "plain async run(text) agents cannot represent them"
+            )
+
     async def prepare_response(self, turn_input: AgentTurnInput) -> PreparedAgentResponse:
         """Run a simple agent without committing its response to chat history.
 
@@ -192,6 +200,7 @@ class AgentRunner:
         """
         if not self.supports_preemptive_generation:
             raise RuntimeError("agent does not support preemptive generation")
+        self._validate_plain_turn_input(turn_input)
 
         started_at_ns = time.monotonic_ns()
         try:
@@ -270,6 +279,7 @@ class AgentRunner:
                     text=turn_input.text,
                     context=list(self._history),
                     turn_id=turn_input.turn_id,
+                    role=turn_input.role,
                 )
             accumulated = ""
             done_text = ""
@@ -300,10 +310,11 @@ class AgentRunner:
                     elif kind == "done":
                         done_text = text
                         await close_stream_after_done(inner_iter)
-                        self._history.append({"role": "user", "content": turn_input.text})
                         final_text = done_text or accumulated
-                        if final_text:
-                            self._history.append({"role": "assistant", "content": final_text})
+                        if turn_input.role != "system":
+                            self._history.append({"role": "user", "content": turn_input.text})
+                            if final_text:
+                                self._history.append({"role": "assistant", "content": final_text})
                         yield event
                         return
                     yield event
@@ -313,10 +324,11 @@ class AgentRunner:
                     # sync without a manual rollback.
                     raise AgentTimeoutError(timeout or 0)
                 # Mirror the completed turn into the advisory shadow history.
-                self._history.append({"role": "user", "content": turn_input.text})
                 final_text = done_text or accumulated
-                if final_text:
-                    self._history.append({"role": "assistant", "content": final_text})
+                if turn_input.role != "system":
+                    self._history.append({"role": "user", "content": turn_input.text})
+                    if final_text:
+                        self._history.append({"role": "assistant", "content": final_text})
                 return
             finally:
                 # A barge-in ``aclose()`` on this generator injects
@@ -332,6 +344,7 @@ class AgentRunner:
 
         if cancel_token and cancel_token.is_cancelled:
             return
+        self._validate_plain_turn_input(turn_input)
 
         cursor: ExecutionCursor | None = None
         if not isinstance(recorder, NullAgentRecorder):

@@ -263,6 +263,8 @@ class Session:
         self._start_lock = asyncio.Lock()
         self._closed = False
         self._stopping = False
+        self._stop_task: asyncio.Task[Any] | None = None
+        self._force_stop_requested = asyncio.Event()
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -1107,14 +1109,43 @@ class Session:
             self._record_debug_bundle()
             return
         if self._stopping:
+            if force:
+                self._force_stop_requested.set()
+                await self._turn_runner.cancel_application_prompt()
+            stop_task = self._stop_task
+            if stop_task is not None and stop_task is not asyncio.current_task():
+                await asyncio.shield(stop_task)
             return
         self._stopping = True
+        self._stop_task = asyncio.current_task()
+        self._force_stop_requested.clear()
         self._is_running = False
         current_task = asyncio.current_task()
 
         try:
+            prompt_task = self._turn_runner.active_application_prompt
+            prompt_is_current = prompt_task is current_task
+            if (
+                not force
+                and prompt_task is not None
+                and not prompt_is_current
+                and not prompt_task.done()
+            ):
+                # Application prompts are confirmed turn work. Graceful stop
+                # lets them finish unless a concurrent forced stop escalates.
+                force_waiter = asyncio.create_task(self._force_stop_requested.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        {prompt_task, force_waiter},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    force = force_waiter in done
+                finally:
+                    force_waiter.cancel()
+                    await asyncio.gather(force_waiter, return_exceptions=True)
+
             turn = self._turn
-            if turn:
+            if turn and not prompt_is_current:
                 turn.cancel_token.cancel()
 
             # Cancel any in-flight text turn so it doesn't emit events
@@ -1129,17 +1160,8 @@ class Session:
                     await text_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            prompt_token = self._turn_runner.application_prompt_cancel_token
-            if prompt_token:
-                prompt_token.cancel()
-            prompt_task = self._turn_runner.active_application_prompt
-            if (
-                prompt_task is not None
-                and prompt_task is not current_task
-                and not prompt_task.done()
-            ):
-                prompt_task.cancel()
-                await asyncio.gather(prompt_task, return_exceptions=True)
+            if force and not prompt_is_current:
+                await self._turn_runner.cancel_application_prompt()
 
             # Speculative plain-agent work is not part of the confirmed turn
             # task yet. Drain it explicitly before either teardown path can
@@ -1248,6 +1270,8 @@ class Session:
             # Clear the stopping flag FIRST so it is always reset even if a
             # later teardown step (observability / log-context reset) raises.
             self._stopping = False
+            self._stop_task = None
+            self._force_stop_requested.clear()
             self._mark_observability_inactive()
             self._reset_session_log_context()
             self._record_debug_bundle()
@@ -1293,6 +1317,7 @@ class Session:
         prompt_token = self._turn_runner.application_prompt_cancel_token
         if prompt_token is not None:
             prompt_token.cancel()
+        prompt_cleanup = asyncio.create_task(self._turn_runner.cancel_application_prompt())
 
         # Stamp the barge-in initiation time so the cutoff-latency histogram
         # can measure the elapsed wall time until playback is actually cleared
@@ -1314,6 +1339,7 @@ class Session:
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
+        await prompt_cleanup
 
         # Playback is cleared at this point; record the barge-in -> cutoff
         # latency so OTel consumers can track how long the caller kept hearing
@@ -1355,6 +1381,7 @@ class Session:
         turn = self._turn
         if turn:
             turn.cancel_token.cancel()
+        await self._turn_runner.cancel_application_prompt()
 
         await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
@@ -1512,12 +1539,16 @@ class Session:
             raise TypeError("speak must be a bool")
         if self._closed:
             raise RuntimeError("Session has been stopped")
+        if self._stopping:
+            raise RuntimeError("Session is stopping")
         if speak and self._runtime_mode == "text_session":
             raise RuntimeError("speak=True is unavailable in text_session mode")
         if speak and not self._is_running:
             raise RuntimeError("Session must be started before speak=True")
         if self._turn is not None or self._turn_manager.state != TurnManagerState.IDLE:
             await self.cancel_turn()
+        if self._stopping:
+            raise RuntimeError("Session is stopping")
         self._mark_observability_active()
         try:
             with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
@@ -1525,6 +1556,7 @@ class Session:
                     text.strip(),
                     role=role,
                     speak=speak,
+                    admit=lambda: not self._closed and not self._stopping,
                 )
         finally:
             self._mark_observability_inactive()

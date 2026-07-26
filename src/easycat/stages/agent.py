@@ -6,7 +6,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -194,6 +194,7 @@ class AgentStage:
         cancel_token: Any | None = None,
         system_prefix: str | None = None,
         prepared_response: PreparedAgentResponse | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> AsyncGenerator[AgentBridgeEvent, None]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
 
@@ -239,6 +240,7 @@ class AgentStage:
             input_text,
             context=base_context if (self._tracks_history or system_prefix) else None,
             turn_id=turn.id,
+            role=input_role,
         )
 
         accumulated: list[str] = []
@@ -373,9 +375,11 @@ class AgentStage:
                 final_text = "".join(accumulated)
                 if (
                     self._tracks_history
+                    and input_role != "system"
                     and self._provider is bridge
                     and self._history_epoch == history_epoch
                     and final_text
+                    and input_role != "system"
                 ):
                     # Record the turn in shadow history so the next
                     # ``invoke()`` forwards it as ``turn_input.context``
