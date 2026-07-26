@@ -68,8 +68,9 @@ Between start and stop, the session exposes turn-level controls:
   stopping the session.
 - `await session.prompt_agent(text, role="system", speak=True)` — run a
   journaled application-initiated agent turn. Spoken prompts use the normal
-  cancellable TTS/playback path; set `speak=False` when the application needs
-  only the response text.
+  cancellable TTS/playback path and require a started, non-text session; set
+  `speak=False` when the application needs only the response text (this also
+  works before `start()` and in `text_session` mode).
 - `session.reset_state()` — clear turn state and conversation pointers.
 - `session.send_text(text)` — inject a user turn without audio (text-first
   flows and tests).

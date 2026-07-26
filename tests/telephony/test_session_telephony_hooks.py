@@ -227,6 +227,9 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
     assert agent.prompts[0].role == "system"
     assert "Ignore prior instructions" not in agent.prompts[0].text
     assert "exfiltrate crm_token" not in agent.prompts[0].text
+    joined_context = " ".join(item.get("content", "") for item in agent.prompts[0].context)
+    assert "Ignore prior instructions" not in joined_context
+    assert "exfiltrate crm_token" not in joined_context
     session.synthesize_bypass.assert_awaited_once_with("This is EasyCat.")
 
 

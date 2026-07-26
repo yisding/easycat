@@ -242,6 +242,27 @@ def _prompt_session(agent: _TestBridgeBase) -> Session:
 
 
 @pytest.mark.asyncio
+async def test_prompt_reclaims_turn_when_vad_races_initial_cancellation():
+    bridge = _BlockingPromptBridge()
+    bridge.release.set()
+    session = _prompt_session(bridge)
+    await session._turn_manager.start_turn()
+    original_cancel = session.cancel_turn
+
+    async def cancel_then_race_vad(*, barge_in: bool = False) -> None:
+        await original_cancel(barge_in=barge_in)
+        await session._turn_manager.start_turn()
+
+    session.cancel_turn = cancel_then_race_vad  # type: ignore[method-assign]
+
+    assert (
+        await session.prompt_agent("Classify this call.", role="user", speak=False) == "finished"
+    )
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_silent_prompt_owns_turn_until_voice_barge_in_drains_it():
     bridge = _BlockingPromptBridge()
     session = _prompt_session(bridge)

@@ -188,6 +188,7 @@ class TurnRunner:
         self._agent = wiring.agent
         self._drain_session_actions = wiring.drain_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
+        self._cancel_turn = wiring.cancel_turn
         self._stop = wiring.stop
         self._reset_turn_state = wiring.reset_turn_state
         self._emit = wiring.emit
@@ -1201,13 +1202,25 @@ class TurnRunner:
             await self.cancel_application_prompt()
             if not admit():
                 raise RuntimeError("Session is stopping")
+            if self._turn_manager.state is not TurnManagerState.IDLE:
+                # VAD/PTT can acquire turn ownership after Session.prompt_agent()
+                # performs its first cancellation. Re-cancel at the actual
+                # admission point, then reserve the application turn without
+                # another await so voice work cannot race back in.
+                await self._cancel_turn()
+                if not admit():
+                    raise RuntimeError("Session is stopping")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
+            turn = TurnContext(turn_id=turn_id, cancel_token=token)
+            self._turn_manager.begin_application_turn(turn_id, token)
+            self._turn.set(turn)
             self._application_prompt_cancel_token = token
             self._application_turn_ids.add(turn_id)
             coroutine = self._execute_application_prompt(
                 text,
                 token,
+                turn=turn,
                 turn_id=turn_id,
                 role=role,
                 speak=speak,
@@ -1251,13 +1264,11 @@ class TurnRunner:
         text: str,
         token: CancelToken,
         *,
+        turn: TurnContext,
         turn_id: str,
         role: Literal["system", "user"],
         speak: bool,
     ) -> str:
-        turn = TurnContext(turn_id=turn_id, cancel_token=token)
-        self._turn_manager._begin_application_turn(turn_id, token)
-        self._turn.set(turn)
         agent_text, system_prefix = self._application_agent_input(text, role)
         try:
             if speak:
