@@ -19,7 +19,7 @@ import struct
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_type_hints
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -152,9 +152,6 @@ StreamTokenValidator = (
         [StreamTokenContext], StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]
     ]
 )
-_STREAM_TOKEN_CONTEXT_PARAMETER_NAMES = frozenset(
-    {"context", "ctx", "stream_context", "token_context"}
-)
 
 
 @dataclass
@@ -167,11 +164,17 @@ class TwilioTransportConfig:
     port: int = 8766
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
-    # Legacy validators receive the raw token string. Validators whose first
-    # parameter is named/annotated as StreamTokenContext receive the Twilio
-    # start-frame context and may return claims to merge into CallIdentity.
+    # Legacy validators receive the raw token string. Annotating the accepted
+    # parameter as StreamTokenContext explicitly opts into start-frame context.
     stream_token_validator: StreamTokenValidator | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
+    stream_token_validation_timeout_s: float = 5.0
+
+    def __post_init__(self) -> None:
+        if not self.stream_token_parameter:
+            raise ValueError("stream_token_parameter must be non-empty")
+        if self.stream_token_validation_timeout_s <= 0:
+            raise ValueError("stream_token_validation_timeout_s must be positive")
 
 
 def _parse_twilio_start_identity(
@@ -277,19 +280,18 @@ def _stream_token_validator_parameter(
             inspect.Parameter.KEYWORD_ONLY,
         ):
             continue
-        annotation = parameter.annotation
+        try:
+            annotation = get_type_hints(validator).get(parameter.name, parameter.annotation)
+        except (NameError, TypeError):
+            annotation = parameter.annotation
         if (
             annotation is StreamTokenContext
             or annotation == "StreamTokenContext"
+            or (isinstance(annotation, str) and annotation.endswith(".StreamTokenContext"))
             or getattr(annotation, "__name__", None) == "StreamTokenContext"
         ):
             return parameter, True
-        # An explicit annotation preserves the legacy raw-token contract unless
-        # it positively identifies StreamTokenContext. Parameter names are only
-        # a compatibility heuristic for unannotated callables.
-        if annotation is not inspect.Parameter.empty:
-            return parameter, False
-        return parameter, parameter.name in _STREAM_TOKEN_CONTEXT_PARAMETER_NAMES
+        return parameter, False
     return None, False
 
 
@@ -321,7 +323,10 @@ def _coerce_stream_token_claims(result: StreamTokenValidatorResult) -> dict[str,
 
 
 async def _twilio_stream_token_claims(
-    start: dict[str, Any], config: TwilioTransportConfig
+    start: dict[str, Any],
+    config: TwilioTransportConfig,
+    *,
+    stream_sid: str | None = None,
 ) -> dict[str, str] | None:
     validator = config.stream_token_validator
     if validator is None:
@@ -335,14 +340,21 @@ async def _twilio_stream_token_claims(
     context = StreamTokenContext(
         token=token,
         call_sid=start.get("callSid") if isinstance(start.get("callSid"), str) else None,
-        stream_sid=start.get("streamSid") if isinstance(start.get("streamSid"), str) else None,
+        stream_sid=stream_sid,
         parameters=parameters,
     )
     try:
-        result = await _maybe_await_stream_token_result(
-            _call_stream_token_validator(validator, token=token, context=context)
-        )
-        return _coerce_stream_token_claims(result)
+        async with asyncio.timeout(config.stream_token_validation_timeout_s):
+            result = await _maybe_await_stream_token_result(
+                _call_stream_token_validator(validator, token=token, context=context)
+            )
+        claims = _coerce_stream_token_claims(result)
+        if claims is not None:
+            claims.pop(config.stream_token_parameter, None)
+        return claims
+    except TimeoutError:
+        logger.warning("Twilio stream token validator timed out")
+        return None
     except Exception:
         logger.warning("Twilio stream token validator raised", exc_info=True)
         return None
@@ -702,14 +714,33 @@ class _TwilioProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return
-        token_claims = await _twilio_stream_token_claims(start, self._config)
+        top_stream_sid = msg.get("streamSid")
+        top_stream_sid = top_stream_sid if isinstance(top_stream_sid, str) else None
+        nested_stream_sid = start.get("streamSid")
+        nested_stream_sid = nested_stream_sid if isinstance(nested_stream_sid, str) else None
+        if (
+            top_stream_sid is not None
+            and nested_stream_sid is not None
+            and top_stream_sid != nested_stream_sid
+        ):
+            logger.warning("Rejecting Twilio start with conflicting streamSid values")
+            ws = self._current_ws()
+            if ws is not None:
+                await ws.close(4003, "Conflicting streamSid")
+            return
+        stream_sid = top_stream_sid or nested_stream_sid
+        token_claims = await _twilio_stream_token_claims(
+            start,
+            self._config,
+            stream_sid=stream_sid,
+        )
         if token_claims is None:
             logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             ws = self._current_ws()
             if ws is not None:
                 await ws.close(4003, "Missing or invalid stream token")
             return
-        self._stream_sid = msg.get("streamSid") or start.get("streamSid")
+        self._stream_sid = stream_sid
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
