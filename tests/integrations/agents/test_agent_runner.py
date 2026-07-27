@@ -517,6 +517,21 @@ async def test_bridge_delegation_stops_after_done_without_timeout():
     ]
 
 
+@pytest.mark.asyncio
+async def test_bridge_delegation_closes_inner_stream_on_early_consumer_close():
+    inner = _PostDoneHangingBridge()
+    runner = AgentRunner(inner, AgentRunnerConfig(timeout=None))
+    stream = runner.invoke(AgentTurnInput.from_text("hello"), _recorder())
+
+    first = await stream.__anext__()
+    assert first == AgentBridgeEvent(kind="text_delta", text="ok")
+
+    await stream.aclose()
+
+    assert inner.closed
+    assert runner.history == []
+
+
 class _HangingBridge:
     COMMITTABLE_BOUNDARIES: dict = {}
 

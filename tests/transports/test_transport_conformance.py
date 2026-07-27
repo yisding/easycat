@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from typing import Any
 
 import pytest
 
-from easycat.events import EventBus
+from easycat.events import CallAnswered, EventBus, TransportDegraded
 from easycat.transports.local import LocalTransport
-from easycat.transports.twilio_media import TwilioTransport
+from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
@@ -28,12 +30,47 @@ class _FakeServerWS:
         return None
 
 
-def _make_connection_transports() -> dict[str, object]:
+class _RemoteEOFWebSocket:
+    """Minimal connection that reaches remote EOF without local teardown."""
+
+    def __init__(self, messages: tuple[str, ...] = ()) -> None:
+        self._messages = iter(messages)
+        self.close_calls = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            return next(self._messages)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def send(self, _message: str | bytes) -> None:
+        return None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.close_calls += 1
+
+
+def _twilio_start_msg() -> str:
+    return json.dumps(
+        {
+            "event": "start",
+            "streamSid": "MZ123",
+            "start": {"streamSid": "MZ123", "callSid": "CA456"},
+        }
+    )
+
+
+def _make_connection_transports() -> dict[str, Any]:
     """Build one bare instance of every transport that owns a ``disconnect``."""
 
     return {
         "websocket_server": WebSocketTransport(),
-        "websocket_connection": WebSocketConnectionTransport(_FakeServerWS()),
+        "websocket_connection": WebSocketConnectionTransport(
+            _FakeServerWS(),  # type: ignore[arg-type]
+        ),
         "webrtc": WebRTCTransport(),
         "webtransport_connection": WebTransportConnectionTransport(),
         "local": LocalTransport(),
@@ -70,10 +107,113 @@ class TestEmitTaskDrain:
         assert len(seen) == 1
 
 
+class TestRemoteFirstDisconnect:
+    @pytest.mark.asyncio
+    async def test_websocket_disconnect_releases_resources_after_remote_eof(self):
+        ws = _RemoteEOFWebSocket()
+        bus = EventBus()
+        degraded: list[TransportDegraded] = []
+
+        async def capture_degraded(event: TransportDegraded) -> None:
+            await asyncio.sleep(0)
+            degraded.append(event)
+
+        bus.subscribe(TransportDegraded, capture_degraded)
+        transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+        transport._event_bus = bus
+        await transport.connect()
+        receive_task = transport._receive_task
+        assert receive_task is not None
+        await receive_task
+        assert not transport.is_connected
+
+        forwarder = transport._browser_event_forwarder
+        assert forwarder is not None
+        transport._emit_degraded("audit_remote_eof")
+        assert transport._emit_tasks
+
+        await transport.disconnect()
+
+        assert transport._receive_task is None
+        assert transport._browser_event_forwarder is None
+        assert not forwarder._subscriptions
+        assert ws.close_calls == 1
+        assert transport._emit_tasks == set()
+        assert len(degraded) == 1
+
+        await transport.disconnect()
+        assert ws.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_twilio_disconnect_releases_resources_after_remote_eof(self):
+        ws = _RemoteEOFWebSocket((_twilio_start_msg(),))
+        bus = EventBus()
+        degraded: list[TransportDegraded] = []
+
+        async def capture_degraded(event: TransportDegraded) -> None:
+            await asyncio.sleep(0)
+            degraded.append(event)
+
+        bus.subscribe(TransportDegraded, capture_degraded)
+        transport = TwilioConnectionTransport(  # type: ignore[arg-type]
+            ws,
+            event_bus=bus,
+        )
+        await transport.connect()
+        receive_task = transport._receive_task
+        assert receive_task is not None
+        await receive_task
+        assert not transport.is_connected
+        assert transport._call_identity is not None
+        assert transport._call_ended_emitted
+
+        transport._emit_degraded("audit_remote_eof")
+        assert transport._emit_tasks
+
+        await transport.disconnect()
+
+        assert transport._receive_task is None
+        assert transport._call_identity is None
+        assert not transport._call_ended_emitted
+        assert ws.close_calls == 1
+        assert transport._emit_tasks == set()
+        assert len(degraded) == 1
+
+        await transport.disconnect()
+        assert ws.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_twilio_self_disconnect_does_not_rearm_call_ended_latch(self):
+        ws = _RemoteEOFWebSocket((_twilio_start_msg(),))
+        bus = EventBus()
+        transport = TwilioConnectionTransport(  # type: ignore[arg-type]
+            ws,
+            event_bus=bus,
+        )
+
+        async def disconnect_on_answered(_event: CallAnswered) -> None:
+            await asyncio.sleep(0)
+            await transport.disconnect()
+
+        bus.subscribe(CallAnswered, disconnect_on_answered)
+        await transport.connect()
+        receive_task = transport._receive_task
+        assert receive_task is not None
+        await receive_task
+
+        assert transport._receive_task is None
+        assert not transport.is_connected
+        assert not transport._call_ended_emitted
+        assert ws.close_calls == 1
+
+        await transport.disconnect()
+        assert ws.close_calls == 1
+
+
 class TestTransportConformance:
     """Verify all transports satisfy the Transport protocol shape."""
 
-    def _assert_has_protocol_methods(self, t: object) -> None:
+    def _assert_has_protocol_methods(self, t: Any) -> None:
         assert callable(t.connect)
         assert callable(t.disconnect)
         assert callable(t.receive_audio)

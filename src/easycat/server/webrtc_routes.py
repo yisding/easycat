@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
+from easycat.server.transports import _await_with_hard_timeout
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports._webrtc_stats import WebRTCStatsState
 
@@ -148,6 +149,8 @@ class WebRTCRoutes:
         self._client_base = ""
         # Tracks per-offer transport cleanup tasks so ``stop`` can cancel them.
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._cleanup_task_keys: dict[asyncio.Task[None], int] = {}
+        self._released_cleanup_keys: set[int] = set()
         # aiohttp.web, resolved lazily inside ``register``.
         self._web: Any = None
 
@@ -409,9 +412,11 @@ class WebRTCRoutes:
             # active-connection gauge so WebRTC traffic is visible to OTel.
             self._emit_connections_changed()
             transport._ensure_browser_event_forwarder()
+            self._released_cleanup_keys.discard(key)
             task = asyncio.create_task(self._cleanup_session(key, transport))
             self._cleanup_tasks.add(task)
-            task.add_done_callback(self._cleanup_tasks.discard)
+            self._cleanup_task_keys[task] = key
+            task.add_done_callback(self._cleanup_task_done)
         except Exception:
             # Stop + drop the started session (``manager.remove`` stops it) and
             # clear any partial gate/active-map bookkeeping. The gate reservation
@@ -432,23 +437,47 @@ class WebRTCRoutes:
         try:
             await transport.wait_closed()
         finally:
-            try:
-                await asyncio.shield(self._manager.remove(key))
-                self._gate.untrack(key)
-                if self._active_session_objs is not None:
-                    self._active_session_objs.pop(key, None)
-            finally:
-                self._gate.release()
-                # The reservation is gone — refresh the shared gauge so the
-                # active-connection count decrements for WebRTC teardown too.
-                self._emit_connections_changed()
+            await self._finalize_session_cleanup(key, force=False)
 
-    async def cancel_cleanup_tasks(self) -> None:
+    async def _finalize_session_cleanup(self, key: int, *, force: bool) -> None:
+        """Stop and release one offer exactly once, including pre-start cancellation."""
+        await self._manager.remove(key, force=force)
+        self._gate.untrack(key)
+        if self._active_session_objs is not None:
+            self._active_session_objs.pop(key, None)
+        if key not in self._released_cleanup_keys:
+            self._released_cleanup_keys.add(key)
+            self._gate.release()
+            self._emit_connections_changed()
+
+    def _cleanup_task_done(self, task: asyncio.Task[None]) -> None:
+        self._cleanup_tasks.discard(task)
+        self._cleanup_task_keys.pop(task, None)
+
+    async def cancel_cleanup_tasks(self, *, timeout_s: float | None = None) -> None:
         """Cancel + await the per-offer cleanup tasks (called on server stop)."""
-        for task in list(self._cleanup_tasks):
+        pending = [(task, self._cleanup_task_keys.get(task)) for task in self._cleanup_tasks]
+        for task, _key in pending:
             task.cancel()
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+        if pending:
+            finalizers = [
+                asyncio.create_task(self._finalize_session_cleanup(key, force=True))
+                for _task, key in pending
+                if key is not None
+            ]
+            cleanup = asyncio.gather(
+                *(task for task, _key in pending),
+                *finalizers,
+                return_exceptions=True,
+            )
+            if timeout_s is None:
+                await cleanup
+            else:
+                await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+
+    async def _stop_managed_session(self, key: int, force: bool) -> None:
+        """Route drain teardown through the manager's keyed stop ownership."""
+        await self._manager.remove(key, force=force)
 
     # ── Config / stats / health / root / cors (shared, stateless) ─────
     # These handlers and their CORS / auth / stats helpers are byte-identical to
@@ -566,14 +595,14 @@ async def serve_webrtc_config_sessions(
             drain_timeout_s=max(drain_timeout_s, 0.0),
             force_after=True,
             force_timeout_s=max(force_shutdown_timeout_s, 0.0),
+            stop_for_key=routes._stop_managed_session,
         )
-        await routes.cancel_cleanup_tasks()
-        try:
-            await asyncio.wait_for(
-                manager.stop_all(),
-                timeout=max(force_shutdown_timeout_s, 0.0),
-            )
-        except TimeoutError:
+        await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
+        swept = await _await_with_hard_timeout(
+            manager.stop_all(force=True),
+            timeout_s=max(force_shutdown_timeout_s, 0.0),
+        )
+        if not swept:
             logger.warning(
                 "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
                 force_shutdown_timeout_s,

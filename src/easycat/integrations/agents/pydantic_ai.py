@@ -11,9 +11,9 @@ import json
 import logging
 import shlex
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -52,7 +52,7 @@ class PydanticAIBridge:
     ``state_factory`` and ``initial_node_factory`` (graph mode).
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,

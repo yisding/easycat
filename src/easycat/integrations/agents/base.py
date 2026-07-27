@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import enum
 import logging
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
 from easycat.runtime.records import ErrorInfo
@@ -447,7 +447,7 @@ class ExternalAgentBridge(Protocol):
     producing text/tool events the voice pipeline consumes.
     """
 
-    COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule]
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]]
 
     # Declared as a *sync* method returning an async iterator: every
     # implementation is an ``async def`` generator function, and calling
