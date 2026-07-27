@@ -14,9 +14,9 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -142,7 +142,7 @@ class LangChainBridge:
         than overwritten by the resolved default.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,

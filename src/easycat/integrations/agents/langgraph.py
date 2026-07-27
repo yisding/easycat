@@ -31,9 +31,9 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -151,7 +151,7 @@ class LangGraphBridge:
         performance demands it for a very chatty graph.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_NODES,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
