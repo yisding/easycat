@@ -170,6 +170,7 @@ class SessionConfig:
     capture_aec_reference: bool = False
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    on_agent_failure: str | Callable[[Exception], str] | None = None
 
     # Interruption behaviour.
     # "truncate" (default): truncate the assistant message to what was

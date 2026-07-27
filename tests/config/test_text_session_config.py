@@ -19,6 +19,28 @@ def test_create_text_session_forwards_warmup():
     assert session._warmup.enabled is False
 
 
+def test_create_text_session_preserves_debug_snapshot_shape(tmp_path):
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(
+        agent=_DummyAgent(),
+        debug="off",
+        journal_retention="delete",
+        warmup=False,
+        record_to=tmp_path,
+    )
+
+    session = create_text_session(config)
+
+    assert vars(session._easycat_config) == {
+        "debug": "off",
+        "journal_backend": "sqlite",
+        "journal_retention": "delete",
+        "warmup": False,
+        "record_to": tmp_path,
+    }
+
+
 def test_text_session_config_defaults_debug_to_light():
     from easycat.config import TextSessionConfig
 

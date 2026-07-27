@@ -111,6 +111,10 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `dnc_list` — do-not-call store checked before placing outbound calls.
 - `caller_id_exposure` — how the callee identity reaches the agent:
   `"off"`, `"system_message"`, or `"tools_only"` (default).
+- `on_agent_failure` — optional fallback text or
+  `Callable[[Exception], str]`. When an agent error or timeout delivers no
+  response audio, EasyCat speaks the resolved text through the normal
+  cancellable TTS path. The default `None` preserves silent failure behavior.
 - `session_id` — optional caller-supplied runtime session id; unset generates
   a `session-...` id.
 - `record_to` — directory path; when set, every session exports a

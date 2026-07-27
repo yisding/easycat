@@ -22,8 +22,8 @@ _KIND_NAMES = {
         aec_reference_frame interruption_note markdown_stripped provider_versions
         replace_last_assistant_text stage_complete stage_error stage_start
         stt_segment_commit_requested stt_segment_commit_result stt_segment_final tts_frame
-        tts_payload_prepared agent_delta agent_final agent_request_started agent_usage
-        bot_started_speaking
+        tts_payload_prepared agent_delta agent_failure_fallback agent_final
+        agent_request_started agent_usage bot_started_speaking
         bot_stopped_speaking call_answered call_ended call_failed call_screening error
         playback_mark_ack session_action_completed session_action_failed session_action_requested
         session_action_started stt_final stt_partial supervisor_listener_attached
@@ -66,6 +66,7 @@ _REQUIRED_KEYS = {
     "turn_total_latency_ms": "value from to",
     "agent_final": "text",
     "agent_usage": "run_id",
+    "agent_failure_fallback": "text error_type",
     "call_answered": "call_sid",
     "call_ended": "call_sid",
     "call_failed": "call_sid reason",

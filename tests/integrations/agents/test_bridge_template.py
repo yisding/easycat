@@ -20,6 +20,7 @@ from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
     AgentTurnInput,
+    BridgeInputError,
     CancellationMode,
     CommitRule,
     ExternalAgentBridge,
@@ -378,15 +379,30 @@ class TestRegisterAgentDetector:
     def test_detectors_consulted_in_registration_order(self):
         register_agent_detector(
             lambda obj: isinstance(obj, _MyFrameworkAgent),
-            lambda obj: ("first", obj),
+            lambda obj: _MyFrameworkBridge(obj),
         )
         register_agent_detector(
             lambda obj: isinstance(obj, _MyFrameworkAgent),
-            lambda obj: ("second", obj),
+            lambda obj: _MinimalBridge(),
         )
 
         adapted = auto_adapt_agent(_MyFrameworkAgent())
-        assert adapted[0] == "first"
+        assert isinstance(adapted, _MyFrameworkBridge)
+
+    def test_detector_rejects_non_bridge_factory_result(self):
+        def invalid_factory(obj: Any) -> ExternalAgentBridge:
+            return ("invalid", obj)  # type: ignore[return-value]
+
+        register_agent_detector(
+            lambda obj: isinstance(obj, _MyFrameworkAgent),
+            invalid_factory,
+        )
+
+        with pytest.raises(
+            BridgeInputError,
+            match="bridge_factory must return an ExternalAgentBridge; got tuple",
+        ):
+            auto_adapt_agent(_MyFrameworkAgent())
 
     def test_clear_agent_detectors_removes_registrations(self):
         register_agent_detector(lambda obj: True, lambda obj: _MyFrameworkBridge(obj))

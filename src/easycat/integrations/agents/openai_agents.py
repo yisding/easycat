@@ -10,8 +10,8 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -108,7 +108,7 @@ class OpenAIAgentsBridge:
     tool calls, and handoffs to the journal via the ``AgentRecorder``.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,

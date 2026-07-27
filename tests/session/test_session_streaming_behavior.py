@@ -30,6 +30,7 @@ from easycat.events import (
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, AgentTurnInput
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig, TTSTimeoutError
@@ -128,6 +129,163 @@ async def test_session_basic_agent_error_emits_event():
     assert len(errors) >= 1
     assert errors[0].stage == ErrorStage.AGENT
     assert isinstance(errors[0].exception, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_uses_normal_tts_and_journals():
+    seen_errors: list[Exception] = []
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    tts = FakeTTS()
+    journal = InMemoryRingBuffer(capacity=1000)
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FailingStreamingAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            journal=journal,
+            on_agent_failure=lambda error: (
+                seen_errors.append(error) or "I am having trouble. Please try again."
+            ),
+        )
+    )
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
+
+    await session.start()
+    await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    await session.stop()
+
+    assert len(seen_errors) == 1
+    assert isinstance(seen_errors[0], RuntimeError)
+    assert tts.synthesized_texts == ["I am having trouble. Please try again."]
+    assert transport.sent
+    [record] = [item for item in journal.read() if item.name == "agent_failure_fallback"]
+    assert record.data == {
+        "text": "I am having trouble. Please try again.",
+        "error_type": "RuntimeError",
+    }
+    assert record.turn_id is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_timeout_uses_spoken_failure_fallback():
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=TimeoutThenRecoverStreamingAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+            on_agent_failure="The service is taking too long. Please try again.",
+        )
+    )
+    errors: list[Error] = []
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(Error, lambda event: errors.append(event))
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
+
+    await session.start()
+    await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    await session.stop()
+
+    assert any(isinstance(event.exception, AgentTimeoutError) for event in errors)
+    assert tts.synthesized_texts == ["The service is taking too long. Please try again."]
+    assert transport.sent
+
+
+@pytest.mark.asyncio
+async def test_agent_timeout_drops_unfinished_fragment_before_fallback():
+    class PartialTimeoutAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return text
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="text_delta", text="unfinished fragment")
+            await asyncio.Event().wait()
+
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=PartialTimeoutAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+            on_agent_failure="Please try again.",
+        )
+    )
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
+
+    await session.start()
+    await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Please try again."]
+
+
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_is_skipped_after_response_audio():
+    class PartialResponseAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return text
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="text_delta", text="Partial answer.")
+            await asyncio.sleep(0.02)
+            raise RuntimeError("agent failed after playback began")
+
+    transport = FakeTransport(chunks=[_chunk(), _chunk()])
+    tts = FakeTTS()
+    journal = InMemoryRingBuffer(capacity=1000)
+    session = Session(
+        SessionConfig(
+            transport=transport,
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=PartialResponseAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            journal=journal,
+            on_agent_failure="Please try again.",
+        )
+    )
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
+
+    await session.start()
+    await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    await session.stop()
+
+    assert tts.synthesized_texts == ["Partial answer."]
+    assert transport.sent
+    assert all(record.name != "agent_failure_fallback" for record in journal.read())
 
 
 @pytest.mark.asyncio

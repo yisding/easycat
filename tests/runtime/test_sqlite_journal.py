@@ -27,6 +27,7 @@ from easycat.runtime import (
     create_journal,
     run_retention,
 )
+from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecordKind,
@@ -563,6 +564,9 @@ class TestCrashRecovery:
         j1._conn.commit()
         j1._conn.close()
         j1._closed = True
+        # The fixture creates and "crashes" the owner in this process. Expire
+        # the cache entry to model the fresh worker that would discover it.
+        journal_sql_module._clear_crash_sweep_states()
 
         j2 = SqliteJournal("fresh", data_dir=tmp_path)
         try:
@@ -576,16 +580,24 @@ class TestCrashRecovery:
         j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
         # While open, the liveness marker is present.
         live = j._conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        live_start = j._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+        ).fetchone()
         assert live is not None and live[0] not in (None, "")
+        assert live_start is not None and live_start[0] not in (None, "")
         j.close()
 
         # After a clean close the marker is gone so the file never reads live.
         conn = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
         try:
             row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+            start_row = conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+            ).fetchone()
         finally:
             conn.close()
         assert row is None
+        assert start_row is None
 
     def test_open_does_not_sweep_a_live_sibling(self, tmp_path):
         # A concurrently-open live journal (its PID is this test process,

@@ -52,6 +52,7 @@ reader may inspect.
 | Name | Kind | Required `data` keys | Optional or variant `data` keys |
 |---|---|---|---|
 | `aec_reference_frame` | `EVENT` | `stage: str`, `audio_bytes: int` | `sample_rate: int`, `channels: int`, `sample_width: int`, `encoding: str`, `duration_ms: number` |
+| `agent_failure_fallback` | `EVENT` | `text: str`, `error_type: str` | - |
 | `agent_usage` | `EVENT` | `run_id: str`; at least one token-count key | `provider: str`, `model: str`, `input_tokens: int`, `output_tokens: int`, `cached_input_tokens: int` |
 | `interruption_note` | `EVENT` | `stage: str`, `note: str` | - |
 | `markdown_stripped` | `EVENT` | `phase: str`, `changed: bool`, `original_text: str`, `stripped_text: str` | - |
