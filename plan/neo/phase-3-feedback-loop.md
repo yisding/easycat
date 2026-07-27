@@ -185,14 +185,14 @@ locations — no new behavior, just an import surface; covered by an
 
 ```python
 from easycat.evals import (
-    load_bundle,          # debug/testing.py:93
-    assert_no_error,      # debug/testing.py:314
-    assert_tool_called,   # debug/testing.py:333
-    assert_regex,         # debug/testing.py:279
-    assert_exact_match,   # debug/testing.py:256
-    assert_latency,       # debug/testing.py:360 (NOTE: existing signature differs
-                          # from any budget-aware helper; do NOT conflate with
-                          # assert_budgets_pass below)
+    load_bundle,  # debug/testing.py:93
+    assert_no_error,  # debug/testing.py:314
+    assert_tool_called,  # debug/testing.py:333
+    assert_regex,  # debug/testing.py:279
+    assert_exact_match,  # debug/testing.py:256
+    assert_latency,  # debug/testing.py:360 (NOTE: existing signature differs
+    # from any budget-aware helper; do NOT conflate with
+    # assert_budgets_pass below)
     assert_turn_completed,  # debug/testing.py:300
 )
 ```
@@ -202,13 +202,13 @@ not present them as re-exports):
 
 ```python
 from easycat.evals import (
-    assert_budgets_pass,    # NET-NEW (no such symbol today)
-    EvalRunner,             # NET-NEW
-    EvalScenario,           # NET-NEW
-    EvalTurn,               # NET-NEW
-    promote_turn_to_test,   # NET-NEW (only the CLI `promote_turn` exists today,
-                            # at cli/debug/bundles.py:1820 — no library fn)
-    ScenarioResult,         # NET-NEW
+    assert_budgets_pass,  # NET-NEW (no such symbol today)
+    EvalRunner,  # NET-NEW
+    EvalScenario,  # NET-NEW
+    EvalTurn,  # NET-NEW
+    promote_turn_to_test,  # NET-NEW (only the CLI `promote_turn` exists today,
+    # at cli/debug/bundles.py:1820 — no library fn)
+    ScenarioResult,  # NET-NEW
 )
 ```
 
@@ -232,6 +232,7 @@ class EvalScenario:
     turns: list[EvalTurn]
     # CostBudget is NET-NEW (Workstream D); LatencyBudget is existing.
     budgets: list[LatencyBudget | CostBudget] = field(default_factory=list)
+
 
 @dataclass
 class EvalTurn:

@@ -55,7 +55,7 @@ def create_app() -> FastAPI:  # noqa: C901, PLR0915
             transport = TwilioConnectionTransport(
                 ws,
                 config=TwilioTransportConfig(
-                    stream_token_start_validator=stream_tokens.consume_start
+                    stream_token_validator=stream_tokens.consume_start
                 ),
             )
             if not await transport.wait_for_start(timeout_s=start_timeout_s):

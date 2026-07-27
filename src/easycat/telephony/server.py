@@ -257,7 +257,7 @@ async def serve_twilio_voice_app(
             transport = TwilioConnectionTransport(
                 ws,
                 config=TwilioTransportConfig(
-                    stream_token_start_validator=stream_tokens.consume_start
+                    stream_token_validator=stream_tokens.consume_start
                 ),
             )
             if not await transport.wait_for_start(timeout_s=config.start_timeout_s):

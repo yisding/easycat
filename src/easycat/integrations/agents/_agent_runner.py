@@ -16,9 +16,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -142,7 +142,7 @@ class AgentRunner:
     turn that the inner bridge has already partially committed.
     """
 
-    COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule] = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
     }
 
@@ -250,86 +250,102 @@ class AgentRunner:
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Run one turn, yielding bridge events as they occur."""
-        if self._is_bridge:
-            # Forward runner-managed history so multi-turn bridges that rely
-            # on turn_input.context stay stateful across turns.  Any context
-            # the caller already set takes precedence.
-            #
-            # The inner bridge owns the authoritative turn state: it records
-            # the user message and any partial assistant output into its own
-            # durable store (e.g. checkpointer / message history) and keeps
-            # that partial state intentionally on cancel/timeout.  We cannot
-            # roll the inner bridge back, so we only mirror a turn into the
-            # runner's *advisory* shadow ``_history`` after the inner turn has
-            # completed successfully.  This keeps the shadow list and the
-            # bridge's real history from drifting apart on timeout/error
-            # (which previously caused the next turn to double-feed context).
-            bridge_input = turn_input
-            if not turn_input.context and self._history:
-                bridge_input = AgentTurnInput(
-                    text=turn_input.text,
-                    context=list(self._history),
-                    turn_id=turn_input.turn_id,
-                )
-            accumulated = ""
-            done_text = ""
-            timeout = self._config.timeout
-            deadline = time.monotonic() + timeout if timeout is not None else None
-            inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
-            timed_out = False
-            try:
-                while True:
-                    try:
-                        if deadline is not None:
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                timed_out = True
-                                break
-                            event = await _await_with_timeout(inner_iter.__anext__(), remaining)
-                        else:
-                            event = await inner_iter.__anext__()
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
-                        timed_out = True
-                        break
-                    kind = getattr(event, "kind", None)
-                    text = getattr(event, "text", "") or ""
-                    if kind == "text_delta":
-                        accumulated += text
-                    elif kind == "done":
-                        done_text = text
-                        await close_stream_after_done(inner_iter)
-                        self._history.append({"role": "user", "content": turn_input.text})
-                        final_text = done_text or accumulated
-                        if final_text:
-                            self._history.append({"role": "assistant", "content": final_text})
-                        yield event
-                        return
-                    yield event
-                if timed_out:
-                    # Let the inner bridge keep its own partial state; the runner
-                    # never recorded this turn, so its shadow history stays in
-                    # sync without a manual rollback.
-                    raise AgentTimeoutError(timeout or 0)
-                # Mirror the completed turn into the advisory shadow history.
-                self._history.append({"role": "user", "content": turn_input.text})
-                final_text = done_text or accumulated
-                if final_text:
-                    self._history.append({"role": "assistant", "content": final_text})
-                return
-            finally:
-                # A barge-in ``aclose()`` on this generator injects
-                # ``GeneratorExit`` at a ``yield event`` above; ``async for``
-                # (in AgentStage) does not forward it into ``inner_iter``, so
-                # the inner bridge would be left suspended and only
-                # GC-finalized — its ``BaseException`` cleanup (which persists
-                # the partial turn) racing the next ``apply_interruption()``.
-                # Close it explicitly so that teardown runs synchronously.  On
-                # normal completion / a handled timeout ``inner_iter`` is
-                # already drained, so this is a harmless no-op.
-                await aclose_quietly(inner_iter)
+        stream = (
+            self._invoke_bridge(turn_input, recorder, cancel_token)
+            if self._is_bridge
+            else self._invoke_simple(turn_input, recorder, cancel_token)
+        )
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            # ``async for`` does not forward an early consumer ``aclose()`` into
+            # the selected child generator. Close it explicitly so bridge
+            # cancellation cleanup and simple-agent cursor rollback finish
+            # before a follow-up interruption mutates state.
+            await aclose_quietly(stream)
 
+    async def _invoke_bridge(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Drive a wrapped stateful bridge and mirror only completed turns."""
+        # Forward runner-managed history so multi-turn bridges that rely
+        # on turn_input.context stay stateful across turns.  Any context
+        # the caller already set takes precedence.
+        #
+        # The inner bridge owns the authoritative turn state: it records
+        # the user message and any partial assistant output into its own
+        # durable store (e.g. checkpointer / message history) and keeps
+        # that partial state intentionally on cancel/timeout.  We cannot
+        # roll the inner bridge back, so we only mirror a turn into the
+        # runner's *advisory* shadow ``_history`` after the inner turn has
+        # completed successfully.
+        bridge_input = turn_input
+        if not turn_input.context and self._history:
+            bridge_input = AgentTurnInput(
+                text=turn_input.text,
+                context=list(self._history),
+                turn_id=turn_input.turn_id,
+            )
+        accumulated = ""
+        timeout = self._config.timeout
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
+        timed_out = False
+        try:
+            while True:
+                try:
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        event = await _await_with_timeout(inner_iter.__anext__(), remaining)
+                    else:
+                        event = await inner_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    timed_out = True
+                    break
+                kind = getattr(event, "kind", None)
+                text = getattr(event, "text", "") or ""
+                if kind == "text_delta":
+                    accumulated += text
+                elif kind == "done":
+                    await close_stream_after_done(inner_iter)
+                    self._append_completed_turn(turn_input.text, text or accumulated)
+                    yield event
+                    return
+                yield event
+            if timed_out:
+                # Let the inner bridge keep its own partial state; the runner
+                # never recorded this turn, so its shadow history stays in
+                # sync without a manual rollback.
+                raise AgentTimeoutError(timeout or 0)
+            self._append_completed_turn(turn_input.text, accumulated)
+        finally:
+            # Closing the runner mid-yield does not automatically close the
+            # wrapped bridge. Finish its partial-turn cleanup synchronously so
+            # a follow-up ``apply_interruption()`` cannot race it.
+            await aclose_quietly(inner_iter)
+
+    def _append_completed_turn(self, user_text: str, assistant_text: str) -> None:
+        """Mirror one completed bridge turn into advisory runner history."""
+        self._history.append({"role": "user", "content": user_text})
+        if assistant_text:
+            self._history.append({"role": "assistant", "content": assistant_text})
+
+    async def _invoke_simple(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        """Drive a simple ``run(text)`` agent with rollback-safe history."""
         if cancel_token and cancel_token.is_cancelled:
             return
 
@@ -352,13 +368,11 @@ class AgentRunner:
             )
         except TimeoutError:
             self._history.pop()
-            if cursor is not None:
-                recorder.record_unit_exited(cursor, reason="timeout")
+            self._close_simple_cursor(recorder, cursor, reason="timeout")
             raise AgentTimeoutError(self._config.timeout or 0)
         except Exception:
             self._history.pop()
-            if cursor is not None:
-                recorder.record_unit_exited(cursor, reason="error")
+            self._close_simple_cursor(recorder, cursor, reason="error")
             raise
         except BaseException:
             # A parent ``aclose()`` (barge-in) injects ``GeneratorExit`` /
@@ -369,13 +383,11 @@ class AgentRunner:
             # invariant for the postmortem journal.  Close it defensively
             # before re-raising.
             self._history.pop()
-            if cursor is not None:
-                recorder.safe_exit_cursor(cursor)
+            self._close_simple_cursor(recorder, cursor, safe=True)
             raise
 
         self._history.append({"role": "assistant", "content": response})
-        if cursor is not None:
-            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        self._close_simple_cursor(recorder, cursor, committable=True)
 
         if cancel_token and cancel_token.is_cancelled:
             # User barged in while run() was executing — history already
@@ -386,6 +398,24 @@ class AgentRunner:
 
         yield AgentBridgeEvent(kind="text_delta", text=response)
         yield AgentBridgeEvent(kind="done", text=response)
+
+    @staticmethod
+    def _close_simple_cursor(
+        recorder: AgentRecorder,
+        cursor: ExecutionCursor | None,
+        *,
+        reason: str | None = None,
+        committable: bool = False,
+        safe: bool = False,
+    ) -> None:
+        """Close an optional simple-agent cursor with the requested semantics."""
+        if cursor is None:
+            return
+        if safe:
+            recorder.safe_exit_cursor(cursor)
+            return
+        final_cursor = cursor.with_committable(True) if committable else cursor
+        recorder.record_unit_exited(final_cursor, reason=reason)
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         if self._is_bridge:

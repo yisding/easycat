@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 # ``AuthPolicy`` is a real type as of M5 (``easycat.server.auth``). The import
 # is light (auth.py pulls only hmac/dataclasses/typing/os and the leaf
@@ -48,6 +49,7 @@ class VoiceServerConfig:
     max_sessions: int = 64
     drain_timeout_s: float = 30.0
     force_shutdown_timeout_s: float = 10.0
+    drain_mode: Literal["stop_sessions", "await_natural_end"] = "stop_sessions"
     # The unified auth policy (M5). ``None`` means no token policy — subject to
     # the non-loopback bind guard, which still raises for a non-loopback host
     # unless ``unsafe_allow_no_auth`` is set.
