@@ -11,14 +11,15 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import secrets
 import struct
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any, ClassVar, cast, get_type_hints
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -133,6 +134,26 @@ class TwilioStreamTokenStore:
             self._pending.pop(nonce, None)
 
 
+@dataclass(frozen=True, slots=True)
+class StreamTokenContext:
+    """Twilio stream-token validation context from the ``start`` frame."""
+
+    token: str
+    call_sid: str | None
+    stream_sid: str | None
+    parameters: Mapping[str, str]
+
+
+StreamTokenClaims = Mapping[str, Any]
+StreamTokenValidatorResult = bool | StreamTokenClaims | None
+StreamTokenValidator = (
+    Callable[[str], StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]]
+    | Callable[
+        [StreamTokenContext], StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]
+    ]
+)
+
+
 @dataclass
 class TwilioTransportConfig:
     """Configuration for :class:`TwilioTransport`."""
@@ -143,8 +164,17 @@ class TwilioTransportConfig:
     port: int = 8766
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
-    stream_token_validator: Callable[[str], bool] | None = None
+    # Legacy validators receive the raw token string. Annotating the accepted
+    # parameter as StreamTokenContext explicitly opts into start-frame context.
+    stream_token_validator: StreamTokenValidator | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
+    stream_token_validation_timeout_s: float = 5.0
+
+    def __post_init__(self) -> None:
+        if not self.stream_token_parameter:
+            raise ValueError("stream_token_parameter must be non-empty")
+        if self.stream_token_validation_timeout_s <= 0:
+            raise ValueError("stream_token_validation_timeout_s must be positive")
 
 
 def _parse_twilio_start_identity(
@@ -224,21 +254,136 @@ def _clean_twilio_parameter(value: Any) -> str:
     return text
 
 
-def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
-    validator = config.stream_token_validator
-    if validator is None:
-        return True
+def _stream_token_parameters(start: dict[str, Any]) -> dict[str, str] | None:
     raw_params = start.get("customParameters") or {}
     if not isinstance(raw_params, dict):
-        return False
-    token = raw_params.get(config.stream_token_parameter)
-    if not isinstance(token, str) or not token:
-        return False
+        return None
+    parameters: dict[str, str] = {}
+    for key, value in raw_params.items():
+        if isinstance(key, str) and (
+            isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
+        ):
+            parameters[key] = str(value)
+    return parameters
+
+
+def _stream_token_validator_parameter(
+    validator: StreamTokenValidator,
+) -> tuple[inspect.Parameter | None, bool]:
+    """Return the validator parameter and whether it opts into context."""
     try:
-        return bool(validator(token))
+        signature = inspect.signature(validator)
+    except (TypeError, ValueError):
+        return None, False
+    try:
+        hints = get_type_hints(validator)
+    except (NameError, TypeError):
+        hints = {}
+    parameters = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    ]
+    parameter = next(
+        (candidate for candidate in parameters if candidate.default is inspect.Parameter.empty),
+        parameters[0] if parameters else None,
+    )
+    if parameter is None:
+        return None, False
+    annotation = hints.get(parameter.name, parameter.annotation)
+    if (
+        annotation is StreamTokenContext
+        or annotation == "StreamTokenContext"
+        or (isinstance(annotation, str) and annotation.endswith(".StreamTokenContext"))
+        or getattr(annotation, "__name__", None) == "StreamTokenContext"
+    ):
+        return parameter, True
+    return parameter, False
+
+
+def _call_stream_token_validator(
+    validator: StreamTokenValidator,
+    *,
+    token: str,
+    context: StreamTokenContext,
+) -> StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult]:
+    parameter, wants_context = _stream_token_validator_parameter(validator)
+    argument = context if wants_context else token
+    if parameter is not None and parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+        return validator(**{parameter.name: argument})  # type: ignore[call-arg]
+    return validator(argument)  # type: ignore[arg-type]
+
+
+async def _maybe_await_stream_token_result(
+    result: StreamTokenValidatorResult | Awaitable[StreamTokenValidatorResult],
+) -> StreamTokenValidatorResult:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _coerce_stream_token_claims(result: StreamTokenValidatorResult) -> dict[str, str] | None:
+    if isinstance(result, Mapping):
+        return {str(key): str(value) for key, value in result.items() if value is not None}
+    return {} if bool(result) else None
+
+
+async def _twilio_stream_token_claims(
+    start: dict[str, Any],
+    config: TwilioTransportConfig,
+    *,
+    stream_sid: str | None = None,
+) -> dict[str, str] | None:
+    validator = config.stream_token_validator
+    if validator is None:
+        return {}
+    parameters = _stream_token_parameters(start)
+    if parameters is None:
+        return None
+    token = parameters.get(config.stream_token_parameter)
+    if not isinstance(token, str) or not token:
+        return None
+    context = StreamTokenContext(
+        token=token,
+        call_sid=start.get("callSid") if isinstance(start.get("callSid"), str) else None,
+        stream_sid=stream_sid,
+        parameters=parameters,
+    )
+    try:
+        async with asyncio.timeout(config.stream_token_validation_timeout_s):
+            if inspect.iscoroutinefunction(validator):
+                result_or_awaitable = _call_stream_token_validator(
+                    cast(StreamTokenValidator, validator),
+                    token=token,
+                    context=context,
+                )
+            else:
+                result_or_awaitable = await asyncio.to_thread(
+                    _call_stream_token_validator,
+                    validator,
+                    token=token,
+                    context=context,
+                )
+            result = await _maybe_await_stream_token_result(result_or_awaitable)
+        claims = _coerce_stream_token_claims(result)
+        if claims is not None:
+            claims.pop(config.stream_token_parameter, None)
+        return claims
+    except TimeoutError:
+        logger.warning("Twilio stream token validator timed out")
+        return None
     except Exception:
         logger.warning("Twilio stream token validator raised", exc_info=True)
-        return False
+        return None
+
+
+async def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
+    return await _twilio_stream_token_claims(start, config) is not None
 
 
 def _parse_twilio_int(value: Any) -> int | None:
@@ -464,6 +609,7 @@ class _TwilioProtocolMixin:
     # Base-provided members this mixin relies on (declared for readers/type
     # checkers; supplied by ServerTransportBase / AudioQueueMixin at runtime).
     _emit_degraded: Any
+    _record_transport_disconnect: Any
     _enqueue_chunk: Any
     _enqueue_sentinel: Any
     _client_connected: Any
@@ -480,6 +626,28 @@ class _TwilioProtocolMixin:
     _mark_counter: int
 
     # ── Per-class hooks ───────────────────────────────────────────
+
+    def _init_twilio_protocol(
+        self,
+        config: TwilioTransportConfig,
+        event_bus: EventBus | None,
+    ) -> None:
+        """Initialize state shared by both Twilio transport lifecycles.
+
+        Queue/server ownership must be initialized by the concrete transport
+        before this method runs so ``_emit_degraded`` is ready for diagnostics.
+        """
+        self._config = config
+        self._audio_format = config.audio_format
+        self._event_bus = event_bus
+        self._stream_sid = None
+        self._call_sid = None
+        self._call_identity = None
+        self._identity_sink = None
+        self._answered_at = None
+        self._call_ended_emitted = False
+        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
+        self._mark_counter = 0
 
     def _current_ws(self) -> ServerConnection | None:
         """Return the active Twilio WebSocket connection (or ``None``)."""
@@ -525,6 +693,24 @@ class _TwilioProtocolMixin:
         return self._call_sid
 
     # ── Inbound routing ───────────────────────────────────────────
+
+    async def _receive_twilio_messages(self, ws: ServerConnection) -> None:
+        """Drive one Twilio receive stream and perform guarded cleanup."""
+        try:
+            async for raw in ws:
+                if isinstance(raw, bytes):
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        logger.warning("Ignoring non-UTF-8 Twilio message")
+                        continue
+                await self._handle_message(raw)
+        except websockets.exceptions.ConnectionClosed as exc:
+            logger.info("Twilio Media Streams disconnected")
+            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+                self._record_transport_disconnect("twilio stream closed abnormally")
+        finally:
+            await self._finalize_after_receive(ws)
 
     async def _finalize_after_receive(self, ws: ServerConnection) -> None:
         """Run the reconnect-race-guarded finally cleanup for a receive driver.
@@ -596,13 +782,33 @@ class _TwilioProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return
-        if not _twilio_stream_token_valid(start, self._config):
+        top_stream_sid = msg.get("streamSid")
+        top_stream_sid = top_stream_sid if isinstance(top_stream_sid, str) else None
+        nested_stream_sid = start.get("streamSid")
+        nested_stream_sid = nested_stream_sid if isinstance(nested_stream_sid, str) else None
+        if (
+            top_stream_sid is not None
+            and nested_stream_sid is not None
+            and top_stream_sid != nested_stream_sid
+        ):
+            logger.warning("Rejecting Twilio start with conflicting streamSid values")
+            ws = self._current_ws()
+            if ws is not None:
+                await ws.close(4003, "Conflicting streamSid")
+            return
+        stream_sid = top_stream_sid or nested_stream_sid
+        token_claims = await _twilio_stream_token_claims(
+            start,
+            self._config,
+            stream_sid=stream_sid,
+        )
+        if token_claims is None:
             logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
             ws = self._current_ws()
             if ws is not None:
                 await ws.close(4003, "Missing or invalid stream token")
             return
-        self._stream_sid = msg.get("streamSid") or start.get("streamSid")
+        self._stream_sid = stream_sid
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
@@ -612,6 +818,11 @@ class _TwilioProtocolMixin:
             self._call_sid,
             excluded_parameter_names={self._config.stream_token_parameter},
         )
+        if token_claims:
+            identity = replace(
+                identity,
+                custom_fields={**identity.custom_fields, **token_claims},
+            )
         self._call_identity = identity
         if self._identity_sink is not None:
             try:
@@ -693,7 +904,7 @@ class _TwilioProtocolMixin:
             await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
 
     async def _emit_call_ended_once(self) -> None:
-        if self._call_ended_emitted:
+        if self._call_ended_emitted or self._call_sid is None:
             return
         self._call_ended_emitted = True
         await _emit_twilio_call_ended(
@@ -764,27 +975,13 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         config: TwilioTransportConfig | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
-        self._config = config or TwilioTransportConfig()
+        resolved_config = config or TwilioTransportConfig()
         super().__init__(
-            host=self._config.host,
-            port=self._config.port,
-            max_pending_chunks=self._config.max_pending_chunks,
+            host=resolved_config.host,
+            port=resolved_config.port,
+            max_pending_chunks=resolved_config.max_pending_chunks,
         )
-        self._audio_format = self._config.audio_format
-        self._event_bus = event_bus
-
-        self._stream_sid: str | None = None
-        self._call_sid: str | None = None
-        self._call_identity: Any | None = None
-        # Optional sink populated by Session wiring so the caller ID
-        # extracted from the ``<Stream>`` customParameters flows through
-        # to ``session.call_identity`` without the app doing plumbing.
-        self._identity_sink: Any = None
-        self._answered_at: float | None = None
-        self._call_ended_emitted = False
-        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
-
-        self._mark_counter = 0
+        self._init_twilio_protocol(resolved_config, event_bus)
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -912,22 +1109,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         self._ws = ws
         self._client_connected.set()
         logger.info("Twilio Media Streams connected")
-
-        try:
-            async for raw in ws:
-                if isinstance(raw, bytes):
-                    try:
-                        raw = raw.decode("utf-8")
-                    except UnicodeDecodeError:
-                        logger.warning("Ignoring non-UTF-8 Twilio message")
-                        continue
-                await self._handle_message(raw)
-        except websockets.exceptions.ConnectionClosed as exc:
-            logger.info("Twilio Media Streams disconnected")
-            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
-                self._record_transport_disconnect("twilio stream closed abnormally")
-        finally:
-            await self._finalize_after_receive(ws)
+        await self._receive_twilio_messages(ws)
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("twilio", "websockets")
@@ -1037,19 +1219,13 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         config: TwilioTransportConfig | None = None,
     ) -> None:
         self._ws = ws
-        self._config = config or TwilioTransportConfig()
-        self._audio_format = self._config.audio_format
+        resolved_config = config or TwilioTransportConfig()
+        # AudioQueueMixin preserves a constructor-injected event bus while it
+        # initializes the queue and diagnostics machinery.
         self._event_bus = event_bus
-        self._stream_sid: str | None = None
-        self._call_sid: str | None = None
-        self._call_identity: Any | None = None
-        self._identity_sink: Any = None
-        self._answered_at: float | None = None
-        self._call_ended_emitted = False
-        self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
-        self._init_audio_queue(self._config.max_pending_chunks)
-        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
+        self._init_audio_queue(resolved_config.max_pending_chunks)
+        self._init_twilio_protocol(resolved_config, event_bus)
 
     def _current_ws(self) -> ServerConnection | None:
         return self._ws
@@ -1066,17 +1242,33 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def disconnect(self) -> None:
-        if not self._connected:
+        # Remote EOF clears ``_connected`` in the shared receive finalizer
+        # before the owner calls disconnect. Only skip once the connection
+        # task and all per-call teardown state have been released.
+        if (
+            not self._connected
+            and self._receive_task is None
+            and self._stream_sid is None
+            and self._call_sid is None
+            and self._call_identity is None
+            and self._answered_at is None
+            and not self._call_ended_emitted
+            and not self._emit_tasks
+        ):
             return
         self._connected = False
         self._client_connected.clear()
-        if self._receive_task is not None and not self._receive_task.done():
-            self._receive_task.cancel()
+        receive_task = self._receive_task
+        self._receive_task = None
+        if receive_task is not None and receive_task is not asyncio.current_task():
+            if not receive_task.done():
+                receive_task.cancel()
             try:
-                await self._receive_task
+                await receive_task
             except asyncio.CancelledError:
                 pass
-        self._receive_task = None
+            except Exception:
+                logger.debug("Twilio receive loop failed during disconnect", exc_info=True)
         self._stream_sid = None
         self._call_sid = None
         self._call_identity = None
@@ -1149,22 +1341,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         return await self.send_mark(name=name)
 
     async def _receive_loop(self) -> None:
-        ws = self._ws
-        try:
-            async for raw in ws:
-                if isinstance(raw, bytes):
-                    try:
-                        raw = raw.decode("utf-8")
-                    except UnicodeDecodeError:
-                        logger.warning("Ignoring non-UTF-8 Twilio message")
-                        continue
-                await self._handle_message(raw)
-        except websockets.exceptions.ConnectionClosed as exc:
-            logger.info("Twilio Media Streams disconnected")
-            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
-                self._record_transport_disconnect("twilio stream closed abnormally")
-        finally:
-            await self._finalize_after_receive(ws)
+        await self._receive_twilio_messages(self._ws)
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("twilio-connection", "websockets")

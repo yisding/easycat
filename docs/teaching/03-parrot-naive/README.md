@@ -678,11 +678,16 @@ Open the bundle in `runs/`:
 
 ```python
 from easycat.debug.testing import load_bundle
+
 b = load_bundle("docs/teaching/03-parrot-naive/runs/<file>.bundle")
 for r in b.records():
     if r["name"].startswith(("stt.", "parrot.")):
-        print(r["sequence"], r["data"].get("offset_ms"), r["name"],
-              r["data"].get("text") or r["data"].get("committed_text"))
+        print(
+            r["sequence"],
+            r["data"].get("offset_ms"),
+            r["name"],
+            r["data"].get("text") or r["data"].get("committed_text"),
+        )
 ```
 
 Find the moment the parrot committed with the maintained analyzer:

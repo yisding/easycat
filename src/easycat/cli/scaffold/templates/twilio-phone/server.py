@@ -9,10 +9,6 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
-from fastapi import FastAPI, HTTPException, Request, Response
-from websockets.asyncio.server import ServerConnection
-
-from agent import make_agent
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -24,6 +20,10 @@ from easycat import (
 from easycat.telephony import reconstruct_public_url, validate_twilio_webhook_signature
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
+from fastapi import FastAPI, HTTPException, Request, Response
+from websockets.asyncio.server import ServerConnection
+
+from agent import make_agent
 
 
 def create_app() -> FastAPI:
