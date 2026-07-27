@@ -350,6 +350,20 @@ class AgentRecorder(Protocol):
         ...
 
 
+class UsageRecorder(Protocol):
+    """Optional recorder capability for provider-reported token counts."""
+
+    def record_usage(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+    ) -> None: ...
+
+
 class NullAgentRecorder:
     """No-op :class:`AgentRecorder` for driving bridges outside a Session.
 
@@ -410,6 +424,17 @@ class NullAgentRecorder:
         pass
 
     def record_framework_error(self, error: ErrorInfo) -> None:
+        pass
+
+    def record_usage(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+    ) -> None:
         pass
 
     def record_state_committed(

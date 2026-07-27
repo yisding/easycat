@@ -16,7 +16,11 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
-from easycat.integrations.agents._helpers import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import (
+    bridge_version_info,
+    record_usage_from_result,
+    split_replacement_by_original_parts,
+)
 from easycat.integrations.agents._openai_agents_events import (
     extract_text_delta,
     extract_tool_delta,
@@ -178,6 +182,24 @@ class OpenAIAgentsBridge:
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
+    def version_info(self) -> dict[str, str]:
+        """Return model and SDK metadata for journal reproducibility."""
+        return bridge_version_info(
+            provider="openai_agents",
+            model=self._model_name(),
+            distribution="openai-agents",
+        )
+
+    def _model_name(self) -> str | None:
+        for candidate in (
+            getattr(self._run_config, "model", None),
+            getattr(self._agent, "model", None),
+        ):
+            resolved = _resolve_model_id(candidate)
+            if resolved is not None:
+                return resolved
+        return None
+
     async def invoke(
         self,
         turn_input: AgentTurnInput,
@@ -226,7 +248,8 @@ class OpenAIAgentsBridge:
         accumulated = ""
         pending_tool_calls: dict[str, str] = {}
         run_cancelled = False
-        cursor_exited = False
+        stream_failed = False
+        usage_model_ambiguous = False
 
         try:
             async for event in result.stream_events():
@@ -246,6 +269,12 @@ class OpenAIAgentsBridge:
                         result.cancel(mode="after_turn" if pending_tool_calls else "immediate")
                     if pending_tool_calls:
                         if event.type == "run_item_stream_event":
+                            item_type = getattr(event.item, "type", "")
+                            usage_model_ambiguous |= item_type in {
+                                "handoff_call_item",
+                                "handoff_output_item",
+                                "tool_call_item",
+                            }
                             bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                             if bridge_ev is not None:
                                 yield bridge_ev
@@ -274,6 +303,12 @@ class OpenAIAgentsBridge:
                         if bridge_ev is not None:
                             yield bridge_ev
                 elif event.type == "run_item_stream_event":
+                    item_type = getattr(event.item, "type", "")
+                    usage_model_ambiguous |= item_type in {
+                        "handoff_call_item",
+                        "handoff_output_item",
+                        "tool_call_item",
+                    }
                     bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                     if bridge_ev is not None:
                         yield bridge_ev
@@ -294,9 +329,8 @@ class OpenAIAgentsBridge:
                 logger.debug("RunResultStreaming.cancel() raised during close", exc_info=True)
             raise
         except Exception as exc:
+            stream_failed = True
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            cursor_exited = True
             raise
         finally:
             # This ``finally`` also runs on ``GeneratorExit`` /
@@ -322,33 +356,41 @@ class OpenAIAgentsBridge:
                 self._message_history = _drop_dangling_function_calls(history)
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
-            if not cursor_exited:
-                last_agent = getattr(result, "last_agent", None)
-                if last_agent is not None and last_agent is not self._agent:
-                    # Record handoff.
-                    old_name = getattr(self._agent, "name", "unknown")
-                    new_name = getattr(last_agent, "name", "unknown")
-                    recorder.record_unit_exited(
-                        agent_cursor.with_committable(True), reason="handoff"
-                    )
-                    recorder.record_framework_handoff(
-                        from_unit=old_name,
-                        to_unit=new_name,
-                        reason="agent_handoff",
-                    )
-                    self._agent = last_agent
-                    # Enter new agent cursor for the handoff target.
-                    new_cursor = ExecutionCursor(
-                        unit_id=f"agent-{uuid4().hex[:8]}",
-                        unit_kind=UnitKind.AGENT,
-                        display_name=new_name,
-                        entered_at=time.monotonic_ns(),
-                        committable=True,
-                    )
-                    recorder.record_unit_entered(new_cursor)
-                    recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
-                else:
-                    recorder.safe_exit_cursor(agent_cursor.with_committable(True), reason=None)
+            last_agent = getattr(result, "last_agent", None)
+            handed_off = last_agent is not None and last_agent is not self._agent
+            await record_usage_from_result(
+                recorder,
+                result,
+                provider="openai_agents",
+                # The SDK reports aggregate run usage. Once a handoff occurs,
+                # attributing that total to either agent's model is misleading.
+                model=None if handed_off or usage_model_ambiguous else self._model_name(),
+            )
+            if stream_failed:
+                recorder.safe_exit_cursor(agent_cursor, reason="error")
+            elif handed_off:
+                # Record handoff.
+                old_name = getattr(self._agent, "name", "unknown")
+                new_name = getattr(last_agent, "name", "unknown")
+                recorder.record_unit_exited(agent_cursor.with_committable(True), reason="handoff")
+                recorder.record_framework_handoff(
+                    from_unit=old_name,
+                    to_unit=new_name,
+                    reason="agent_handoff",
+                )
+                self._agent = last_agent
+                # Enter new agent cursor for the handoff target.
+                new_cursor = ExecutionCursor(
+                    unit_id=f"agent-{uuid4().hex[:8]}",
+                    unit_kind=UnitKind.AGENT,
+                    display_name=new_name,
+                    entered_at=time.monotonic_ns(),
+                    committable=True,
+                )
+                recorder.record_unit_entered(new_cursor)
+                recorder.record_unit_exited(new_cursor.with_committable(True), reason=None)
+            else:
+                recorder.safe_exit_cursor(agent_cursor.with_committable(True), reason=None)
 
         self._last_output = getattr(result, "final_output", None)
         yield AgentBridgeEvent(

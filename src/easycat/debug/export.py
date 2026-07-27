@@ -273,7 +273,15 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
 
 def _collect_provider_versions(session: object) -> dict[str, Any]:
     versions: dict[str, Any] = {}
-    for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
+    for attr in (
+        "stt",
+        "tts",
+        "transport",
+        "vad",
+        "noise_reducer",
+        "echo_canceller",
+        "agent",
+    ):
         provider = getattr(session, attr, None)
         if provider is not None and hasattr(provider, "version_info"):
             try:
