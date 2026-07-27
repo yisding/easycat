@@ -165,6 +165,7 @@ Under the hood it is:
 
 ```python
 from easycat.debug.testing import load_bundle
+
 b = load_bundle(path)
 for r in b.records():
     ...
