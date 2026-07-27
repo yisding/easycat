@@ -182,6 +182,8 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
             "TWILIO_WS_PORT",
             "TWILIO_STREAM_TOKEN_SECRET",
             "TWILIO_MAX_SESSIONS",
+            "TWILIO_START_TIMEOUT_S",
+            "TWILIO_PUBLIC_TWIML_URL",
             "TRUST_PROXY_HEADERS",
         ),
         description="Phone-call voice agent with a Twilio WebSocket server.",

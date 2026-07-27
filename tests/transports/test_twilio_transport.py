@@ -14,7 +14,14 @@ import pytest
 import websockets
 
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
-from easycat.events import DTMF, CallEnded, EventBus, PlaybackMarkAck, TransportDegraded
+from easycat.events import (
+    DTMF,
+    CallAnswered,
+    CallEnded,
+    EventBus,
+    PlaybackMarkAck,
+    TransportDegraded,
+)
 from easycat.transports.twilio_media import (
     _DEGRADED_TWILIO_SEQUENCE_GAP,
     _DEGRADED_TWILIO_TIMESTAMP_GAP,
@@ -120,7 +127,12 @@ def _twilio_media_msg_with_track(
             "event": "media",
             "sequenceNumber": "2",
             "streamSid": stream_sid,
-            "media": {"track": track, "chunk": "1", "timestamp": "0", "payload": payload},
+            "media": {
+                "track": track,
+                "chunk": "1",
+                "timestamp": "0",
+                "payload": payload,
+            },
         }
     )
 
@@ -161,6 +173,38 @@ class _DummyTwilioWebSocket:
         self.closed_with = args
 
 
+class _ScriptedTwilioWebSocket:
+    def __init__(self, *messages: str) -> None:
+        self._messages = list(messages)
+        self.sent: list[str] = []
+        self.closed_with: tuple[object, ...] | None = None
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def __aiter__(self) -> _ScriptedTwilioWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._messages:
+            return self._messages.pop(0)
+        self.entered.set()
+        await self.release.wait()
+        raise StopAsyncIteration
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def close(self, *args: object) -> None:
+        self.closed_with = args
+        self.release.set()
+
+
+class _MalformedTrickleWebSocket(_ScriptedTwilioWebSocket):
+    async def __anext__(self) -> str:
+        await asyncio.sleep(0.002)
+        return "{not-json"
+
+
 class TestTwilioStreamTokenStore:
     def test_consumes_token_once(self) -> None:
         store = TwilioStreamTokenStore("secret")
@@ -182,6 +226,34 @@ class TestTwilioStreamTokenStore:
         current = 1002.0
 
         assert not store.consume(token)
+
+    def test_idempotent_claimed_grant_does_not_mint_on_webhook_retry(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        token = store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"})
+        context = StreamTokenContext(
+            token=token,
+            call_sid="CA1",
+            stream_sid="MZ1",
+            parameters={},
+        )
+
+        assert store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"}) == token
+        assert store.consume_start(context)
+        assert store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"}) == token
+        assert not store.consume_start(context)
+
+    def test_claimed_grant_rejects_different_call_sid(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        token = store.issue(claims={"CallSid": "CA1", "Direction": "inbound"})
+
+        assert not store.consume_start(
+            StreamTokenContext(
+                token=token,
+                call_sid="CA1",
+                stream_sid="MZ1",
+                parameters={"Direction": "outbound"},
+            )
+        )
 
 
 class TestTwilioStreamTokenValidation:
@@ -270,6 +342,170 @@ class TestTwilioStreamTokenValidation:
         assert transport.stream_sid == "STREAM1"
         assert transport.call_sid == "CALL1"
         assert ws.closed_with is None
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_preflight_accepts_token_once(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        token = store.issue()
+        ws = _ScriptedTwilioWebSocket(
+            _twilio_connected_msg(),
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: token},
+            ),
+        )
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=store.consume),
+        )
+
+        assert await transport.wait_for_start()
+        assert not store.consume(token)
+        assert transport.stream_sid is None
+
+        await transport.connect()
+
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+        assert ws.closed_with is None
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_preflight_rejects_invalid_token(self) -> None:
+        ws = _ScriptedTwilioWebSocket(_twilio_start_msg("STREAM1", "CALL1"))
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=lambda _token: False),
+        )
+
+        assert not await transport.wait_for_start()
+
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert ws.closed_with == (4003, "Missing or invalid stream token")
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_preflight_times_out_and_closes(self) -> None:
+        ws = _ScriptedTwilioWebSocket()
+        transport = TwilioConnectionTransport(ws)
+
+        assert not await transport.wait_for_start(timeout_s=0.01)
+
+        assert ws.closed_with == (1008, "Timed out waiting for Twilio start")
+        assert not transport.is_connected
+
+    @pytest.mark.asyncio
+    async def test_preflight_deadline_is_not_reset_by_malformed_trickle(self) -> None:
+        ws = _MalformedTrickleWebSocket()
+        transport = TwilioConnectionTransport(ws)
+
+        assert not await transport.wait_for_start(timeout_s=0.01)
+
+        assert ws.closed_with == (1008, "Timed out waiting for Twilio start")
+
+    @pytest.mark.asyncio
+    async def test_deferred_start_handler_failure_rolls_back_connection(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        ws = _ScriptedTwilioWebSocket(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: store.issue()},
+            )
+        )
+        bus = EventBus(handler_error_policy="raise")
+
+        async def fail_start(_event: CallAnswered) -> None:
+            raise RuntimeError("strict handler failed")
+
+        bus.subscribe(CallAnswered, fail_start)
+        transport = TwilioConnectionTransport(
+            ws,
+            event_bus=bus,
+            config=TwilioTransportConfig(stream_token_validator=store.consume),
+        )
+        assert await transport.wait_for_start()
+
+        with pytest.raises(RuntimeError, match="strict handler failed"):
+            await transport.connect()
+
+        assert not transport.is_connected
+        assert transport._receive_task is None
+        assert ws.closed_with == ()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_deferred_start_closes_and_rolls_back(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        ws = _ScriptedTwilioWebSocket(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: store.issue()},
+            )
+        )
+        bus = EventBus()
+        entered = asyncio.Event()
+
+        async def block_start(_event: CallAnswered) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        bus.subscribe(CallAnswered, block_start)
+        transport = TwilioConnectionTransport(
+            ws,
+            event_bus=bus,
+            config=TwilioTransportConfig(stream_token_validator=store.consume),
+        )
+        assert await transport.wait_for_start()
+        connecting = asyncio.create_task(transport.connect())
+        await entered.wait()
+
+        connecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await connecting
+
+        assert not transport.is_connected
+        assert transport._receive_task is None
+        assert ws.closed_with == ()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_during_deferred_start_does_not_spawn_receiver(
+        self,
+    ) -> None:
+        store = TwilioStreamTokenStore("secret")
+        ws = _ScriptedTwilioWebSocket(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: store.issue()},
+            )
+        )
+        bus = EventBus()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def block_start(_event: CallAnswered) -> None:
+            entered.set()
+            await release.wait()
+
+        bus.subscribe(CallAnswered, block_start)
+        transport = TwilioConnectionTransport(
+            ws,
+            event_bus=bus,
+            config=TwilioTransportConfig(stream_token_validator=store.consume),
+        )
+        assert await transport.wait_for_start()
+        connecting = asyncio.create_task(transport.connect())
+        await entered.wait()
+
+        await transport.disconnect()
+        release.set()
+
+        with pytest.raises(ConnectionError, match="disconnected during connect"):
+            await connecting
+        assert not transport.is_connected
+        assert transport._receive_task is None
 
     @pytest.mark.asyncio
     async def test_context_validator_receives_start_fields_and_merges_claims(self) -> None:
@@ -647,7 +883,9 @@ class TestTwilioDtmfParsingInTransports:
 
 class TestTwilioStreamGapDiagnostics:
     @pytest.mark.asyncio
-    async def test_server_transport_emits_sequence_and_timestamp_gap_diagnostics(self) -> None:
+    async def test_server_transport_emits_sequence_and_timestamp_gap_diagnostics(
+        self,
+    ) -> None:
         event_bus = EventBus()
         degraded: list[TransportDegraded] = []
         event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
@@ -682,7 +920,9 @@ class TestTwilioStreamGapDiagnostics:
         assert "expected media timestamp 20ms, got 60ms" in degraded[1].detail
 
     @pytest.mark.asyncio
-    async def test_connection_transport_emits_sequence_gap_for_active_controls(self) -> None:
+    async def test_connection_transport_emits_sequence_gap_for_active_controls(
+        self,
+    ) -> None:
         event_bus = EventBus()
         degraded: list[TransportDegraded] = []
         event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
@@ -705,7 +945,9 @@ class TestTwilioStreamGapDiagnostics:
         assert "expected sequenceNumber 2, got 4" in degraded[0].detail
 
     @pytest.mark.asyncio
-    async def test_malformed_media_metadata_breaks_gap_tracking_continuity(self) -> None:
+    async def test_malformed_media_metadata_breaks_gap_tracking_continuity(
+        self,
+    ) -> None:
         event_bus = EventBus()
         degraded: list[TransportDegraded] = []
         event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
@@ -814,7 +1056,9 @@ class _BlockingTwilioWebSocket:
 
 class TestTwilioStreamLifecycleRaces:
     @pytest.mark.asyncio
-    async def test_server_transport_stale_finally_does_not_tear_down_replacement(self) -> None:
+    async def test_server_transport_stale_finally_does_not_tear_down_replacement(
+        self,
+    ) -> None:
         bus = EventBus()
         ended: list[str] = []
         bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
@@ -860,7 +1104,9 @@ class TestTwilioStreamLifecycleRaces:
         await asyncio.wait_for(new_task, timeout=1.0)
 
     @pytest.mark.asyncio
-    async def test_server_transport_ignores_stale_stop_and_media_after_new_start(self) -> None:
+    async def test_server_transport_ignores_stale_stop_and_media_after_new_start(
+        self,
+    ) -> None:
         event_bus = EventBus()
         ended: list[str] = []
         event_bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
@@ -889,7 +1135,9 @@ class TestTwilioStreamLifecycleRaces:
         assert ended == ["CALL2"]
 
     @pytest.mark.asyncio
-    async def test_connection_transport_ignores_stale_stop_and_media_after_new_start(self) -> None:
+    async def test_connection_transport_ignores_stale_stop_and_media_after_new_start(
+        self,
+    ) -> None:
         event_bus = EventBus()
         ended: list[str] = []
         event_bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
@@ -1048,7 +1296,9 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         assert received[0].format.sample_rate == 16000
 
     @pytest.mark.asyncio
-    async def test_media_frame_guard_filters_prestart_wrong_stream_and_outbound_tracks(self):
+    async def test_media_frame_guard_filters_prestart_wrong_stream_and_outbound_tracks(
+        self,
+    ):
         """Server transport only accepts inbound media for the active streamSid."""
         transport = TwilioTransport(TwilioTransportConfig())
         mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
@@ -1303,7 +1553,9 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         await transport.disconnect()
 
     @pytest.mark.asyncio
-    async def test_wait_for_client_waits_for_new_twilio_connection_after_disconnect(self):
+    async def test_wait_for_client_waits_for_new_twilio_connection_after_disconnect(
+        self,
+    ):
         """wait_for_client should clear after Twilio socket disconnects."""
         port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
@@ -1362,7 +1614,9 @@ class TestTwilioSendAudioConnectionClosed:
         assert not transport._client_connected.is_set()
 
     @pytest.mark.asyncio
-    async def test_server_variant_mark_raises_and_clears_state_on_connection_closed(self):
+    async def test_server_variant_mark_raises_and_clears_state_on_connection_closed(
+        self,
+    ):
         config = TwilioTransportConfig(host="127.0.0.1", port=0)
         transport = TwilioTransport(config)
         transport._ws = self._ClosedWS()
@@ -1392,7 +1646,9 @@ class TestTwilioSendAudioConnectionClosed:
         assert not transport._client_connected.is_set()
 
     @pytest.mark.asyncio
-    async def test_connection_variant_mark_raises_and_clears_state_on_connection_closed(self):
+    async def test_connection_variant_mark_raises_and_clears_state_on_connection_closed(
+        self,
+    ):
         transport = TwilioConnectionTransport(self._ClosedWS())
         transport._stream_sid = "STREAM1"
         transport._connected = True

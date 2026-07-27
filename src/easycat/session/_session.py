@@ -685,7 +685,11 @@ class Session:
             (STTFinal, user_transcript, lambda cb: lambda e: cb(e.text)),
             (AgentDelta, agent_delta, lambda cb: lambda e: cb(e.text)),
             (AgentFinal, agent_response, lambda cb: lambda e: cb(e.text)),
-            (ToolCallStarted, tool_started, lambda cb: lambda e: cb(e.tool_name, e.call_id)),
+            (
+                ToolCallStarted,
+                tool_started,
+                lambda cb: lambda e: cb(e.tool_name, e.call_id),
+            ),
             (ToolCallResult, tool_result, lambda cb: lambda e: cb(e.call_id, e.result)),
             (TurnStarted, turn_started, lambda cb: lambda _e: cb()),
             (TurnEnded, turn_ended, lambda cb: lambda _e: cb()),
@@ -1098,6 +1102,11 @@ class Session:
             # None of these hooks need the transport connected.
             await self._warmup.run(select=lambda name: name != "transport")
 
+            # Telephony helpers subscribe to lifecycle events emitted while a
+            # preflighted transport applies its deferred start frame.
+            for helper in self.telephony.helpers:
+                helper.start()
+
             await self.transport.connect()
             transport_connected = True
 
@@ -1134,9 +1143,6 @@ class Session:
                     )
                     checker.start()
                     self._health_checkers.append(checker)
-
-            for helper in self.telephony.helpers:
-                helper.start()
 
             self._is_running = True
             self._mark_observability_active()
