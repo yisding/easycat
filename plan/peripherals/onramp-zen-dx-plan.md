@@ -44,7 +44,7 @@ top-level verb, no rename of `EasyConfig`, no removal of capability: the existin
 from easycat import EasyConfig, create_session
 
 config = EasyConfig(openai_api_key="your-api-key", agent=my_agent)
-session = create_session(config)   # never .start(); no run(); hardcoded placeholder key
+session = create_session(config)  # never .start(); no run(); hardcoded placeholder key
 ```
 
 The actually-runnable form (`run(EasyConfig.mic(agent=...))`) used to live much later in
@@ -71,12 +71,16 @@ Run:       python bot.py
 `easycat init` scaffolds this same shape — the file you'd hand-write is the
 shape the CLI generates. One golden path.
 """
+
 from agents import Agent  # the OpenAI Agents SDK (pip name: openai-agents)
 
 from easycat import EasyConfig, run
 
-run(EasyConfig.mic(agent=Agent(name="assistant",
-                               instructions="You are a helpful voice assistant.")))
+run(
+    EasyConfig.mic(
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
+    )
+)
 
 # Next, try (change one token here, or type `easycat.` to browse the surface):
 #   stt="deepgram/nova-2"          swap STT (needs DEEPGRAM_API_KEY + easycat[deepgram])
@@ -162,8 +166,12 @@ session = create_session(config)
 # README.md first block (same shape as examples/openai_agents_voice.py and `easycat init`)
 from agents import Agent
 from easycat import EasyConfig, run
-run(EasyConfig.mic(agent=Agent(name="assistant",
-                               instructions="You are a helpful voice assistant.")))
+
+run(
+    EasyConfig.mic(
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
+    )
+)
 # create_session shown later under "Advanced: own the lifecycle" using `async with`.
 ```
 
@@ -203,7 +211,7 @@ that `easycat explain` exists. Render the registry fix onto the exception itself
 ```python
 def __init__(self, code, message, **context):
     self.code, self.message, self.context = code, message, context
-    super().__init__(f"{code}: {message}")   # no fix, no explain hint
+    super().__init__(f"{code}: {message}")  # no fix, no explain hint
 ```
 **After**
 ```python
@@ -211,12 +219,13 @@ def __init__(self, code, message, **context):
     self.code, self.message, self.context = code, message, context
     super().__init__(self._render())
 
+
 def _render(self):
     base = f"{self.code}: {self.message}"
     entry = REGISTRY.get(self.code)
     if entry is None:
         return base
-    try:                                   # guard: a future braced fix template
+    try:  # guard: a future braced fix template
         fix = entry.fix.format(**self.context) if self.context else entry.fix
     except (KeyError, IndexError):
         fix = entry.fix
@@ -262,7 +271,8 @@ def _validate(self):
 ```
 **After** (corrected — captures the leverage in the None branch, avoids the nonexistent helper)
 ```python
-from easycat.errors import EASYCAT_E203   # add the import (every existing caller does a local one)
+from easycat.errors import EASYCAT_E203  # add the import (every existing caller does a local one)
+
 
 def _validate(self):
     # The #1 first-run mistake: no key resolved and nothing configured.
@@ -469,11 +479,11 @@ the first turn. The `@runtime_checkable` `Agent` protocol already exists
 import inspect
 from easycat.session._types import Agent as _AgentProto
 from easycat.integrations.agents import ExternalAgentBridge
+
 # `adapted` = auto_adapt_agent(config.agent); check BEFORE wrapping in AgentRunner.
 if config.wrap_agent and not isinstance(adapted, ExternalAgentBridge):
     run_attr = getattr(adapted, "run", None)
-    if not (isinstance(adapted, _AgentProto)
-            and inspect.iscoroutinefunction(run_attr)):
+    if not (isinstance(adapted, _AgentProto) and inspect.iscoroutinefunction(run_attr)):
         raise EasyConfigError(  # match EasyConfig's existing error style
             "agent must expose `async run(text) -> str` or be a recognized "
             "framework agent (see auto_adapt_agent's supported list)."
@@ -512,7 +522,7 @@ auto-wiring audible on a TTY.
 **After** (`src/easycat/helpers.py::run`, reusing the existing TTY/PYTEST guard)
 ```python
 if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("EASYCAT_QUIET"):
-    print(_wired_summary(config), file=sys.stderr)   # lazy import of the catalogs inside
+    print(_wired_summary(config), file=sys.stderr)  # lazy import of the catalogs inside
     attach_runtime_feedback(session)
 ```
 
@@ -545,7 +555,7 @@ near-duplicates. Make `async with session:` the one documented public idiom.
 
 **After**
 ```python
-async with create_session(cfg) as session:   # Session.__aenter__/__aexit__ already wired
+async with create_session(cfg) as session:  # Session.__aenter__/__aexit__ already wired
     await session.wait_closed()
 # Keep ONE explicit verb stop(force=False); demote close()/destroy() to underscore-private
 # (bodies UNCHANGED so postmortem-journal teardown semantics are preserved).
@@ -593,8 +603,11 @@ class _AgentSessionConfig:
     journal_retention: Literal["archive", "delete"] = "archive"
     mcp_servers: list[str] | None = None
 
+
 @dataclass
-class EasyConfig(_AgentSessionConfig): ...          # audio fields (all with defaults)
+class EasyConfig(_AgentSessionConfig): ...  # audio fields (all with defaults)
+
+
 @dataclass
 class TextSessionConfig(_AgentSessionConfig): ...
 ```

@@ -772,15 +772,13 @@ once with `--no-preroll`. Open both bundles:
 
 ```python
 from easycat.debug.testing import load_bundle
+
 for which in ("preroll", "nopreroll"):
-    for b in Path("docs/teaching/04-vad-preroll/runs/").glob(
-        f"ch04-vad-{which}-*.bundle"
-    ):
+    for b in Path("docs/teaching/04-vad-preroll/runs/").glob(f"ch04-vad-{which}-*.bundle"):
         bundle = load_bundle(b)
-        print(which, [
-            r["data"].get("text") for r in bundle.records()
-            if r["name"] == "turn.ended"
-        ])
+        print(
+            which, [r["data"].get("text") for r in bundle.records() if r["name"] == "turn.ended"]
+        )
 ```
 
 You should see:

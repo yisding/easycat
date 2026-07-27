@@ -491,6 +491,7 @@ which connection, with a guaranteed stop on disconnect.
 ```python
 manager: SessionManager[str] = SessionManager()
 
+
 async def handle_connection(ws):
     # See examples/twilio_app.py for the full per-connection wiring:
     # an EasyConfig(..., transport=TwilioConnectionTransport(ws))

@@ -134,7 +134,7 @@ checkpoint is a committable point. A `LangGraphBridge` publishes:
 
 ```python
 COMMITTABLE_BOUNDARIES = {
-    "workflow_node": "between_nodes",       # every checkpoint
+    "workflow_node": "between_nodes",  # every checkpoint
     "tool_call": "between_phases",
     "model_node": "non_committable_during_stream",
     "agent": "between_turns",
@@ -289,9 +289,7 @@ class LangChainBridge:
         # Build input with history; exact shape depends on the runnable.
         input_data = {"input": turn_input.text, "history": self._history}
 
-        async for event in self._runnable.astream_events(
-            input_data, version="v2"
-        ):
+        async for event in self._runnable.astream_events(input_data, version="v2"):
             if cancel_token and cancel_token.is_cancelled():
                 recorder.record_cancellation_boundary(
                     mode=CancellationMode.IMMEDIATE_STOP,
@@ -315,9 +313,7 @@ class LangChainBridge:
             }
         )
 
-    def apply_interruption(
-        self, delivered_text: str, mode: CancellationMode
-    ) -> None:
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         # Truncate the last AIMessage in history to match delivered text.
         # LangChain history is a list of BaseMessage subclasses.
         ...
@@ -463,19 +459,13 @@ class LangGraphBridge:
             }
         )
 
-    def apply_interruption(
-        self, delivered_text: str, mode: CancellationMode
-    ) -> None:
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         # Use LangGraph's native update_state to patch the last AIMessage.
         state = self._graph.get_state(self._config())
         messages = state.values.get("messages", [])
         if messages and messages[-1].type == "ai":
-            messages[-1].content = (
-                f"{delivered_text}..." if delivered_text else ""
-            )
-            self._graph.update_state(
-                self._config(), {"messages": messages}
-            )
+            messages[-1].content = f"{delivered_text}..." if delivered_text else ""
+            self._graph.update_state(self._config(), {"messages": messages})
 
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
@@ -554,16 +544,19 @@ def translate_event(event: dict, recorder: AgentRecorder) -> Iterator[AgentBridg
 ```python
 # src/easycat/integrations/agents/base.py (relevant section)
 
+
 def auto_adapt_agent(agent: Any) -> ExternalAgentBridge:
     # ... existing OpenAI Agents, PydanticAI, GenericWorkflow dispatch ...
 
     # New: LangChain runnables
     try:
         from langchain_core.runnables import Runnable
+
         if isinstance(agent, Runnable):
             # Disambiguate: is this a LangGraph CompiledGraph?
             try:
                 from langgraph.graph.state import CompiledStateGraph
+
                 if isinstance(agent, CompiledStateGraph):
                     if agent.checkpointer is None:
                         raise BridgeInputError(
@@ -572,10 +565,12 @@ def auto_adapt_agent(agent: Any) -> ExternalAgentBridge:
                             "Call graph.compile(checkpointer=...)."
                         )
                     from .langgraph import LangGraphBridge
+
                     return LangGraphBridge(graph=agent)
             except ImportError:
                 pass  # langgraph not installed
             from .langchain import LangChainBridge
+
             return LangChainBridge(runnable=agent)
     except ImportError:
         pass  # langchain not installed
@@ -596,11 +591,13 @@ from easycat import EasyConfig, LocalTransportConfig, create_session
 from easycat.integrations.agents import LangChainBridge
 
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful voice assistant."),
-    ("placeholder", "{history}"),
-    ("user", "{input}"),
-])
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful voice assistant."),
+        ("placeholder", "{history}"),
+        ("user", "{input}"),
+    ]
+)
 
 model = ChatOpenAI(model="gpt-5.2")
 chain = prompt | model
