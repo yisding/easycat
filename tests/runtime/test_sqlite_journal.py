@@ -1161,6 +1161,44 @@ class TestSqliteHotPathBehavior:
 
 
 class TestLitestreamSqliteJournal:
+    def test_replica_url_is_namespaced_per_session(self, tmp_path):
+        sidecars: list[mock.Mock] = []
+
+        def start_sidecar(*args, **kwargs):
+            sidecar = mock.Mock(pid=100 + len(sidecars), stderr=None)
+            sidecars.append(sidecar)
+            return sidecar
+
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                side_effect=start_sidecar,
+            ) as popen,
+        ):
+            first = LitestreamSqliteJournal(
+                "call-one",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals?region=us-west-2",
+            )
+            second = LitestreamSqliteJournal(
+                "call two",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals?region=us-west-2",
+            )
+
+        assert popen.call_args_list[0].args[0][-1] == (
+            "s3://bucket/journals/call-one.sqlite?region=us-west-2"
+        )
+        assert popen.call_args_list[1].args[0][-1] == (
+            "s3://bucket/journals/call%20two.sqlite?region=us-west-2"
+        )
+        first.close()
+        second.close()
+
     def test_fallback_when_binary_missing(self, tmp_path):
         """When litestream is not on PATH, adapter degrades to plain SqliteJournal."""
         with mock.patch("easycat.runtime.journal_sql.shutil.which", return_value=None):
@@ -1251,7 +1289,7 @@ class TestLitestreamSqliteJournal:
 
         restore_path = tmp_path / "restored.sqlite"
         subprocess.run(
-            ["litestream", "restore", "-o", str(restore_path), replica_url],
+            ["litestream", "restore", "-o", str(restore_path), j._replica_url],
             check=True,
             timeout=10,
         )

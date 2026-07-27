@@ -16,7 +16,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import (
@@ -830,6 +830,14 @@ def _sanitize_replica_url(url: str) -> str:
         return "<unparseable>"
 
 
+def _session_replica_url(base_url: str, session_id: str) -> str:
+    """Namespace a replica root by session without disturbing URL options."""
+    parsed = urlsplit(base_url)
+    session_path = f"{quote(session_id, safe='')}.sqlite"
+    path = f"{parsed.path.rstrip('/')}/{session_path}"
+    return urlunsplit(parsed._replace(path=path))
+
+
 class LitestreamSqliteJournal:
     """SqliteJournal with a Litestream sidecar for WAL replication.
 
@@ -848,7 +856,8 @@ class LitestreamSqliteJournal:
         retention_mode: Literal["archive", "delete"] = "archive",
     ) -> None:
         self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
-        self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        replica_root = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        self._replica_url = _session_replica_url(replica_root, session_id) if replica_root else ""
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
         self._stderr_thread: threading.Thread | None = None
