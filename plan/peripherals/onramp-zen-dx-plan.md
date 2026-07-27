@@ -155,13 +155,16 @@ relabel `create_session` as an explicit "Advanced: own the lifecycle" door, and 
 parameterized template).
 
 **Before**
+
 ```python
 # README old first block — never started, hardcoded key
 config = EasyConfig(openai_api_key="your-api-key", agent=my_agent)
 session = create_session(config)
 # plus contradictory "fastest path" claims across README quickstart/example sections
 ```
+
 **After**
+
 ```python
 # README.md first block (same shape as examples/openai_agents_voice.py and `easycat init`)
 from agents import Agent
@@ -208,12 +211,15 @@ sees a bare `EASYCAT_E203: Missing API key: OPENAI_API_KEY` traceback with no fi
 that `easycat explain` exists. Render the registry fix onto the exception itself.
 
 **Before** (`src/easycat/errors.py::EasyCatError.__init__`, old behavior)
+
 ```python
 def __init__(self, code, message, **context):
     self.code, self.message, self.context = code, message, context
     super().__init__(f"{code}: {message}")  # no fix, no explain hint
 ```
+
 **After**
+
 ```python
 def __init__(self, code, message, **context):
     self.code, self.message, self.context = code, message, context
@@ -259,6 +265,7 @@ Wire the dataclass path into the same catalog so identical intent yields one ide
 actionable error.
 
 **Before** (`src/easycat/config/easy.py::EasyConfig._validate`, old behavior)
+
 ```python
 def _validate(self):
     if self.stt is None:
@@ -269,7 +276,9 @@ def _validate(self):
         if hasattr(cfg, "api_key") and not cfg.api_key:
             raise ValueError(f"{_provider_display_name(cfg, kind)} requires an API key.")
 ```
+
 **After** (corrected — captures the leverage in the None branch, avoids the nonexistent helper)
+
 ```python
 from easycat.errors import EASYCAT_E203  # add the import (every existing caller does a local one)
 
@@ -344,13 +353,16 @@ foreign tool's `.ruff_cache/` that sit in the template source at install time sh
 brand-new "clean" project — the first artifact the recommended CLI door produces.
 
 **Before** (`src/easycat/cli/scaffold/init.py::_copy_template`, old behavior)
+
 ```python
 for source in sorted(src_root.rglob("*")):
     if source.is_dir():
         continue
     rel = source.relative_to(src_root)
 ```
+
 **After**
+
 ```python
 _COPY_IGNORE = {"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
 for source in sorted(src_root.rglob("*")):
@@ -384,6 +396,7 @@ which defaults to `ensure_ascii=True`, so the default instruction's em-dash rend
 step tells the newcomer to edit.
 
 **Before** (`src/easycat/cli/scaffold/init.py::_python_string_literal_contents`, old behavior) → **After**
+
 ```python
 return json.dumps(value, ensure_ascii=False)[1:-1]
 ```
@@ -406,6 +419,7 @@ lazy-import curation policy (a maintainer concern), not a "start here." Lead wit
 snippet and the EasyConfig-vs-SessionConfig steer.
 
 **Before** (`src/easycat/__init__.py` module docstring, old behavior) → **After**
+
 ```python
 """EasyCat — a voice bot in three lines.
 
@@ -475,6 +489,7 @@ the first turn. The `@runtime_checkable` `Agent` protocol already exists
 
 **After** (placed in `src/easycat/config/_factory.py::_validate_agent_shape`, before the
 `AgentRunner` wrap, in *both* `create_session` *and* `create_text_session`)
+
 ```python
 import inspect
 from easycat.session._types import Agent as _AgentProto
@@ -520,6 +535,7 @@ fail-fast DX, **not** an onramp simplification (concept delta ≈ 0).
 auto-wiring audible on a TTY.
 
 **After** (`src/easycat/helpers.py::run`, reusing the existing TTY/PYTEST guard)
+
 ```python
 if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("EASYCAT_QUIET"):
     print(_wired_summary(config), file=sys.stderr)  # lazy import of the catalogs inside
@@ -554,6 +570,7 @@ but tears down no backends (its own docstring warns callers off it), and `stop`/
 near-duplicates. Make `async with session:` the one documented public idiom.
 
 **After**
+
 ```python
 async with create_session(cfg) as session:  # Session.__aenter__/__aexit__ already wired
     await session.wait_closed()
@@ -590,6 +607,7 @@ fields across". Extract `src/easycat/config/easy.py::_AgentSessionConfig` and ha
 it.
 
 **After**
+
 ```python
 @dataclass
 class _AgentSessionConfig:

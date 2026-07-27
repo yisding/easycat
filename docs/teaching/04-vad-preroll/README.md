@@ -771,6 +771,8 @@ question) and run the script **twice** — once with pre-roll on,
 once with `--no-preroll`. Open both bundles:
 
 ```python
+from pathlib import Path
+
 from easycat.debug.testing import load_bundle
 
 for which in ("preroll", "nopreroll"):
