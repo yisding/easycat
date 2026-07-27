@@ -77,6 +77,10 @@ Between start and stop, the session exposes turn-level controls:
   cancellable TTS/playback path and require a started, non-text session; set
   `speak=False` when the application needs only the response text (this also
   works before `start()` and in `text_session` mode).
+- `session.set_audio_capture_enabled(enabled)` — pause or resume persisting
+  audio artifacts while leaving transcripts and journal events enabled. A
+  callable consent policy remains authoritative; pass `None` to clear the
+  runtime override.
 - `session.reset_state()` — clear turn state and conversation pointers.
 - `session.send_text(text)` — inject a user turn without audio (text-first
   flows and tests).

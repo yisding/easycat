@@ -191,6 +191,22 @@ class AgentRunner:
                 "plain async run(text) agents cannot represent them"
             )
 
+    def version_info(self) -> dict[str, str]:
+        """Expose wrapped bridge metadata to the session journal."""
+        version_info = getattr(self._agent, "version_info", None)
+        if callable(version_info):
+            info = version_info()
+            if isinstance(info, dict) and all(
+                isinstance(key, str) and isinstance(value, str) for key, value in info.items()
+            ):
+                return info
+        return {
+            "provider": type(self._agent).__name__,
+            "model": "unknown",
+            "api_version": "unknown",
+            "sdk_version": "unknown",
+        }
+
     async def prepare_response(self, turn_input: AgentTurnInput) -> PreparedAgentResponse:
         """Run a simple agent without committing its response to chat history.
 

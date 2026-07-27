@@ -213,10 +213,12 @@ def test_template_env_var_collector_reads_twilio_server_code() -> None:
     assert "TWILIO_WS_PORT" in referenced
     assert "TWILIO_STREAM_TOKEN_SECRET" in referenced
     assert "TWILIO_MAX_SESSIONS" in referenced
+    assert "TWILIO_START_TIMEOUT_S" in referenced
     assert "TRUST_PROXY_HEADERS" in referenced
     assert "TWILIO_WS_PORT" not in required
     assert "TWILIO_STREAM_TOKEN_SECRET" not in required
     assert "TWILIO_MAX_SESSIONS" not in required
+    assert "TWILIO_START_TIMEOUT_S" not in required
     assert "TRUST_PROXY_HEADERS" not in required
 
 
@@ -239,7 +241,7 @@ def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
 def test_twilio_scaffold_keeps_runtime_feedback_opt_in() -> None:
     source = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
 
-    assert "manager.connection(id(ws), create_session(config))" in source
+    assert "manager.connection(id(ws), session)" in source
     assert "runtime_feedback=True" not in source
     assert "attach_runtime_feedback" not in source
 
@@ -1070,8 +1072,11 @@ def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
     assert 'require_env("TWILIO_AUTH_TOKEN")' in server
     assert "validate_twilio_webhook_signature" in server
     assert "TwilioStreamTokenStore" in server
-    assert "TwilioTransportConfig(stream_token_validator=stream_tokens.consume)" in server
+    assert "stream_token_validator=stream_tokens.consume_start" in server
+    assert "if not await transport.wait_for_start(timeout_s=start_timeout_s):" in server
     assert "TWILIO_AUTH_TOKEN" in env_example
     assert "TWILIO_MAX_SESSIONS" in env_example
+    assert "TWILIO_START_TIMEOUT_S" in env_example
+    assert "TWILIO_PUBLIC_TWIML_URL" in env_example
     assert "TRUST_PROXY_HEADERS" in env_example
     assert "one-time stream token" in readme

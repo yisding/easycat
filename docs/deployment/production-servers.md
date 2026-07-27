@@ -92,6 +92,69 @@ unauthenticated `0.0.0.0` WebSocket voice endpoint. The **only** escape hatch is
 the structured `unsafe_allow_no_auth=True` field (on the auth policy and mirrored
 on `VoiceServerConfig`); never bypass it with prose-only config.
 
+### Binding a typed principal
+
+`AuthResult` is deliberately only a verdict. Keep tenant and caller identity in
+an application-owned type, and use one verifier in both places that need it:
+the `AuthPolicy` rejects invalid credentials before session construction, then
+the session factory reads the accepted handshake from the transport and
+re-verifies it to recover the typed principal.
+
+```python
+from dataclasses import dataclass
+
+from easycat import EasyConfig
+from easycat.server import VoiceServer, VoiceServerConfig
+from easycat.server.auth import AuthResult, RequestLike, from_websocket
+from easycat.transports import WebSocketConnectionTransport
+
+
+@dataclass(frozen=True)
+class CallPrincipal:
+    tenant_id: str
+    agent_version_id: str
+    call_id: str
+
+
+class CallContextAuth:
+    def authenticate(self, request: RequestLike) -> CallPrincipal | None:
+        # Application code verifies the signature, expiry, audience, and claims.
+        return verify_call_context(request.authorization_header)
+
+    def authorize(self, request: RequestLike) -> AuthResult:
+        principal = self.authenticate(request)
+        reason = "allowed" if principal is not None else "invalid"
+        return AuthResult(allowed=principal is not None, reason=reason)
+
+
+auth = CallContextAuth()
+
+
+def session_factory(transport: WebSocketConnectionTransport) -> EasyConfig:
+    request = transport.request
+    if request is None:
+        raise RuntimeError("accepted WebSocket request is unavailable")
+    principal = auth.authenticate(from_websocket(request.headers, request.path))
+    if principal is None:
+        raise RuntimeError("accepted credentials no longer validate")
+    return EasyConfig(
+        transport=transport,
+        agent=build_agent(principal.tenant_id, principal.agent_version_id),
+        session_id=principal.call_id,
+    )
+
+
+server = VoiceServer(
+    VoiceServerConfig(host="0.0.0.0", auth=auth),
+    session_factory=session_factory,
+)
+```
+
+Do not parse a token without verifying it in the factory. Re-verification keeps
+the factory correct even when credentials can expire or be revoked between the
+accept check and session construction. For WebRTC, use the same pattern with
+`transport.offer_request` and `from_aiohttp_request(...)`.
+
 ## Graceful shutdown
 
 `VoiceServer.stop()` (and `stop(force=True)`) drain through the shared
@@ -196,11 +259,12 @@ For public Twilio deployments:
 
 `debug="full"` (opt in — the `EasyConfig` default is the in-memory
 `debug="light"`, which writes nothing to disk) writes a crash-durable SQLite
-journal per session under `EASYCAT_DATA_DIR` (default `.easycat`) — see
+journal per session under `EasyConfig.data_dir` when set, otherwise
+`EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
 for the exact durability guarantees and storage layout. That promise only
-holds if `EASYCAT_DATA_DIR` is a **persistent** path: a container without a
-volume mounted there, or a process directory that gets wiped on redeploy,
+holds if the resolved data directory is a **persistent** path: a container
+without a volume mounted there, or a process directory that gets wiped on redeploy,
 silently discards every journal. The Docker-specific version of this guidance
 — including the image's `VOLUME` declaration and named-volume compose
 config — lives in
@@ -210,13 +274,26 @@ process host (systemd unit, EC2 instance, Kubernetes `Deployment`), not just
 containers.
 
 For continuous off-host replication instead of periodic filesystem backups,
-set `journal_backend="sqlite+litestream"` or `journal_backend="libsql"` on
-`EasyConfig`/`SessionConfig` and configure the replica target through
-environment variables (`EASYCAT_JOURNAL_LITESTREAM_REPLICA`,
-`EASYCAT_LIBSQL_URL` / `EASYCAT_LIBSQL_AUTH_TOKEN`) — see
+choose a replication topology explicitly. The in-process
+`journal_backend="sqlite+litestream"` backend uses
+`EASYCAT_JOURNAL_LITESTREAM_REPLICA` and starts one `litestream replicate`
+subprocess plus one stderr thread for each live session. It is convenient for
+single-call demos or tightly bounded workers, but operators must account for
+that per-session process/thread cost.
+
+An external Litestream sidecar may instead share a volume with
+`journal_backend="sqlite"`. Current Litestream releases support
+[watched directory replication](https://litestream.io/guides/directory-watcher/):
+configure the journal directory with `dir`, `pattern: "*.sqlite"`, and
+`watch: true`. Litestream discovers databases created after startup and
+namespaces each remote replica by its relative path. Pin the sidecar image to a
+tested release rather than `latest`; [docker.md](docker.md#litestream-and-libsql-replicas-in-a-container)
+shows a complete configuration.
+
+The `journal_backend="libsql"` alternative uses `EASYCAT_LIBSQL_URL` and
+`EASYCAT_LIBSQL_AUTH_TOKEN`; see
 [docker.md's "Litestream and libSQL replicas in a container"](docker.md#litestream-and-libsql-replicas-in-a-container)
-for the sidecar-vs-bundled-binary tradeoff and the crash-recovery gap on the
-libSQL backend.
+for container wiring and the crash-recovery gap on the libSQL backend.
 
 **Readiness probes.** `VoiceServer` (the process layer behind
 `run_webrtc_config_server()` and `VoiceServer.from_app(...)`) serves
@@ -257,9 +334,10 @@ walkthrough.
 - **Shutdown:** fail readiness first, stop accepting new connections, give live
   calls a bounded drain window, then force-stop remaining sessions before the
   process manager's graceful-shutdown timeout expires.
-- **Persistence:** mount a persistent volume/path at `EASYCAT_DATA_DIR` before
-  running with `debug="full"` in production — see "Journal persistence,
-  replication, and metrics scraping" above.
+- **Persistence:** mount the resolved data root before running with
+  `debug="full"` in production. `EasyConfig.data_dir` takes precedence over
+  `EASYCAT_DATA_DIR`; when neither is set, the root is `.easycat`. See
+  "Journal persistence, replication, and metrics scraping" above.
 - **Health probes:** point liveness/readiness checks at `/health/live` /
   `/health/ready` for `VoiceServer`-based servers; fall back to a TCP connect
   for WebSocket-only servers with no HTTP surface.
