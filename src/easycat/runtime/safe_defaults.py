@@ -45,6 +45,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "auto_turn_from_stt_final",
         "strip_markdown",
         "interruption_mode",
+        "on_agent_failure",
         # Journal config (safe to report)
         "journal_backend",
         "journal_retention",
