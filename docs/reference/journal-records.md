@@ -10,7 +10,7 @@ recognize, and should treat a missing optional key as unknown rather than as a
 zero, empty string, or false value. Write-time redaction can replace a value
 while preserving its key.
 
-Applications can write other names through a journal backend directly. Those
+Applications can append namespaced records with `Session.record(...)`. Those
 application-defined names are outside this built-in vocabulary.
 
 For the maintained app-builder route list and terminal journal summary, run:
@@ -150,6 +150,21 @@ Every bridge record includes `run_id: str` in `data`.
 | `buffer_overflow` | `CONTROL` | `dropped_from: str` | `gap: int` for a lagging `JournalView.follow()` cursor. |
 | `journal_degraded` | `DEGRADED` | `error_type: str`, `error_message: str` | Uses sequence `-1`; inspect `JournalView.degraded` for the live health signal. |
 | `recovered_session` | `RECOVERY` | `recovered_record_count: int`, `original_session_id: str` | Uses sequence `0` when SQLite recovers an unclean prior session. |
+
+## Application Records
+
+Use `session.record("app.<name>", data={...})` to append application facts to
+the same live journal as EasyCat's runtime records. The method forces
+`JournalRecordKind.EVENT`, accepts optional `turn_id` and `tags`, and applies
+the journal's normal write-time redaction unchanged. Payloads must contain
+JSON-native values with finite numbers and are snapshotted at the call
+boundary. Tags are canonicalized to a `frozenset`; each tag must be non-empty
+and cannot contain commas. An omitted `turn_id` inherits the active turn while
+explicit `None` keeps the record session-scoped.
+
+The `app.` namespace is required. Built-in names are rejected, and calls after
+`session.stop()` raise `RuntimeError` because the preserved postmortem journal
+is read-only. With journaling disabled, a valid call is a no-op.
 
 ## Contract Guard
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import copy
 import logging
 import threading
 import time
@@ -102,7 +103,7 @@ class InMemoryRingBuffer:
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
             records = list(self._buf)
-        return _read_records(records, start=start, limit=limit)
+        return copy.deepcopy(_read_records(records, start=start, limit=limit))
 
     def slice(
         self,
@@ -115,13 +116,15 @@ class InMemoryRingBuffer:
     ) -> list[JournalRecord]:
         with self._lock:
             records = list(self._buf)
-        return _slice_records(
-            records,
-            kind=kind,
-            session_id=session_id,
-            turn_id=turn_id,
-            name=name,
-            tags=tags,
+        return copy.deepcopy(
+            _slice_records(
+                records,
+                kind=kind,
+                session_id=session_id,
+                turn_id=turn_id,
+                name=name,
+                tags=tags,
+            )
         )
 
     def close(self) -> None:
@@ -137,7 +140,7 @@ class InMemoryRingBuffer:
         """Return a read-only copy of the current buffer contents."""
         with self._lock:
             return FrozenJournalSnapshot(
-                list(self._buf),
+                copy.deepcopy(list(self._buf)),
                 degraded=self._degraded,
                 latest_sequence=self._seq,
             )

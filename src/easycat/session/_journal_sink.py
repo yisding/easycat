@@ -381,9 +381,11 @@ class SessionJournalSink:
         output_bytes: bytes | None = None,
         input_artifact_class: ArtifactClass = "debug_verbose",
         output_artifact_class: ArtifactClass = "debug_verbose",
-    ) -> None:
+        tags: frozenset[str] = frozenset(),
+        inherit_turn_id: bool = True,
+    ) -> int | None:
         if self.journal is None:
-            return
+            return None
         validate_builtin_record(name=name, kind=kind, data=data)
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
@@ -395,13 +397,14 @@ class SessionJournalSink:
             if output_bytes is not None
             else None
         )
-        resolved_turn_id = self.current_turn_id(turn_id)
-        self.journal.append(
+        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+        return self.journal.append(
             kind=kind,
             name=name,
             session_id=self.session_id,
             turn_id=resolved_turn_id,
             data=data,
+            tags=tags,
             input_ref=input_ref,
             output_ref=output_ref,
         )

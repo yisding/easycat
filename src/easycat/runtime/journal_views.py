@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -117,7 +118,7 @@ class FrozenJournalSnapshot:
         degraded: bool = False,
         latest_sequence: int | None = None,
     ) -> None:
-        self._records = tuple(records)
+        self._records = tuple(copy.deepcopy(records))
         self._degraded = degraded
         self._latest_sequence = (
             latest_sequence
@@ -140,7 +141,7 @@ class FrozenJournalSnapshot:
         return -1
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
-        return _read_records(self._records, start=start, limit=limit)
+        return copy.deepcopy(_read_records(self._records, start=start, limit=limit))
 
     def slice(
         self,
@@ -151,13 +152,15 @@ class FrozenJournalSnapshot:
         name: str | None = None,
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        return _slice_records(
-            self._records,
-            kind=kind,
-            session_id=session_id,
-            turn_id=turn_id,
-            name=name,
-            tags=tags,
+        return copy.deepcopy(
+            _slice_records(
+                self._records,
+                kind=kind,
+                session_id=session_id,
+                turn_id=turn_id,
+                name=name,
+                tags=tags,
+            )
         )
 
     def close(self) -> None:
