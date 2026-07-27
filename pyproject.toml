@@ -330,7 +330,20 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 asyncio_mode = "auto"
 # Surface the slowest tests so regressions in test latency stay visible
 # (core pytest CLI flags, so strict_config=true is unaffected).
-addopts = "--durations=15 --durations-min=1.0"
+#
+# --max-worker-restart=0 is load-bearing, not tuning. `timeout_method =
+# "thread"` force-exits the whole worker PROCESS when a test blocks past
+# `timeout` below, and xdist's default policy is to spawn a replacement
+# worker and hand it the very test that just killed its predecessor. A test
+# that blocks deterministically (synchronous I/O on the event loop, a wedged
+# subprocess) therefore kills worker after worker, burning `timeout` seconds
+# each, up to xdist's default budget of 4x the node count -- on an 8-core box
+# that is 32 restarts x 60s ~= 32 minutes of an apparently-hung run that
+# emits no output, then reports the same test failed 33 times. Capping
+# restarts at 0 turns that into one crash, one failure, and a run that keeps
+# moving. Measured on a 2-node repro: 147s and 9 duplicate failures before,
+# 18s and 1 accurate failure after.
+addopts = "--durations=15 --durations-min=1.0 --max-worker-restart=0"
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
