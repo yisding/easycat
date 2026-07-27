@@ -7,6 +7,7 @@ half an hour.
 
 from __future__ import annotations
 
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -18,21 +19,19 @@ def _ini_options() -> dict:
     return pyproject["tool"]["pytest"]["ini_options"]
 
 
-def test_xdist_does_not_restart_workers_after_a_crash() -> None:
-    """A crashing test must not be re-run on a parade of fresh workers.
+def test_xdist_allows_one_replacement_without_a_restart_cycle() -> None:
+    """A single crashed worker is replaced, but repeated crashes stop the run.
 
     ``timeout_method = "thread"`` force-exits the worker PROCESS, and xdist's
-    default policy replaces a dead worker and reassigns it the test that just
-    killed its predecessor. A deterministically-hanging test therefore kills
-    up to 4x-node-count workers, each costing a full ``timeout``, emitting no
-    output the whole time -- ~32 minutes of apparent hang on an 8-core box,
-    ending in the same test reported failed 33 times.
+    default restart budget is 4x the node count. One replacement lets the
+    remaining queue continue after an isolated worker crash; stopping after a
+    second crash prevents a long cycle of full-timeout worker replacements.
     """
-    addopts = _ini_options()["addopts"]
+    addopts = shlex.split(_ini_options()["addopts"])
 
-    assert "--max-worker-restart=0" in addopts, (
-        "pytest addopts must keep --max-worker-restart=0; without it a single "
-        "hanging test stalls the whole run behind repeated worker restarts"
+    assert "--max-worker-restart=1" in addopts, (
+        "pytest addopts must keep --max-worker-restart=1 so one crashed worker "
+        "can be replaced without permitting a long restart cycle"
     )
 
 
