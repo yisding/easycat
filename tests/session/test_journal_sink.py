@@ -3,9 +3,15 @@ import pytest
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
+    CallAnswered,
+    CallEnded,
+    CallFailed,
+    CallScreening,
     Error,
     ErrorStage,
     EventBus,
+    PlaybackMarkAck,
+    ReconnectAttempt,
     STTFinal,
     SupervisorListenerAttached,
     SupervisorListenerDetached,
@@ -26,6 +32,10 @@ def test_simple_event_record_registry_is_complete() -> None:
         "AgentRequestStarted": "agent_request_started",
         "BotStartedSpeaking": "bot_started_speaking",
         "BotStoppedSpeaking": "bot_stopped_speaking",
+        "CallAnswered": "call_answered",
+        "CallEnded": "call_ended",
+        "CallFailed": "call_failed",
+        "CallScreening": "call_screening",
         "Error": "error",
         "PlaybackMarkAck": "playback_mark_ack",
         "ReconnectAttempt": "ws_reconnect_attempt",
@@ -79,6 +89,75 @@ async def test_journal_sink_subscribes_session_events() -> None:
     assert records[0].session_id == "event-session"
     assert records[0].turn_id == "t1"
     assert records[0].data == {"text": "hello", "track": "caller"}
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_preserves_reconnect_and_playback_identifiers() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(ReconnectAttempt(provider="deepgram", attempt=2))
+    await bus.emit(PlaybackMarkAck(mark_name="tts-17"))
+
+    records = journal.read()
+    assert records[0].data == {"provider": "deepgram", "attempt": 2}
+    assert records[1].data == {"mark_name": "tts-17"}
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_records_telephony_lifecycle_events() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(CallAnswered(call_sid="CA1", answered_by="human"))
+    await bus.emit(CallScreening(call_sid="CA1", platform="ios"))
+    await bus.emit(CallFailed(call_sid="CA1", reason="busy", sip_code=486, number="+15551234567"))
+    await bus.emit(
+        CallEnded(
+            call_sid="CA1",
+            duration_s=42.5,
+            disposition="completed",
+            number="+15551234567",
+        )
+    )
+
+    records = journal.read()
+    assert [record.name for record in records] == [
+        "call_answered",
+        "call_screening",
+        "call_failed",
+        "call_ended",
+    ]
+    assert records[0].data == {"call_sid": "CA1", "answered_by": "human"}
+    assert records[1].data == {"call_sid": "CA1", "platform": "ios"}
+    assert records[2].data == {
+        "call_sid": "CA1",
+        "reason": "busy",
+        "sip_code": 486,
+        "number": "[REDACTED_PHONE]",
+    }
+    assert records[3].data == {
+        "call_sid": "CA1",
+        "duration_s": 42.5,
+        "disposition": "completed",
+        "number": "[REDACTED_PHONE]",
+    }
 
 
 @pytest.mark.asyncio

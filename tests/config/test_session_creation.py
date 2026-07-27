@@ -297,6 +297,30 @@ def test_create_session_forwards_warmup_to_runtime_config():
     assert session._warmup.enabled is False
 
 
+def test_create_session_preserves_data_dir_before_emergency_export(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    armed_with: list[object] = []
+    monkeypatch.setattr(
+        "easycat.config._factory.install_emergency_export",
+        lambda session: armed_with.append(session),
+    )
+
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            data_dir=tmp_path,
+            emergency_export=True,
+        )
+    )
+
+    assert session._data_dir == tmp_path
+    assert armed_with == [session]
+
+
 @pytest.mark.asyncio
 async def test_create_session_binds_twilio_connection_identity_sink():
     transport = TwilioConnectionTransport(_DummyWebSocket())
@@ -319,6 +343,15 @@ async def test_create_session_binds_twilio_connection_identity_sink():
                     "From": "+15551234567",
                     "To": "+15557654321",
                     "CallerName": "Alice Example",
+                    "FromCity": "SAN FRANCISCO",
+                    "FromState": "CA",
+                    "FromZip": "94105",
+                    "FromCountry": "US",
+                    "caller_name": "Alias Name",
+                    "from_city": "ALIAS CITY",
+                    "from_state": "ZZ",
+                    "from_zip": "00000",
+                    "from_country": "ZZ",
                 },
             },
         }
@@ -329,6 +362,11 @@ async def test_create_session_binds_twilio_connection_identity_sink():
     assert session.call_identity.caller_number == "+15551234567"
     assert session.call_identity.called_number == "+15557654321"
     assert session.call_identity.display_name == "Alice Example"
+    assert session.call_identity.city == "SAN FRANCISCO"
+    assert session.call_identity.state == "CA"
+    assert session.call_identity.zip_code == "94105"
+    assert session.call_identity.country == "US"
+    assert session.call_identity.custom_fields == {}
 
 
 @pytest.mark.asyncio

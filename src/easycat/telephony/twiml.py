@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape, quoteattr
 
@@ -191,18 +191,27 @@ async def twilio_form_items_from_request(
 
 def twilio_stream_parameters_from_form(
     form: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    *,
+    extra_fields: Sequence[str] = (),
 ) -> dict[str, str]:
-    """Build caller/call metadata parameters for ``twiml_connect_stream``."""
+    """Build caller/call metadata parameters for ``twiml_connect_stream``.
+
+    The returned fields become Twilio ``start.customParameters``. EasyCat
+    preserves unrecognized parameters in ``CallIdentity.custom_fields``.
+    """
     values = _form_values(form)
     parameters = {"Direction": values.get("Direction") or "inbound"}
     for name in (
         "From",
         "To",
+        "CallerId",
         "CallerName",
+        "ForwardedFrom",
         "FromCity",
         "FromState",
         "FromZip",
         "FromCountry",
+        *extra_fields,
     ):
         if values.get(name):
             parameters[name] = values[name]
@@ -484,6 +493,45 @@ def twiml_hangup() -> str:
         Complete TwiML ``<Response>`` document as a string.
     """
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+
+
+def twiml_reject(reason: Literal["rejected", "busy"] = "rejected") -> str:
+    """Generate TwiML to reject an inbound call before answering it.
+
+    Twilio accepts only ``"rejected"`` and ``"busy"`` as reject reasons.
+
+    Raises:
+        ValueError: If *reason* is not accepted by Twilio.
+    """
+    if reason not in {"rejected", "busy"}:
+        raise ValueError("reason must be 'rejected' or 'busy'")
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Reject reason={quoteattr(reason)}/></Response>"
+    )
+
+
+def twiml_redirect(
+    url: str,
+    *,
+    method: Literal["GET", "POST"] | None = None,
+) -> str:
+    """Generate TwiML to redirect call handling to another TwiML URL.
+
+    Raises:
+        ValueError: If *url* is blank or *method* is not ``"GET"``, ``"POST"``,
+            or ``None``.
+    """
+    if not url.strip():
+        raise ValueError("url must be non-empty")
+    url = url.strip()
+    if method is not None and method not in {"GET", "POST"}:
+        raise ValueError("method must be 'GET' or 'POST'")
+    method_attr = f" method={quoteattr(method)}" if method else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Redirect{method_attr}>{escape(url)}</Redirect></Response>"
+    )
 
 
 def twiml_say_and_hangup(text: str) -> str:

@@ -11,11 +11,12 @@ import sqlite3
 import subprocess
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import (
@@ -37,6 +38,7 @@ from easycat.runtime._private_files import (
 )
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
+    _pid_alive,
     _process_birth_identity,
     sweep_crashed_journals,
 )
@@ -51,6 +53,10 @@ from easycat.runtime.records import (
 
 logger = logging.getLogger(__name__)
 
+_LIVE_SQLITE_JOURNALS_LOCK = threading.Lock()
+_LIVE_SQLITE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = (
+    weakref.WeakValueDictionary()
+)
 _CRASH_SWEEP_INTERVAL_SECONDS = 60.0
 _CRASH_SWEEP_RETRY_SECONDS = 1.0
 _CRASH_SWEEP_MAX_ROOTS = 128
@@ -373,6 +379,43 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
+        self._claim_live_journal()
+        try:
+            self._initialize_live_journal(session_id, existed=existed)
+        except BaseException:
+            self._release_live_journal()
+            self._conn.close()
+            raise
+
+    # ── Startup phases ────────────────────────────────────────────
+
+    def _claim_live_journal(self) -> None:
+        """Reject a second live writer for this process/path identity."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            current = _LIVE_SQLITE_JOURNALS.get(key)
+            if current is not None and not current._closed:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+
+            row = self._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            if row is not None and row[0] not in (None, ""):
+                try:
+                    live_pid = int(row[0])
+                except (TypeError, ValueError):
+                    live_pid = 0
+                if live_pid != os.getpid() and _pid_alive(live_pid):
+                    raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
+            _LIVE_SQLITE_JOURNALS[key] = self
+
+    def _release_live_journal(self) -> None:
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            if _LIVE_SQLITE_JOURNALS.get(key) is self:
+                _LIVE_SQLITE_JOURNALS.pop(key, None)
+
+    def _initialize_live_journal(self, session_id: str, *, existed: bool) -> None:
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
         # After reconcile the live table is empty (prior rows were promoted
         # or truncated), so the pre-v2 backfill only stamps the version.
@@ -416,8 +459,6 @@ class SqliteJournal(_SqlJournalBase):
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
             self._insert_recovery_marker(session_id, prior_count)
-
-    # ── Startup phases ────────────────────────────────────────────
 
     def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -592,6 +633,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.close()
             except sqlite3.ProgrammingError:
                 pass  # already closed
+        self._release_live_journal()
         # Run retention opportunistically — never block a turn.
         try:
             run_retention(self._root, mode=self._retention_mode, skip=self._db_path)
@@ -788,6 +830,14 @@ def _sanitize_replica_url(url: str) -> str:
         return "<unparseable>"
 
 
+def _session_replica_url(base_url: str, session_id: str) -> str:
+    """Namespace a replica root by session without disturbing URL options."""
+    parsed = urlsplit(base_url)
+    session_path = f"{quote(session_id, safe='')}.sqlite"
+    path = f"{parsed.path.rstrip('/')}/{session_path}"
+    return urlunsplit(parsed._replace(path=path))
+
+
 class LitestreamSqliteJournal:
     """SqliteJournal with a Litestream sidecar for WAL replication.
 
@@ -806,7 +856,8 @@ class LitestreamSqliteJournal:
         retention_mode: Literal["archive", "delete"] = "archive",
     ) -> None:
         self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
-        self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        replica_root = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        self._replica_url = _session_replica_url(replica_root, session_id) if replica_root else ""
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
         self._stderr_thread: threading.Thread | None = None
