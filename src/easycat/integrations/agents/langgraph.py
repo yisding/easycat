@@ -31,9 +31,9 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -44,6 +44,7 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
+    close_top_ended_cursors,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
@@ -59,7 +60,6 @@ from easycat.integrations.agents.base import (
     UnitKind,
     apply_standard_interruption,
 )
-from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
 
 # ``stream_mode`` values whose payloads LangGraph folds into top-level
@@ -151,7 +151,7 @@ class LangGraphBridge:
         performance demands it for a very chatty graph.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_NODES,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
@@ -1091,7 +1091,7 @@ class LangGraphBridge:
             run_id = str(event.get("run_id") or "")
             if run_id and run_id in open_cursors:
                 ended_runs.add(run_id)
-                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
+                close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
     def _nearest_parent_id(
         self,

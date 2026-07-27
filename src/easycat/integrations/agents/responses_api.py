@@ -13,7 +13,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -62,7 +62,7 @@ class RemoteResponsesAPIBridge:
         Optional metadata dict to include in every request.
     """
 
-    COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule] = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
     }
 

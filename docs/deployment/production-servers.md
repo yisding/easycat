@@ -163,12 +163,18 @@ capacity/draining collaborator, not `SessionManager`:
 1. Set the draining flag — new connections are rejected (WS close code `1013`,
    reason `Server is draining`).
 2. Close the aiohttp listeners and the raw-`websockets` `/ws` listener.
-3. Wait for active sessions up to `drain_timeout_s` (graceful `session.stop()`).
+3. Wait for active sessions up to `drain_timeout_s` (default
+   `drain_mode="stop_sessions"` starts graceful `session.stop()` immediately).
 4. Force-escalate (`session.stop(force=True)`) anything still active after the
    window; `force_shutdown_timeout_s` bounds the forced phase.
 
 `stop(force=True)` collapses the drain window to zero and force-stops
 immediately.
+
+For rolling restarts where calls should be allowed to reach caller hangup,
+set `VoiceServerConfig(drain_mode="await_natural_end")`; new connections are
+rejected, open `/ws` media sockets stay open until the caller disconnects or
+`drain_timeout_s` expires, and stragglers are then force-stopped.
 
 ## WebRTC browser servers
 
@@ -268,13 +274,26 @@ process host (systemd unit, EC2 instance, Kubernetes `Deployment`), not just
 containers.
 
 For continuous off-host replication instead of periodic filesystem backups,
-set `journal_backend="sqlite+litestream"` or `journal_backend="libsql"` on
-`EasyConfig`/`SessionConfig` and configure the replica target through
-environment variables (`EASYCAT_JOURNAL_LITESTREAM_REPLICA`,
-`EASYCAT_LIBSQL_URL` / `EASYCAT_LIBSQL_AUTH_TOKEN`) — see
+choose a replication topology explicitly. The in-process
+`journal_backend="sqlite+litestream"` backend uses
+`EASYCAT_JOURNAL_LITESTREAM_REPLICA` and starts one `litestream replicate`
+subprocess plus one stderr thread for each live session. It is convenient for
+single-call demos or tightly bounded workers, but operators must account for
+that per-session process/thread cost.
+
+An external Litestream sidecar may instead share a volume with
+`journal_backend="sqlite"`. Current Litestream releases support
+[watched directory replication](https://litestream.io/guides/directory-watcher/):
+configure the journal directory with `dir`, `pattern: "*.sqlite"`, and
+`watch: true`. Litestream discovers databases created after startup and
+namespaces each remote replica by its relative path. Pin the sidecar image to a
+tested release rather than `latest`; [docker.md](docker.md#litestream-and-libsql-replicas-in-a-container)
+shows a complete configuration.
+
+The `journal_backend="libsql"` alternative uses `EASYCAT_LIBSQL_URL` and
+`EASYCAT_LIBSQL_AUTH_TOKEN`; see
 [docker.md's "Litestream and libSQL replicas in a container"](docker.md#litestream-and-libsql-replicas-in-a-container)
-for the sidecar-vs-bundled-binary tradeoff and the crash-recovery gap on the
-libSQL backend.
+for container wiring and the crash-recovery gap on the libSQL backend.
 
 **Readiness probes.** `VoiceServer` (the process layer behind
 `run_webrtc_config_server()` and `VoiceServer.from_app(...)`) serves
