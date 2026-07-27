@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -52,6 +54,18 @@ def run_subprocess(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def run_timed_command(
+    command_runner: CommandRunner,
+    command: list[str],
+    *,
+    env: Mapping[str, str],
+) -> tuple[CommandResult, float, datetime]:
+    """Run one injected command and capture monotonic duration plus finish time."""
+    started_monotonic = time.perf_counter()
+    result = command_runner(command, env=env)
+    return result, time.perf_counter() - started_monotonic, datetime.now(UTC)
 
 
 def pytest_command_prefix() -> list[str]:

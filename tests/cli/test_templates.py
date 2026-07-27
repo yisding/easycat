@@ -39,8 +39,7 @@ from easycat.cli.scaffold.init import (
     _COPY_IGNORE,
     _COPY_PART_SUFFIX_IGNORE,
     _COPY_SUFFIX_IGNORE,
-    _TEMPLATE_BASE_EXTRAS,
-    _TEMPLATE_CATALOG,
+    _TEMPLATE_SPECS,
     _available_template_catalog,
     _base_requirement,
     _easycat_version_floor,
@@ -130,44 +129,32 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
 
 
 def test_template_catalog_metadata_covers_available_templates(templates: list[str]) -> None:
-    missing = sorted(set(templates) - set(_TEMPLATE_CATALOG))
-    stale = sorted(set(_TEMPLATE_CATALOG) - set(templates))
-    missing_base_extras = sorted(set(templates) - set(_TEMPLATE_BASE_EXTRAS))
-    stale_base_extras = sorted(set(_TEMPLATE_BASE_EXTRAS) - set(templates))
+    missing = sorted(set(templates) - set(_TEMPLATE_SPECS))
+    stale = sorted(set(_TEMPLATE_SPECS) - set(templates))
 
     assert not missing, "Template catalog missing metadata for: " + ", ".join(missing)
     assert not stale, "Template catalog references missing templates: " + ", ".join(stale)
-    assert not missing_base_extras, "Template catalog missing base extras for: " + ", ".join(
-        missing_base_extras
-    )
-    assert not stale_base_extras, "Template base extras reference missing templates: " + ", ".join(
-        stale_base_extras
-    )
 
     for name in templates:
-        entry = _TEMPLATE_CATALOG[name]
-        assert "name" not in entry
-        for key in (
-            "mode",
-            "transport",
-            "framework",
-            "best_for",
-            "required_env",
-        ):
-            assert entry[key], f"{name} catalog entry missing {key}"
-        assert "optional_env" in entry, f"{name} catalog entry missing optional_env"
-        assert entry["description"], f"{name} catalog entry missing description"
+        spec = _TEMPLATE_SPECS[name]
+        assert spec.mode, f"{name} catalog entry missing mode"
+        assert spec.transport, f"{name} catalog entry missing transport"
+        assert spec.framework, f"{name} catalog entry missing framework"
+        assert spec.best_for, f"{name} catalog entry missing best_for"
+        assert spec.required_env, f"{name} catalog entry missing required_env"
+        assert spec.description, f"{name} catalog entry missing description"
+        assert spec.base_extras, f"{name} catalog entry missing base_extras"
         env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
-        for env_var in entry["required_env"]:
+        for env_var in spec.required_env:
             assert env_var.isupper(), f"{name} catalog env var is not uppercase: {env_var}"
             assert f"{env_var}=" in env_example, (
                 f"{name} catalog required_env {env_var} missing from .env.example"
             )
-        for env_var in entry["optional_env"]:
+        for env_var in spec.optional_env:
             assert env_var.isupper(), (
                 f"{name} catalog optional env var is not uppercase: {env_var}"
             )
-            assert env_var not in entry["required_env"], (
+            assert env_var not in spec.required_env, (
                 f"{name} catalog optional_env duplicates required_env: {env_var}"
             )
             assert f"{env_var}=" in env_example, (
@@ -178,15 +165,45 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     assert set(emitted) == set(templates)
     assert all(entry["name"] == name for name, entry in emitted.items())
     for name, entry in emitted.items():
-        assert entry["base_extras"] == _TEMPLATE_BASE_EXTRAS[name]
+        spec = _TEMPLATE_SPECS[name]
+        assert entry["base_extras"] == spec.base_extras
         assert entry["base_requirement"] == _base_requirement(name)
         assert entry["files"] == _template_file_names(name)
         assert entry["next_step_commands"] == _next_step_commands(Path("my-agent"), name)
-        assert entry["run_command"]
+        assert entry["run_command"] == spec.run_command
         assert entry["check_command"]
         assert entry["fix_command"]
-        assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
-        assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
+        assert entry["required_env"] == spec.required_env
+        assert entry["optional_env"] == spec.optional_env
+
+
+def test_template_specs_make_audio_capabilities_explicit() -> None:
+    audio_templates = {
+        name for name, spec in _TEMPLATE_SPECS.items() if spec.supports_audio_config
+    }
+
+    assert audio_templates == {
+        "openai-agents",
+        "pydantic-ai",
+        "pydantic-ai-workflow",
+        "twilio-phone",
+        "webrtc-browser",
+    }
+    assert {
+        name: spec.expected_transport
+        for name, spec in _TEMPLATE_SPECS.items()
+        if spec.expected_transport is not None
+    } == {
+        "openai-agents": "local",
+        "pydantic-ai": "local",
+        "pydantic-ai-workflow": "local",
+        "twilio-phone": "twilio",
+        "webrtc-browser": "webrtc",
+    }
+    # The provider package has a voice demo but intentionally does not expose
+    # EasyConfig audio overrides through the scaffold command.
+    assert _TEMPLATE_SPECS["provider"].mode == "voice"
+    assert not _TEMPLATE_SPECS["provider"].supports_audio_config
 
 
 def test_template_env_var_collector_reads_twilio_server_code() -> None:
@@ -230,8 +247,8 @@ def test_twilio_scaffold_keeps_runtime_feedback_opt_in() -> None:
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_catalog_env_covers_template_code(name: str) -> None:
     code_required, code_referenced = _template_code_env_vars(name)
-    catalog_required = set(_TEMPLATE_CATALOG[name]["required_env"])
-    catalog_optional = set(_TEMPLATE_CATALOG[name]["optional_env"])
+    catalog_required = set(_TEMPLATE_SPECS[name].required_env)
+    catalog_optional = set(_TEMPLATE_SPECS[name].optional_env)
     catalog_env = catalog_required | catalog_optional
 
     missing = sorted(code_referenced - catalog_env)
@@ -637,7 +654,7 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_documents_catalog_optional_env(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
-    optional_env = _TEMPLATE_CATALOG[name]["optional_env"]
+    optional_env = _TEMPLATE_SPECS[name].optional_env
 
     for env_var in optional_env:
         assert env_var in readme, f"{name}/README.md missing optional env {env_var}"
@@ -777,7 +794,7 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     parsed = tomllib.loads(rendered)
 
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
-    assert f"easycat[{','.join(_TEMPLATE_BASE_EXTRAS[name])}]" in rendered
+    assert f"easycat[{','.join(_TEMPLATE_SPECS[name].base_extras)}]" in rendered
     assert "$EASYCAT_VERSION_FLOOR" in pyproject
     assert "$EASYCAT_VERSION_FLOOR" not in rendered
     assert _base_requirement(name) in rendered

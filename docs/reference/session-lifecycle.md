@@ -21,6 +21,12 @@ subscription = session.subscribe_event(STTFinal, lambda e: print(e.text))
 run_session(session)  # start, wait for shutdown signal, stop
 ```
 
+Construction is safe off the event-loop thread. Async servers that build
+sessions on a connection hot path may use
+`session = await asyncio.to_thread(create_session, config)` to keep filesystem
+and optional model initialization from blocking unrelated calls. Start, use,
+and stop the returned session on the owning event loop.
+
 For manual control, `await session.start()` begins audio capture and
 `await session.stop()` ends it. `async with session:` is the preferred idiom
 for tests and scripts — it calls `stop(force=True)` on exit.

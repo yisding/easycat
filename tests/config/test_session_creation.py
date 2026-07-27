@@ -10,6 +10,7 @@ from easycat import (
     EasyConfig,
     create_session,
 )
+from easycat.config import _factory as config_factory
 from easycat.session._types import CallIdentity
 from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
@@ -189,6 +190,56 @@ async def test_capture_revocation_fences_in_flight_blocking_write():
 
     assert await write_task is None
     assert store.refs == set()
+
+
+def test_create_session_closes_vad_when_later_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vad = _ProviderShapeVAD()
+    vad.closed = False
+    vad.close = lambda: setattr(vad, "closed", True)
+    monkeypatch.setattr(config_factory, "_create_vad", lambda config: vad)
+    monkeypatch.setattr(
+        config_factory,
+        "_resolve_agent",
+        lambda config, mcp_servers: (_ for _ in ()).throw(RuntimeError("agent failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="agent failed"):
+        create_session(
+            EasyConfig(
+                stt=_ProviderShapeSTT(),
+                tts=_ProviderShapeTTS(),
+                vad=_ProviderShapeVAD(),
+                transport=_IdentitySinkTransport(),
+                agent=_DummyAgent(),
+            )
+        )
+
+    assert vad.closed is True
+
+
+@pytest.mark.asyncio
+async def test_create_session_is_safe_to_construct_off_loop(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        debug="full",
+    )
+
+    session = await asyncio.to_thread(create_session, config)
+    try:
+        assert session.session_id
+        assert session._journal is not None
+    finally:
+        await session.stop(force=True)
 
 
 def test_create_session_binds_custom_identity_sink_capability():

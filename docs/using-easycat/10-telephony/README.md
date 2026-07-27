@@ -59,6 +59,15 @@ Webhook signature validation and the stream token solve different problems.
 The signature authenticates Twilio's HTTP request. The one-time token prevents
 an arbitrary WebSocket client from bypassing the webhook and attaching to the
 media listener. The checkpoint proves a token succeeds once and replay fails.
+For multi-tenant or shared-worker media listeners, `stream_token_validator` can
+accept a `StreamTokenContext` parameter instead of a raw token string; EasyCat
+passes the token, `CallSid`, `StreamSid`, and stream custom parameters, and any
+mapping returned by the validator is merged into `session.call_identity.custom_fields`.
+An explicit `StreamTokenContext` annotation opts in regardless of the parameter
+name (including aliases of that type). Every other case — other explicit
+annotations and unannotated parameters — retains the raw-token contract,
+whatever the parameter is named. The reserved stream-token parameter is
+stripped from returned claims and never lands in `custom_fields`.
 
 ## Validate the public URL Twilio signed
 

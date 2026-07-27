@@ -114,9 +114,7 @@ Here is the complete executor contract. Merge the two config fields
        def supports(self, action: SessionAction) -> bool:
            return isinstance(action, CustomAction) and action.name == "play_chime"
 
-       async def execute(
-           self, _session: Any, action: SessionAction
-       ) -> SessionActionResult:
+       async def execute(self, _session: Any, action: SessionAction) -> SessionActionResult:
            assert isinstance(action, CustomAction)
            frequency = action.payload["freq"]
            print(f"BEEP at {frequency} Hz")

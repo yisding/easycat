@@ -59,6 +59,19 @@ class LaneRunContext:
     requested_report_path: Path | None
     artifacts: dict[str, ArtifactRef] = field(default_factory=dict)
 
+    def artifacts_with(
+        self,
+        additional: Mapping[str, ArtifactRef],
+    ) -> dict[str, ArtifactRef]:
+        """Merge lane artifacts while consistently projecting ``--report``."""
+        artifacts = {**self.artifacts, **additional}
+        if self.requested_report_path is not None:
+            artifacts["requested_report"] = ArtifactRef(
+                kind="validation_report",
+                path=str(self.requested_report_path),
+            )
+        return artifacts
+
 
 def _start_lane_run(
     label: str,

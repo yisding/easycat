@@ -486,6 +486,16 @@ class TurnManager:
             TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
         )
 
+    async def _complete_user_turn(self, reason: str) -> None:
+        """Transition to processing and emit the correlated turn-end event."""
+        self._transition(
+            TurnManagerState.PROCESSING,
+            reason=reason,
+        )
+        await self._event_bus.emit(
+            TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
+
     async def _handle_speech_stop(self) -> None:
         """Handle VAD speech stop — transition to UserPaused and start timer."""
         if self._state != TurnManagerState.USER_SPEAKING:
@@ -571,15 +581,7 @@ class TurnManager:
                         is_complete = result.prediction == 1
                     if is_complete:
                         if self._state == TurnManagerState.USER_PAUSED:
-                            self._transition(
-                                TurnManagerState.PROCESSING,
-                                reason="smart_turn_complete",
-                            )
-                            await self._event_bus.emit(
-                                TurnEnded(
-                                    session_id=self._session_id, turn_id=self._current_turn_id
-                                )
-                            )
+                            await self._complete_user_turn("smart_turn_complete")
                         return
                     logger.debug(
                         "Smart-turn: incomplete (p=%.3f), falling back to silence timeout",
@@ -599,14 +601,8 @@ class TurnManager:
                 punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
             if self._state == TurnManagerState.USER_PAUSED:
-                self._transition(
-                    TurnManagerState.PROCESSING,
-                    reason=(
-                        "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
-                    ),
-                )
-                await self._event_bus.emit(
-                    TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+                await self._complete_user_turn(
+                    "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
         except asyncio.CancelledError:
             pass
@@ -717,13 +713,7 @@ class TurnManager:
             return
 
         self._cancel_silence_timer()
-        self._transition(
-            TurnManagerState.PROCESSING,
-            reason="manual_end",
-        )
-        await self._event_bus.emit(
-            TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
-        )
+        await self._complete_user_turn("manual_end")
 
     # ── Bot speaking lifecycle ──────────────────────────────────
 
