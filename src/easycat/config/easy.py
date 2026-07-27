@@ -12,6 +12,7 @@ telephony stack.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
@@ -137,6 +138,16 @@ def _validate_on_agent_failure(
         raise ValueError("on_agent_failure text must not be empty")
 
 
+def _validate_capture_audio(policy: bool | Callable[[], bool]) -> None:
+    if not isinstance(policy, bool) and not callable(policy):
+        raise ValueError("capture_audio must be a bool or zero-argument callable")
+    predicate_call = type(policy).__call__ if callable(policy) else None
+    if callable(policy) and (
+        inspect.iscoroutinefunction(policy) or inspect.iscoroutinefunction(predicate_call)
+    ):
+        raise ValueError("capture_audio predicate must be synchronous")
+
+
 def _validate_common(
     *,
     debug: str,
@@ -146,6 +157,7 @@ def _validate_common(
     session_id: str | None = None,
     agent: Any | None = None,
     agent_model: str | None = None,
+    capture_audio: bool | Callable[[], bool] = True,
 ) -> None:
     """Validate the shared fields used by both session factories."""
     if debug not in _VALID_DEBUG:
@@ -160,6 +172,7 @@ def _validate_common(
             f"Invalid journal_retention={journal_retention!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
         )
+    _validate_capture_audio(capture_audio)
     if mcp_servers is not None:
         for uri in mcp_servers:
             if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
@@ -488,6 +501,7 @@ class _AgentSessionConfig:
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
     debugger_autolaunch: bool = False
+    capture_audio: bool | Callable[[], bool] = True
     capture_aec_reference: bool = False
     emergency_export: bool = False
     data_dir: str | Path | None = None
@@ -564,6 +578,7 @@ class EasyConfig(_AgentSessionConfig):
             session_id=self.session_id,
             agent=self.agent,
             agent_model=self.agent_model,
+            capture_audio=self.capture_audio,
         )
         _validate_on_agent_failure(self.on_agent_failure)
 
@@ -786,6 +801,7 @@ class TextSessionConfig(_AgentSessionConfig):
             session_id=self.session_id,
             agent=self.agent,
             agent_model=self.agent_model,
+            capture_audio=self.capture_audio,
         )
 
     @classmethod
@@ -805,6 +821,7 @@ class TextSessionConfig(_AgentSessionConfig):
         remote_agent_api_key: str | None = None,
         mcp_servers: list[str] | None = None,
         record_to: str | Path | None = None,
+        capture_audio: bool | Callable[[], bool] = True,
         data_dir: str | Path | None = None,
         emergency_export: bool = False,
     ) -> TextSessionConfig:
@@ -832,6 +849,7 @@ class TextSessionConfig(_AgentSessionConfig):
                 "remote_agent_api_key": (remote_agent_api_key, None),
                 "mcp_servers": (mcp_servers, None),
                 "record_to": (record_to, None),
+                "capture_audio": (capture_audio, True),
                 "data_dir": (data_dir, None),
                 "emergency_export": (emergency_export, False),
             }
@@ -856,6 +874,7 @@ class TextSessionConfig(_AgentSessionConfig):
             remote_agent_api_key=remote_agent_api_key,
             mcp_servers=mcp_servers,
             record_to=record_to,
+            capture_audio=capture_audio,
             data_dir=data_dir,
             emergency_export=emergency_export,
         )

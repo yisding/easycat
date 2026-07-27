@@ -250,6 +250,13 @@ class TurnManager:
         """
         return list(self._turn_audio)
 
+    def discard_buffered_audio(self) -> None:
+        """Drop pre-decision audio when capture changes from denied to allowed."""
+        self._turn_audio.clear()
+        self._turn_audio_duration_ms = 0.0
+        self._pre_roll_buffer.clear()
+        self._pre_roll_duration_ms = 0.0
+
     @property
     def endpoint_detector(self) -> SmartTurnProvider | None:
         """The smart-turn endpoint detector this manager uses, if any.

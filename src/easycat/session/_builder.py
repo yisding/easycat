@@ -110,6 +110,8 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         runtime_mode=cfg.runtime_mode,
         journal=journal,
         artifact_store=session._artifact_store,
+        audio_capture_enabled=session._is_audio_capture_enabled,
+        audio_capture_epoch=session._audio_capture_epoch_value,
     )
     no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
 

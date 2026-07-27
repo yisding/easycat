@@ -240,3 +240,6 @@ class SessionConfig:
     #     identity for DNC handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
+
+    # Keep appended for positional compatibility with older SessionConfig calls.
+    capture_audio: bool | Callable[[], bool] = True

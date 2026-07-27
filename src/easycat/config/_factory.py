@@ -599,6 +599,7 @@ def _make_session_config(
         enable_noise_reduction=config.enable_noise_reduction,
         enable_echo_cancellation=audio.enable_echo_cancellation,
         capture_aec_reference=config.capture_aec_reference,
+        capture_audio=config.capture_audio,
         auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
         strip_markdown=config.strip_markdown,
         output_processors=config.output_processors,
@@ -939,6 +940,7 @@ def create_text_session(
     remote_agent_api_key: str | None = None,
     mcp_servers: list[str] | None = None,
     record_to: str | Path | None = None,
+    capture_audio: bool | Callable[[], bool] = True,
     data_dir: str | Path | None = None,
     emergency_export: bool = False,
 ) -> Session:
@@ -976,6 +978,7 @@ def create_text_session(
         remote_agent_api_key=remote_agent_api_key,
         mcp_servers=mcp_servers,
         record_to=record_to,
+        capture_audio=capture_audio,
         data_dir=data_dir,
         emergency_export=emergency_export,
     )
@@ -1010,6 +1013,7 @@ def create_text_session(
                 event_bus=event_bus,
                 journal=debug_resources.journal,
                 artifact_store=debug_resources.artifact_store,
+                capture_audio=config.capture_audio,
                 warmup=config.warmup,
                 record_to=config.record_to,
                 session_id=sid,
@@ -1026,6 +1030,7 @@ def create_text_session(
         debug=config.debug,
         journal_backend=config.journal_backend,
         journal_retention=config.journal_retention,
+        capture_audio=config.capture_audio,
         warmup=config.warmup,
         record_to=config.record_to,
     )

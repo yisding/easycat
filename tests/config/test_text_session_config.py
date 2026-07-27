@@ -36,6 +36,7 @@ def test_create_text_session_preserves_debug_snapshot_shape(tmp_path):
         "debug": "off",
         "journal_backend": "sqlite",
         "journal_retention": "delete",
+        "capture_audio": True,
         "warmup": False,
         "record_to": tmp_path,
     }
@@ -83,6 +84,18 @@ def test_create_text_session_kwargs_still_supported():
 
     session = create_text_session(agent=_DummyAgent(), debug="off")
     assert session is not None
+
+
+def test_create_text_session_accepts_shared_capture_policy():
+    from easycat.config import create_text_session
+
+    session = create_text_session(
+        agent=_DummyAgent(),
+        debug="off",
+        capture_audio=False,
+    )
+
+    assert session._is_audio_capture_enabled() is False
 
 
 def test_create_text_session_loose_data_dir_is_preserved(tmp_path):
