@@ -74,9 +74,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         async with session_slots:
             transport = TwilioConnectionTransport(
                 ws,
-                config=TwilioTransportConfig(
-                    stream_token_validator=stream_tokens.consume_start
-                ),
+                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
             )
             if not await transport.wait_for_start(timeout_s=settings.start_timeout_s):
                 return

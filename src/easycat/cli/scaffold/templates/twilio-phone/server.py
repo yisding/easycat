@@ -9,10 +9,6 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
-from agent import make_agent
-from fastapi import FastAPI, HTTPException, Request, Response
-from websockets.asyncio.server import ServerConnection
-
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -28,9 +24,13 @@ from easycat.telephony import (
 )
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
+from fastapi import FastAPI, HTTPException, Request, Response
+from websockets.asyncio.server import ServerConnection
+
+from agent import make_agent
 
 
-def create_app() -> FastAPI:  # noqa: C901, PLR0915
+def create_app() -> FastAPI:
     require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
     twilio_auth_token = require_env("TWILIO_AUTH_TOKEN")

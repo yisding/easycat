@@ -481,9 +481,7 @@ def _twilio_start_stream_sid(
     nested_stream_sid = start.get("streamSid")
     nested_stream_sid = nested_stream_sid if isinstance(nested_stream_sid, str) else None
     return top_stream_sid or nested_stream_sid, (
-        top_stream_sid is None
-        or nested_stream_sid is None
-        or top_stream_sid == nested_stream_sid
+        top_stream_sid is None or nested_stream_sid is None or top_stream_sid == nested_stream_sid
     )
 
 
