@@ -183,6 +183,14 @@ class AgentRunner:
         """Maximum speculative attempts allowed for one voice turn."""
         return max(1, self._config.preemptive_max_retries)
 
+    @staticmethod
+    def _validate_plain_turn_input(turn_input: AgentTurnInput) -> None:
+        if turn_input.role != "user":
+            raise ValueError(
+                "system application prompts require an ExternalAgentBridge; "
+                "plain async run(text) agents cannot represent them"
+            )
+
     def version_info(self) -> dict[str, str]:
         """Expose wrapped bridge metadata to the session journal."""
         version_info = getattr(self._agent, "version_info", None)
@@ -208,6 +216,7 @@ class AgentRunner:
         """
         if not self.supports_preemptive_generation:
             raise RuntimeError("agent does not support preemptive generation")
+        self._validate_plain_turn_input(turn_input)
 
         started_at_ns = time.monotonic_ns()
         try:
@@ -305,6 +314,7 @@ class AgentRunner:
                 text=turn_input.text,
                 context=list(self._history),
                 turn_id=turn_input.turn_id,
+                role=turn_input.role,
             )
         accumulated = ""
         timeout = self._config.timeout
@@ -333,7 +343,7 @@ class AgentRunner:
                     accumulated += text
                 elif kind == "done":
                     await close_stream_after_done(inner_iter)
-                    self._append_completed_turn(turn_input.text, text or accumulated)
+                    self._append_completed_turn(turn_input, text or accumulated)
                     yield event
                     return
                 yield event
@@ -342,16 +352,22 @@ class AgentRunner:
                 # never recorded this turn, so its shadow history stays in
                 # sync without a manual rollback.
                 raise AgentTimeoutError(timeout or 0)
-            self._append_completed_turn(turn_input.text, accumulated)
+            self._append_completed_turn(turn_input, accumulated)
         finally:
             # Closing the runner mid-yield does not automatically close the
             # wrapped bridge. Finish its partial-turn cleanup synchronously so
             # a follow-up ``apply_interruption()`` cannot race it.
             await aclose_quietly(inner_iter)
 
-    def _append_completed_turn(self, user_text: str, assistant_text: str) -> None:
+    def _append_completed_turn(
+        self,
+        turn_input: AgentTurnInput,
+        assistant_text: str,
+    ) -> None:
         """Mirror one completed bridge turn into advisory runner history."""
-        self._history.append({"role": "user", "content": user_text})
+        if turn_input.role == "system":
+            return
+        self._history.append({"role": "user", "content": turn_input.text})
         if assistant_text:
             self._history.append({"role": "assistant", "content": assistant_text})
 
@@ -364,6 +380,7 @@ class AgentRunner:
         """Drive a simple ``run(text)`` agent with rollback-safe history."""
         if cancel_token and cancel_token.is_cancelled:
             return
+        self._validate_plain_turn_input(turn_input)
 
         cursor: ExecutionCursor | None = None
         if not isinstance(recorder, NullAgentRecorder):

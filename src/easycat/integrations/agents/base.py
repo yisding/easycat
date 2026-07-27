@@ -99,6 +99,7 @@ class AgentTurnInput:
     text: str
     context: list[dict[str, str]] = field(default_factory=list)
     turn_id: str | None = None
+    role: Literal["system", "user"] = "user"
 
     @staticmethod
     def from_text(
@@ -106,12 +107,14 @@ class AgentTurnInput:
         context: list[dict[str, str]] | None = None,
         *,
         turn_id: str | None = None,
+        role: Literal["system", "user"] = "user",
     ) -> AgentTurnInput:
         """Construct from raw text, independent of voice pipeline."""
         return AgentTurnInput(
             text=text,
             context=context or [],
             turn_id=turn_id,
+            role=role,
         )
 
 

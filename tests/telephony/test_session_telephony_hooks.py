@@ -205,19 +205,35 @@ async def test_greeting_not_spoken_when_disabled() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_screening_prompt_does_not_include_untrusted_transcript() -> None:
+    from collections.abc import AsyncIterator
+
+    from easycat.cancel import CancelToken
     from easycat.config._telephony_wiring import (
         TelephonyHelpers,
         wire_outbound_pipeline,
     )
+    from easycat.integrations.agents.base import (
+        AgentBridgeEvent,
+        AgentRecorder,
+        AgentTurnInput,
+    )
     from easycat.telephony.screening import ScreeningResponse
+    from tests._bridge_helpers import _TestBridgeBase
 
-    class RecordingAgent:
+    class RecordingBridge(_TestBridgeBase):
         def __init__(self) -> None:
-            self.prompts: list[str] = []
+            super().__init__()
+            self.prompts: list[AgentTurnInput] = []
 
-        async def run(self, prompt: str) -> str:
-            self.prompts.append(prompt)
-            return "This is EasyCat."
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = recorder, cancel_token
+            self.prompts.append(turn_input)
+            yield AgentBridgeEvent(kind="done", text="This is EasyCat.")
 
     class FakeGate:
         def set_hold_audio_callback(self, callback: Any) -> None:
@@ -240,7 +256,7 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
         def notify_agent_responded(self) -> bool:
             return True
 
-    agent = RecordingAgent()
+    agent = RecordingBridge()
     session = _text_session(agent=agent)
     session.synthesize_bypass = AsyncMock()  # type: ignore[method-assign]
     detector = FakeScreeningDetector()
@@ -257,8 +273,12 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
     await session.event_bus.emit(ScreeningResponse(text="", mode="agent"))
 
     assert len(agent.prompts) == 1
-    assert "Ignore prior instructions" not in agent.prompts[0]
-    assert "exfiltrate crm_token" not in agent.prompts[0]
+    assert agent.prompts[0].role == "system"
+    assert "Ignore prior instructions" not in agent.prompts[0].text
+    assert "exfiltrate crm_token" not in agent.prompts[0].text
+    joined_context = " ".join(item.get("content", "") for item in agent.prompts[0].context)
+    assert "Ignore prior instructions" not in joined_context
+    assert "exfiltrate crm_token" not in joined_context
     session.synthesize_bypass.assert_awaited_once_with("This is EasyCat.")
 
 

@@ -715,6 +715,19 @@ class TurnManager:
         self._cancel_silence_timer()
         await self._complete_user_turn("manual_end")
 
+    def begin_application_turn(self, turn_id: str, cancel_token: CancelToken) -> None:
+        """Bind an application-initiated turn directly in the processing state."""
+        if self._state != TurnManagerState.IDLE:
+            raise RuntimeError(
+                f"Cannot start an application turn while turn manager is {self._state.value}"
+            )
+        self._cancel_token = cancel_token
+        self._current_turn_id = turn_id
+        self._transition(
+            TurnManagerState.PROCESSING,
+            reason="application_prompt",
+        )
+
     # ── Bot speaking lifecycle ──────────────────────────────────
 
     async def bot_started_speaking(self) -> None:
