@@ -58,6 +58,7 @@ from .easy import (
     EasyConfigError,
     TextSessionConfig,
     TransportConfig,
+    _AgentSessionConfig,
     _inject_agent_runtime,
 )
 
@@ -402,7 +403,10 @@ class _BuiltAudioSession:
     telephony: _TelephonyPipeline
 
 
-def _create_debug_resources(config: EasyConfig, session_id: str) -> _DebugResources:
+def _create_debug_resources(
+    config: _AgentSessionConfig,
+    session_id: str,
+) -> _DebugResources:
     artifact_store = _create_artifact_store(session_id, config.debug)
     if config.debug == "off":
         return _DebugResources(artifact_store=artifact_store, journal=None)
@@ -451,18 +455,33 @@ def _resolve_audio_pipeline(config: EasyConfig, event_bus: EventBus) -> _AudioPi
     )
 
 
-def _resolve_agent(config: EasyConfig, mcp_servers: tuple[str, ...]) -> Any | None:
-    if config.agent is None:
-        return None
-    agent = auto_adapt_agent(config.agent, model=config.agent_model)
-    _inject_agent_runtime(
-        agent,
-        mcp_servers=mcp_servers,
-        agent_model=config.agent_model,
-        remote_agent_api_key=config.remote_agent_api_key,
-    )
-    _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
-    if config.wrap_agent and not isinstance(agent, AgentRunner):
+def _resolve_agent(
+    config: _AgentSessionConfig,
+    mcp_servers: tuple[str, ...],
+    *,
+    default_agent: Any | None = None,
+) -> Any | None:
+    """Resolve shared agent settings while preserving caller-specific absence.
+
+    Audio construction leaves ``default_agent`` as ``None``. Text construction
+    supplies ``NoopAgent()`` so its historical echo fallback is still wrapped
+    according to ``wrap_agent``. Runtime settings and shape validation apply
+    only to an explicitly configured agent, matching both factories' previous
+    behavior.
+    """
+    configured_agent = config.agent
+    if configured_agent is None:
+        agent = default_agent
+    else:
+        agent = auto_adapt_agent(configured_agent, model=config.agent_model)
+        _inject_agent_runtime(
+            agent,
+            mcp_servers=mcp_servers,
+            agent_model=config.agent_model,
+            remote_agent_api_key=config.remote_agent_api_key,
+        )
+        _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
+    if agent is not None and config.wrap_agent and not isinstance(agent, AgentRunner):
         agent = AgentRunner(agent, config.agent_runner or AgentRunnerConfig())
     return agent
 
@@ -928,49 +947,19 @@ def create_text_session(
         record_to=record_to,
     )
 
-    agent = config.agent
-    session_id = config.session_id
-    debug = config.debug
-    journal_backend = config.journal_backend
-    journal_retention = config.journal_retention
-    wrap_agent = config.wrap_agent
-    agent_runner = config.agent_runner
-    agent_model = config.agent_model
-    remote_agent_api_key = config.remote_agent_api_key
-    mcp_servers = config.mcp_servers
-    record_to = config.record_to
-
-    sid = session_id or f"session-{uuid4().hex[:12]}"
-    artifact_store = _create_artifact_store(sid, debug)
-    journal = (
-        create_journal(
-            sid,
-            debug=debug,
-            backend=journal_backend,
-            artifact_store=(
-                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-            ),
-            retention_mode=journal_retention,
-        )
-        if debug != "off"
-        else None
-    )
-    try:
+    sid = config.session_id or f"session-{uuid4().hex[:12]}"
+    debug_resources = _create_debug_resources(config, sid)
+    with ExitStack() as rollback:
+        close_journal = getattr(debug_resources.journal, "close", None)
+        if callable(close_journal):
+            rollback.callback(close_journal)
         event_bus = EventBus()
-
-        adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        _mcp = list(mcp_servers) if mcp_servers else []
-        if agent is not None:
-            _inject_agent_runtime(
-                adapted,
-                mcp_servers=_mcp,
-                agent_model=agent_model,
-                remote_agent_api_key=remote_agent_api_key,
-            )
-            _validate_agent_shape(adapted, wrap_agent=wrap_agent)
-        if wrap_agent and not isinstance(adapted, AgentRunner):
-            runner_cfg = agent_runner or AgentRunnerConfig()
-            adapted = AgentRunner(adapted, runner_cfg)
+        resolved_mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+        adapted = _resolve_agent(
+            config,
+            resolved_mcp_servers,
+            default_agent=NoopAgent(),
+        )
 
         # Text sessions use noop providers — validation is skipped because
         # runtime_mode="text_session" never enters the audio pipeline.
@@ -984,30 +973,27 @@ def create_text_session(
                 transport=NoopTransport(),
                 agent=adapted,
                 event_bus=event_bus,
-                journal=journal,
-                artifact_store=artifact_store,
+                journal=debug_resources.journal,
+                artifact_store=debug_resources.artifact_store,
                 warmup=config.warmup,
-                record_to=record_to,
+                record_to=config.record_to,
                 session_id=sid,
                 runtime_mode="text_session",
-                mcp_servers=tuple(_mcp),
+                mcp_servers=resolved_mcp_servers,
             )
         )
-    except Exception:
-        if journal is not None and hasattr(journal, "close"):
-            journal.close()
-        raise
+        rollback.pop_all()
     # Stash user-facing settings so debug bundle export can snapshot them
     # instead of serializing live provider instances from SessionConfig.
     from types import SimpleNamespace
 
     session._easycat_config = SimpleNamespace(
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
+        debug=config.debug,
+        journal_backend=config.journal_backend,
+        journal_retention=config.journal_retention,
         warmup=config.warmup,
-        record_to=record_to,
+        record_to=config.record_to,
     )
-    session._agent_model = agent_model
-    session._remote_agent_api_key = remote_agent_api_key
+    session._agent_model = config.agent_model
+    session._remote_agent_api_key = config.remote_agent_api_key
     return session
