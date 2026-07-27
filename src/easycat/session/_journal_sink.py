@@ -55,6 +55,7 @@ from easycat.events import (
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
 from easycat.runtime.journal import ExecutionJournal
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import redact_value
 
@@ -65,8 +66,10 @@ _JOURNAL_ATTRS = (
     "result",
     "action",
     "executor",
+    "provider",
     "tool_name",
     "call_id",
+    "attempt",
     "call_sid",
     "answered_by",
     "platform",
@@ -78,6 +81,7 @@ _JOURNAL_ATTRS = (
     "listener_id",
     "queue_size",
     "dropped_frames",
+    "mark_name",
     "reason",
     "error",
     "structured_output",
@@ -90,6 +94,7 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
+_NONEMPTY_ATTRS = frozenset({"provider"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 _REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
 _REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"
@@ -271,7 +276,7 @@ def _event_attributes(event: Event) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for attr in _JOURNAL_ATTRS:
         value = getattr(event, attr, None)
-        if value is not None:
+        if value is not None and (attr not in _NONEMPTY_ATTRS or value):
             data[attr] = _journal_attr_value(attr, value)
     return data
 
@@ -379,6 +384,7 @@ class SessionJournalSink:
     ) -> None:
         if self.journal is None:
             return
+        validate_builtin_record(name=name, kind=kind, data=data)
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
             if input_bytes is not None
@@ -409,6 +415,7 @@ class SessionJournalSink:
             if journal is None:
                 return
             projection = _project_journal_event(event)
+            validate_builtin_record(name=name, kind=kind, data=projection.data)
             journal.append(
                 kind=kind,
                 name=name,

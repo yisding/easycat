@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Any
 
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id
+from easycat.runtime.records import CALL_ENDED_RECORD_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +106,7 @@ class _BundleRecordAccumulator:
             self.latest_wall_ns = wall_ns
 
     def _observe_call_duration(self, record: Mapping[str, Any]) -> None:
-        if record.get("name") != "call_ended":
+        if record.get("name") != CALL_ENDED_RECORD_NAME:
             return
         data = record.get("data")
         if not isinstance(data, Mapping):

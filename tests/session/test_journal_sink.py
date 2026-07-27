@@ -10,6 +10,8 @@ from easycat.events import (
     Error,
     ErrorStage,
     EventBus,
+    PlaybackMarkAck,
+    ReconnectAttempt,
     STTFinal,
     SupervisorListenerAttached,
     SupervisorListenerDetached,
@@ -87,6 +89,27 @@ async def test_journal_sink_subscribes_session_events() -> None:
     assert records[0].session_id == "event-session"
     assert records[0].turn_id == "t1"
     assert records[0].data == {"text": "hello", "track": "caller"}
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_preserves_reconnect_and_playback_identifiers() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(ReconnectAttempt(provider="deepgram", attempt=2))
+    await bus.emit(PlaybackMarkAck(mark_name="tts-17"))
+
+    records = journal.read()
+    assert records[0].data == {"provider": "deepgram", "attempt": 2}
+    assert records[1].data == {"mark_name": "tts-17"}
 
 
 @pytest.mark.asyncio

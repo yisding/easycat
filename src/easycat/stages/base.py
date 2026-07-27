@@ -18,6 +18,7 @@ from easycat._turn_context import TurnContext
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import JournalRecordKind
 
 if TYPE_CHECKING:
@@ -326,6 +327,7 @@ def journal_append_event(
         payload["error"] = error
     if data_extra:
         payload.update(data_extra)
+    validate_builtin_record(name=name, kind=kind, data=payload)
     return ctx.journal.append(
         kind=kind,
         name=name,

@@ -18,6 +18,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
     RecorderInvariantError,
 )
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
 if TYPE_CHECKING:
@@ -300,6 +301,7 @@ class JournalAgentRecorder:
         record_data = {"run_id": self._context.run_id}
         if data:
             record_data.update(data)
+        validate_builtin_record(name=name, kind=kind, data=record_data)
         self._journal.append(
             kind=kind,
             name=name,
