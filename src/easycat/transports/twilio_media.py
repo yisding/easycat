@@ -197,9 +197,7 @@ def _parse_twilio_start_identity(
     for name in excluded_parameter_names or set():
         params.pop(name, None)
 
-    direction_raw = _clean_twilio_parameter(
-        params.pop("Direction", "") or params.pop("direction", "")
-    )
+    direction_raw = _clean_twilio_parameter(_pop_twilio_aliases(params, "Direction", "direction"))
     direction_token = direction_raw.strip().lower()
     direction: CallDirection
     if direction_token.startswith("outbound"):
@@ -209,8 +207,8 @@ def _parse_twilio_start_identity(
     else:
         direction = "unknown"
 
-    from_number = _clean_twilio_parameter(params.pop("From", "") or params.pop("from", ""))
-    to_number = _clean_twilio_parameter(params.pop("To", "") or params.pop("to", ""))
+    from_number = _clean_twilio_parameter(_pop_twilio_aliases(params, "From", "from"))
+    to_number = _clean_twilio_parameter(_pop_twilio_aliases(params, "To", "to"))
     if direction == "outbound":
         caller = to_number
         called = from_number
@@ -218,14 +216,12 @@ def _parse_twilio_start_identity(
         caller = from_number
         called = to_number
     display_name = _clean_twilio_parameter(
-        params.pop("CallerName", None) or params.pop("caller_name", None)
+        _pop_twilio_aliases(params, "CallerName", "caller_name")
     )
-    city = _clean_twilio_parameter(params.pop("FromCity", "") or params.pop("from_city", ""))
-    state = _clean_twilio_parameter(params.pop("FromState", "") or params.pop("from_state", ""))
-    zip_code = _clean_twilio_parameter(params.pop("FromZip", "") or params.pop("from_zip", ""))
-    country = _clean_twilio_parameter(
-        params.pop("FromCountry", "") or params.pop("from_country", "")
-    )
+    city = _clean_twilio_parameter(_pop_twilio_aliases(params, "FromCity", "from_city"))
+    state = _clean_twilio_parameter(_pop_twilio_aliases(params, "FromState", "from_state"))
+    zip_code = _clean_twilio_parameter(_pop_twilio_aliases(params, "FromZip", "from_zip"))
+    country = _clean_twilio_parameter(_pop_twilio_aliases(params, "FromCountry", "from_country"))
 
     identity = CallIdentity(
         caller_number=caller,
@@ -240,6 +236,12 @@ def _parse_twilio_start_identity(
         custom_fields=params,
     )
     return identity, caller, called
+
+
+def _pop_twilio_aliases(params: dict[str, str], primary: str, alias: str) -> str:
+    primary_value = params.pop(primary, "")
+    alias_value = params.pop(alias, "")
+    return primary_value or alias_value
 
 
 def _clean_twilio_parameter(value: Any) -> str:
@@ -656,6 +658,11 @@ class _TwilioProtocolMixin:
         raise NotImplementedError
 
     # ── Read-only accessors ───────────────────────────────────────
+
+    @property
+    def request(self) -> Any | None:
+        """Accepted Twilio Media Streams WebSocket handshake request, when available."""
+        return getattr(self._current_ws(), "request", None)
 
     @property
     def call_identity(self) -> Any | None:

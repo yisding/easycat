@@ -73,6 +73,14 @@ class TestSqliteJournalBasics:
         assert records[0].name == "test_event"
         assert records[0].data == {"label": "value"}
 
+    def test_rejects_second_live_writer_for_same_session(self, tmp_path):
+        first = SqliteJournal("same-session", data_dir=tmp_path)
+        try:
+            with pytest.raises(RuntimeError, match="already active"):
+                SqliteJournal("same-session", data_dir=tmp_path)
+        finally:
+            first.close()
+
     def test_append_applies_write_filter(self, journal):
         journal.append(
             kind=JournalRecordKind.EVENT,

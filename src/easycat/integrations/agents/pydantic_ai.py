@@ -42,6 +42,16 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+
+def _completion_text(accumulated: str, structured_output: Any) -> str:
+    """Prefer streamed text, falling back to a speakable structured result."""
+    if accumulated:
+        return accumulated
+    if structured_output is None:
+        return ""
+    return str(structured_output)
+
+
 _DEFAULT_HISTORY_KEY = "__default__"
 
 
@@ -455,7 +465,7 @@ class PydanticAIBridge:
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
-                text=accumulated,
+                text=_completion_text(accumulated, raw_output),
                 structured_output=raw_output,
             )
 
@@ -603,6 +613,7 @@ class PydanticAIBridge:
         state._easycat_event_handler = _handler
 
         accumulated = ""
+        graph_output: Any = None
         prev_node_name: str | None = None
         prev_cursor: ExecutionCursor | None = None
 
@@ -632,6 +643,7 @@ class PydanticAIBridge:
                         if not graph_units:
                             output = _graph_item_output(graph_item)
                             if output is not _UNSET:
+                                graph_output = output
                                 self._last_output = output
                                 if isinstance(output, str):
                                     accumulated = accumulated or output
@@ -691,6 +703,7 @@ class PydanticAIBridge:
             # Capture result.
             output = await _run_output(graph_run)
             if output is not None:
+                graph_output = output
                 self._last_output = output
                 if isinstance(output, str):
                     accumulated = accumulated or output
@@ -768,8 +781,8 @@ class PydanticAIBridge:
 
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
-            structured_output=self._last_output,
+            text=_completion_text(accumulated, graph_output),
+            structured_output=graph_output,
         )
 
 

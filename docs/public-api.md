@@ -265,6 +265,20 @@ from easycat.integrations.agents import PydanticAIBridge
 - `WebTransportServer`
 - `WebTransportTransportConfig`
 
+`WebSocketConnectionTransport.request` and
+`TwilioConnectionTransport.request` expose the accepted `websockets`
+handshake request when the server provides one. `WebRTCTransport.offer_request`
+exposes the accepted aiohttp offer request when the transport is created by
+the mounted WebRTC route, so session factories can derive per-connection
+configuration from headers or URL query parameters.
+
+`AuthResult` intentionally carries only an authorization verdict, not an
+application principal. Applications that need a typed tenant or caller identity
+should use the same verifier in the server auth policy and in the session
+factory, reading the accepted request from the transport. See
+[Binding a typed principal](deployment/production-servers.md#binding-a-typed-principal)
+for the complete composition.
+
 ### Output Processing
 
 - `MarkdownStripProcessor`

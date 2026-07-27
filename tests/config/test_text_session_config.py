@@ -81,6 +81,31 @@ def test_create_text_session_kwargs_still_supported():
     assert session is not None
 
 
+def test_create_text_session_loose_data_dir_is_preserved(tmp_path):
+    session = create_text_session(agent=_DummyAgent(), debug="off", data_dir=tmp_path)
+
+    assert session._data_dir == tmp_path
+
+
+def test_create_text_session_rejects_config_plus_loose_data_dir(tmp_path):
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    with pytest.raises(ValueError, match="data_dir"):
+        create_text_session(config, data_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["", "   ", "contains space", "contains\x00nul", "a" * 129, "../escape"],
+)
+def test_text_session_config_rejects_invalid_session_id(session_id: str):
+    from easycat.config import EasyConfigError, TextSessionConfig
+
+    with pytest.raises(EasyConfigError, match="session_id must"):
+        TextSessionConfig(agent=_DummyAgent(), session_id=session_id)
+
+
 def test_text_session_config_validates_debug():
     from easycat.config import TextSessionConfig
 

@@ -209,12 +209,12 @@ def _resolve_echo_canceller(config: Any) -> Any:
 
 
 def _create_artifact_store(
-    session_id: str, debug: str
+    session_id: str, debug: str, *, data_dir: str | Path | None = None
 ) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
     if debug == "off":
         return None
     if debug == "full":
-        return FilesystemArtifactStore(session_id)
+        return FilesystemArtifactStore(session_id, data_dir=data_dir)
     return InMemoryArtifactStore()
 
 
@@ -407,7 +407,11 @@ def _create_debug_resources(
     config: _AgentSessionConfig,
     session_id: str,
 ) -> _DebugResources:
-    artifact_store = _create_artifact_store(session_id, config.debug)
+    artifact_store = _create_artifact_store(
+        session_id,
+        config.debug,
+        data_dir=config.data_dir,
+    )
     if config.debug == "off":
         return _DebugResources(artifact_store=artifact_store, journal=None)
     journal = create_journal(
@@ -418,6 +422,7 @@ def _create_debug_resources(
             artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
         ),
         retention_mode=config.journal_retention,
+        data_dir=config.data_dir,
     )
     return _DebugResources(artifact_store=artifact_store, journal=journal)
 
@@ -712,6 +717,7 @@ def _maybe_arm_dev_session(session: Session) -> None:
 def _finalize_audio_session(config: EasyConfig, built: _BuiltAudioSession) -> None:
     session = built.session
     session._easycat_config = _safe_config_ns(config)
+    session._data_dir = config.data_dir
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
     _wire_outbound_pipeline(built)
@@ -743,7 +749,7 @@ def create_session(config: EasyConfig) -> Session:
     an :class:`easycat.errors.EasyCatError` subclass when a selected
     provider's credentials or optional extra are missing.
     """
-    session_id = f"session-{uuid4().hex[:12]}"
+    session_id = config.session_id or f"session-{uuid4().hex[:12]}"
     debug = _create_debug_resources(config, session_id)
     with ExitStack() as rollback:
         close_journal = getattr(debug.journal, "close", None)
@@ -926,6 +932,8 @@ def create_text_session(
     remote_agent_api_key: str | None = None,
     mcp_servers: list[str] | None = None,
     record_to: str | Path | None = None,
+    data_dir: str | Path | None = None,
+    emergency_export: bool = False,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -961,6 +969,8 @@ def create_text_session(
         remote_agent_api_key=remote_agent_api_key,
         mcp_servers=mcp_servers,
         record_to=record_to,
+        data_dir=data_dir,
+        emergency_export=emergency_export,
     )
 
     sid = config.session_id or f"session-{uuid4().hex[:12]}"
@@ -1010,6 +1020,9 @@ def create_text_session(
         warmup=config.warmup,
         record_to=config.record_to,
     )
+    session._data_dir = config.data_dir
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
+    if config.debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
     return session
