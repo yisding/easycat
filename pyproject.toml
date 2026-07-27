@@ -330,7 +330,17 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 asyncio_mode = "auto"
 # Surface the slowest tests so regressions in test latency stay visible
 # (core pytest CLI flags, so strict_config=true is unaffected).
-addopts = "--durations=15 --durations-min=1.0"
+#
+# --max-worker-restart=1 is load-bearing, not tuning. `timeout_method =
+# "thread"` force-exits the whole worker PROCESS when a test blocks past
+# `timeout` below, and xdist's default policy is to spawn a replacement
+# worker. The crashing test is reported failed and its remaining queue is
+# redistributed, but xdist's default restart budget is 4x the node count. A
+# run with repeated worker crashes can therefore burn many full `timeout`
+# intervals before it stops. Allow one replacement so a single crashed
+# worker does not abort the rest of the suite, while a second crash ends the
+# run instead of starting a long replacement cycle.
+addopts = "--durations=15 --durations-min=1.0 --max-worker-restart=1"
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true

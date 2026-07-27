@@ -9,15 +9,17 @@ sentence boundaries for low-latency playback.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import logging
+import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from re import sub
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -71,6 +73,8 @@ from easycat.runtime.capabilities import (
     is_passthrough_provider,
 )
 from easycat.runtime.journal import JournalView
+from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
+from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
@@ -117,6 +121,68 @@ def _recording_filename_session_id(session_id: str) -> str:
     return safe or "session"
 
 
+def _validate_application_record_name(name: str) -> None:
+    if not isinstance(name, str):
+        raise ValueError("Application journal record name must be a string")
+    if name in BUILTIN_JOURNAL_RECORD_CONTRACTS:
+        raise ValueError(f"Journal record name {name!r} is reserved by EasyCat")
+    if not name.startswith("app.") or not name.removeprefix("app.").strip():
+        raise ValueError("Application journal record names must use the 'app.<name>' namespace")
+
+
+def _application_record_tags(tags: object) -> frozenset[str]:
+    if isinstance(tags, (str, bytes)) or tags is None:
+        raise ValueError("Application journal record tags must be an iterable of strings")
+    try:
+        frozen = frozenset(cast(Iterable[object], tags))
+    except TypeError as exc:
+        raise ValueError("Application journal record tags must be an iterable of strings") from exc
+    for tag in frozen:
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("Application journal record tags must be non-empty strings")
+        if "," in tag:
+            raise ValueError("Application journal record tags must not contain commas")
+    return cast(frozenset[str], frozen)
+
+
+def _application_record_data(data: object) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError("Application journal record data must be a dictionary")
+    active: set[int] = set()
+
+    def _snapshot(value: Any, path: str) -> Any:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"Application journal record {path} must be finite")
+            return value
+        if isinstance(value, (dict, list)):
+            identity = id(value)
+            if identity in active:
+                raise ValueError(f"Application journal record {path} contains a cycle")
+            active.add(identity)
+            try:
+                if isinstance(value, dict):
+                    snapshot: dict[str, Any] = {}
+                    for key, item in value.items():
+                        if not isinstance(key, str):
+                            raise ValueError(
+                                f"Application journal record {path} keys must be strings"
+                            )
+                        snapshot[key] = _snapshot(item, f"{path}.{key}")
+                    return snapshot
+                return [_snapshot(item, f"{path}[{index}]") for index, item in enumerate(value)]
+            finally:
+                active.remove(identity)
+        raise ValueError(f"Application journal record {path} must contain only JSON-native values")
+
+    return _snapshot(data, "data")
+
+
+_APPLICATION_TURN_ID_OMITTED = object()
+
+
 _HelperT = TypeVar("_HelperT")
 
 
@@ -150,6 +216,7 @@ class Session:
     # hook. Declared (not assigned) so ``getattr(..., default)`` probes keep
     # their runtime behavior.
     _easycat_config: Any
+    _data_dir: str | Path | None
     _emergency_export_unregister: Callable[[], None]
 
     def __init__(self, config: SessionConfig | None = None) -> None:
@@ -685,7 +752,11 @@ class Session:
             (STTFinal, user_transcript, lambda cb: lambda e: cb(e.text)),
             (AgentDelta, agent_delta, lambda cb: lambda e: cb(e.text)),
             (AgentFinal, agent_response, lambda cb: lambda e: cb(e.text)),
-            (ToolCallStarted, tool_started, lambda cb: lambda e: cb(e.tool_name, e.call_id)),
+            (
+                ToolCallStarted,
+                tool_started,
+                lambda cb: lambda e: cb(e.tool_name, e.call_id),
+            ),
             (ToolCallResult, tool_result, lambda cb: lambda e: cb(e.call_id, e.result)),
             (TurnStarted, turn_started, lambda cb: lambda _e: cb()),
             (TurnEnded, turn_ended, lambda cb: lambda _e: cb()),
@@ -756,9 +827,13 @@ class Session:
         self._record_to_exported = True
         try:
             record_to.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
             safe_session_id = _recording_filename_session_id(self.session_id)
-            path = record_to / f"{safe_session_id}-{stamp}.zip"
+            session_digest = hashlib.blake2s(
+                self.session_id.encode("utf-8", errors="surrogatepass"),
+                digest_size=4,
+            ).hexdigest()
+            path = record_to / f"{safe_session_id}-{session_digest}-{stamp}.zip"
             self.export_debug_bundle(str(path))
             logger.info("Recorded debug bundle to %s", path)
         except Exception:
@@ -928,6 +1003,41 @@ class Session:
         """
         return self._journal_view
 
+    def record(
+        self,
+        name: str,
+        *,
+        data: dict[str, Any],
+        turn_id: str | None = _APPLICATION_TURN_ID_OMITTED,  # type: ignore[assignment]
+        tags: object = frozenset(),
+    ) -> None:
+        """Append an application event to the live session journal.
+
+        Application names must use the ``app.`` namespace and cannot collide
+        with EasyCat's built-in record vocabulary. Writes use the same
+        redaction filter as runtime records. The read surface remains available
+        separately through :attr:`journal`.
+        """
+        if self._closed or self._stopping:
+            raise RuntimeError("Session is stopping or has been stopped")
+        _validate_application_record_name(name)
+        snapshot = _application_record_data(data)
+        frozen_tags = _application_record_tags(tags)
+        inherit_turn_id = turn_id is _APPLICATION_TURN_ID_OMITTED
+        if not inherit_turn_id and turn_id is not None:
+            if not isinstance(turn_id, str) or not turn_id.strip():
+                raise ValueError("Application journal record turn_id must be non-empty or None")
+        sequence = self._journal_sink.append_record(
+            name=name,
+            kind=JournalRecordKind.EVENT,
+            turn_id=None if inherit_turn_id else turn_id,
+            data=snapshot,
+            tags=frozen_tags,
+            inherit_turn_id=inherit_turn_id,
+        )
+        if sequence is not None and sequence < 0:
+            raise RuntimeError("Application journal record could not be written")
+
     @property
     def cancel_token(self) -> CancelToken | None:
         return self._turn.cancel_token if self._turn else None
@@ -1059,6 +1169,11 @@ class Session:
             # None of these hooks need the transport connected.
             await self._warmup.run(select=lambda name: name != "transport")
 
+            # Telephony helpers subscribe to lifecycle events emitted while a
+            # preflighted transport applies its deferred start frame.
+            for helper in self.telephony.helpers:
+                helper.start()
+
             await self.transport.connect()
             transport_connected = True
 
@@ -1095,9 +1210,6 @@ class Session:
                     )
                     checker.start()
                     self._health_checkers.append(checker)
-
-            for helper in self.telephony.helpers:
-                helper.start()
 
             self._is_running = True
             self._mark_observability_active()

@@ -172,8 +172,9 @@ helpers, which validate or escape values.
 
 - Provider AMD (`AnsweredBy`) is one signal for human versus machine.
 - `VoicemailDetector` observes audio timing/transcripts as another signal.
-- `CallScreeningDetector` recognizes iOS, Android, carrier, and third-party
-  screening prompts and can provide a bounded response.
+- `CallScreeningDetector` is for outbound calls: it recognizes iOS, Android,
+  carrier, and third-party screening prompts that intercept a call EasyCat
+  placed, then can provide a bounded response.
 - `IVRNavigator` recognizes menu prompts and asks an injected agent callback
   for a validated `dtmf`, `speak`, `wait`, or `hangup` decision.
 
@@ -186,6 +187,11 @@ call forever.
 `IVRNavigator` enforces maximum menu depth, prompt/agent timeouts, retry bounds,
 and a DTMF whitelist. The callback result is untrusted even when produced by
 your model. EasyCat parses it into a constrained decision before acting.
+
+Inbound spam or routing policy belongs in your `/twiml` webhook, before a media
+stream token is minted. Use `twiml_reject()` to decline an inbound call or
+`twiml_redirect()` to hand it to another TwiML URL without opening an EasyCat
+session.
 
 ## Call control stays provider-neutral at the session boundary
 

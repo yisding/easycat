@@ -47,6 +47,80 @@ logger = logging.getLogger(__name__)
 __all__ = ["TwilioVoiceServerConfig", "run_twilio_voice_app", "serve_twilio_voice_app"]
 
 
+def _issue_call_bound_stream_token(
+    store: Any,
+    form_items: list[tuple[str, str]],
+    *,
+    idempotency_key: str | None,
+) -> str:
+    from easycat.telephony import twilio_stream_parameters_from_form
+
+    call_sid = dict(form_items).get("CallSid", "").strip()
+    if not call_sid:
+        raise ValueError("Twilio webhook is missing CallSid")
+    parameters = twilio_stream_parameters_from_form(form_items)
+    return store.issue(
+        idempotency_key=idempotency_key,
+        claims={"CallSid": call_sid, **parameters},
+    )
+
+
+async def _handle_twiml_request(
+    request: Any,
+    *,
+    web: Any,
+    config: TwilioVoiceServerConfig,
+    stream_tokens: Any,
+) -> Any:
+    from easycat.telephony import (
+        twilio_stream_parameters_from_form,
+        twilio_webhook_idempotency_key,
+    )
+    from easycat.telephony.twiml import (
+        reconstruct_public_url,
+        validate_twilio_webhook_signature,
+    )
+    from easycat.transports.twilio_media import twiml_connect_stream
+
+    post = await request.post()
+    form_items = list(post.items())
+    public_url = config.public_twiml_url or reconstruct_public_url(
+        request.headers,
+        getattr(request, "raw_path", request.path_qs),
+        trust_proxy=config.trust_proxy_headers,
+        default_scheme=request.scheme,
+    )
+    signature = request.headers.get("X-Twilio-Signature")
+    if config.twilio_auth_token and not validate_twilio_webhook_signature(
+        auth_token=config.twilio_auth_token,
+        url=public_url,
+        params=form_items,
+        signature=signature,
+    ):
+        return web.Response(status=403, text="Twilio signature validation failed")
+
+    assert config.stream_url is not None
+    grant_key = twilio_webhook_idempotency_key(
+        url=public_url,
+        params=form_items,
+        signature=signature,
+    )
+    try:
+        stream_token = _issue_call_bound_stream_token(
+            stream_tokens,
+            form_items,
+            idempotency_key=grant_key,
+        )
+    except ValueError as exc:
+        return web.Response(status=400, text=str(exc))
+    xml = twiml_connect_stream(
+        config.stream_url,
+        parameters=twilio_stream_parameters_from_form(form_items),
+        stream_token=stream_token,
+    )
+    return web.Response(text=xml, content_type="application/xml")
+
+
 @dataclass(frozen=True)
 class TwilioVoiceServerConfig:
     """Settings for :func:`serve_twilio_voice_app`.
@@ -67,14 +141,14 @@ class TwilioVoiceServerConfig:
     TLS-terminating proxy/load balancer so the public URL Twilio signed is
     reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
 
-    ``max_sessions`` caps concurrent media sessions. The media listener defaults
-    to a public bind (``host="0.0.0.0"``) and builds a full EasyCat session per
-    accepted WebSocket *before* the first ``start`` frame's one-time stream
-    token is validated, so an unauthenticated client could otherwise open
-    idle/invalid sockets and exhaust provider connections or block real calls.
-    The gate bounds that blast radius (mirroring the WebRTC/WebSocket session
-    servers); over-limit connections are rejected with WebSocket close code
-    ``1013`` (Try Again Later).
+    ``max_sessions`` caps concurrent media sockets and sessions. The media
+    listener defaults to a public bind (``host="0.0.0.0"``), so each connection
+    is held behind this gate while its first ``start`` frame's one-time stream
+    token is validated. Invalid sockets never build an EasyCat session; valid
+    sessions and idle pre-start sockets are bounded by the same gate. Over-limit
+    connections are rejected with WebSocket close code ``1013`` (Try Again
+    Later). ``start_timeout_s`` bounds how long a socket may hold one of those
+    slots without presenting an authenticated Twilio ``start`` frame.
     """
 
     host: str = "0.0.0.0"
@@ -87,6 +161,8 @@ class TwilioVoiceServerConfig:
     trust_proxy_headers: bool = False
     unsafe_allow_unsigned_webhooks: bool = False
     max_sessions: int = 64
+    start_timeout_s: float = 10.0
+    public_twiml_url: str | None = None
 
 
 async def _start_twiml_http_listener(
@@ -144,6 +220,8 @@ async def serve_twilio_voice_app(
             "wss:// media URL Twilio connects back to. Set stream_url (or the "
             "TWILIO_STREAM_URL env var when running through VoiceApp)."
         )
+    if config.start_timeout_s <= 0:
+        raise ValueError("TwilioVoiceServerConfig.start_timeout_s must be positive")
 
     # aiohttp is the only thing that makes twilio mode need the telephony extra;
     # websockets and TwilioConnectionTransport import at base. Gate it here so a
@@ -161,66 +239,42 @@ async def serve_twilio_voice_app(
 
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
-    from easycat.telephony import twilio_stream_parameters_from_form
-    from easycat.telephony.twiml import (
-        reconstruct_public_url,
-        validate_twilio_webhook_signature,
-    )
     from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
-    from easycat.transports.twilio_media import (
-        TwilioConnectionTransport,
-        twiml_connect_stream,
-    )
+    from easycat.transports.twilio_media import TwilioConnectionTransport
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(config.stream_token_secret)
     session_slots = asyncio.Semaphore(config.max_sessions)
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
-        # Gate before building/starting a session: this handler spins up a full
-        # EasyCat session (provider connections included) for every accepted
-        # WebSocket, and the one-time stream token is only validated once the
-        # first ``start`` frame arrives inside the transport. Cap concurrency so
-        # an unauthenticated client cannot exhaust provider connections or block
-        # real calls by opening idle/invalid sockets.
+        # Gate before validating the first Twilio ``start`` frame. Invalid
+        # sockets never reach config_factory/create_session, while idle pre-start
+        # sockets and valid sessions are both bounded.
         if session_slots.locked():
             await ws.close(code=1013, reason="Server is at the configured session limit")
             return
         async with session_slots:
             transport = TwilioConnectionTransport(
                 ws,
-                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
+                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
             )
-            session = create_session(config_factory(transport))
+            if not await transport.wait_for_start(timeout_s=config.start_timeout_s):
+                return
+            try:
+                session = create_session(config_factory(transport))
+            except BaseException:
+                await transport.disconnect()
+                raise
             async with manager.connection(id(ws), session, runtime_feedback=True):
                 await ws.wait_closed()
 
     async def handle_twiml(request: Any) -> Any:
-        post = await request.post()
-        form_items = list(post.items())
-        # Authenticate the webhook before minting a stream token. Skipped only
-        # when the operator explicitly opted into unsigned webhooks above.
-        if config.twilio_auth_token:
-            public_url = reconstruct_public_url(
-                request.headers,
-                request.path_qs,
-                trust_proxy=config.trust_proxy_headers,
-                default_scheme=request.scheme,
-            )
-            if not validate_twilio_webhook_signature(
-                auth_token=config.twilio_auth_token,
-                url=public_url,
-                params=form_items,
-                signature=request.headers.get("X-Twilio-Signature"),
-            ):
-                return web.Response(status=403, text="Twilio signature validation failed")
-        assert config.stream_url is not None
-        xml = twiml_connect_stream(
-            config.stream_url,
-            parameters=twilio_stream_parameters_from_form(form_items),
-            stream_token=stream_tokens.issue(),
+        return await _handle_twiml_request(
+            request,
+            web=web,
+            config=config,
+            stream_tokens=stream_tokens,
         )
-        return web.Response(text=xml, content_type="application/xml")
 
     media_server = await websockets.serve(
         handle_twilio_connection,

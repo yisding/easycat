@@ -276,6 +276,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         journal_sink=journal_sink,
         runtime_scope=session._runtime_scope,
         timeout_config=session._timeout_config,
+        on_agent_failure=cfg.on_agent_failure,
         turn_handle=_SessionTurnHandle(session),
         stt_stage=stt_stage,
         session_id=session.session_id,

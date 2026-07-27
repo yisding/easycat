@@ -97,6 +97,23 @@ def test_capture_audio_rejects_invalid_policy():
         EasyConfig(openai_api_key="test-key", capture_audio=async_policy)
 
 
+def test_on_agent_failure_accepts_text_and_callable():
+    static = EasyConfig(openai_api_key="test-key", on_agent_failure="Please try again.")
+    dynamic = EasyConfig(
+        openai_api_key="test-key",
+        on_agent_failure=lambda error: type(error).__name__,
+    )
+
+    assert static.on_agent_failure == "Please try again."
+    assert callable(dynamic.on_agent_failure)
+
+
+@pytest.mark.parametrize("value", [" ", 42])
+def test_on_agent_failure_rejects_invalid_policy(value):
+    with pytest.raises(ValueError, match="on_agent_failure"):
+        EasyConfig(openai_api_key="test-key", on_agent_failure=value)  # type: ignore[arg-type]
+
+
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

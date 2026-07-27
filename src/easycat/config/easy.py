@@ -15,6 +15,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -113,6 +114,7 @@ _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def _require_positive(name: str, value: float) -> None:
@@ -125,6 +127,25 @@ def _require_non_negative(name: str, value: float) -> None:
     """Raise ``ValueError`` if ``value`` is negative."""
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _validate_on_agent_failure(
+    policy: str | Callable[[Exception], str] | None,
+) -> None:
+    if policy is not None and not (isinstance(policy, str) or callable(policy)):
+        raise ValueError("on_agent_failure must be text, a callable, or None")
+    if isinstance(policy, str) and not policy.strip():
+        raise ValueError("on_agent_failure text must not be empty")
+
+
+def _validate_capture_audio(policy: bool | Callable[[], bool]) -> None:
+    if not isinstance(policy, bool) and not callable(policy):
+        raise ValueError("capture_audio must be a bool or zero-argument callable")
+    predicate_call = type(policy).__call__ if callable(policy) else None
+    if callable(policy) and (
+        inspect.iscoroutinefunction(policy) or inspect.iscoroutinefunction(predicate_call)
+    ):
+        raise ValueError("capture_audio predicate must be synchronous")
 
 
 def _validate_common(
@@ -151,13 +172,7 @@ def _validate_common(
             f"Invalid journal_retention={journal_retention!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
         )
-    if not isinstance(capture_audio, bool) and not callable(capture_audio):
-        raise ValueError("capture_audio must be a bool or zero-argument callable")
-    predicate_call = type(capture_audio).__call__ if callable(capture_audio) else None
-    if callable(capture_audio) and (
-        inspect.iscoroutinefunction(capture_audio) or inspect.iscoroutinefunction(predicate_call)
-    ):
-        raise ValueError("capture_audio predicate must be synchronous")
+    _validate_capture_audio(capture_audio)
     if mcp_servers is not None:
         for uri in mcp_servers:
             if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
@@ -165,10 +180,14 @@ def _validate_common(
                     f"Invalid MCP server URI: {uri!r}. "
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
-    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyConfigError(
-            f"session_id must not contain path separators or '..': {session_id!r}"
-        )
+    if session_id is not None:
+        if not session_id.strip():
+            raise EasyConfigError("session_id must not be empty")
+        if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
+            raise EasyConfigError(
+                "session_id must be 1-128 ASCII letters, digits, '.', '_', or '-', "
+                f"starting with a letter or digit: {session_id!r}"
+            )
     if isinstance(agent, str):
         from urllib.parse import urlparse
 
@@ -485,6 +504,7 @@ class _AgentSessionConfig:
     capture_audio: bool | Callable[[], bool] = True
     capture_aec_reference: bool = False
     emergency_export: bool = False
+    data_dir: str | Path | None = None
 
 
 @dataclass(kw_only=True)
@@ -504,6 +524,11 @@ class EasyConfig(_AgentSessionConfig):
             ``EchoCanceller``.
         smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
             detection.
+        session_id: Optional caller-supplied runtime session id. When unset,
+            EasyCat generates a ``session-...`` id.
+        data_dir: Optional root for this session's journals and artifacts.
+            When unset, the runtime falls back to ``EASYCAT_DATA_DIR`` or
+            ``.easycat``.
         debug / journal_backend / journal_retention: Debug-journal settings.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
@@ -535,6 +560,8 @@ class EasyConfig(_AgentSessionConfig):
     greeting: str | None = None
     dnc_list: DNCStore | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+    on_agent_failure: str | Callable[[Exception], str] | None = None
+    session_id: str | None = None
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
     # user who hits a real failure already has the bundle saved to disk
@@ -548,10 +575,12 @@ class EasyConfig(_AgentSessionConfig):
             journal_backend=self.journal_backend,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
+            session_id=self.session_id,
             agent=self.agent,
             agent_model=self.agent_model,
             capture_audio=self.capture_audio,
         )
+        _validate_on_agent_failure(self.on_agent_failure)
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
         # ``EasyConfig(agent=...)`` works when the env var is set —
@@ -758,6 +787,7 @@ class TextSessionConfig(_AgentSessionConfig):
     """
 
     session_id: str | None = None
+    data_dir: str | Path | None = None
     # Match EasyConfig(record_to=...): text sessions can auto-export a
     # timestamped debug bundle on stop when debug journaling is enabled.
     record_to: str | Path | None = None
@@ -792,6 +822,8 @@ class TextSessionConfig(_AgentSessionConfig):
         mcp_servers: list[str] | None = None,
         record_to: str | Path | None = None,
         capture_audio: bool | Callable[[], bool] = True,
+        data_dir: str | Path | None = None,
+        emergency_export: bool = False,
     ) -> TextSessionConfig:
         """Resolve the config-or-loose-kwargs calling convention to one config.
 
@@ -818,6 +850,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "mcp_servers": (mcp_servers, None),
                 "record_to": (record_to, None),
                 "capture_audio": (capture_audio, True),
+                "data_dir": (data_dir, None),
+                "emergency_export": (emergency_export, False),
             }
             supplied = [name for name, (value, default) in loose.items() if value != default]
             if supplied:
@@ -841,4 +875,6 @@ class TextSessionConfig(_AgentSessionConfig):
             mcp_servers=mcp_servers,
             record_to=record_to,
             capture_audio=capture_audio,
+            data_dir=data_dir,
+            emergency_export=emergency_export,
         )
