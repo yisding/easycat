@@ -57,6 +57,16 @@ class PlainSTT:
 
 
 @dataclass
+class LocalSTTConfig:
+    model: str = "tiny"
+
+
+class LocalSTT:
+    def __init__(self, config: LocalSTTConfig) -> None:
+        self.config = config
+
+
+@dataclass
 class FakeTTSConfig:
     api_key: str = ""
     model: str = "fake-1"
@@ -196,11 +206,49 @@ def test_conflicting_reregistration_raises() -> None:
         register_stt_provider("fakestt", FakeSTT, FakeSTTConfig, env_var="OTHER_KEY")
 
 
-def test_registration_requires_name_and_env_var() -> None:
+def test_registration_requires_name_and_rejects_empty_env_var() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         register_stt_provider("  ", FakeSTT, FakeSTTConfig, env_var="X")
     with pytest.raises(ValueError, match="env_var"):
         register_tts_provider("faketts", FakeTTS, FakeTTSConfig, env_var="")
+
+
+def test_credential_free_provider_supports_shortcuts_factory_plan_and_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.cli.diagnose.doctor import _provider_env
+    from easycat.cli.scaffold import init as init_module
+    from easycat.planning import build_provider_plan
+    from easycat.project.schema import VoiceProfile
+
+    monkeypatch.delenv("LOCALSTT_API_KEY", raising=False)
+    register_stt_provider(
+        "localstt",
+        LocalSTT,
+        LocalSTTConfig,
+        extra="localstt",
+        probe_module="localstt",
+    )
+
+    provider = create_stt_provider(STTProviderConfig(provider="localstt"))
+    config = parse_stt_string("localstt/base")
+    plan = build_provider_plan(
+        VoiceProfile(
+            name="local",
+            transport="websocket",
+            stt="localstt/base",
+            tts="openai",
+        ),
+        environ={"OPENAI_API_KEY": "x"},
+    )
+
+    assert isinstance(provider, LocalSTT)
+    assert provider.config == LocalSTTConfig()
+    assert config == LocalSTTConfig(model="base")
+    assert plan.selected["stt"].required_env is None
+    assert plan.missing_env == ()
+    assert "localstt" not in _provider_env()
+    assert "localstt" not in init_module._provider_to_env_var()
 
 
 def test_registered_stt_capabilities_drive_endpointing_and_planner() -> None:

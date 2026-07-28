@@ -39,7 +39,7 @@ class ProviderSpec:
 
     provider_cls: Callable[..., Any]
     config_cls: type
-    env_var: str
+    env_var: str | None
     extra: str
     api_domains: tuple[str, ...]
     probe_module: str | None = None
@@ -55,7 +55,7 @@ class ProviderCatalog:
     kind: str
     entry_point_group: str | None = None
     providers: dict[str, tuple[Callable[..., Any], type]] = field(init=False)
-    env_vars: dict[str, str] = field(init=False)
+    env_vars: dict[str, str | None] = field(init=False)
     extras: dict[str, str] = field(init=False)
     api_domains: dict[str, tuple[str, ...]] = field(init=False)
     probe_modules: dict[str, str | None] = field(init=False)
@@ -105,7 +105,7 @@ class ProviderCatalog:
         provider_cls: type,
         config_cls: type,
         *,
-        env_var: str,
+        env_var: str | None = None,
         extra: str | None = None,
         api_domains: tuple[str, ...] = (),
         probe_module: str | None = None,
@@ -116,9 +116,9 @@ class ProviderCatalog:
         normalized = name.strip().lower() if isinstance(name, str) else ""
         if not normalized:
             raise ValueError(f"{self.kind} provider name must be a non-empty string.")
-        if not env_var:
+        if env_var is not None and not env_var.strip():
             raise ValueError(
-                f"{self.kind} provider {normalized!r} requires an env_var naming its API key."
+                f"{self.kind} provider {normalized!r} env_var must be non-empty or None."
             )
         existing = self.providers.get(normalized)
         if existing is not None:
@@ -233,7 +233,7 @@ class ProviderCatalog:
             raise ValueError(
                 f"Invalid params for {provider!r} {self.kind} provider: {exc}"
             ) from exc
-        if not getattr(config, "api_key", None):
+        if self.env_vars[name] is not None and not getattr(config, "api_key", None):
             raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
         return provider_cls(inject_event_bus(config, event_bus))
 
@@ -270,15 +270,19 @@ class ProviderCatalog:
         provider = self.validate_name(provider)
 
         env_var = self.env_vars[provider]
-        if api_key_overrides is not None and env_var in api_key_overrides:
-            api_key = api_key_overrides[env_var]
-        else:
-            api_key = os.getenv(env_var, "")
-        if not api_key:
-            raise EASYCAT_E203(var=env_var)
+        api_key: str | None = None
+        if env_var is not None:
+            if api_key_overrides is not None and env_var in api_key_overrides:
+                api_key = api_key_overrides[env_var]
+            else:
+                api_key = os.getenv(env_var, "")
+            if not api_key:
+                raise EASYCAT_E203(var=env_var)
 
         _, config_cls = self.providers[provider]
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {}
+        if api_key is not None:
+            kwargs["api_key"] = api_key
         if model:
             model_field = getattr(config_cls, "MODEL_FIELD", "model")
             kwargs[model_field] = model
@@ -301,11 +305,12 @@ def provider_names() -> frozenset[str]:
 
 
 def provider_env_vars() -> dict[str, str]:
-    """Provider → API-key env var, merged across the STT and TTS catalogs."""
+    """Credentialed provider → API-key env var, merged across both catalogs."""
     return {
         name: env_var
         for catalog in stt_tts_catalogs()
         for name, env_var in catalog.env_vars.items()
+        if env_var is not None
     }
 
 

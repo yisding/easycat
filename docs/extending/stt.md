@@ -123,7 +123,8 @@ register_stt_provider(
 the same contract built-in providers follow. To receive the session
 `EventBus`, declare `event_bus: EventBus | None = None` on `YourSTTConfig`; the
 factory injects the bus into that optional config field before constructing the
-provider. `YourSTTConfig` also needs an `api_key` field.
+provider. Credentialed providers declare `env_var=...` and need an `api_key`
+field; local/self-hosted providers omit both.
 For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
@@ -136,7 +137,7 @@ What each metadata field feeds:
 
 | Field | Consumed by |
 | --- | --- |
-| `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/model"` shortcuts |
+| `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/model"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
 | `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
 | `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries |
@@ -145,6 +146,21 @@ What each metadata field feeds:
 When `native_endpointing` is declared, `EasyConfig` drives turns from STT
 FINAL events and disables its own VAD/smart-turn endpointing. Omit it when the
 provider expects EasyCat to commit segments.
+
+For a credential-free local provider, omit `env_var`; shortcut parsing and the
+planner then construct the config without reading an API key:
+
+```python
+register_stt_provider(
+    "local-whisper",
+    LocalWhisperSTT,
+    LocalWhisperConfig,  # no api_key field required
+    extra="local-whisper",
+    probe_module="local_whisper",
+)
+
+config = EasyConfig(stt="local-whisper/base", tts=..., agent=...)
+```
 
 ### Auto-registering from a pip-installed package
 

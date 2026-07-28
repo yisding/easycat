@@ -605,6 +605,12 @@ swap in open-source models for fully local operation. Provider instances are
 accepted directly with `vad=`, `noise_reduction=`, and `echo_cancellation=`
 when you have custom audio-processing stages.
 
+Reusable local STT/TTS packages can also call `register_stt_provider(...)` or
+`register_tts_provider(...)` without an `env_var`. That enables
+`stt="local-whisper/base"` / `tts="local-piper/en_US"` shortcuts, planning,
+scaffold extras, and readiness probes without a dummy credential; see the
+[provider extending guides](docs/extending/).
+
 ## Inspecting conversation flow
 
 Observability is handled by the journal runtime. It defaults to `debug="light"`

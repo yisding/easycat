@@ -112,7 +112,8 @@ register_tts_provider(
 the same contract built-in providers follow. To receive the session
 `EventBus`, declare `event_bus: EventBus | None = None` on `YourTTSConfig`; the
 factory injects the bus into that optional config field before constructing the
-provider. `YourTTSConfig` also needs an `api_key` field.
+provider. Credentialed providers declare `env_var=...` and need an `api_key`
+field; local/self-hosted providers omit both.
 For the `"yours/voice-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
@@ -125,11 +126,26 @@ What each metadata field feeds:
 
 | Field | Consumed by |
 | --- | --- |
-| `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/voice"` shortcuts |
+| `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/voice"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
 | `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
 | `capabilities` | static provider capabilities exposed by `easycat plan` and `/capabilities` |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
+
+For a credential-free local provider, omit `env_var`; shortcut parsing and the
+planner then construct the config without reading an API key:
+
+```python
+register_tts_provider(
+    "local-piper",
+    LocalPiperTTS,
+    LocalPiperConfig,  # no api_key field required
+    extra="local-piper",
+    probe_module="local_piper",
+)
+
+config = EasyConfig(stt=..., tts="local-piper/en_US", agent=...)
+```
 
 ### Auto-registering from a pip-installed package
 

@@ -117,13 +117,13 @@ def register_stt_provider(
     provider_cls: type,
     config_cls: type,
     *,
-    env_var: str,
+    env_var: str | None = None,
     extra: str | None = None,
     api_domains: tuple[str, ...] = (),
     probe_module: str | None = None,
     capabilities: frozenset[str] = frozenset(),
 ) -> None:
-    """Register an STT provider and its discovery metadata."""
+    """Register an STT provider and its optional credential/discovery metadata."""
     _CATALOG.register(
         name,
         provider_cls,
