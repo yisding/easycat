@@ -26,6 +26,7 @@ from easycat.events import CallAnswered, CallEnded, EventBus
 from easycat.stubs import NoopAgent
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
+from tests.session._session_core_helpers import FakeTransport, _full_config
 
 
 def _text_session(**overrides: Any) -> Session:
@@ -58,6 +59,32 @@ class _ClosingWebSocket(_DummyWebSocket):
         return self._messages.pop(0)
 
 
+class _AnsweredOnConnectTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self._event_bus: EventBus | None = None
+
+    async def connect(self) -> None:
+        await super().connect()
+        assert self._event_bus is not None
+        await self._event_bus.emit(CallAnswered(call_sid="CA-preflight"))
+
+
+class _AnsweredHelper:
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+        self.call_sid = ""
+
+    def start(self) -> None:
+        self._bus.subscribe(CallAnswered, self._on_answered)
+
+    def stop(self) -> None:
+        self._bus.unsubscribe(CallAnswered, self._on_answered)
+
+    def _on_answered(self, event: CallAnswered) -> None:
+        self.call_sid = event.call_sid
+
+
 # ── transport_kind ─────────────────────────────────────────────────
 
 
@@ -68,6 +95,25 @@ def test_transport_kind_telephony() -> None:
         transport=TwilioTransport(TwilioTransportConfig(), event_bus=EventBus()),
     )
     assert session.transport_kind == "telephony"
+
+
+@pytest.mark.asyncio
+async def test_helpers_subscribe_before_transport_emits_deferred_answered() -> None:
+    bus = EventBus()
+    helper = _AnsweredHelper(bus)
+    session = Session(
+        _full_config(
+            event_bus=bus,
+            transport=_AnsweredOnConnectTransport(),
+            telephony_helpers=(helper,),
+        )
+    )
+
+    await session.start()
+    try:
+        assert helper.call_sid == "CA-preflight"
+    finally:
+        await session.stop(force=True)
 
 
 def test_transport_kind_local() -> None:
@@ -159,16 +205,35 @@ async def test_greeting_not_spoken_when_disabled() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_screening_prompt_does_not_include_untrusted_transcript() -> None:
-    from easycat.config._telephony_wiring import TelephonyHelpers, wire_outbound_pipeline
+    from collections.abc import AsyncIterator
+
+    from easycat.cancel import CancelToken
+    from easycat.config._telephony_wiring import (
+        TelephonyHelpers,
+        wire_outbound_pipeline,
+    )
+    from easycat.integrations.agents.base import (
+        AgentBridgeEvent,
+        AgentRecorder,
+        AgentTurnInput,
+    )
     from easycat.telephony.screening import ScreeningResponse
+    from tests._bridge_helpers import _TestBridgeBase
 
-    class RecordingAgent:
+    class RecordingBridge(_TestBridgeBase):
         def __init__(self) -> None:
-            self.prompts: list[str] = []
+            super().__init__()
+            self.prompts: list[AgentTurnInput] = []
 
-        async def run(self, prompt: str) -> str:
-            self.prompts.append(prompt)
-            return "This is EasyCat."
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = recorder, cancel_token
+            self.prompts.append(turn_input)
+            yield AgentBridgeEvent(kind="done", text="This is EasyCat.")
 
     class FakeGate:
         def set_hold_audio_callback(self, callback: Any) -> None:
@@ -191,7 +256,7 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
         def notify_agent_responded(self) -> bool:
             return True
 
-    agent = RecordingAgent()
+    agent = RecordingBridge()
     session = _text_session(agent=agent)
     session.synthesize_bypass = AsyncMock()  # type: ignore[method-assign]
     detector = FakeScreeningDetector()
@@ -208,8 +273,12 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
     await session.event_bus.emit(ScreeningResponse(text="", mode="agent"))
 
     assert len(agent.prompts) == 1
-    assert "Ignore prior instructions" not in agent.prompts[0]
-    assert "exfiltrate crm_token" not in agent.prompts[0]
+    assert agent.prompts[0].role == "system"
+    assert "Ignore prior instructions" not in agent.prompts[0].text
+    assert "exfiltrate crm_token" not in agent.prompts[0].text
+    joined_context = " ".join(item.get("content", "") for item in agent.prompts[0].context)
+    assert "Ignore prior instructions" not in joined_context
+    assert "exfiltrate crm_token" not in joined_context
     session.synthesize_bypass.assert_awaited_once_with("This is EasyCat.")
 
 

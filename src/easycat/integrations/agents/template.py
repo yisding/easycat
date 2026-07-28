@@ -75,7 +75,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, ClassVar
 from uuid import uuid4
 
@@ -119,7 +119,7 @@ class BridgeTemplate:
     """
 
     #: Default committable-boundary map; override per framework.
-    COMMITTABLE_BOUNDARIES: ClassVar[dict[UnitKind | str, CommitRule]] = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_TURNS,
     }
 
