@@ -69,7 +69,8 @@ the next hint; keep each attempt in your evidence record.
 <summary>Hint 3 of 5</summary>
 
 Each `connection(...)` context calls `remove()` in `finally`, which
-   removes the slot and awaits graceful `session.stop()`. Do not race
+   awaits graceful `session.stop()` and removes the slot only after it
+   succeeds. Do not race
    `remove()` or `stop_all()` against code still running inside an
    overlapping connection block—cancel/finish those handler tasks first,
    then use `stop_all()` as the final sweep.
@@ -79,12 +80,13 @@ Each `connection(...)` context calls `remove()` in `finally`, which
 <details markdown="1">
 <summary>Hint 4 of 5</summary>
 
-`stop_all()` clears the registry before awaiting every captured
-   session's `stop()` concurrently. The probe captures one expected failure
-   under `stop_all.expected_error`; it does not leak an alarming log line to
-   stderr. That failure does not prevent the other stop or escape from
-   `stop_all()`. This isolates shutdown failures; it does not make a failed
-   session's own cleanup successful.
+`stop_all()` awaits every captured session's `stop()` concurrently,
+   removes successful entries, and retains failed or cancelled entries for
+   retry. The probe captures one expected failure under
+   `stop_all.expected_error`; it does not leak an alarming log line to stderr.
+   That failure does not prevent the other stop or escape from `stop_all()`.
+   This isolates shutdown failures; it does not make a failed session's own
+   cleanup successful.
 
 </details>
 

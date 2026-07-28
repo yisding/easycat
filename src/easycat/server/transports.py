@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Hashable, Iterable
+from functools import partial
 from typing import Generic, TypeVar
 
 KeyT = TypeVar("KeyT", bound=Hashable)
@@ -63,6 +64,7 @@ class CapacityGate(Generic[KeyT]):
         self._reserved = 0
         self._active: set[KeyT] = set()
         self._draining = False
+        self._drain_tasks: set[asyncio.Task[None]] = set()
 
     # ── Capacity ─────────────────────────────────────────────────────
 
@@ -134,6 +136,18 @@ class CapacityGate(Generic[KeyT]):
         """
         self._draining = False
 
+    async def wait_drained(self, *, timeout_s: float, poll_interval_s: float = 0.05) -> bool:
+        """Wait for active connections to disappear without stopping sessions."""
+        if self.active_count == 0:
+            return True
+        deadline = asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+        while self.active_count > 0:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(max(poll_interval_s, 0.001), remaining))
+        return True
+
     async def drain(
         self,
         sessions_for_keys: Callable[[], Iterable[tuple[KeyT, object]]],
@@ -142,6 +156,7 @@ class CapacityGate(Generic[KeyT]):
         force_after: bool = True,
         force_timeout_s: float | None = None,
         poll_interval_s: float = 0.05,
+        stop_for_key: Callable[[KeyT, bool], object] | None = None,
     ) -> None:
         """Drive each active session GRACEFULLY, then force-escalate the stragglers.
 
@@ -164,107 +179,146 @@ class CapacityGate(Generic[KeyT]):
            ``session.stop()`` task for each.
         2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
            they all complete in time, the drain stayed graceful (no force).
-        3. For any session whose graceful stop did NOT finish, call
-           ``session.stop(force=True)`` (the force path runs for an
-           idempotency-free session; for a real ``Session`` whose graceful stop
-           is hung, the guard makes it a no-op — handled by step 4) and then
-           CANCEL the still-pending graceful task so a genuinely-hung teardown
-           cannot block the caller forever.
-        4. Untrack every drained key.
+        3. For any session whose graceful stop did NOT finish, CANCEL and reap
+           the still-pending graceful task first. This clears the real
+           ``Session._stopping`` guard before force escalation.
+        4. Call ``session.stop(force=True)`` after the cancelled graceful task
+           has unwound, so the force path can perform backend teardown.
+        5. Untrack every drained key.
 
         ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace
         window to zero so every session is force-escalated immediately.
 
-        ``force_timeout_s`` (default ``None`` = unbounded) bounds the FORCED
-        phase: the ``stop(force=True)`` call AND the follow-on cancel-await are
-        each wrapped in :func:`asyncio.wait_for`, so a session that hangs even
-        in its force-stop cannot block the caller past roughly
-        ``force_timeout_s``. A hung force-stop is abandoned (the task is
-        cancelled) rather than awaited forever.
+        ``force_timeout_s`` (default ``None`` = unbounded) is one hard deadline
+        for the concurrent forced phase. Work still running at the deadline
+        remains owned in the background rather than making the caller wait for
+        cancellation-resistant teardown.
         """
         pairs = list(sessions_for_keys())
         if not pairs:
             return
 
-        # (1) launch the single graceful stop per active session. The raw
-        # ``stop()`` coroutine is scheduled directly as the task so cancelling it
-        # never leaves an un-awaited coroutine; a synchronous ``stop`` runs inline
-        # and is recorded with no pending task (``None``).
+        # (1) launch the single graceful stop per active session. Servers pass a
+        # keyed manager callback so handler cleanup and drain escalation share
+        # one owned stop task. Direct CapacityGate users retain the session.stop
+        # fallback.
         graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]] = {}
         for key, session in pairs:
-            stop = getattr(session, "stop", None)
-            if stop is None:
+            result = _call_stop(key, session, force=False, stop_for_key=stop_for_key)
+            if result is None:
                 # Nothing to stop; just drop it from the active set.
                 self.untrack(key)
                 continue
-            result = stop(force=False)
             task = asyncio.ensure_future(result) if isinstance(result, Awaitable) else None
             graceful[key] = (session, task)
 
         # (2) wait up to the grace window for the graceful stops to complete.
         pending_tasks = [t for _, t in graceful.values() if t is not None]
-        if pending_tasks and drain_timeout_s > 0:
-            await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
-
-        # (3) escalate / reap each graceful stop, then (4) untrack the key.
-        for key, (session, task) in graceful.items():
-            await _escalate_graceful_stop(
-                session, task, force_after=force_after, force_timeout_s=force_timeout_s
+        try:
+            if pending_tasks and drain_timeout_s > 0:
+                await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
+        finally:
+            # Teardown ownership survives cancellation of the caller running
+            # drain. This prevents graceful tasks from becoming detached and
+            # preserves a keyed path for later force escalation.
+            finish_task = asyncio.create_task(
+                self._finish_drain(
+                    graceful,
+                    force_after=force_after,
+                    force_timeout_s=force_timeout_s,
+                    stop_for_key=stop_for_key,
+                )
             )
+            self._drain_tasks.add(finish_task)
+            finish_task.add_done_callback(self._drain_tasks.discard)
+
+        await asyncio.shield(finish_task)
+
+    async def _finish_drain(
+        self,
+        graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]],
+        *,
+        force_after: bool,
+        force_timeout_s: float | None,
+        stop_for_key: Callable[[KeyT, bool], object] | None,
+    ) -> None:
+        """Escalate all remaining sessions concurrently under one deadline."""
+        escalations: list[asyncio.Task[None]] = []
+        for key, (session, task) in graceful.items():
+            escalation = asyncio.create_task(
+                _escalate_graceful_stop(
+                    key,
+                    session,
+                    task,
+                    force_after=force_after,
+                    stop_for_key=stop_for_key,
+                )
+            )
+            escalation.add_done_callback(partial(self._untrack_after_escalation, key))
+            escalations.append(escalation)
+        if escalations:
+            await _safe_await(
+                asyncio.gather(*escalations, return_exceptions=True),
+                timeout_s=force_timeout_s,
+            )
+        for key in graceful:
             self.untrack(key)
+
+    def _untrack_after_escalation(self, key: KeyT, _task: asyncio.Task[None]) -> None:
+        self.untrack(key)
+
+
+def _call_stop(
+    key: KeyT,
+    session: object,
+    *,
+    force: bool,
+    stop_for_key: Callable[[KeyT, bool], object] | None,
+) -> object | None:
+    if stop_for_key is not None:
+        return stop_for_key(key, force)
+    stop = getattr(session, "stop", None)
+    if stop is None:
+        return None
+    return stop(force=force)
 
 
 async def _escalate_graceful_stop(
+    key: KeyT,
     session: object,
     task: asyncio.Task[None] | None,
     *,
     force_after: bool,
-    force_timeout_s: float | None = None,
+    stop_for_key: Callable[[KeyT, bool], object] | None,
 ) -> None:
     """Reap, force-escalate, or cancel one session's graceful-stop task.
 
     * Graceful already completed (``task.done()``) — reap it, no escalation.
-    * Still pending and ``force_after`` — call ``stop(force=True)`` then cancel
-      the pending graceful task so a hung teardown cannot block forever.
+    * Still pending and ``force_after`` — cancel and reap the pending graceful
+      task, then call ``stop(force=True)`` after its ``_stopping`` guard clears.
     * Still pending and NOT ``force_after`` — cancel it rather than block on a
       teardown that may never complete.
 
-    ``force_timeout_s`` bounds the FORCED phase: the ``stop(force=True)`` call
-    and the follow-on cancel-await are each bounded by it (``None`` = unbounded),
-    so a session that hangs even in its force-stop is abandoned rather than
-    blocking the drain forever.
+    The containing drain applies one shared hard deadline across every
+    escalation, so session count does not multiply the forced-shutdown bound.
     """
     if task is not None and task.done():
         await _safe_await(task)
         return
-    if force_after:
-        stop = getattr(session, "stop", None)
-        if stop is not None:
-            await _safe_await_stop(stop, force=True, timeout_s=force_timeout_s)
     if task is not None:
         task.cancel()
-        await _safe_await(task, timeout_s=force_timeout_s)
-
-
-async def _safe_await_stop(
-    stop: Callable[..., object], *, force: bool, timeout_s: float | None = None
-) -> None:
-    """Call ``stop(force=...)`` and await it if awaitable, swallowing errors.
-
-    When ``timeout_s`` is set the await is bounded by :func:`asyncio.wait_for`;
-    a hung force-stop is cancelled (and swallowed) rather than awaited forever.
-    """
-    result = stop(force=force)
-    if isinstance(result, Awaitable):
-        await _safe_await(result, timeout_s=timeout_s)
+        await _safe_await(task)
+    if force_after:
+        result = _call_stop(key, session, force=True, stop_for_key=stop_for_key)
+        if isinstance(result, Awaitable):
+            await _safe_await(result)
 
 
 async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None = None) -> None:
     """Await ``awaitable`` swallowing errors so one bad teardown cannot abort drain.
 
-    When ``timeout_s`` is set, the await is bounded by :func:`asyncio.wait_for`
-    so a hung teardown cannot block the drain past roughly ``timeout_s``; the
-    :class:`TimeoutError` it raises cancels the awaitable and is swallowed here.
+    When ``timeout_s`` is set, the await uses a hard deadline that does not wait
+    for cancellation-resistant teardown.
 
     A :class:`asyncio.CancelledError` is swallowed ONLY when it belongs to the
     teardown awaitable being reaped — e.g. a graceful-stop task
@@ -278,7 +332,7 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     """
     try:
         if timeout_s is not None:
-            await asyncio.wait_for(asyncio.ensure_future(awaitable), timeout=timeout_s)
+            await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
         else:
             await awaitable
     except asyncio.CancelledError:
@@ -287,3 +341,53 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
             raise
     except Exception:  # pragma: no cover - defensive teardown
         pass
+
+
+_BACKGROUND_TIMEOUT_TASKS: set[asyncio.Future[object]] = set()
+
+
+async def _await_with_hard_timeout(
+    awaitable: Awaitable[object],
+    *,
+    timeout_s: float,
+) -> bool:
+    """Wait no longer than ``timeout_s`` without awaiting cancellation cleanup.
+
+    ``asyncio.wait_for`` is not a hard bound: after its deadline it cancels the
+    child and waits for that cancellation to finish. A teardown coroutine can
+    catch cancellation and keep the caller blocked indefinitely. This helper
+    instead requests cancellation, leaves any still-unfinished work owned in a
+    background set, and returns immediately at the deadline. It returns
+    ``True`` when the awaitable completed in time and ``False`` when it remains
+    in progress.
+    """
+    future = asyncio.ensure_future(awaitable)
+    try:
+        done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
+    except asyncio.CancelledError:
+        _track_background_timeout(future)
+        raise
+    if future not in done:
+        future.cancel()
+        _track_background_timeout(future)
+        # Give cooperative cancellation one event-loop turn without waiting for
+        # a coroutine that deliberately resists it.
+        await asyncio.sleep(0)
+        return False
+    await future
+    return True
+
+
+def _track_background_timeout(future: asyncio.Future[object]) -> None:
+    """Keep timed-out teardown work owned and consume its eventual result."""
+    _BACKGROUND_TIMEOUT_TASKS.add(future)
+
+    def finish(done: asyncio.Future[object]) -> None:
+        _BACKGROUND_TIMEOUT_TASKS.discard(done)
+        if not done.cancelled():
+            try:
+                done.exception()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
+
+    future.add_done_callback(finish)
