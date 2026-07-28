@@ -31,6 +31,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -52,6 +53,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -83,6 +85,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -111,6 +114,7 @@ jobs:
           fetch-depth: 0  # diff-cover needs origin/main history
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -159,6 +163,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -189,6 +194,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -216,6 +222,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
+          version-file: .uv-version
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
