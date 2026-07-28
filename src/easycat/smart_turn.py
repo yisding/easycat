@@ -22,124 +22,32 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from easycat._extras import require_module
+from easycat._smart_turn_features import (
+    _create_triangular_filter_bank as _create_triangular_filter_bank,
+)
+from easycat._smart_turn_features import _hertz_to_mel as _hertz_to_mel
+from easycat._smart_turn_features import _mel_filter_bank as _mel_filter_bank
+from easycat._smart_turn_features import _mel_to_hertz as _mel_to_hertz
+from easycat._smart_turn_features import _spectrogram as _spectrogram
+from easycat._smart_turn_features import _WhisperFeatureExtractorNP as _WhisperFeatureExtractorNP
+from easycat._smart_turn_features import _window_function as _window_function
+from easycat._smart_turn_resources import _CGROUP_ROOT as _CGROUP_ROOT
+from easycat._smart_turn_resources import _MAX_INTRA_OP_THREADS as _MAX_INTRA_OP_THREADS
+from easycat._smart_turn_resources import _SELF_CGROUP as _SELF_CGROUP
+from easycat._smart_turn_resources import _cgroup_ancestors as _cgroup_ancestors
+from easycat._smart_turn_resources import _cgroup_cpu_count as _cgroup_cpu_count
+from easycat._smart_turn_resources import _cgroup_path as _cgroup_path
+from easycat._smart_turn_resources import _current_cgroup_paths as _current_cgroup_paths
+from easycat._smart_turn_resources import (
+    _intra_op_thread_count as _resource_intra_op_thread_count,
+)
+from easycat._smart_turn_resources import _quota_cpu_count as _quota_cpu_count
+from easycat._smart_turn_resources import _quota_from_paths as _quota_from_paths
 from easycat.audio_format import AudioChunk
 
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
 
 logger = logging.getLogger(__name__)
-
-_MAX_INTRA_OP_THREADS = 4
-_CGROUP_ROOT = Path("/sys/fs/cgroup")
-_SELF_CGROUP = Path("/proc/self/cgroup")
-
-
-def _quota_cpu_count(quota: str, period: str) -> int | None:
-    """Convert a cgroup CPU quota/period pair into schedulable CPU units."""
-    if quota.strip() in {"max", "-1"}:
-        return None
-    try:
-        quota_value = int(quota)
-        period_value = int(period)
-    except ValueError:
-        return None
-    if quota_value <= 0 or period_value <= 0:
-        return None
-    return max(1, math.ceil(quota_value / period_value))
-
-
-def _cgroup_path(value: str) -> Path | None:
-    """Return a safe path relative to a cgroup controller mount."""
-    parts = Path(value.strip()).parts
-    if any(part == ".." for part in parts):
-        return None
-    return Path(*(part for part in parts if part not in {"/", "."}))
-
-
-def _current_cgroup_paths(cgroup_file: Path) -> tuple[Path | None, tuple[str, Path] | None]:
-    """Read the process's unified and legacy CPU controller paths."""
-    unified: Path | None = None
-    legacy_cpu: tuple[str, Path] | None = None
-    try:
-        lines = cgroup_file.read_text().splitlines()
-    except OSError:
-        return unified, legacy_cpu
-
-    for line in lines:
-        try:
-            _hierarchy, controllers_value, path_value = line.split(":", 2)
-        except ValueError:
-            continue
-        path = _cgroup_path(path_value)
-        if path is None:
-            continue
-        controllers = controllers_value.split(",") if controllers_value else []
-        if not controllers:
-            unified = path
-        elif "cpu" in controllers:
-            legacy_cpu = controllers_value, path
-    return unified, legacy_cpu
-
-
-def _cgroup_ancestors(root: Path, relative: Path | None) -> list[Path]:
-    """List a process cgroup and its ancestors up to the controller root."""
-    current = root / relative if relative is not None else root
-    paths: list[Path] = []
-    while True:
-        paths.append(current)
-        if current == root:
-            return paths
-        current = current.parent
-
-
-def _quota_from_paths(paths: list[Path], quota_name: str, period_name: str) -> int | None:
-    """Return the tightest CPU quota found along a cgroup hierarchy."""
-    limits: list[int] = []
-    for path in paths:
-        try:
-            quota = (path / quota_name).read_text()
-            period = (path / period_name).read_text()
-        except OSError:
-            continue
-        count = _quota_cpu_count(quota, period)
-        if count is not None:
-            limits.append(count)
-    return min(limits, default=None)
-
-
-def _cgroup_cpu_count(
-    root: Path = _CGROUP_ROOT,
-    cgroup_file: Path = _SELF_CGROUP,
-) -> int | None:
-    """Read the process's effective cgroup v2 or v1 CPU bandwidth limit."""
-    unified, legacy_cpu = _current_cgroup_paths(cgroup_file)
-
-    v2_limits: list[int] = []
-    for path in _cgroup_ancestors(root, unified):
-        try:
-            quota, period = (path / "cpu.max").read_text().split()[:2]
-        except (OSError, ValueError):
-            continue
-        count = _quota_cpu_count(quota, period)
-        if count is not None:
-            v2_limits.append(count)
-    if v2_limits:
-        return min(v2_limits)
-
-    controller_name, legacy_path = legacy_cpu or ("cpu", None)
-    controller_roots = (root / controller_name, root / "cpu", root)
-    v1_limits = [
-        limit
-        for controller_root in dict.fromkeys(controller_roots)
-        if (
-            limit := _quota_from_paths(
-                _cgroup_ancestors(controller_root, legacy_path),
-                "cpu.cfs_quota_us",
-                "cpu.cfs_period_us",
-            )
-        )
-        is not None
-    ]
-    return min(v1_limits, default=None)
 
 
 def _intra_op_thread_count() -> int:
@@ -151,18 +59,11 @@ def _intra_op_thread_count() -> int:
     available through their affinity mask (or ``os.cpu_count`` off Linux) and
     cgroup CPU bandwidth quota.
     """
-    get_affinity = getattr(os, "sched_getaffinity", None)
-    if get_affinity is not None:
-        try:
-            available = len(get_affinity(0))
-        except OSError:
-            available = os.cpu_count() or 1
-    else:
-        available = os.cpu_count() or 1
-    quota_count = _cgroup_cpu_count()
-    if quota_count is not None:
-        available = min(available, quota_count)
-    return max(1, min(_MAX_INTRA_OP_THREADS, available))
+    return _resource_intra_op_thread_count(
+        os_module=os,
+        cgroup_cpu_count=_cgroup_cpu_count,
+        max_threads=_MAX_INTRA_OP_THREADS,
+    )
 
 
 def _validate_probability_threshold(name: str, value: float) -> float:
@@ -190,205 +91,6 @@ class SmartTurnProvider(Protocol):
     async def detect(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
         """Classify accumulated turn audio as complete or incomplete."""
         ...
-
-
-# ── Minimal Whisper feature extraction (NumPy only) ──────────────
-#
-# The helpers below and ``_WhisperFeatureExtractorNP`` are NumPy ports
-# derived from HuggingFace Transformers (audio_utils.py and Whisper's
-# feature_extraction_whisper.py), Apache 2.0 licensed. Modified to drop
-# PyTorch and keep only the single-waveform, 16 kHz code path Smart Turn
-# needs. See LICENSE.transformers in this package.
-
-
-def _hertz_to_mel(freq: Any, *, np: Any, mel_scale: str = "slaney") -> Any:
-    if mel_scale != "slaney":
-        raise ValueError(f"Unsupported mel scale: {mel_scale}")
-
-    min_log_hertz = 1000.0
-    min_log_mel = 15.0
-    logstep = 27.0 / np.log(6.4)
-    mels = 3.0 * freq / 200.0
-
-    if isinstance(freq, np.ndarray):
-        log_region = freq >= min_log_hertz
-        mels[log_region] = min_log_mel + np.log(freq[log_region] / min_log_hertz) * logstep
-    elif freq >= min_log_hertz:
-        mels = min_log_mel + np.log(freq / min_log_hertz) * logstep
-
-    return mels
-
-
-def _mel_to_hertz(mels: Any, *, np: Any, mel_scale: str = "slaney") -> Any:
-    if mel_scale != "slaney":
-        raise ValueError(f"Unsupported mel scale: {mel_scale}")
-
-    min_log_hertz = 1000.0
-    min_log_mel = 15.0
-    logstep = np.log(6.4) / 27.0
-    freq = 200.0 * mels / 3.0
-
-    if isinstance(mels, np.ndarray):
-        log_region = mels >= min_log_mel
-        freq[log_region] = min_log_hertz * np.exp(logstep * (mels[log_region] - min_log_mel))
-    elif mels >= min_log_mel:
-        freq = min_log_hertz * np.exp(logstep * (mels - min_log_mel))
-
-    return freq
-
-
-def _create_triangular_filter_bank(fft_freqs: Any, filter_freqs: Any, *, np: Any) -> Any:
-    filter_diff = np.diff(filter_freqs)
-    slopes = np.expand_dims(filter_freqs, 0) - np.expand_dims(fft_freqs, 1)
-    down_slopes = -slopes[:, :-2] / filter_diff[:-1]
-    up_slopes = slopes[:, 2:] / filter_diff[1:]
-    return np.maximum(np.zeros(1), np.minimum(down_slopes, up_slopes))
-
-
-def _mel_filter_bank(
-    *,
-    np: Any,
-    num_frequency_bins: int,
-    num_mel_filters: int,
-    min_frequency: float,
-    max_frequency: float,
-    sampling_rate: int,
-) -> Any:
-    mel_min = _hertz_to_mel(min_frequency, np=np)
-    mel_max = _hertz_to_mel(max_frequency, np=np)
-    mel_freqs = np.linspace(mel_min, mel_max, num_mel_filters + 2)
-    filter_freqs = _mel_to_hertz(mel_freqs, np=np)
-    fft_freqs = np.linspace(0, sampling_rate // 2, num_frequency_bins)
-    mel_filters = _create_triangular_filter_bank(fft_freqs, filter_freqs, np=np)
-
-    enorm = 2.0 / (filter_freqs[2 : num_mel_filters + 2] - filter_freqs[:num_mel_filters])
-    mel_filters *= np.expand_dims(enorm, 0)
-    return mel_filters
-
-
-def _window_function(window_length: int, *, np: Any) -> Any:
-    return np.hanning(window_length + 1)[:-1]
-
-
-def _spectrogram(
-    waveform: Any,
-    *,
-    np: Any,
-    window: Any,
-    frame_length: int,
-    hop_length: int,
-    mel_filters: Any,
-) -> Any:
-    if waveform.size < 2:
-        pad_mode = "edge"
-    else:
-        pad_mode = "reflect"
-    waveform = np.pad(waveform, (frame_length // 2, frame_length // 2), mode=pad_mode)
-    waveform = waveform.astype(np.float64)
-    window = window.astype(np.float64)
-
-    num_frames = int(1 + np.floor((waveform.size - frame_length) / hop_length))
-    frames = np.lib.stride_tricks.sliding_window_view(waveform, frame_length)[::hop_length]
-    frames = frames[:num_frames]
-    # Batch all ~800 windows into one NumPy FFT call.  Keep the explicit
-    # complex64 cast from the former per-frame output buffer so this is a
-    # scheduling optimization, not a feature-precision/model-input change.
-    spec = np.fft.rfft(frames * window, axis=1).astype(np.complex64, copy=False)
-
-    spec = (np.abs(spec, dtype=np.float64) ** 2.0).T
-    # This is a small, fixed-shape contraction (80 x 201 x ~800).  ``np.dot``
-    # delegates it to the process-wide BLAS pool, whose auto-sized worker team
-    # can contend with the ONNX pool that runs immediately afterward.  The
-    # explicit non-optimizing einsum stays single-threaded, is numerically
-    # equivalent at float32 precision, and removes the endpoint-latency spikes
-    # without mutating host-wide BLAS environment settings.
-    spec = np.maximum(
-        1e-10,
-        np.einsum("ij,jk->ik", mel_filters.T, spec, optimize=False),
-    )
-    spec = np.log10(spec)
-    return spec.astype(np.float32)
-
-
-class _WhisperFeatureExtractorNP:
-    """Whisper-compatible log-mel frontend for the bundled ONNX model.
-
-    This is a narrow, torch-free subset of Hugging Face's Whisper feature
-    extraction logic. It only implements the path Smart Turn needs:
-    single-waveform, CPU, NumPy output.
-    """
-
-    def __init__(
-        self,
-        *,
-        np: Any,
-        feature_size: int = 80,
-        sampling_rate: int = 16000,
-        hop_length: int = 160,
-        chunk_length: int = 8,
-        n_fft: int = 400,
-        padding_value: float = 0.0,
-    ) -> None:
-        self._np = np
-        self.feature_size = feature_size
-        self.sampling_rate = sampling_rate
-        self.hop_length = hop_length
-        self.chunk_length = chunk_length
-        self.n_fft = n_fft
-        self.padding_value = padding_value
-        self.n_samples = chunk_length * sampling_rate
-        self.window = _window_function(n_fft, np=np)
-        self.mel_filters = _mel_filter_bank(
-            np=np,
-            num_frequency_bins=1 + n_fft // 2,
-            num_mel_filters=feature_size,
-            min_frequency=0.0,
-            max_frequency=8000.0,
-            sampling_rate=sampling_rate,
-        )
-
-    def __call__(
-        self,
-        raw_speech: Any,
-        *,
-        sampling_rate: int,
-        do_normalize: bool = True,
-    ) -> Any:
-        np = self._np
-        if sampling_rate != self.sampling_rate:
-            raise ValueError(f"expected sampling_rate={self.sampling_rate}, got {sampling_rate}")
-
-        audio = np.asarray(raw_speech, dtype=np.float32)
-        if audio.ndim != 1:
-            raise ValueError(f"expected mono waveform, got shape={audio.shape}")
-        if audio.size == 0:
-            return np.zeros(
-                (1, self.feature_size, self.n_samples // self.hop_length), dtype=np.float32
-            )
-
-        audio = audio[-self.n_samples :]
-        valid_length = audio.shape[0]
-
-        if do_normalize:
-            audio = (audio - audio.mean()) / np.sqrt(audio.var() + 1e-7)
-
-        if valid_length < self.n_samples:
-            padded = np.full((self.n_samples,), self.padding_value, dtype=np.float32)
-            padded[:valid_length] = audio
-            audio = padded
-
-        log_spec = _spectrogram(
-            audio,
-            np=np,
-            window=self.window,
-            frame_length=self.n_fft,
-            hop_length=self.hop_length,
-            mel_filters=self.mel_filters,
-        )
-        log_spec = log_spec[:, :-1]
-        log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
-        log_spec = (log_spec + 4.0) / 4.0
-        return np.expand_dims(log_spec.astype(np.float32), axis=0)
 
 
 # ── Smart-Turn ONNX implementation ────────────────────────────────

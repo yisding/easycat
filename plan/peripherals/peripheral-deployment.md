@@ -193,18 +193,16 @@ infrastructure, acceptable to structure the app as a Modal class.
 import modal
 from fastapi import FastAPI, WebSocket
 
-image = (
-    modal.Image.debian_slim()
-    .pip_install("easycat", "fastapi", "uvicorn")
-)
+image = modal.Image.debian_slim().pip_install("easycat", "fastapi", "uvicorn")
 
 app = modal.App("voice-agent", image=image)
 
+
 @app.cls(
-    min_containers=1,        # at least one warm container
-    buffer_containers=1,     # plus one ready to accept a burst
-    scaledown_window=600,    # keep warm 10min after last call
-    timeout=3600,            # allow full-hour calls
+    min_containers=1,  # at least one warm container
+    buffer_containers=1,  # plus one ready to accept a burst
+    scaledown_window=600,  # keep warm 10min after last call
+    timeout=3600,  # allow full-hour calls
     cpu=4,
     memory=4096,
 )
@@ -217,6 +215,7 @@ class VoiceAgent:
         and warm the SQLite file-open cost.
         """
         from easycat import create_session
+
         self.session_factory = ...  # build configured factory
 
     @modal.asgi_app()

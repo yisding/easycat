@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from easycat import EasyConfig, create_session
-from easycat.config import _factory
+from easycat import EasyConfig, create_session, create_text_session
+from easycat.config import TextSessionConfig, _factory
 from tests.config._helpers import _DummyAgent, _stub_audio_backends
 
 
@@ -60,5 +60,21 @@ def test_build_failure_rolls_back_acquired_journal(
 
     with pytest.raises(RuntimeError, match="audio build failed"):
         create_session(EasyConfig(openai_api_key="test-key", agent=_DummyAgent(), debug="light"))
+
+    journal.close.assert_called_once_with()
+
+
+def test_text_build_failure_rolls_back_acquired_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _tracked_journal(monkeypatch)
+
+    def fail_session(_config: object) -> object:
+        raise RuntimeError("text build failed")
+
+    monkeypatch.setattr(_factory, "Session", fail_session)
+
+    with pytest.raises(RuntimeError, match="text build failed"):
+        create_text_session(TextSessionConfig(agent=_DummyAgent(), debug="light"))
 
     journal.close.assert_called_once_with()
