@@ -24,9 +24,11 @@ from easycat.runtime.replay import (
     REPLAY_IGNORE_FIELDS,
     ProviderVersionMismatchError,
     ReplayCassette,
+    ReplayDivergenceError,
     ReplayError,
     ReplayFidelity,
     ReplayResult,
+    ReplayRunner,
     ReplaySideEffectBlocked,
     ReplaySpec,
     ToolReplayPolicy,
@@ -331,6 +333,59 @@ class TestReplayRunner:
         assert stt_complete.output_blob == b"audio-out"
         stt_start = next(f for f in result.frames if f.sequence == 2)
         assert stt_start.input_blob == b"audio-in"
+        assert len(result.stage_replays) == 1
+        replayed = result.stage_replays[0]
+        assert replayed.stage == "stt"
+        assert replayed.turn_id == "t1"
+        assert replayed.output == "hello world"
+        assert replayed.matches_recording is True
+
+    def test_custom_stage_replayer_is_compared_with_recording(self, tmp_path):
+        bundle = self._basic_bundle(tmp_path)
+        calls = []
+
+        def replay_stt(spec, cassette):
+            calls.append((spec.fidelity, cassette.stage_name))
+            return "hello world"
+
+        result = bundle.replay(_spec(), stage_replayers={"stt": replay_stt})
+
+        assert calls == [(ReplayFidelity.ARTIFACT, "stt")]
+        assert result.stage_replays[0].matches_recording is True
+
+    def test_live_builtin_exposes_input_without_comparing_it_to_output(self, tmp_path):
+        bundle = self._basic_bundle(tmp_path)
+
+        result = bundle.replay(_spec(fidelity=ReplayFidelity.LIVE))
+
+        replayed = result.stage_replays[0]
+        assert replayed.output == b"audio-in"
+        assert replayed.matches_recording is None
+
+    def test_live_custom_replayer_is_compared_with_recorded_artifact(self, tmp_path):
+        bundle = self._basic_bundle(tmp_path)
+
+        result = bundle.replay(
+            _spec(fidelity=ReplayFidelity.LIVE),
+            stage_replayers={"stt": lambda _spec, _cassette: "hello world"},
+        )
+
+        assert result.stage_replays[0].matches_recording is True
+
+    def test_stage_replay_divergence_raises_e403(self, tmp_path):
+        bundle = self._basic_bundle(tmp_path)
+
+        with pytest.raises(ReplayDivergenceError) as exc_info:
+            bundle.replay(
+                _spec(),
+                stage_replayers={"stt": lambda _spec, _cassette: "changed"},
+            )
+
+        error = exc_info.value
+        assert error.code == "EASYCAT_E403"
+        assert error.stage == "stt"
+        assert error.turn_id == "t1"
+        assert error.expected_digest != error.actual_digest
 
     def test_timing_fast_masks_nondeterministic(self, tmp_path):
         bundle = self._basic_bundle(tmp_path)
@@ -347,6 +402,35 @@ class TestReplayRunner:
         # wall-timing replay keeps every field for interruption debugging.
         assert stt_complete.data["timing"]["wall_ns"] == 123
         assert stt_complete.data["timing"]["stage_ms"] == 42
+
+    def test_timing_wall_replays_recorded_delays(self, tmp_path):
+        records = [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "first",
+                "timing": {"mono_ns": 1_000_000_000},
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "second",
+                "timing": {"mono_ns": 1_125_000_000},
+            },
+            {
+                "sequence": 3,
+                "kind": "event",
+                "name": "third",
+                "timing": {"mono_ns": 1_175_000_000},
+            },
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+        delays = []
+
+        result = ReplayRunner(bundle, _spec(timing="wall"), sleep=delays.append).run()
+
+        assert len(result.frames) == 3
+        assert delays == [0.125, 0.05]
 
     def test_stage_filter(self, tmp_path):
         records = [
@@ -568,17 +652,33 @@ class TestToolPolicyEnforcement:
         assert len(result.stubbed_tool_calls) == 2
         assert "get_weather" in result.stubbed_tool_calls[0]
 
-    def test_allow_marks_result_side_effecting(self, tmp_path, caplog):
+    def test_allow_without_executor_is_not_reported_as_side_effecting(self, tmp_path, caplog):
         bundle = self._bundle_with_tool(tmp_path)
         with caplog.at_level("WARNING", logger="easycat.runtime.replay"):
             result = bundle.replay(_spec(tool_policy=ToolReplayPolicy.ALLOW))
-        assert result.side_effecting is True
+        assert result.side_effecting is False
         assert len(result.allowed_tool_calls) == 2
-        # Per-frame flag is set for allowed tool phases too.
+        assert result.executed_tool_calls == []
         tool_frames = [f for f in result.frames if f.name == "tool_call"]
-        assert all(f.side_effecting for f in tool_frames)
-        # ALLOW logs a prominent warning.
-        assert any("ALLOW" in rec.message for rec in caplog.records)
+        assert not any(f.side_effecting for f in tool_frames)
+        assert any("no tool executor" in rec.message for rec in caplog.records)
+
+    def test_allow_executes_start_phase_once_when_executor_is_supplied(self, tmp_path, caplog):
+        bundle = self._bundle_with_tool(tmp_path)
+        executed_records = []
+
+        with caplog.at_level("WARNING", logger="easycat.runtime.replay"):
+            result = bundle.replay(
+                _spec(tool_policy=ToolReplayPolicy.ALLOW),
+                tool_executor=executed_records.append,
+            )
+
+        assert [record["data"]["phase"] for record in executed_records] == ["start"]
+        assert result.side_effecting is True
+        assert result.executed_tool_calls == ["get_weather(c1)"]
+        tool_frames = [f for f in result.frames if f.name == "tool_call"]
+        assert [f.side_effecting for f in tool_frames] == [True, False]
+        assert any("result is side-effecting" in rec.message for rec in caplog.records)
 
 
 # ── Cassette behaviour (stand-alone, not via runner) ─────────────

@@ -519,6 +519,45 @@ async def test_api_replay_returns_structured_replay_error(tmp_path):
         }
 
 
+async def test_api_replay_returns_structured_divergence_error(tmp_path):
+    """Stage output mismatches retain EASYCAT_E403 and digest details."""
+    from easycat.runtime.replay import ReplayDivergenceError
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+
+    def _raise(**_kwargs):
+        raise ReplayDivergenceError(
+            "stage='agent', turn_id='turn-1'",
+            stage="agent",
+            turn_id="turn-1",
+            expected_digest="expected",
+            actual_digest="actual",
+            requested_sequence=7,
+        )
+
+    source._replay_fn = _raise
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact"},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 409
+        body = await resp.json()
+        assert body["error_code"] == "EASYCAT_E403"
+        assert body["details"] == {
+            "requested_sequence": 7,
+            "stage": "agent",
+            "turn_id": "turn-1",
+            "expected_digest": "expected",
+            "actual_digest": "actual",
+        }
+
+
 async def test_api_replay_returns_structured_side_effect_blocked(tmp_path):
     """:class:`ReplaySideEffectBlocked` becomes ``REPLAY_SIDE_EFFECT_BLOCKED``
     so the UI can hint at switching tool policy."""

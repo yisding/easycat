@@ -202,9 +202,9 @@ entry points include:
   `format_version`, `summary`, `redaction` -
                          `easycat bundles export PATH --output DIR --json`
   `path`, `fidelity_requested`, `fidelity_effective`, `frames`, `stages`,
-  `side_effecting`, `tool_policy`, `allowed_tool_calls`,
-  `blocked_tool_calls`, `stubbed_tool_calls`, `from_sequence`,
-  `to_sequence`, `stage_filter`, `force`, `timing` -
+  `stage_replays`, `side_effecting`, `tool_policy`, `allowed_tool_calls`,
+  `executed_tool_calls`, `blocked_tool_calls`, `stubbed_tool_calls`,
+  `from_sequence`, `to_sequence`, `stage_filter`, `force`, `timing` -
                          `easycat replay PATH --json`
 
 When an error is about a file or directory, commands include the

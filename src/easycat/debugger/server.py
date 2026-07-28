@@ -851,6 +851,7 @@ class _DebuggerRoutes:
             )
         from easycat.runtime.replay import (
             ProviderVersionMismatchError,
+            ReplayDivergenceError,
             ReplayError,
             ReplaySideEffectBlocked,
         )
@@ -872,6 +873,21 @@ class _DebuggerRoutes:
                             }
                             for m in exc.mismatches
                         ],
+                    },
+                },
+                status=409,
+            )
+        except ReplayDivergenceError as exc:
+            return web.json_response(
+                {
+                    "error_code": exc.code,
+                    "message": exc.message,
+                    "details": {
+                        "requested_sequence": exc.requested_sequence,
+                        "stage": exc.stage,
+                        "turn_id": exc.turn_id,
+                        "expected_digest": exc.expected_digest,
+                        "actual_digest": exc.actual_digest,
                     },
                 },
                 status=409,

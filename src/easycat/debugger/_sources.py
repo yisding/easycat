@@ -236,10 +236,12 @@ def _run_bundle_source(
             "total_frames": total_frames,
             "frames_truncated": truncated,
             "frames": [_serialize_frame(f) for f in kept],
+            "stage_replays": len(result.stage_replays),
             "side_effecting": result.side_effecting,
             "blocked_tool_calls": result.blocked_tool_calls,
             "stubbed_tool_calls": result.stubbed_tool_calls,
             "allowed_tool_calls": result.allowed_tool_calls,
+            "executed_tool_calls": result.executed_tool_calls,
         }
 
     return DebuggerSource(

@@ -27,11 +27,16 @@ from __future__ import annotations
 
 import copy
 import enum
+import hashlib
+import inspect
+import json
 import logging
+import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from easycat.errors import EASYCAT_E403, EasyCatError
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS
 
 if TYPE_CHECKING:
@@ -88,6 +93,30 @@ class ReplayError(RuntimeError):
         self.nearest_committable_before = nearest_committable_before
         self.nearest_committable_after = nearest_committable_after
         self.stage = stage
+
+
+class ReplayDivergenceError(EasyCatError, ReplayError):
+    """A stage replay produced output that differs from its recording."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        stage: str,
+        turn_id: str | None,
+        expected_digest: str,
+        actual_digest: str,
+        requested_sequence: int | None = None,
+    ) -> None:
+        coded = EASYCAT_E403(detail=detail)
+        super().__init__(coded.code, coded.message, **coded.context)
+        self.requested_sequence = requested_sequence
+        self.nearest_committable_before = None
+        self.nearest_committable_after = None
+        self.stage = stage
+        self.turn_id = turn_id
+        self.expected_digest = expected_digest
+        self.actual_digest = actual_digest
 
 
 @dataclass(frozen=True)
@@ -206,6 +235,25 @@ class ReplayFrame:
     side_effecting: bool = False
 
 
+@dataclass(frozen=True)
+class StageReplayResult:
+    """One built-in stage replayed from its turn-scoped cassette.
+
+    ``output`` is the value returned by the stage's existing
+    :meth:`Stage.replay` implementation. ``output_digest`` is a stable,
+    compact comparison value suitable for logs and JSON summaries.
+    """
+
+    stage: str
+    turn_id: str | None
+    from_sequence: int | None
+    to_sequence: int | None
+    fidelity: ReplayFidelity
+    output: Any = field(repr=False)
+    output_digest: str
+    matches_recording: bool | None
+
+
 @dataclass
 class ReplayResult:
     """Output of :meth:`ReplayRunner.run`.
@@ -214,20 +262,23 @@ class ReplayResult:
     (e.g. ``ARTIFACT`` with ``force=True`` and a version mismatch is
     downgraded to ``LIVE`` because determinism is no longer guaranteed).
 
-    ``side_effecting`` is ``True`` when at least one ``ALLOW``-policy
-    tool call was observed during the walk.
+    ``side_effecting`` is ``True`` only when a configured tool executor
+    actually ran at least one ``ALLOW``-policy tool invocation. Merely
+    permitting recorded tool frames does not claim that a side effect
+    happened.
 
-    ``blocked_tool_calls`` records ``STUB``-policy substitutions and
-    ``ALLOW``-policy pass-throughs so callers can tell users exactly
-    what was swapped or permitted.
+    The tool-call lists let callers distinguish substitutions,
+    pass-throughs, and calls that were actually executed.
     """
 
     frames: list[ReplayFrame]
     fidelity_label: ReplayFidelity
+    stage_replays: list[StageReplayResult] = field(default_factory=list)
     side_effecting: bool = False
     blocked_tool_calls: list[str] = field(default_factory=list)
     stubbed_tool_calls: list[str] = field(default_factory=list)
     allowed_tool_calls: list[str] = field(default_factory=list)
+    executed_tool_calls: list[str] = field(default_factory=list)
 
 
 # ── Ignored-field masking ────────────────────────────────────────
@@ -438,14 +489,18 @@ class ReplayRunner:
        boundary when one is required.
     2. Walks the bundle's journal records and produces
        :class:`ReplayFrame` objects with artifact blobs attached.
-    3. Enforces :attr:`ReplaySpec.tool_policy` on any tool-call records
+    3. Invokes the built-in stages' :meth:`Stage.replay` implementations
+       with turn-scoped cassettes and verifies their outputs against the
+       recording.
+    4. Enforces :attr:`ReplaySpec.tool_policy` on any tool-call records
        surfaced by the walk.
 
-    The runner does **not** instantiate stages or call their
-    ``execute()`` methods.  That's the caller's responsibility — they
-    pull a :class:`ReplayCassette` from the bundle for the stage of
-    interest and feed it to a fresh stage instance's
-    :meth:`Stage.replay`.
+    Replay never guesses how to construct credentialed provider clients.
+    Built-in ``Stage.replay`` implementations therefore rehydrate
+    ARTIFACT/SIMULATED outputs and expose LIVE inputs. Applications that
+    own fresh providers may pass ``stage_replayers`` to execute those
+    inputs and compare the fresh result with the recording. Likewise,
+    ALLOW tool calls run only when ``tool_executor`` is supplied.
     """
 
     def __init__(
@@ -454,53 +509,49 @@ class ReplayRunner:
         spec: ReplaySpec,
         *,
         installed_versions: dict[str, str] | None = None,
+        stage_replayers: dict[str, Callable[[ReplaySpec, ReplayCassette], Any]] | None = None,
+        tool_executor: Callable[[dict[str, Any]], Any] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._bundle = bundle
         self._spec = spec
         self._installed_versions = dict(installed_versions or {})
+        self._stage_replayers = dict(stage_replayers or {})
+        self._tool_executor = tool_executor
+        self._sleep = sleep
 
     def run(self) -> ReplayResult:
         """Produce a :class:`ReplayResult` for the configured bundle+spec."""
         effective_fidelity = self._apply_version_check()
         self._validate_entry_point()
 
+        replay_records = list(self._iter_records())
         frames: list[ReplayFrame] = []
         blocked: list[str] = []
         stubbed: list[str] = []
         allowed: list[str] = []
+        executed: list[str] = []
         side_effecting = False
+        previous_timing_ns: int | None = None
 
         mask_fields = REPLAY_IGNORE_FIELDS if self._spec.timing == "fast" else frozenset()
 
-        for record in self._iter_records():
+        for record in replay_records:
             frame_stage = _infer_stage(record)
             if self._spec.stage_filter and frame_stage not in self._spec.stage_filter:
                 continue
 
-            name = record.get("name", "") or ""
-            is_tool_phase = _is_tool_phase(record)
-            frame_side_effecting = False
+            previous_timing_ns = self._pace_record(record, previous_timing_ns)
 
-            if is_tool_phase:
-                descriptor = _tool_descriptor(record)
-                policy = self._spec.tool_policy
-                if policy is ToolReplayPolicy.DENY:
-                    blocked.append(descriptor)
-                    raise ReplaySideEffectBlocked(
-                        f"Tool call {descriptor!r} blocked by "
-                        f"ToolReplayPolicy.DENY at sequence "
-                        f"{record.get('sequence')}"
-                    )
-                if policy is ToolReplayPolicy.STUB:
-                    stubbed.append(descriptor)
-                elif policy is ToolReplayPolicy.ALLOW:
-                    allowed.append(descriptor)
-                    side_effecting = True
-                    frame_side_effecting = True
-                    logger.warning(
-                        "Replay: ToolReplayPolicy.ALLOW permitted %s; result is side-effecting.",
-                        descriptor,
-                    )
+            name = record.get("name", "") or ""
+            frame_side_effecting = self._apply_tool_policy(
+                record,
+                blocked=blocked,
+                stubbed=stubbed,
+                allowed=allowed,
+                executed=executed,
+            )
+            side_effecting = side_effecting or frame_side_effecting
 
             masked_data = mask_nondeterministic(record.get("data") or {}, mask_fields)
             masked_error = mask_nondeterministic(record.get("error"), mask_fields)
@@ -526,16 +577,85 @@ class ReplayRunner:
             )
             frames.append(frame)
 
+        stage_replays = self._run_stage_replays(
+            replay_records,
+            effective_fidelity=effective_fidelity,
+        )
         return ReplayResult(
             frames=frames,
             fidelity_label=effective_fidelity,
+            stage_replays=stage_replays,
             side_effecting=side_effecting,
             blocked_tool_calls=blocked,
             stubbed_tool_calls=stubbed,
             allowed_tool_calls=allowed,
+            executed_tool_calls=executed,
         )
 
     # ── Internal helpers ─────────────────────────────────────────
+
+    def _pace_record(
+        self,
+        record: dict[str, Any],
+        previous_timing_ns: int | None,
+    ) -> int | None:
+        if self._spec.timing != "wall":
+            return previous_timing_ns
+        current_timing_ns = _record_timing_ns(record)
+        if current_timing_ns is None:
+            return previous_timing_ns
+        if previous_timing_ns is not None and current_timing_ns > previous_timing_ns:
+            self._sleep((current_timing_ns - previous_timing_ns) / 1_000_000_000)
+        return current_timing_ns
+
+    def _apply_tool_policy(
+        self,
+        record: dict[str, Any],
+        *,
+        blocked: list[str],
+        stubbed: list[str],
+        allowed: list[str],
+        executed: list[str],
+    ) -> bool:
+        if not _is_tool_phase(record):
+            return False
+
+        descriptor = _tool_descriptor(record)
+        policy = self._spec.tool_policy
+        if policy is ToolReplayPolicy.DENY:
+            blocked.append(descriptor)
+            raise ReplaySideEffectBlocked(
+                f"Tool call {descriptor!r} blocked by ToolReplayPolicy.DENY "
+                f"at sequence {record.get('sequence')}"
+            )
+        if policy is ToolReplayPolicy.STUB:
+            stubbed.append(descriptor)
+            return False
+
+        allowed.append(descriptor)
+        if self._tool_executor is None:
+            logger.warning(
+                "Replay: ToolReplayPolicy.ALLOW permitted recorded frame %s, "
+                "but no tool executor is configured; no side effect was executed.",
+                descriptor,
+            )
+            return False
+        if not _is_tool_invocation(record):
+            return False
+
+        result = self._tool_executor(copy.deepcopy(record))
+        if inspect.isawaitable(result):
+            raise ReplayError(
+                "Async tool executors are not supported by synchronous replay; "
+                "provide a synchronous executor.",
+                requested_sequence=_record_sequence(record),
+            )
+        executed.append(descriptor)
+        logger.warning(
+            "Replay: ToolReplayPolicy.ALLOW executed %s; result is side-effecting.",
+            descriptor,
+        )
+        return True
 
     def _iter_records(self) -> Iterable[dict[str, Any]]:
         low = self._spec.from_sequence
@@ -603,6 +723,96 @@ class ReplayRunner:
             nearest_committable_after=after,
         )
 
+    def _run_stage_replays(
+        self,
+        records: Sequence[dict[str, Any]],
+        *,
+        effective_fidelity: ReplayFidelity,
+    ) -> list[StageReplayResult]:
+        built_ins = _built_in_stage_replayers()
+        replayers = {**built_ins, **self._stage_replayers}
+        grouped: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+        for record in records:
+            stage = _infer_stage(record)
+            if not stage or stage not in replayers:
+                continue
+            if self._spec.stage_filter and stage not in self._spec.stage_filter:
+                continue
+            turn_id = record.get("turn_id")
+            grouped.setdefault((stage, turn_id), []).append(record)
+
+        replay_spec = replace(self._spec, fidelity=effective_fidelity)
+        outcomes: list[StageReplayResult] = []
+        blobs = self._bundle.artifact_blobs
+
+        for (stage, turn_id), cassette_records in grouped.items():
+            cassette = ReplayCassette(
+                stage_name=stage,
+                records=tuple(cassette_records),
+                _resolver=blobs.get,
+            )
+            output = replayers[stage](replay_spec, cassette)
+            if inspect.isawaitable(output):
+                raise ReplayError(
+                    "Async stage replayers are not supported by synchronous replay; "
+                    "provide a synchronous replayer.",
+                    requested_sequence=_first_sequence(cassette_records),
+                    stage=stage,
+                )
+
+            matches: bool | None = None
+            is_custom_replayer = stage in self._stage_replayers
+            should_compare = stage in built_ins and (
+                effective_fidelity is not ReplayFidelity.LIVE or is_custom_replayer
+            )
+            if should_compare:
+                recorded_fidelity = (
+                    ReplayFidelity.ARTIFACT
+                    if effective_fidelity is ReplayFidelity.LIVE
+                    else effective_fidelity
+                )
+                recorded_spec = replace(
+                    replay_spec,
+                    fidelity=recorded_fidelity,
+                    overrides={},
+                )
+                expected = built_ins[stage](recorded_spec, cassette)
+                expected_digest = _replay_value_digest(expected)
+                actual_digest = _replay_value_digest(output)
+                matches = actual_digest == expected_digest
+                if not matches:
+                    detail = (
+                        f"stage={stage!r}, turn_id={turn_id!r}, "
+                        f"expected_digest={expected_digest}, actual_digest={actual_digest}"
+                    )
+                    raise ReplayDivergenceError(
+                        detail,
+                        stage=stage,
+                        turn_id=turn_id,
+                        expected_digest=expected_digest,
+                        actual_digest=actual_digest,
+                        requested_sequence=_first_sequence(cassette_records),
+                    )
+            else:
+                actual_digest = _replay_value_digest(output)
+
+            sequences = [
+                seq for record in cassette_records if (seq := _record_sequence(record)) is not None
+            ]
+            outcomes.append(
+                StageReplayResult(
+                    stage=stage,
+                    turn_id=turn_id,
+                    from_sequence=min(sequences) if sequences else None,
+                    to_sequence=max(sequences) if sequences else None,
+                    fidelity=effective_fidelity,
+                    output=output,
+                    output_digest=actual_digest,
+                    matches_recording=matches,
+                )
+            )
+        return outcomes
+
 
 # ── Private record helpers ───────────────────────────────────────
 
@@ -624,12 +834,29 @@ def _infer_stage(record: dict[str, Any]) -> str:
     """
     data = record.get("data") or {}
     if isinstance(data, dict):
-        if data.get("stage") in _STAGE_NAMES:
-            return str(data["stage"])
+        stage = data.get("stage")
+        if isinstance(stage, str) and stage:
+            return stage
         observed = data.get("observed_stage")
-        if observed in _STAGE_NAMES:
-            return str(observed)
+        if isinstance(observed, str) and observed:
+            return observed
     return ""
+
+
+def _record_timing_ns(record: dict[str, Any]) -> int | None:
+    """Return a record's monotonic/wall timestamp for wall-paced replay."""
+    timing = record.get("timing")
+    if isinstance(timing, dict):
+        for key in ("mono_ns", "wall_ns"):
+            value = timing.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+    # Crash-dump projections may flatten the timestamp.
+    for key in ("mono_ns", "wall_ns"):
+        value = record.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def _is_tool_phase(record: dict[str, Any]) -> bool:
@@ -640,6 +867,16 @@ def _is_tool_phase(record: dict[str, Any]) -> bool:
             return True
     name = record.get("name") or ""
     return isinstance(name, str) and name.startswith("tool_")
+
+
+def _is_tool_invocation(record: dict[str, Any]) -> bool:
+    data = record.get("data") or {}
+    if isinstance(data, dict):
+        phase = str(data.get("phase") or "").lower()
+        if phase:
+            return phase in {"start", "started", "call", "request"}
+    name = str(record.get("name") or "").lower()
+    return name in {"tool_call", "tool_call_started", "tool_started"}
 
 
 def _tool_descriptor(record: dict[str, Any]) -> str:
@@ -664,6 +901,71 @@ def _format_version_mismatch(mismatches: Sequence[VersionMismatch]) -> str:
             f"installed={m.installed_version!r} ({m.code})"
         )
     return "; ".join(parts)
+
+
+def _first_sequence(records: Sequence[dict[str, Any]]) -> int | None:
+    return next(
+        (seq for record in records if (seq := _record_sequence(record)) is not None),
+        None,
+    )
+
+
+def _replay_value_digest(value: Any) -> str:
+    """Return a stable digest for a stage replay value."""
+    if isinstance(value, bytes):
+        payload = b"bytes\0" + value
+    else:
+        try:
+            serialized = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=repr,
+            )
+        except (TypeError, ValueError):
+            serialized = repr(value)
+        payload = f"{type(value).__module__}.{type(value).__qualname__}\0{serialized}".encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _built_in_stage_replayers() -> dict[
+    str,
+    Callable[[ReplaySpec, ReplayCassette], Any],
+]:
+    """Return provider-free adapters for every built-in ``Stage.replay``.
+
+    The replay methods are deliberately pure and do not read instance
+    state. Constructing the stage normally would require provider
+    credentials that a redacted bundle cannot and must not contain, so
+    the adapters allocate an uninitialized instance solely to invoke
+    the shipped replay implementation.
+    """
+    from easycat.stages.agent import AgentStage
+    from easycat.stages.audio import AudioStage
+    from easycat.stages.stt import STTStage
+    from easycat.stages.transport import TransportStage
+    from easycat.stages.tts import TTSStage
+    from easycat.stages.turn import TurnStage
+    from easycat.stages.vad import VADStage
+
+    stage_types = {
+        "agent": AgentStage,
+        "audio": AudioStage,
+        "stt": STTStage,
+        "transport": TransportStage,
+        "tts": TTSStage,
+        "turn": TurnStage,
+        "vad": VADStage,
+    }
+
+    def _adapter(stage_type: type[Any]) -> Callable[[ReplaySpec, ReplayCassette], Any]:
+        def replay(spec: ReplaySpec, cassette: ReplayCassette) -> Any:
+            stage = object.__new__(stage_type)
+            return stage_type.replay(stage, spec, cassette)
+
+        return replay
+
+    return {name: _adapter(stage_type) for name, stage_type in stage_types.items()}
 
 
 # ── End-to-end audio emitter ─────────────────────────────────────
