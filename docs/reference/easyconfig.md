@@ -50,6 +50,10 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   recording.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
+- `journal_capacity` — maximum records retained by the bounded in-memory
+  `"light"` journal (default `10_000`). Evictions are counted on
+  `session.journal.dropped_records` and carried into exported bundle metadata.
+  Persistent `"full"` backends ignore this value.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
 - `warmup` — run provider warmup hooks at session start (default `True`).

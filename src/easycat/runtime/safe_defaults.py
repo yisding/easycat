@@ -47,6 +47,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "interruption_mode",
         # Journal config (safe to report)
         "journal_backend",
+        "journal_capacity",
         "journal_retention",
     }
 )

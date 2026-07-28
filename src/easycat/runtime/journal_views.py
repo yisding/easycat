@@ -116,9 +116,11 @@ class FrozenJournalSnapshot:
         *,
         degraded: bool = False,
         latest_sequence: int | None = None,
+        dropped_records: int = 0,
     ) -> None:
         self._records = tuple(records)
         self._degraded = degraded
+        self._dropped_records = dropped_records
         self._latest_sequence = (
             latest_sequence
             if latest_sequence is not None
@@ -184,3 +186,7 @@ class FrozenJournalSnapshot:
     @property
     def degraded(self) -> bool:
         return self._degraded
+
+    @property
+    def dropped_records(self) -> int:
+        return self._dropped_records

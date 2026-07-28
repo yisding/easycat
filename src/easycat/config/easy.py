@@ -130,6 +130,7 @@ def _validate_common(
     *,
     debug: str,
     journal_backend: str,
+    journal_capacity: int,
     journal_retention: str,
     mcp_servers: list[str] | None = None,
     session_id: str | None = None,
@@ -144,6 +145,12 @@ def _validate_common(
             f"Invalid journal_backend={journal_backend!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
         )
+    if (
+        not isinstance(journal_capacity, int)
+        or isinstance(journal_capacity, bool)
+        or journal_capacity <= 0
+    ):
+        raise ValueError("journal_capacity must be a positive integer")
     if journal_retention not in _VALID_JOURNAL_RETENTION:
         raise ValueError(
             f"Invalid journal_retention={journal_retention!r}. "
@@ -470,6 +477,7 @@ class _AgentSessionConfig:
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_capacity: int = 10_000
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
     debugger_autolaunch: bool = False
@@ -494,7 +502,8 @@ class EasyConfig(_AgentSessionConfig):
             ``EchoCanceller``.
         smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
             detection.
-        debug / journal_backend / journal_retention: Debug-journal settings.
+        debug / journal_backend / journal_capacity / journal_retention:
+            Debug-journal settings.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -536,6 +545,7 @@ class EasyConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
             agent=self.agent,
@@ -755,6 +765,7 @@ class TextSessionConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
             session_id=self.session_id,
@@ -771,6 +782,7 @@ class TextSessionConfig(_AgentSessionConfig):
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+        journal_capacity: int = 10_000,
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
         wrap_agent: bool = True,
@@ -796,6 +808,7 @@ class TextSessionConfig(_AgentSessionConfig):
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
                 "journal_backend": (journal_backend, "sqlite"),
+                "journal_capacity": (journal_capacity, 10_000),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),
                 "wrap_agent": (wrap_agent, True),
@@ -818,6 +831,7 @@ class TextSessionConfig(_AgentSessionConfig):
             session_id=session_id,
             debug=debug,
             journal_backend=journal_backend,
+            journal_capacity=journal_capacity,
             journal_retention=journal_retention,
             warmup=True if warmup is None else warmup,
             wrap_agent=wrap_agent,

@@ -19,6 +19,9 @@ class RunContext:
     ``journal`` and ``artifact_store`` are typed as ``Any`` to avoid
     circular imports with the runtime package; at runtime they are
     ``ExecutionJournal | None`` and ``ArtifactStore | None``.
+    ``journal_detail`` controls whether frame-oriented stages retain verbose
+    replay spans/artifacts (``"full"``) or only higher-level events and errors
+    (``"light"``).
     """
 
     run_id: str
@@ -26,6 +29,7 @@ class RunContext:
     runtime_mode: Literal["chained_pipeline", "text_session"]
     journal: Any = None  # ExecutionJournal | None
     artifact_store: Any = None  # ArtifactStore | None
+    journal_detail: Literal["off", "light", "full"] = "full"
     config_snapshot: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -33,4 +37,9 @@ class RunContext:
             raise ValueError(
                 f"Unsupported runtime_mode: {self.runtime_mode!r}. "
                 "Must be 'chained_pipeline' or 'text_session'."
+            )
+        if self.journal_detail not in ("off", "light", "full"):
+            raise ValueError(
+                f"Unsupported journal_detail: {self.journal_detail!r}. "
+                "Must be 'off', 'light', or 'full'."
             )

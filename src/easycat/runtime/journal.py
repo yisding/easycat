@@ -272,3 +272,9 @@ class JournalView:
     @property
     def degraded(self) -> bool:
         return self._journal.degraded
+
+    @property
+    def dropped_records(self) -> int:
+        """Number of records evicted by a bounded backend (zero otherwise)."""
+        value = getattr(self._journal, "dropped_records", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0

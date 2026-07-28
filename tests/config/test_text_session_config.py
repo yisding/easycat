@@ -26,6 +26,23 @@ def test_text_session_config_defaults_debug_to_light():
     assert config.debug == "light"
 
 
+def test_text_session_config_defaults_journal_capacity():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    assert config.journal_capacity == 10_000
+
+
+def test_create_text_session_forwards_journal_capacity():
+    session = create_text_session(agent=_DummyAgent(), journal_capacity=321)
+    try:
+        assert session._easycat_config.journal_capacity == 321
+        assert session._journal._capacity == 321
+        assert session._run_ctx.journal_detail == "light"
+    finally:
+        session._journal.close()
+
+
 def test_create_text_session_defaults_build_memory_journal(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -64,6 +81,13 @@ def test_text_session_config_validates_debug():
 
     with pytest.raises(ValueError, match="Invalid debug"):
         TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_text_session_config_validates_journal_capacity():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="journal_capacity must be a positive integer"):
+        TextSessionConfig(agent=_DummyAgent(), journal_capacity=0)
 
 
 def test_create_text_session_rejects_config_plus_loose_kwargs():

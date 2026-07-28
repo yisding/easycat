@@ -15,6 +15,7 @@ from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -31,11 +32,12 @@ class AudioStage:
 
     ``execute`` feeds the input chunk through the AEC → NR chain: echo
     cancellation runs on the raw mic signal *before* noise reduction
-    because NR's nonlinear processing breaks AEC convergence. It records
-    the raw input bytes as ``input_ref`` on ``stage_start`` and the
-    processed output as ``output_ref`` on ``stage_complete`` so LIVE
-    replay can re-drive a fresh NR backend and ARTIFACT replay can skip
-    processing entirely.
+    because NR's nonlinear processing breaks AEC convergence. In full-detail
+    journaling it records the raw input bytes as ``input_ref`` on
+    ``stage_start`` and the processed output as ``output_ref`` on
+    ``stage_complete`` so LIVE replay can re-drive a fresh NR backend and
+    ARTIFACT replay can skip processing entirely. Light journaling omits those
+    per-frame records and artifacts.
     """
 
     name = "audio"
@@ -56,21 +58,26 @@ class AudioStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
-        raw_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        input_ref = await put_artifact_async(ctx, raw_bytes)
-        start_extra = {
-            "audio_bytes": len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0,
-        }
-        start_extra.update(audio_format_fields(input))
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            input_ref=input_ref,
-            data_extra=start_extra,
-        )
+        capture_detail = captures_verbose_stage_io(ctx)
+        start_sequence: int | None = None
+        if capture_detail:
+            raw_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
+            input_ref = await put_artifact_async(ctx, raw_bytes)
+            start_extra = {
+                "audio_bytes": (
+                    len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0
+                ),
+            }
+            start_extra.update(audio_format_fields(input))
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                input_ref=input_ref,
+                data_extra=start_extra,
+            )
         # Track which component is in flight so a raised exception is
         # attributed to the provider that actually failed (the noise reducer
         # vs. the echo canceller), not always to ``self._provider``.
@@ -110,28 +117,29 @@ class AudioStage:
                 time.perf_counter() - started,
                 {"easycat.stage": self.name, "easycat.result": result_attr},
             )
-        state_after = self.snapshot_state()
-        processed_bytes = (
-            getattr(result, "data", None) if not isinstance(result, bytes) else result
-        )
-        output_ref = await put_artifact_async(ctx, processed_bytes)
-        complete_extra = {
-            "audio_bytes": (
-                len(processed_bytes) if isinstance(processed_bytes, (bytes, bytearray)) else 0
-            ),
-            "elapsed_ms": (time.perf_counter() - started) * 1000,
-        }
-        complete_extra.update(audio_format_fields(result))
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            output_ref=output_ref,
-            data_extra=complete_extra,
-        )
+        if capture_detail:
+            state_after = self.snapshot_state()
+            processed_bytes = (
+                getattr(result, "data", None) if not isinstance(result, bytes) else result
+            )
+            output_ref = await put_artifact_async(ctx, processed_bytes)
+            complete_extra = {
+                "audio_bytes": (
+                    len(processed_bytes) if isinstance(processed_bytes, (bytes, bytearray)) else 0
+                ),
+                "elapsed_ms": (time.perf_counter() - started) * 1000,
+            }
+            complete_extra.update(audio_format_fields(result))
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+                output_ref=output_ref,
+                data_extra=complete_extra,
+            )
         return result
 
     async def record_reference(

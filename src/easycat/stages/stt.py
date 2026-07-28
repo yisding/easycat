@@ -14,6 +14,7 @@ from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -28,12 +29,11 @@ logger = logging.getLogger(__name__)
 class STTStage:
     """Stage wrapper around an :class:`STTProvider`.
 
-    ``execute`` accepts one audio chunk at a time, hands it to the
-    provider's ``send_audio``, and journals a ``stage_start`` /
-    ``stage_complete`` pair.  The chunk's bytes are stored as a
-    ``replay_critical`` artifact and attached to ``stage_start`` via
-    ``input_ref`` so a LIVE-fidelity replay can re-drive a fresh STT
-    provider from the original audio.
+    ``execute`` accepts one audio chunk at a time and hands it to the
+    provider's ``send_audio``. Full-detail journaling stores a
+    ``stage_start`` / ``stage_complete`` pair plus the chunk bytes needed for
+    LIVE-fidelity replay. Light journaling omits those per-frame records and
+    artifacts; asynchronous STT events remain in the session journal.
     """
 
     name = "stt"
@@ -47,27 +47,30 @@ class STTStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
+        capture_detail = captures_verbose_stage_io(ctx)
         with observability.span(
             "easycat.stt.stream",
             {"easycat.stage": self.name, "easycat.surface": "stt"},
         ):
             data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-            input_ref = await put_artifact_async(ctx, data_bytes)
-            extra = {
-                "audio_bytes": len(data_bytes)
-                if isinstance(data_bytes, (bytes, bytearray))
-                else 0,
-            }
-            extra.update(audio_format_fields(input))
-            start_sequence = journal_append_event(
-                ctx,
-                stage=self.name,
-                name="stage_start",
-                turn_id=turn.id,
-                state_before=state_before,
-                input_ref=input_ref,
-                data_extra=extra,
-            )
+            start_sequence: int | None = None
+            if capture_detail:
+                input_ref = await put_artifact_async(ctx, data_bytes)
+                extra = {
+                    "audio_bytes": (
+                        len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0
+                    ),
+                }
+                extra.update(audio_format_fields(input))
+                start_sequence = journal_append_event(
+                    ctx,
+                    stage=self.name,
+                    name="stage_start",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    input_ref=input_ref,
+                    data_extra=extra,
+                )
             try:
                 await self._provider.send_audio(input)
                 result = input
@@ -92,17 +95,18 @@ class STTStage:
                     time.perf_counter() - started,
                     {"easycat.stage": self.name, "easycat.result": result_attr},
                 )
-            state_after = self.snapshot_state()
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            journal_append_event(
-                ctx,
-                stage=self.name,
-                name="stage_complete",
-                turn_id=turn.id,
-                state_before=state_before,
-                state_after=state_after,
-                data_extra={"elapsed_ms": elapsed_ms},
-            )
+            if capture_detail:
+                state_after = self.snapshot_state()
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                journal_append_event(
+                    ctx,
+                    stage=self.name,
+                    name="stage_complete",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    state_after=state_after,
+                    data_extra={"elapsed_ms": elapsed_ms},
+                )
             return result
 
     def snapshot_state(self) -> StageStateSnapshot:

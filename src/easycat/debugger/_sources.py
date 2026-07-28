@@ -256,6 +256,7 @@ def _run_bundle_source(
             "format_version": bundle.format_version,
             "provider_versions": bundle.manifest.provider_versions,
             "config_snapshot": bundle.manifest.config_snapshot,
+            "journal_dropped_records": bundle.manifest.journal_dropped_records,
             "sharing_banner": bundle.sharing_banner,
             "record_count": len(cached_records),
             "artifact_count": len(bundle.artifact_blobs),
@@ -354,10 +355,15 @@ def _session_artifact_for_analysis(session: Any, ref: str) -> bytes | None:
 
 
 def _session_manifest(session: Any) -> dict[str, Any]:
+    journal = getattr(session, "_journal", None)
+    dropped_records = getattr(journal, "dropped_records", 0)
+    if not isinstance(dropped_records, int) or isinstance(dropped_records, bool):
+        dropped_records = 0
     return {
         "source": "session",
         "session_id": getattr(session, "session_id", ""),
         "config_snapshot": safe_config_snapshot_from_session(session),
+        "journal_dropped_records": max(0, dropped_records),
         "is_running": bool(getattr(session, "is_running", False)),
         "turn_state": str(getattr(session, "turn_state", "")),
         "supports_replay": False,

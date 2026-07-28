@@ -17,6 +17,7 @@ from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -45,13 +46,11 @@ def _serialize_event(event: Any) -> dict[str, Any]:
 class VADStage:
     """Stage wrapper around a :class:`VADProvider`.
 
-    ``execute`` runs the provider on a single chunk, captures the raw
-    input bytes as an ``input_ref`` artifact for LIVE-fidelity replay,
-    and returns the list of events emitted.  ``stage_complete`` carries
-    a serialized descriptor per event in ``data["events"]`` — each a
-    dict of the event's ``type`` plus its dataclass fields (timestamps,
-    correlation ids, etc.) — so ARTIFACT replay can reconstruct the VAD
-    output without re-running the model.
+    ``execute`` runs the provider on a single chunk and returns the list of
+    events emitted. Full-detail journaling captures raw input bytes for LIVE
+    replay and a serialized event descriptor on ``stage_complete`` for
+    ARTIFACT replay. Light journaling omits those per-frame records and
+    artifacts; the session journal sink still records emitted VAD events.
     """
 
     name = "vad"
@@ -71,7 +70,8 @@ class VADStage:
         result_attr = "pass"
         state_before = self.snapshot_state()
         data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        input_ref = await put_artifact_async(ctx, data_bytes)
+        capture_detail = captures_verbose_stage_io(ctx)
+        input_ref = await put_artifact_async(ctx, data_bytes) if capture_detail else None
         # VAD backends decode the raw byte stream as flat int16 mono (frame
         # boundaries are computed as samples*2). Interleaved multi-channel
         # input would be misread as garbage, so downmix to mono before
@@ -79,19 +79,23 @@ class VADStage:
         # input_ref artifact so replay still reflects the true raw input.
         if isinstance(input, AudioChunk) and input.format.channels > 1:
             input = to_mono_chunk(input)
-        start_extra = {
-            "audio_bytes": len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0,
-        }
-        start_extra.update(audio_format_fields(input))
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            input_ref=input_ref,
-            data_extra=start_extra,
-        )
+        start_sequence: int | None = None
+        if capture_detail:
+            start_extra = {
+                "audio_bytes": (
+                    len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0
+                ),
+            }
+            start_extra.update(audio_format_fields(input))
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                input_ref=input_ref,
+                data_extra=start_extra,
+            )
         try:
             with observability.span(
                 "easycat.vad.detect",
@@ -129,19 +133,20 @@ class VADStage:
             )
         if events:
             self._last_decision = type(events[-1]).__name__
-        state_after = self.snapshot_state()
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            data_extra={
-                "events": [_serialize_event(e) for e in events],
-                "elapsed_ms": (time.perf_counter() - started) * 1000,
-            },
-        )
+        if capture_detail:
+            state_after = self.snapshot_state()
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+                data_extra={
+                    "events": [_serialize_event(e) for e in events],
+                    "elapsed_ms": (time.perf_counter() - started) * 1000,
+                },
+            )
         return result
 
     def snapshot_state(self) -> StageStateSnapshot:
