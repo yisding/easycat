@@ -208,10 +208,13 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     path = REPO_ROOT / "examples" / "webtransport_server.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 35
+    assert _visible_code_line_count(path) <= 40
     assert "run_webtransport_config_server" in source
     assert "WebTransportTransportConfig" in source
     assert "WebTransportConnectionTransport" in source
+    assert 'default="127.0.0.1"' in source
+    assert 'os.getenv("EASYCAT_SERVE_TOKEN")' in source
+    assert "allow_query_token=args.allow_query_token" in source
     assert "create_session" not in source
     assert "SessionManager" not in source
     assert "attach_runtime_feedback" not in source
@@ -219,6 +222,16 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     assert "asyncio.run(" not in source
     assert "await server.start()" not in source
     assert "await server.stop()" not in source
+
+
+def test_webtransport_browser_client_forwards_query_token_without_displaying_it() -> None:
+    source = (REPO_ROOT / "examples" / "webtransport_browser_client.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'new URLSearchParams(location.search).get("token")' in source
+    assert "encodeURIComponent(WT_TOKEN)" in source
+    assert '"?token=<redacted>"' in source
 
 
 def test_ws_server_authorizes_bearer_or_query_token():
