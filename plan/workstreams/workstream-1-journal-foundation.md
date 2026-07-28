@@ -379,43 +379,40 @@ full `RedactionPolicy` write filter lands later in
   to serialize. The full allowlist for Phase 1 is:
 
   ```python
-  SAFE_CONFIG_FIELDS: frozenset[str] = frozenset({
-      # Provider role identifiers (the *kind* of provider, not
-      # credentials)
-      "stt_provider",
-      "tts_provider",
-      "transport_provider",
-      "telephony_provider",
-      "noise_reducer_provider",
-      "vad_provider",
-
-      # Model identities
-      "stt_model",
-      "tts_model",
-      "tts_voice",
-
-      # Runtime mode and turn policy
-      "runtime_mode",          # "chained_pipeline" | "text_session"
-      "turn_mode",             # "vad" | "push_to_talk"
-      "debug",                 # "off" | "light" | "full"
-
-      # Timeouts and thresholds (all numeric, no secrets)
-      "agent_timeout_seconds",
-      "stt_timeout_seconds",
-      "tts_timeout_seconds",
-      "min_speech_duration_ms",
-      "silence_duration_ms",
-      "interruption_threshold",
-
-      # Feature toggles (booleans)
-      "smart_turn_enabled",
-      "backchannel_filter_enabled",
-      "echo_cancellation_enabled",
-
-      # Journal config (safe to report)
-      "journal_retention",
-      "journal_backend",
-  })
+  SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
+      {
+          # Provider role identifiers (the *kind* of provider, not
+          # credentials)
+          "stt_provider",
+          "tts_provider",
+          "transport_provider",
+          "telephony_provider",
+          "noise_reducer_provider",
+          "vad_provider",
+          # Model identities
+          "stt_model",
+          "tts_model",
+          "tts_voice",
+          # Runtime mode and turn policy
+          "runtime_mode",  # "chained_pipeline" | "text_session"
+          "turn_mode",  # "vad" | "push_to_talk"
+          "debug",  # "off" | "light" | "full"
+          # Timeouts and thresholds (all numeric, no secrets)
+          "agent_timeout_seconds",
+          "stt_timeout_seconds",
+          "tts_timeout_seconds",
+          "min_speech_duration_ms",
+          "silence_duration_ms",
+          "interruption_threshold",
+          # Feature toggles (booleans)
+          "smart_turn_enabled",
+          "backchannel_filter_enabled",
+          "echo_cancellation_enabled",
+          # Journal config (safe to report)
+          "journal_retention",
+          "journal_backend",
+      }
+  )
   ```
 
   Every other `EasyCatConfig` field — including anything whose name
@@ -427,17 +424,19 @@ full `RedactionPolicy` write filter lands later in
   to serialize. The Phase 1 allowlist is:
 
   ```python
-  SAFE_ENV_VARS: frozenset[str] = frozenset({
-      # EasyCat runtime control
-      "EASYCAT_DATA_DIR",
-      "EASYCAT_LEGACY_OBS_DUAL_WRITE",
-      # Standard runtime identification (non-secret)
-      "PYTHONVERSION",  # captured as sys.version, not os.environ
-      # Deployment identification (non-secret, useful for bundles)
-      "HOSTNAME",
-      "REGION",
-      "DEPLOY_ENV",
-  })
+  SAFE_ENV_VARS: frozenset[str] = frozenset(
+      {
+          # EasyCat runtime control
+          "EASYCAT_DATA_DIR",
+          "EASYCAT_LEGACY_OBS_DUAL_WRITE",
+          # Standard runtime identification (non-secret)
+          "PYTHONVERSION",  # captured as sys.version, not os.environ
+          # Deployment identification (non-secret, useful for bundles)
+          "HOSTNAME",
+          "REGION",
+          "DEPLOY_ENV",
+      }
+  )
   ```
 
   Every other environment variable is dropped — including anything

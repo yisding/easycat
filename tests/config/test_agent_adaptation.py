@@ -6,7 +6,9 @@ from easycat import (
     EasyConfig,
     create_session,
 )
+from easycat.config import TextSessionConfig, _factory
 from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.stubs import NoopAgent
 from easycat.turn_manager import TurnManagerConfig
 from tests.config._helpers import (
     _DummyAgent,
@@ -118,6 +120,62 @@ def test_inject_agent_runtime_clears_mcp_when_empty():
     bridge = _Bridge()
     _inject_agent_runtime(bridge, mcp_servers=())
     assert bridge.mcp == []
+
+
+def test_shared_agent_resolver_preserves_audio_and_text_defaults():
+    audio_config = EasyConfig(openai_api_key="test-key", agent=None)
+    text_config = TextSessionConfig(agent=None)
+
+    assert _factory._resolve_agent(audio_config, ()) is None
+
+    text_agent = _factory._resolve_agent(
+        text_config,
+        (),
+        default_agent=NoopAgent(),
+    )
+    assert isinstance(text_agent, AgentRunner)
+    assert isinstance(text_agent._agent, NoopAgent)
+
+    unwrapped_text_agent = _factory._resolve_agent(
+        TextSessionConfig(agent=None, wrap_agent=False),
+        (),
+        default_agent=NoopAgent(),
+    )
+    assert isinstance(unwrapped_text_agent, NoopAgent)
+
+
+def test_shared_agent_resolver_configures_text_agent_before_wrapping():
+    class RuntimeAwareAgent:
+        def __init__(self) -> None:
+            self.runtime: dict[str, object] = {}
+
+        async def run(self, text: str) -> str:
+            return text
+
+        def configure_runtime(self, *, mcp_servers=None, model=None, api_key=None):
+            self.runtime = {
+                "mcp_servers": mcp_servers,
+                "model": model,
+                "api_key": api_key,
+            }
+
+    raw = RuntimeAwareAgent()
+    config = TextSessionConfig(
+        agent=raw,
+        agent_model="gpt-test",
+        remote_agent_api_key="secret",
+        mcp_servers=["stdio://server"],
+    )
+
+    resolved = _factory._resolve_agent(config, ("stdio://server",))
+
+    assert isinstance(resolved, AgentRunner)
+    assert resolved._agent is raw
+    assert raw.runtime == {
+        "mcp_servers": ["stdio://server"],
+        "model": "gpt-test",
+        "api_key": "secret",
+    }
 
 
 def test_create_session_does_not_mutate_turn_taking_config():

@@ -22,6 +22,10 @@ from easycat.events import (
     AgentRequestStarted,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    CallAnswered,
+    CallEnded,
+    CallFailed,
+    CallScreening,
     Error,
     Event,
     EventBus,
@@ -52,6 +56,7 @@ from easycat.events import (
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore, FilesystemArtifactStore
 from easycat.runtime.journal import ExecutionJournal, append_journal_record_async
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import redact_value
 
@@ -62,12 +67,22 @@ _JOURNAL_ATTRS = (
     "result",
     "action",
     "executor",
+    "provider",
     "tool_name",
     "call_id",
+    "attempt",
+    "call_sid",
+    "answered_by",
+    "platform",
+    "sip_code",
+    "duration_s",
+    "disposition",
+    "number",
     "delta",
     "listener_id",
     "queue_size",
     "dropped_frames",
+    "mark_name",
     "reason",
     "error",
     "structured_output",
@@ -80,6 +95,7 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
+_NONEMPTY_ATTRS = frozenset({"provider"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 _REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
 _REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"
@@ -117,6 +133,10 @@ _SIMPLE_EVENT_RECORDS = (
     _EventRecordSpec(AgentRequestStarted, JournalRecordKind.EVENT, "agent_request_started"),
     _EventRecordSpec(AgentDelta, JournalRecordKind.EVENT, "agent_delta"),
     _EventRecordSpec(AgentFinal, JournalRecordKind.EVENT, "agent_final"),
+    _EventRecordSpec(CallAnswered, JournalRecordKind.EVENT, "call_answered"),
+    _EventRecordSpec(CallEnded, JournalRecordKind.EVENT, "call_ended"),
+    _EventRecordSpec(CallFailed, JournalRecordKind.EVENT, "call_failed"),
+    _EventRecordSpec(CallScreening, JournalRecordKind.EVENT, "call_screening"),
     _EventRecordSpec(BotStartedSpeaking, JournalRecordKind.EVENT, "bot_started_speaking"),
     _EventRecordSpec(BotStoppedSpeaking, JournalRecordKind.EVENT, "bot_stopped_speaking"),
     _EventRecordSpec(Error, JournalRecordKind.EVENT, "error"),
@@ -257,7 +277,7 @@ def _event_attributes(event: Event) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for attr in _JOURNAL_ATTRS:
         value = getattr(event, attr, None)
-        if value is not None:
+        if value is not None and (attr not in _NONEMPTY_ATTRS or value):
             data[attr] = _journal_attr_value(attr, value)
     return data
 
@@ -362,9 +382,12 @@ class SessionJournalSink:
         output_bytes: bytes | None = None,
         input_artifact_class: ArtifactClass = "debug_verbose",
         output_artifact_class: ArtifactClass = "debug_verbose",
-    ) -> None:
+        tags: frozenset[str] = frozenset(),
+        inherit_turn_id: bool = True,
+    ) -> int | None:
         if self.journal is None:
-            return
+            return None
+        validate_builtin_record(name=name, kind=kind, data=data)
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
             if input_bytes is not None
@@ -375,13 +398,14 @@ class SessionJournalSink:
             if output_bytes is not None
             else None
         )
-        resolved_turn_id = self.current_turn_id(turn_id)
-        self.journal.append(
+        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+        return self.journal.append(
             kind=kind,
             name=name,
             session_id=self.session_id,
             turn_id=resolved_turn_id,
             data=data,
+            tags=tags,
             input_ref=input_ref,
             output_ref=output_ref,
         )
@@ -445,6 +469,7 @@ class SessionJournalSink:
             if journal is None:
                 return
             projection = _project_journal_event(event)
+            validate_builtin_record(name=name, kind=kind, data=projection.data)
             await append_journal_record_async(
                 journal,
                 kind=kind,

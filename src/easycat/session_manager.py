@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Generic, TypeVar
 
 from easycat.session._session import Session
@@ -34,10 +35,16 @@ class SessionManager(Generic[TKey]):
       sessions that may be in active ``connection`` blocks, coordinate
       cancellation at the call site (e.g. cancel the tasks running those
       blocks) before invoking ``stop_all``.
+    - A key remains registered until its stop completes successfully. If a
+      caller awaiting :meth:`remove` or :meth:`stop_all` is cancelled, the
+      retained entry can be retried with ``force=True`` after the original stop
+      coroutine has unwound.
     """
 
     def __init__(self) -> None:
         self._sessions: dict[TKey, Session] = {}
+        self._stop_tasks: dict[TKey, tuple[Session, asyncio.Task[None], bool]] = {}
+        self._force_requested: set[TKey] = set()
         self._lock = asyncio.Lock()
 
     def get(self, key: TKey) -> Session | None:
@@ -47,6 +54,7 @@ class SessionManager(Generic[TKey]):
         async with self._lock:
             if key in self._sessions:
                 raise ValueError(f"Session key already exists: {key}")
+            self._force_requested.discard(key)
             self._sessions[key] = session
         try:
             await session.start()
@@ -62,23 +70,104 @@ class SessionManager(Generic[TKey]):
             raise
         return session
 
-    async def remove(self, key: TKey) -> None:
-        async with self._lock:
-            session = self._sessions.pop(key, None)
-        if session is None:
-            return
-        await session.stop()
+    async def remove(self, key: TKey, *, force: bool = False) -> None:
+        """Stop one session, dropping its key only after successful teardown.
 
-    async def stop_all(self) -> None:
+        The manager owns one stop task per key. Cancelling a caller waiting on
+        graceful removal therefore does not lose ownership of the in-flight
+        stop, and a later forced removal can cancel that exact task before
+        entering ``stop(force=True)``.
+        """
+        while True:
+            operation = await self._prepare_stop(key, force=force)
+            if operation is None:
+                return
+            task, force_requested, operation_force = operation
+            if force_requested and not operation_force:
+                task.cancel()
+
+            try:
+                completed = await _await_owned_stop(task)
+            except Exception:
+                if force_requested and not operation_force:
+                    # A failing graceful cancellation must not suppress the
+                    # requested force attempt.
+                    continue
+                raise
+            if not completed:
+                # A concurrent force escalation cancelled the owned graceful
+                # task. Loop so every waiter joins the replacement force task.
+                continue
+
+            if force_requested and not operation_force:
+                # A cancellation-resistant graceful stop may complete normally
+                # after cancellation. Its completion callback either removed
+                # the session or retained it after an error; re-check both
+                # pieces of keyed state before deciding whether force is needed.
+                continue
+            return
+
+    async def _prepare_stop(
+        self,
+        key: TKey,
+        *,
+        force: bool,
+    ) -> tuple[asyncio.Task[None], bool, bool] | None:
+        """Return the current keyed stop operation, creating it when needed."""
         async with self._lock:
-            sessions = list(self._sessions.items())
-            self._sessions.clear()
+            session = self._sessions.get(key)
+            if session is None:
+                self._force_requested.discard(key)
+                return None
+            if force:
+                self._force_requested.add(key)
+            force_requested = key in self._force_requested
+            operation = self._stop_tasks.get(key)
+            if operation is not None and operation[1].done():
+                self._finish_stop(key, operation[0], operation[1])
+                session = self._sessions.get(key)
+                if session is None:
+                    return None
+                operation = None
+            if operation is None or operation[0] is not session:
+                stop = session.stop(force=True) if force_requested else session.stop()
+                task = asyncio.create_task(stop)
+                operation = (session, task, force_requested)
+                self._stop_tasks[key] = operation
+                task.add_done_callback(partial(self._finish_stop, key, session))
+            return operation[1], force_requested, operation[2]
+
+    async def stop_all(self, *, force: bool = False) -> None:
+        """Stop all sessions, retaining entries whose teardown did not finish."""
+        async with self._lock:
+            keys = list(self._sessions)
         results = await asyncio.gather(
-            *(session.stop() for _, session in sessions), return_exceptions=True
+            *(self.remove(key, force=force) for key in keys),
+            return_exceptions=True,
         )
-        for (key, _), result in zip(sessions, results):
-            if isinstance(result, Exception):
-                logger.error("Failed to stop session %s: %s", key, result)
+        # _finish_stop() consumes and logs each owned task's exception. Avoid
+        # emitting the same failure again from this aggregate wait.
+        _ = results
+
+    def _finish_stop(
+        self,
+        key: TKey,
+        session: Session,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Finalize manager bookkeeping for an owned stop task."""
+        operation = self._stop_tasks.get(key)
+        if operation is not None and operation[0] is session and operation[1] is task:
+            self._stop_tasks.pop(key, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            if self._sessions.get(key) is session:
+                self._sessions.pop(key, None)
+                self._force_requested.discard(key)
+        else:
+            logger.error("Failed to stop session %s: %s", key, error)
 
     @asynccontextmanager
     async def connection(
@@ -108,3 +197,17 @@ class SessionManager(Generic[TKey]):
             yield session
         finally:
             await self.remove(key)
+
+
+async def _await_owned_stop(task: asyncio.Task[None]) -> bool:
+    """Shield a manager-owned stop and distinguish child from caller cancellation."""
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if task.cancelled():
+            return False
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        return False
+    return True

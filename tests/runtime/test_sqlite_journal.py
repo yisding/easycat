@@ -28,6 +28,7 @@ from easycat.runtime import (
     create_journal,
     run_retention,
 )
+from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.records import (
     ErrorInfo,
@@ -80,6 +81,14 @@ class TestSqliteJournalBasics:
         assert records[0].sequence == 1
         assert records[0].name == "test_event"
         assert records[0].data == {"label": "value"}
+
+    def test_rejects_second_live_writer_for_same_session(self, tmp_path):
+        first = SqliteJournal("same-session", data_dir=tmp_path)
+        try:
+            with pytest.raises(RuntimeError, match="already active"):
+                SqliteJournal("same-session", data_dir=tmp_path)
+        finally:
+            first.close()
 
     def test_append_applies_write_filter(self, journal):
         journal.append(
@@ -665,6 +674,9 @@ class TestCrashRecovery:
         j1._conn.commit()
         j1._conn.close()
         j1._closed = True
+        # The fixture creates and "crashes" the owner in this process. Expire
+        # the cache entry to model the fresh worker that would discover it.
+        journal_sql_module._clear_crash_sweep_states()
 
         j2 = SqliteJournal("fresh", data_dir=tmp_path)
         try:
@@ -678,16 +690,24 @@ class TestCrashRecovery:
         j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
         # While open, the liveness marker is present.
         live = j._conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        live_start = j._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+        ).fetchone()
         assert live is not None and live[0] not in (None, "")
+        assert live_start is not None and live_start[0] not in (None, "")
         j.close()
 
         # After a clean close the marker is gone so the file never reads live.
         conn = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
         try:
             row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+            start_row = conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+            ).fetchone()
         finally:
             conn.close()
         assert row is None
+        assert start_row is None
 
     def test_open_does_not_sweep_a_live_sibling(self, tmp_path):
         # A concurrently-open live journal (its PID is this test process,
@@ -1254,6 +1274,44 @@ class TestSqliteHotPathBehavior:
 
 
 class TestLitestreamSqliteJournal:
+    def test_replica_url_is_namespaced_per_session(self, tmp_path):
+        sidecars: list[mock.Mock] = []
+
+        def start_sidecar(*args, **kwargs):
+            sidecar = mock.Mock(pid=100 + len(sidecars), stderr=None)
+            sidecars.append(sidecar)
+            return sidecar
+
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                side_effect=start_sidecar,
+            ) as popen,
+        ):
+            first = LitestreamSqliteJournal(
+                "call-one",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals?region=us-west-2",
+            )
+            second = LitestreamSqliteJournal(
+                "call two",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals?region=us-west-2",
+            )
+
+        assert popen.call_args_list[0].args[0][-1] == (
+            "s3://bucket/journals/call-one.sqlite?region=us-west-2"
+        )
+        assert popen.call_args_list[1].args[0][-1] == (
+            "s3://bucket/journals/call%20two.sqlite?region=us-west-2"
+        )
+        first.close()
+        second.close()
+
     def test_fallback_when_binary_missing(self, tmp_path):
         """When litestream is not on PATH, adapter degrades to plain SqliteJournal."""
         with mock.patch("easycat.runtime.journal_sql.shutil.which", return_value=None):
@@ -1344,7 +1402,7 @@ class TestLitestreamSqliteJournal:
 
         restore_path = tmp_path / "restored.sqlite"
         subprocess.run(
-            ["litestream", "restore", "-o", str(restore_path), replica_url],
+            ["litestream", "restore", "-o", str(restore_path), j._replica_url],
             check=True,
             timeout=10,
         )
