@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,24 @@ from easycat.vad import (
 )
 from easycat.vad import funasr as vad_funasr_module
 from tests.vad._helpers import _assert_extra_hint, _make_chunk
+
+
+def test_funasr_state_anomalies_use_logger_not_stdout(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from easycat.vad._funasr_runtime.e2e_vad import E2EVadModel
+
+    model = E2EVadModel({})
+    model.confirmed_start_frame = 12
+
+    with caplog.at_level(logging.WARNING):
+        model.OnVoiceStart(13, fake_result=True)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert "FunASR VAD start frame was not reset: confirmed_start_frame=12" in caplog.text
 
 
 def test_funasr_vad_fails_without_runtime_dependency(monkeypatch: pytest.MonkeyPatch):

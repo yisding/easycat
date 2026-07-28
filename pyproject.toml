@@ -238,7 +238,20 @@ extend-exclude = ["src/easycat/cli/scaffold/templates"]
 # new code out of the >10-complexity territory the M4 refactor cleaned up in
 # the streaming/bridge hot spots.  Existing offenders are enumerated in
 # per-file-ignores below — shrink that list, never grow it.
-select = ["E", "F", "I", "W", "UP", "C901", "PLR0912", "PLR0915", "ASYNC", "B", "RUF006"]
+select = [
+    "E",
+    "F",
+    "I",
+    "W",
+    "UP",
+    "C901",
+    "PLR0912",
+    "PLR0915",
+    "ASYNC",
+    "B",
+    "RUF006",
+    "T201",
+]
 # ASYNC109 (explicit async timeout params) is deliberate public API here (incl.
 # timeouts.py) — permanent.
 ignore = ["ASYNC109"]
@@ -250,6 +263,21 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# Executable teaching material, examples, maintenance scripts, benchmarks,
+# and tests intentionally write human-facing output.
+"docs/**/*.py" = ["T201"]
+"examples/**/*.py" = ["T201"]
+"perf/**/*.py" = ["T201"]
+"scripts/**/*.py" = ["T201"]
+"tests/**/*.py" = ["T201"]
+# These production entry points intentionally own terminal output. Library
+# modules outside this list must route diagnostics through logging.
+"src/easycat/cli/__init__.py" = ["T201"]
+"src/easycat/helpers.py" = ["T201"]
+"src/easycat/server/webrtc_routes.py" = ["T201"]
+"src/easycat/server/websocket.py" = ["T201"]
+"src/easycat/server/webtransport.py" = ["T201"]
+"src/easycat/validation/runner.py" = ["T201"]
 # ── Complexity-lint grandfather list (M4) ─────────────────────────
 # Pre-existing C901/PLR0912/PLR0915 offenders at the time the rules were
 # enabled.  Fix a file → delete its line.  Do not add new entries.
