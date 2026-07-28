@@ -29,6 +29,7 @@ from easycat.debug.bundle import (
     Manifest,
     RunBundle,
 )
+from easycat.errors import EASYCAT_E401, _attach_error_code
 
 
 @runtime_checkable
@@ -70,12 +71,19 @@ def export_debug_bundle(
     if path.exists() and not overwrite:
         raise BundleExists(f"Bundle already exists: {path}. Use overwrite=True to replace.")
 
-    captured = _capture_session_bundle(session, journal)
-    _write_bundle_archive(
-        path,
-        captured,
-        inline_artifacts=inline_artifacts,
-    )
+    try:
+        captured = _capture_session_bundle(session, journal)
+        _write_bundle_archive(
+            path,
+            captured,
+            inline_artifacts=inline_artifacts,
+        )
+    except Exception as exc:
+        _attach_error_code(
+            exc,
+            EASYCAT_E401(path=str(path), detail=str(exc)),
+        )
+        raise
 
 
 def _resolve_journal(session: object) -> _JournalReader | None:
