@@ -186,12 +186,12 @@ jobs:
         # matrix.extra is derived from pyproject (scripts/extras_matrix.py), not
         # attacker-controllable input.
         run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
-      # The unused requires_extra pytest marker was dropped (it marked zero
-      # tests). Extras coverage relies on the import smoke above plus the
-      # offline contract tests below, whose importorskip gates now run for
-      # real with this cell's SDK installed.
-      - name: Offline contract tests with the real SDK present
-        run: uv run --no-sync --python 3.12 pytest tests/contracts -q -m "not integration_live"
+      # The import smoke proves the package imports. The integration directory
+      # contains importorskip-gated tests and AgentBridgeContractSuite
+      # subclasses built around real SDK objects; this cell's installed extra
+      # therefore exercises the adapter rather than only its import surface.
+      - name: Offline bridge and contract tests with the real SDK present
+        run: uv run --no-sync --python 3.12 pytest tests/contracts tests/integrations/agents -q -m "not integration_live"
 
   live-canaries:
     name: Live Provider Canaries
