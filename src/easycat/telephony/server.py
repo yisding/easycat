@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import websockets
@@ -82,8 +82,8 @@ class TwilioVoiceServerConfig:
     http_host: str = "0.0.0.0"
     http_port: int = 8000
     stream_url: str | None = None
-    stream_token_secret: str | None = None
-    twilio_auth_token: str | None = None
+    stream_token_secret: str | None = field(default=None, repr=False)
+    twilio_auth_token: str | None = field(default=None, repr=False)
     trust_proxy_headers: bool = False
     unsafe_allow_unsigned_webhooks: bool = False
     max_sessions: int = 64

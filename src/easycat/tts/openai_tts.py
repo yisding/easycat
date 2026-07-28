@@ -67,7 +67,7 @@ async def _iter_low_latency_pcm_chunks(
 class OpenAITTSConfig:
     """Configuration for the OpenAI TTS provider."""
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "gpt-4o-mini-tts"
     voice: str = "alloy"
     speed: float = 1.0

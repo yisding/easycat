@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from easycat.events import EventBus
@@ -25,13 +25,13 @@ class TwilioAppSettings:
 
     stream_url: str
     account_sid: str = ""
-    auth_token: str = ""
+    auth_token: str = field(default="", repr=False)
     voice_from: str = ""
     twiml_url: str = ""
     status_callback_url: str = ""
-    call_api_token: str = ""
+    call_api_token: str = field(default="", repr=False)
     sms_from: str = ""
-    stream_token_secret: str = ""
+    stream_token_secret: str = field(default="", repr=False)
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:

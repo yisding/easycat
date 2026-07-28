@@ -457,7 +457,7 @@ class _AgentSessionConfig:
 
     agent: Any = None
     agent_model: str | None = None
-    remote_agent_api_key: str | None = None
+    remote_agent_api_key: str | None = field(default=None, repr=False)
     agent_runner: AgentRunnerConfig | None = None
     # When True (default), a plain ``async run(text) -> str`` agent is
     # auto-wrapped in :class:`AgentRunner` so it gets timeout, history,
@@ -503,7 +503,7 @@ class EasyConfig(_AgentSessionConfig):
             changes are not supported.
     """
 
-    openai_api_key: str | None = None
+    openai_api_key: str | None = field(default=None, repr=False)
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
     vad: VADConfig | VADProvider = field(default_factory=VADConfig)

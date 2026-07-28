@@ -49,7 +49,7 @@ class ElevenLabsSTTConfig:
        fail-fasts on an empty key.
     """
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str | None = None
     language: str | None = None
     mode: str = "realtime"  # "realtime" or "batch"

@@ -31,7 +31,7 @@ class CartesiaSTTConfig:
     (``min_volume`` / ``max_silence_duration_secs``), which ink-2 ignores.
     """
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     # Model is resolved lazily (see ``resolved_model``) when left as ``None``:
     # ``ink-2`` (latest, lowest WER, built-in turn detection) for English,
     # falling back to the multilingual ``ink-whisper`` for non-English —

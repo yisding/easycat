@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from easycat._provider_catalog import ProviderCatalog, ProviderSpec
@@ -88,7 +88,7 @@ class STTProviderConfig:
     """Named STT provider, credential, and provider-specific parameters."""
 
     provider: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     params: dict[str, Any] | None = None
 
 

@@ -35,7 +35,7 @@ light.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hmac import compare_digest
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -163,7 +163,7 @@ class BearerTokenAuth:
     :func:`hmac.compare_digest`.
     """
 
-    token: str
+    token: str = field(repr=False)
     allow_query_token: bool = False
     unsafe_allow_no_auth: bool = False
 

@@ -45,7 +45,7 @@ class OpenAISTTConfig:
     requests.
     """
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "gpt-4o-transcribe"
     language: str | None = None
     prompt: str | None = None

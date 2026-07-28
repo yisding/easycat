@@ -21,7 +21,7 @@ class ICEServer:
 
     urls: str | list[str]
     username: str | None = None
-    credential: str | None = None
+    credential: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.urls, str):
@@ -86,7 +86,7 @@ class WebRTCTransportConfig:
     expose_ice_credentials: bool = False
     cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=default_webrtc_stats_path)
-    auth_token: str | None = None
+    auth_token: str | None = field(default=None, repr=False)
     allow_query_token: bool = False
     max_sessions: int = 64
     stats_max_records: int = 1_000
