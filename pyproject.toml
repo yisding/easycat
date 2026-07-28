@@ -329,8 +329,10 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # Surface the slowest tests so regressions in test latency stay visible
-# (core pytest CLI flags, so strict_config=true is unaffected).
-addopts = "--durations=15 --durations-min=1.0"
+# (core pytest CLI flags, so strict_config=true is unaffected). Tests that
+# provision external SDKs, binaries, or services run only when explicitly
+# selected with ``-m integration_external``.
+addopts = '--durations=15 --durations-min=1.0 -m "not integration_external"'
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true

@@ -40,7 +40,7 @@ async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
 
     import sys
 
-    sys.modules["ten_vad"] = mock_ten_vad
+    monkeypatch.setitem(sys.modules, "ten_vad", mock_ten_vad)
 
     import types
 
@@ -52,20 +52,16 @@ async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
         int16="int16",
         frombuffer=lambda data, dtype: _FakeArray(),
     )
-    sys.modules["numpy"] = fake_numpy
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
 
-    try:
-        vad = TenVAD()
-        vad._min_speech_duration_ms = 0
-        vad._threshold = 0.5
+    vad = TenVAD()
+    vad._min_speech_duration_ms = 0
+    vad._threshold = 0.5
 
-        chunk = _make_chunk(1000)
-        events = []
-        async for event in vad.process(chunk):
-            events.append(event)
+    chunk = _make_chunk(1000)
+    events = []
+    async for event in vad.process(chunk):
+        events.append(event)
 
-        assert any(isinstance(e, VADStartSpeaking) for e in events)
-        assert mock_instance.process.call_count == 2
-    finally:
-        del sys.modules["ten_vad"]
-        del sys.modules["numpy"]
+    assert any(isinstance(e, VADStartSpeaking) for e in events)
+    assert mock_instance.process.call_count == 2

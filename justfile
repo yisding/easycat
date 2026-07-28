@@ -20,9 +20,10 @@ sync:
 sync-extra *EXTRAS:
     uv sync --group dev {{ prepend('--extra ', EXTRAS) }}
 
-# Run the full test suite (serial, deterministic). Source of truth.
+# Run the full local test suite. `loadscope` keeps each module on one worker;
+# pytest's default addopts exclude tests that provision external dependencies.
 test:
-    uv run pytest
+    uv run pytest -n auto --dist loadscope
 
 # Run the safe slice in parallel. `loadscope` keeps each module's tests
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
@@ -130,7 +131,7 @@ validate-release:
 validate-report REPORT=".easycat/validation/latest.json":
     uv run easycat validate report {{ quote(REPORT) }}
 
-# The pre-PR gauntlet: format check + lint + full serial test suite.
+# The pre-PR gauntlet: format check + lint + full local test suite.
 check: fmt-check lint test
 
 # Run all pre-commit hooks against the whole tree.

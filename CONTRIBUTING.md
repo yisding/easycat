@@ -41,7 +41,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | --- | --- | --- |
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
-| Full test suite | `just test` | `uv run pytest` |
+| Full local test suite | `just test` | `uv run pytest -n auto --dist loadscope` |
 | Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"` |
 | One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
 | Lint | `just lint` | `uv run ruff check .` |
@@ -59,7 +59,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
 | Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
-| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest` |
+| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest -n auto --dist loadscope` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
 
 The docs/onboarding guard table below is generated from the `justfile` by
@@ -119,15 +119,18 @@ contracts, packaging, live canaries, or stress behavior.
 
 ## Parallel runs and xdist safety
 
-`just test-fast`, `just cov`, and the `quick` validation lane use
+`just test`, `just test-fast`, `just cov`, and the `quick` validation lane use
 `pytest -n auto --dist loadscope`. `loadscope` keeps every test in a module on
 the **same** worker, which matters for async event-loop tests and any
 socket/port-binding tests. If you add tests that bind a **fixed** port (rather
 than port `0`), keep them in one module and prefer marking them
-`integration_socket` — the socket, stress, and contracts lanes stay serial.
-`just test` (serial) is the source of truth. Always run coverage as
-`pytest --cov` — never `coverage run -m pytest -n auto`, which reports 0% under
-xdist.
+`integration_socket` — the dedicated socket, stress, and contracts validation
+lanes stay serial.
+`just test` is the full local source of truth; pytest's configured marker
+expression skips `integration_external` tests that provision SDKs, binaries,
+or services. Run those explicitly with `pytest -m integration_external`.
+Always run coverage as `pytest --cov` — never
+`coverage run -m pytest -n auto`, which reports 0% under xdist.
 
 ## Validation slices and the `easycat validate` CLI
 
@@ -181,7 +184,9 @@ collection. The full list lives in `pyproject.toml` under
 - `integration_live` — needs live provider/API endpoints, API keys, and
   optional provider extras.
 - `integration_external` — needs external local binaries, SDKs, or services
-  without live provider API credentials.
+  without live provider API credentials. Excluded from bare `pytest`,
+  `just test`, and `just check`; run explicitly with
+  `pytest -m integration_external`.
 - `slow` — long end-to-end tests; opt in with `-m slow`.
 - `contract` — provider / protocol / bridge contract tests.
 - `latency` — latency measurement or SLO tests.
