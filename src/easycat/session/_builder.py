@@ -145,8 +145,9 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
     # synthesizer (producer) and the AudioRouter (drain consumer); built
     # once here and handed to both.  Outbound speech must NOT use
     # DROP_OLDEST — dropping the earliest unsent bot audio makes the
-    # listener hear the utterance jump forward; DROP_NEWEST trims only the
-    # tail when the transport falls behind.  Callers wanting real
+    # listener hear the utterance jump forward. DROP_NEWEST preserves all
+    # audio already accepted into the queue, though sustained backpressure can
+    # create gaps wherever later chunks are rejected. Callers wanting real
     # backpressure inject a BLOCK-policy queue via
     # ``SessionConfig.outbound_queue``.
     outbound_queue = cfg.outbound_queue or BoundedAudioQueue(

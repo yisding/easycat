@@ -38,6 +38,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.runtime.scope import RuntimeScope
 from easycat.smart_turn import SmartTurnProvider
 
 logger = logging.getLogger(__name__)
@@ -512,6 +513,7 @@ class TurnManager:
 
         # Start the end-of-turn silence timer
         self._silence_timer_task = asyncio.create_task(self._silence_timeout())
+        self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
         """Return the trailing audio the endpoint detector should consume.
