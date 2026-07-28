@@ -191,7 +191,7 @@ hearing.
  from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
 @@ -60,62 +78,23 @@
- MODEL = "gpt-4o-mini"
+ MODEL = "gpt-5.6-luna"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch09c-estimate-{int(time.time())}"
@@ -268,7 +268,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -144,13 +123,33 @@
+@@ -144,16 +123,32 @@
                  self._preroll.append(chunk)
  
  
@@ -293,20 +293,19 @@ hearing.
  
  
 -async def run_agent(client, history, sentence_queue, cancel: CancelToken):
--    stream = await client.chat.completions.create(model=MODEL, messages=history, stream=True)
 +async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
-+    stream = await client.chat.completions.create(
-+        model=MODEL,
+     stream = await client.chat.completions.create(
+         model=MODEL,
+         reasoning_effort="none",
+-        messages=history,
 +        messages=[
 +            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
 +            {"role": "user", "content": user_text},
 +        ],
-+        stream=True,
-+    )
+         stream=True,
+     )
      buffer = ""
-     async for chunk in stream:
-         if cancel.is_cancelled:
-@@ -171,49 +170,38 @@
+@@ -176,49 +171,38 @@
      await sentence_queue.put(None)
  
  
@@ -367,7 +366,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -239,7 +227,7 @@
+@@ -244,7 +228,7 @@
          await close_if_supported(stt)
  
  
@@ -376,7 +375,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -250,35 +238,35 @@
+@@ -255,35 +239,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -425,7 +424,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -286,54 +274,20 @@
+@@ -291,54 +275,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -486,7 +485,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -351,41 +305,34 @@
+@@ -356,41 +306,34 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -540,7 +539,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -400,6 +347,32 @@
+@@ -405,6 +348,32 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -573,7 +572,7 @@ hearing.
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
          detector = MiniTurnDetector(vad)
-@@ -411,19 +384,22 @@
+@@ -416,19 +385,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  

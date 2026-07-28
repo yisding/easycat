@@ -35,10 +35,11 @@ the next hint; keep each attempt in your evidence record.
 <summary>Hint 1 of 3</summary>
 
 `turn_02_slow_agent.bundle` is the obvious one — `agent` is at
-   2100 ms vs 600 ms budget. Possible fixes: smaller model
-   (gpt-4o-mini → gpt-4o-nano), prompt caching for the system
-   prompt, agent warm-pool (keep one open connection per session
-   to avoid TLS handshake).
+   2100 ms vs 600 ms budget. Possible fixes: choose a latency-first
+   tier such as `gpt-5.6-luna` instead of a quality-first tier, lower
+   reasoning effort when the task permits it, use prompt caching for
+   the system prompt, or keep an agent warm-pool (one open connection
+   per session to avoid a TLS handshake).
 
 </details>
 

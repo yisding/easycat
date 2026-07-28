@@ -29,7 +29,7 @@ from easycat._net import is_loopback_host
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stdout_console
 
-_DEFAULT_AGENT_MODEL = "gpt-4o-mini"
+_DEFAULT_AGENT_MODEL = "gpt-5.6-luna"
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful voice assistant. Keep responses concise and conversational."
 )
@@ -120,6 +120,7 @@ def _playground_config_factory(
             base_url="https://api.openai.com",
             model=agent_model,
             api_key=os.environ.get("OPENAI_API_KEY"),
+            reasoning_effort="none",
         )
         return EasyConfig.browser(transport=transport, agent=agent)
 

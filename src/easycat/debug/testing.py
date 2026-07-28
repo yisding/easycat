@@ -441,7 +441,7 @@ async def assert_llm_judge(
     *,
     min_score: int = 4,
     rubric: str = JUDGE_RUBRIC,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5.6-luna",
     judge: Callable[[str, str], Awaitable[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Judge a turn's transcript with an LLM rubric; assert every score.
@@ -493,6 +493,7 @@ def _openai_judge(model: str) -> Callable[[str, str], Awaitable[Mapping[str, Any
     async def _judge(transcript: str, rubric: str) -> Mapping[str, Any]:
         resp = await client.chat.completions.create(
             model=model,
+            reasoning_effort="none",
             messages=[
                 {"role": "system", "content": rubric},
                 {"role": "user", "content": transcript},
