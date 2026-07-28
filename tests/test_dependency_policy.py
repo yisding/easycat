@@ -80,6 +80,17 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}
+    rnnoise_names = {Requirement(dep).name for dep in extras["rnnoise"]}
+    all_names = {Requirement(dep).name for dep in extras["all"]}
+
+    assert {"pyrnnoise", "requests"} <= rnnoise_names
+    assert {"pyrnnoise", "requests"}.isdisjoint(quickstart_names)
+    assert rnnoise_names <= all_names
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

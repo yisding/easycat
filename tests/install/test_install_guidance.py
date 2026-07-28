@@ -131,10 +131,10 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "local",
         "openai",
         "openai-agents",
-        "rnnoise",
         "silero-vad",
         "smart-turn",
     }.issubset(bundled_extras)
+    assert "rnnoise" not in bundled_extras
 
     redundant: list[str] = []
     extra_pattern = "|".join(re.escape(extra) for extra in bundled_extras)

@@ -132,14 +132,17 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, numpy, onnxruntime, and LiveKit AEC3 echo
-cancellation. It does not include TEN VAD; install that optional extra
-separately only if you accept its non-permissive license. Silero VAD runs on
-its bundled ONNX model via `onnxruntime` (already in `quickstart`) — no torch
-required. If you want a leaner install with Silero, add extras individually:
+SDK, numpy, onnxruntime, and LiveKit AEC3 echo cancellation. RNNoise is
+opt-in because noise reduction defaults off and its Python binding pulls a
+large multimedia/plotting dependency chain; add the `rnnoise` extra only when
+you enable that backend. `quickstart` also does not include TEN VAD; install
+that optional extra separately only if you accept its non-permissive license.
+Silero VAD runs on its bundled ONNX model via `onnxruntime` (already in
+`quickstart`) — no torch required. If you want a leaner install with Silero,
+add extras individually:
 
 ```bash
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad --extra aec --group dev
+uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
 ```
 
 Optional dependencies you may need depending on providers, transports, agent
