@@ -432,6 +432,27 @@ def test_dockerfile_default_extras_cover_ws_server_golden_path() -> None:
     assert "openai-agents" in extras
 
 
+def test_docker_base_images_are_digest_pinned_and_tracked_by_dependabot() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    references = [line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")]
+
+    assert len(references) == 2
+    for reference in references:
+        tagged_image, separator, digest = reference.partition("@sha256:")
+        assert separator
+        assert ":" in tagged_image.rsplit("/", 1)[-1]
+        assert len(digest) == 64
+        assert all(character in "0123456789abcdef" for character in digest)
+
+    dependabot = (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    docker_updates = dependabot.split('- package-ecosystem: "docker"', 1)[1].split(
+        "\n  - package-ecosystem:", 1
+    )[0]
+    assert 'directory: "/docker"' in docker_updates
+    assert 'interval: "weekly"' in docker_updates
+    assert "default-days: 7" in docker_updates
+
+
 def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> None:
     dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
     guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
