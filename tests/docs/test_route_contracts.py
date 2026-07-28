@@ -57,10 +57,13 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         )
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ONBOARDING_GUARD_COMMANDS
-        + RAW_ONBOARDING_GUARD_COMMANDS
     ):
         assert command in command_section
         assert command in route_commands
+
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in command_section
+        assert command not in route_commands
 
 
 def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
@@ -78,10 +81,13 @@ def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ("uv run pytest tests/install/test_install_guidance.py",)
         + ONBOARDING_GUARD_COMMANDS
-        + RAW_ONBOARDING_GUARD_COMMANDS
     ):
         assert command in command_section
         assert command in route_commands
+
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in command_section
+        assert command not in route_commands
 
 
 def test_architecture_explanation_carries_claude_guide_prose() -> None:
@@ -532,11 +538,12 @@ def test_public_api_docs_route_matches_contract_guard_commands() -> None:
         "uv run easycat explain json-schema",
         "uv run pytest tests/test_public_api.py",
         "just guard-docs",
-        RAW_ONBOARDING_GUARD_COMMANDS[0],
     ):
         assert command in contract
         assert command in route_commands
 
+    assert RAW_ONBOARDING_GUARD_COMMANDS[0] in contract
+    assert RAW_ONBOARDING_GUARD_COMMANDS[0] not in route_commands
     assert "If `just` is not installed" in contract
     assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in contract
     assert "easycat docs --json" not in route_commands
@@ -719,7 +726,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 
     for command in RAW_ONBOARDING_GUARD_COMMANDS:
         assert command in validation_section
-        assert command in route_commands
+        assert command not in route_commands
 
     for command in validation_commands:
         assert command in validation_section
@@ -767,7 +774,7 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
 
     for command in RAW_ONBOARDING_GUARD_COMMANDS:
         assert command in contributing
-        assert command in route_commands
+        assert command not in route_commands
 
     for command in validation_commands:
         assert command in validation_section

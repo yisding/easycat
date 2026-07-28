@@ -12,10 +12,9 @@ just                       # list every task (or read the justfile)
 just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 ```
 
-Run `uv run easycat docs` for the maintained reader-facing map, including
-quickstart, CLI and scaffold commands, examples, teaching chapters, public API,
-validation, and operations. Use `uv run easycat docs --audience contributors`
-to narrow the map to contributor-facing routes, or
+Run `uv run easycat docs` for the compact reader-facing route index, or
+`uv run easycat docs --verbose` to expand every route and command hint. Use
+`uv run easycat docs --audience contributors` to show contributor-facing routes, or
 `uv run easycat docs --audience contributors --json` when automation needs
 that smaller route map.
 Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use

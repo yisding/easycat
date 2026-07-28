@@ -2,11 +2,12 @@
 
 Use this page as the map for the maintained docs. Planning notes live under
 `plan/`; the files below are the current reader-facing documentation.
-From this repository, `uv run easycat docs` prints the same map; in an
-installed app environment, use `easycat docs`. Narrow the map by audience —
-the human docs menu also prints the available audience labels:
+From this repository, `uv run easycat docs` prints a compact index of route
+labels and audience filters; in an installed app environment, use
+`easycat docs`. Expand the full map with `--verbose`, or narrow it by audience:
 
 ```bash
+uv run easycat docs --verbose                # every route and command hint
 uv run easycat docs --audience learners      # learning routes
 uv run easycat docs --audience app-builders  # scaffold/app-building routes
 uv run easycat docs --audience operators     # deployment/observability routes

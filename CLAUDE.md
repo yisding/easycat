@@ -57,7 +57,8 @@ uv run pytest                    # Run full test suite
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
 uv run pytest tests/install/test_install_guidance.py    # Verify onboarding/install guidance
-uv run easycat docs              # Maintained docs map
+uv run easycat docs              # Compact docs route/audience index
+uv run easycat docs --verbose    # Full docs map with command hints
 uv run easycat docs --audience maintainers  # Maintainer-focused docs map
 uv run easycat docs --audience maintainers --json  # JSON maintainer-focused docs map
 uv run easycat docs --json       # Docs route map with audiences and command hints

@@ -197,8 +197,9 @@ easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat serve            # serve the browser voice playground on localhost
 easycat plan             # show the provider/capability plan for a manifest profile
 easycat plan --json      # emit the machine-readable provider/capability plan
-easycat docs             # show docs for learning, maintenance, validation, operations
-easycat docs --audience learners # filter docs by reader audience or broad role
+easycat docs             # list route labels and available audience filters
+easycat docs --verbose   # expand every route with descriptions and command hints
+easycat docs --audience learners # expand routes for one reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat docs --audience app-builders # filter docs to scaffold and app-building routes

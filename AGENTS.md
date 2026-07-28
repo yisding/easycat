@@ -46,8 +46,9 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `uv run pytest`: run full test suite.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc_config.py tests/transports/test_webrtc_lifecycle_server.py tests/transports/test_webrtc_stats_artifacts.py tests/transports/test_webrtc_outbound_audio.py tests/transports/test_webrtc_auth_browser_playground.py`: run focused WebRTC transport tests.
-- `uv run easycat docs`: show the maintained docs map for quickstart,
-  examples, teaching, architecture and maintenance, validation, and operations.
+- `uv run easycat docs`: show the compact route-label and audience index.
+- `uv run easycat docs --verbose`: expand every maintained docs route with
+  descriptions and command hints.
 - `uv run easycat docs --audience coding-agents`: show the coding-agent
   route slice without scanning the full map.
 - `uv run easycat docs --audience coding-agents --json`: emit the
