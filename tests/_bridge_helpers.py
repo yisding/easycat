@@ -7,6 +7,7 @@ protocol with minimal boilerplate.  Test classes subclass it and override
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from easycat.integrations.agents.base import (
@@ -34,6 +35,7 @@ class _TestBridgeBase:
         self.interruption_notified = False
         self.interruption_text_spoken = ""
         self.interruption_mode = ""
+        self.interruption_observed = asyncio.Event()
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         return FrameworkStateSnapshot(
@@ -56,6 +58,7 @@ class _TestBridgeBase:
         self.interruption_notified = True
         self.interruption_text_spoken = delivered_text
         self.interruption_mode = "truncate"
+        self.interruption_observed.set()
 
     def replace_last_assistant_text(self, text: str) -> None:
         for entry in reversed(self._history):
@@ -67,10 +70,12 @@ class _TestBridgeBase:
         self._history.append({"role": "system", "content": note})
         self.interruption_notified = True
         self.interruption_mode = "message"
+        self.interruption_observed.set()
 
     def reset(self) -> None:
         self._history.clear()
         self._last_output = None
+        self.interruption_observed.clear()
 
     @property
     def last_output(self) -> Any:
