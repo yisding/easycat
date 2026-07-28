@@ -67,6 +67,16 @@ def _marker_name_is_documented(section: str, marker: str) -> bool:
     return re.search(rf"`{re.escape(marker)}(?:\([^`]*\))?`", section) is not None
 
 
+def test_current_code_status_uses_live_inventory_commands() -> None:
+    status = (REPO_ROOT / "plan/roadmap/current-code-status.md").read_text(encoding="utf-8")
+
+    assert "git ls-files src/easycat | rg -c '\\.py$'" in status
+    assert "git ls-files tests | rg -c '(^|/)test_[^/]*\\.py$'" in status
+    assert re.search(r"contains \d+ tracked", status) is None
+    assert (REPO_ROOT / "LICENSE").is_file()
+    assert "A root `LICENSE` remains active release-bar work" not in status
+
+
 def _development_loop_rows() -> list[dict[str, str]]:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     rows: list[dict[str, str]] = []
