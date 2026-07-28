@@ -103,6 +103,15 @@ class ElevenLabsSTTConfig:
     ws_connect: Any = field(default=None, repr=False)
     event_bus: Any = field(default=None, repr=False)
 
+    @property
+    def resolved_model(self) -> str:
+        """Return the model selected by the explicit value and operating mode."""
+        if self.model is not None:
+            return self.model
+        if self.mode == "realtime":
+            return "scribe_v2_realtime"
+        return "scribe_v1"
+
     def __post_init__(self) -> None:
         if self.max_retries < 0:
             raise ValueError(
@@ -192,11 +201,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._audio_resampler = PCM16StreamResampler(config.realtime_sample_rate)
 
     def _resolved_model(self) -> str:
-        if self._config.model is not None:
-            return self._config.model
-        if self._config.mode == "realtime":
-            return "scribe_v2_realtime"
-        return "scribe_v1"
+        return self._config.resolved_model
 
     def _realtime_audio_format(self) -> str:
         sample_rate = self._config.realtime_sample_rate
