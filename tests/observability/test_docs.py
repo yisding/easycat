@@ -173,6 +173,7 @@ def test_latency_docs_cover_core_latency_defaults() -> None:
     documented = {(cls, field) for cls, field, _value in _LATENCY_DEFAULT_ROW.findall(doc)}
 
     required = {
+        ("LocalTransportConfig", "output_preroll_frames"),
         ("TurnManagerConfig", "end_of_turn_silence_ms"),
         ("TurnManagerConfig", "stt_segment_silence_ms"),
         ("VADConfig", "min_silence_duration_ms"),

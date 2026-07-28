@@ -307,6 +307,24 @@ class TestLocalTransport:
         assert all(len(f) == frame_bytes for f in frames)
 
     @pytest.mark.asyncio
+    async def test_output_preroll_depth_is_configurable(self):
+        """A one-frame depth begins playback as soon as one frame is queued."""
+        np = pytest.importorskip("numpy")
+        transport = LocalTransport(LocalTransportConfig(output_preroll_frames=1))
+        transport._connected = True
+        frame_samples = transport._frame_samples
+        pcm = (1000).to_bytes(2, "little", signed=True) * frame_samples
+        chunk = AudioChunk(data=pcm, format=transport._audio_format)
+        assert await transport.send_audio(chunk) is True
+        outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+
+        transport._output_callback(np, outdata, frame_samples, None, None)
+
+        assert transport._primed is True
+        assert transport._out_queue.empty()
+        assert np.any(outdata)
+
+    @pytest.mark.asyncio
     async def test_output_callback_skips_reference_until_consumer_attached(self):
         """The hot output callback does no per-frame reference work when AEC is
         off (no consumer has drained), then begins capturing once one attaches."""
@@ -351,8 +369,15 @@ class TestLocalTransport:
         config = LocalTransportConfig()
         assert config.audio_format == PCM16_MONO_24K
         assert config.frame_duration_ms == 20
+        assert config.output_preroll_frames == 3
         assert config.input_device is None
         assert config.output_device is None
+        assert LocalTransportConfig(output_preroll_frames=0).output_preroll_frames == 0
+
+    @pytest.mark.parametrize("value", [-1, 1.5, True])
+    def test_config_rejects_invalid_output_preroll_frames(self, value: object):
+        with pytest.raises(ValueError, match="output_preroll_frames"):
+            LocalTransportConfig(output_preroll_frames=value)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_receive_audio_returns_on_disconnect(self):
@@ -441,13 +466,11 @@ class TestLocalTransport:
     async def test_output_callback_buffers_silence_until_primed(self):
         """The jitter buffer emits silence until the pre-roll fills, then audio."""
         np = pytest.importorskip("numpy")
-        from easycat.transports.local import (
-            _OUTPUT_PREROLL_FRAMES,
-            _QueuedOutputChunk,
-        )
+        from easycat.transports.local import _QueuedOutputChunk
 
         transport = LocalTransport()
         frame_samples = transport._frame_samples
+        preroll_frames = transport._config.output_preroll_frames
 
         def _fresh_outdata():
             return np.ones((frame_samples, 1), dtype=np.float32)
@@ -458,7 +481,7 @@ class TestLocalTransport:
             format=transport._audio_format,
         )
         transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=loud))
-        assert transport._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES
+        assert transport._out_queue.qsize() < preroll_frames
 
         outdata = _fresh_outdata()
         transport._output_callback(np, outdata, frame_samples, None, None)
@@ -467,14 +490,14 @@ class TestLocalTransport:
         assert transport._out_queue.qsize() == 1  # frame retained, not drained
 
         # Fill up to the pre-roll target; the next callback primes and drains.
-        while transport._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
+        while transport._out_queue.qsize() < preroll_frames:
             transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=loud))
 
         outdata = _fresh_outdata()
         transport._output_callback(np, outdata, frame_samples, None, None)
         assert transport._primed
         assert not (outdata == 0).all()  # real audio after prime
-        assert transport._out_queue.qsize() == _OUTPUT_PREROLL_FRAMES - 1
+        assert transport._out_queue.qsize() == preroll_frames - 1
 
     @pytest.mark.asyncio
     async def test_clear_audio_re_primes_jitter_buffer(self):

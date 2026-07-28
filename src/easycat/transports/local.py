@@ -24,12 +24,6 @@ logger = logging.getLogger(__name__)
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
 
-# Output jitter-buffer pre-roll: silence is emitted until this many frames have
-# accumulated in ``_out_queue`` so a small burst of late chunks does not
-# underrun the speaker callback. Kept deliberately small (~60ms at 20ms frames)
-# so it smooths jitter without adding audible latency to the bot's first word.
-_OUTPUT_PREROLL_FRAMES = 3
-
 
 @dataclass
 class _QueuedOutputChunk:
@@ -58,6 +52,20 @@ class LocalTransportConfig:
     # partial-fit drop in ``send_audio`` instead of being hidden behind a giant
     # buffer.
     max_pending_out_chunks: int = 500
+    # Output jitter-buffer pre-roll: silence is emitted until this many frames
+    # have accumulated so a small burst of late TTS chunks does not underrun
+    # the speaker callback. Three frames is at most ~60 ms at the default frame
+    # size and often only one callback period when a TTS chunk contains several
+    # frames. Set to 0 to disable the pre-roll.
+    output_preroll_frames: int = 3
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.output_preroll_frames, int)
+            or isinstance(self.output_preroll_frames, bool)
+            or self.output_preroll_frames < 0
+        ):
+            raise ValueError("output_preroll_frames must be a non-negative integer")
 
 
 class LocalTransport(AudioQueueMixin):
@@ -116,9 +124,9 @@ class LocalTransport(AudioQueueMixin):
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Output jitter buffer: the callback emits silence until ``_out_queue``
-        # has built up ``_OUTPUT_PREROLL_FRAMES`` of pre-roll, then drains one
-        # frame per callback. Reset to ``False`` on every connect / barge-in so
-        # each utterance re-primes.
+        # has built up the configured number of pre-roll frames, then drains
+        # one frame per callback. Reset to ``False`` on every connect / barge-in
+        # so each utterance re-primes.
         self._primed: bool = False
 
         self._input_stream: Any = None
@@ -258,7 +266,7 @@ class LocalTransport(AudioQueueMixin):
         # then drain one frame per callback. Re-primes after every
         # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
         if not self._primed:
-            if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
+            if self._out_queue.qsize() < self._config.output_preroll_frames:
                 outdata[:] = 0
                 if self._aec_reference_enabled:
                     self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
