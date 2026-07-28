@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import queue
 import random
 import shutil
@@ -23,6 +24,7 @@ import threading
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -354,9 +356,15 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
     return {
         "schema_version": 1,
         "kind": "framework_latency_benchmark",
+        "generated_at": datetime.now(UTC).isoformat(),
         "metric": "accepted_transcript_to_first_audio_ms",
         "comparison_metric": "accepted_transcript_to_first_audio_ms",
         "easycat_revision": _revision(),
+        "runtime": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python": platform.python_version(),
+        },
         "workload": {
             "iterations": iterations,
             "warmups": warmups,

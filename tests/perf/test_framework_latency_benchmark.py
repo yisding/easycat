@@ -237,6 +237,10 @@ def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
     )
 
     assert result["metric"] == "accepted_transcript_to_first_audio_ms"
+    assert result["generated_at"].endswith("+00:00")
+    assert result["runtime"]["platform"]
+    assert result["runtime"]["machine"]
+    assert result["runtime"]["python"]
     easycat = result["results"]["easycat"]
     assert len(easycat["latency_samples_ms"]) == 2
     assert len(easycat["framework_overhead_samples_ms"]) == 2
