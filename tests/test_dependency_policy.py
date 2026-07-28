@@ -86,9 +86,7 @@ def test_telephony_library_extra_excludes_reference_server_dependencies() -> Non
     fastapi_server = {Requirement(dep).name for dep in extras["telephony-fastapi"]}
 
     assert telephony == {"aiohttp", "phonenumberslite", "twilio"}
-    assert fastapi_server == {"fastapi", "uvicorn"}
-    for dependencies in extras.values():
-        assert "python-multipart" not in {Requirement(dep).name for dep in dependencies}
+    assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
 
 
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:

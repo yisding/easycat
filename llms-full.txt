@@ -599,6 +599,20 @@ uv run easycat explain events
 uv run easycat docs --audience app-builders
 ```
 
+## Journal records reference
+
+- Path: docs/reference/journal-records.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/journal-records.md
+- Audience: app builders
+- Look up stable built-in journal record names, kinds, and data-key contracts.
+
+Commands:
+
+```bash
+uv run easycat explain journal
+uv run easycat docs --audience app-builders
+```
+
 ## EasyConfig reference
 
 - Path: docs/reference/easyconfig.md

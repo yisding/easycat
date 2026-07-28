@@ -681,6 +681,7 @@ the same prompt:
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 
+
 def first_audio_gap_ms(bundle_path):
     b = load_bundle(bundle_path)
     stt_t = next(
@@ -692,6 +693,7 @@ def first_audio_gap_ms(bundle_path):
         None,
     )
     return None if stt_t is None or tts_t is None else tts_t - stt_t
+
 
 for b in Path("docs/teaching/06-streaming-agent/runs/").glob("*.bundle"):
     print(b.name, f"first-audio gap = {first_audio_gap_ms(b):.0f} ms")

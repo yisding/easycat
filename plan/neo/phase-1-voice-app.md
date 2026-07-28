@@ -90,6 +90,7 @@ VoiceMode = Literal["local", "browser", "websocket", "twilio"]
 # There is no abstract `ConnectionContext` — the helpers already take the
 # transport-specific argument.
 
+
 class VoiceApp:
     def __init__(
         self,
@@ -323,6 +324,7 @@ class TwilioVoiceServerConfig:
     stream_url: str | None = None
     stream_token_secret: str | None = None
 
+
 async def serve_twilio_voice_app(
     config_factory: Callable[[TwilioConnectionTransport], EasyConfig],
     config: TwilioVoiceServerConfig,
@@ -344,7 +346,7 @@ def config_factory(transport: TwilioConnectionTransport) -> EasyConfig:
         transport=transport,
         agent=agent,
         telephony=TelephonyConfig(
-            enable_dtmf_aggregator=True,      # opt in per-connection
+            enable_dtmf_aggregator=True,  # opt in per-connection
             enable_voicemail_detector=True,
         ),
     )

@@ -13,6 +13,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
     journal_append_control_signal,
     journal_append_event,
@@ -52,7 +53,11 @@ class STTStage:
             {"easycat.stage": self.name, "easycat.surface": "stt"},
         ):
             data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-            input_ref = await put_artifact_async(ctx, data_bytes)
+            input_ref = await put_artifact_async(
+                ctx,
+                data_bytes,
+                capture_allowed=audio_capture_allowed(ctx, input),
+            )
             extra = {
                 "audio_bytes": len(data_bytes)
                 if isinstance(data_bytes, (bytes, bytearray))

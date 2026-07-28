@@ -13,6 +13,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
     journal_append_control_signal,
     journal_append_event,
@@ -59,7 +60,11 @@ class TransportStage:
         output_ref = None
         extra: dict[str, Any] | None = None
         if capture_enabled:
-            output_ref = await put_artifact_async(ctx, audio_bytes)
+            output_ref = await put_artifact_async(
+                ctx,
+                audio_bytes,
+                capture_allowed=audio_capture_allowed(ctx, input),
+            )
             extra = {
                 "audio_bytes": (
                     len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0
