@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
 
 
 def test_transcribe_ownership_probe_is_provider_free_and_executable() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER / "transcribe_ownership_probe.py")],
         cwd=ROOT,
         capture_output=True,
