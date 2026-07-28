@@ -187,10 +187,10 @@ jobs:
         # attacker-controllable input.
         run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
       # The unused requires_extra pytest marker was dropped (it marked zero
-      # tests). Extras coverage relies on the import smoke above plus the
-      # offline contract tests below, whose importorskip gates now run for
-      # real with this cell's SDK installed.
-      - name: Offline contract tests with the real SDK present
+      # tests). The import smoke above owns optional-SDK coverage; the offline
+      # contracts below exercise EasyCat's real built-in provider
+      # implementations against scripted network backends.
+      - name: Offline real-provider contract tests
         run: uv run --no-sync --python 3.12 pytest tests/contracts -q -m "not integration_live"
 
   live-canaries:

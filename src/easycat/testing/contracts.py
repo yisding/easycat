@@ -11,8 +11,8 @@ collects the protocol-semantics tests against your implementation::
 
 Suites are **offline by default**: the factory should build a provider that
 can complete one scripted exchange without the network (a replay/fake
-backend is fine — EasyCat's own contract tests run these suites against
-hand-rolled fakes in ``tests/contracts/``). For an optional **live mode**,
+backend is fine — EasyCat's own contract tests run both the real built-in
+providers over scripted backends and small reference fakes). For an optional **live mode**,
 set ``live = True`` and ``credential_env_var`` on the subclass; the
 ``provider`` fixture then skips when the credential is missing. In EasyCat's
 own repo, live subclasses should additionally carry
