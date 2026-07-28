@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import pytest
 import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
@@ -18,10 +23,57 @@ from .conftest import make_chunk
 _make_chunk = make_chunk
 
 
+class _ClosingReadyWebSocket:
+    async def send(self, _message: str | bytes) -> None:
+        raise websockets.exceptions.ConnectionClosed(None, None)
+
+
 def test_websocket_transport_config_defaults_to_loopback():
     config = WebSocketTransportConfig()
 
     assert config.host == "127.0.0.1"
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "_receive_loop",
+        "_handle_control_message",
+        "send_audio",
+        "clear_audio",
+        "_send_client_event",
+    ],
+)
+def test_websocket_transports_share_wire_protocol_methods(method_name: str):
+    assert getattr(WebSocketTransport, method_name) is getattr(
+        WebSocketConnectionTransport,
+        method_name,
+    )
+
+
+def test_connection_transport_handles_start_and_stop_control_messages(
+    caplog: pytest.LogCaptureFixture,
+):
+    transport = WebSocketConnectionTransport(object())  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.DEBUG, logger="easycat.transports.websocket"):
+        transport._handle_control_message('{"type":"start"}')
+        transport._handle_control_message('{"type":"stop"}')
+
+    assert "Client sent start signal" in caplog.messages
+    assert "Client sent stop signal" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_ready_disconnect_is_not_raised():
+    transport = WebSocketConnectionTransport(_ClosingReadyWebSocket())  # type: ignore[arg-type]
+
+    await transport.connect()
+
+    assert transport.is_connected is False
+    assert transport._ws is None
+    assert transport._receive_task is None
+    assert transport._in_queue.get_nowait() is None
 
 
 @pytest.mark.asyncio
