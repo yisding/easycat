@@ -351,6 +351,8 @@ class TestReconnectingWebSocket:
         connect_mock.assert_awaited_once()
         callback.assert_awaited_once()
         assert ws._ws is None
+        assert ws.reconnect_exhausted is True
+        assert ws.reconnect_attempts == 1
 
     async def test_normal_peer_close_uses_reconnect_policy(self):
         disconnect = AsyncMock()
