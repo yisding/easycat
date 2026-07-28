@@ -508,6 +508,11 @@ def test_eventbus_rejects_unknown_handler_error_policy():
         EventBus(handler_error_policy="strict")  # type: ignore[arg-type]
 
 
+def test_eventbus_rejects_negative_slow_handler_threshold():
+    with pytest.raises(ValueError, match="slow_handler_threshold_s"):
+        EventBus(slow_handler_threshold_s=-0.001)
+
+
 @pytest.mark.asyncio
 async def test_eventbus_raise_error_policy_stops_and_propagates():
     bus = EventBus(handler_error_policy="raise")

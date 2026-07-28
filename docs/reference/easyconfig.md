@@ -50,6 +50,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   recording.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
+- `slow_handler_threshold_s` — elapsed time before an inline event handler
+  produces a warning. Defaults to `0.005` seconds; set `None` to disable.
+- `handler_error_policy` — `"continue"` (default) logs and counts event-handler
+  exceptions before dispatching later handlers; `"raise"` propagates the first
+  exception to the emitter.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
 - `warmup` — run provider warmup hooks at session start (default `True`).

@@ -110,6 +110,7 @@ class EasyConfigError(ValueError):
 
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
+_VALID_HANDLER_ERROR_POLICY = {"continue", "raise"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
 
@@ -129,6 +130,8 @@ def _require_non_negative(name: str, value: float) -> None:
 def _validate_common(
     *,
     debug: str,
+    slow_handler_threshold_s: float | None,
+    handler_error_policy: str,
     journal_backend: str,
     journal_retention: str,
     mcp_servers: list[str] | None = None,
@@ -139,6 +142,13 @@ def _validate_common(
     """Validate the shared fields used by both session factories."""
     if debug not in _VALID_DEBUG:
         raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    if slow_handler_threshold_s is not None:
+        _require_non_negative("slow_handler_threshold_s", slow_handler_threshold_s)
+    if handler_error_policy not in _VALID_HANDLER_ERROR_POLICY:
+        raise ValueError(
+            f"Invalid handler_error_policy={handler_error_policy!r}. "
+            f"Must be one of {sorted(_VALID_HANDLER_ERROR_POLICY)}."
+        )
     if journal_backend not in _VALID_JOURNAL_BACKEND:
         raise ValueError(
             f"Invalid journal_backend={journal_backend!r}. "
@@ -469,6 +479,8 @@ class _AgentSessionConfig:
     wrap_agent: bool = True
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
+    slow_handler_threshold_s: float | None = 0.005
+    handler_error_policy: Literal["continue", "raise"] = "continue"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
@@ -495,6 +507,8 @@ class EasyConfig(_AgentSessionConfig):
         smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
             detection.
         debug / journal_backend / journal_retention: Debug-journal settings.
+        slow_handler_threshold_s / handler_error_policy: Inline EventBus
+            diagnostics and failure handling.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -535,6 +549,8 @@ class EasyConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
@@ -754,6 +770,8 @@ class TextSessionConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
@@ -770,6 +788,8 @@ class TextSessionConfig(_AgentSessionConfig):
         agent: Any = None,
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
+        slow_handler_threshold_s: float | None = 0.005,
+        handler_error_policy: Literal["continue", "raise"] = "continue",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
@@ -795,6 +815,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "agent": (agent, None),
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
+                "slow_handler_threshold_s": (slow_handler_threshold_s, 0.005),
+                "handler_error_policy": (handler_error_policy, "continue"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),
@@ -817,6 +839,8 @@ class TextSessionConfig(_AgentSessionConfig):
             agent=agent,
             session_id=session_id,
             debug=debug,
+            slow_handler_threshold_s=slow_handler_threshold_s,
+            handler_error_policy=handler_error_policy,
             journal_backend=journal_backend,
             journal_retention=journal_retention,
             warmup=True if warmup is None else warmup,
