@@ -10,7 +10,11 @@ import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
@@ -22,6 +26,12 @@ def test_websocket_transport_config_defaults_to_loopback():
     config = WebSocketTransportConfig()
 
     assert config.host == "127.0.0.1"
+
+
+def test_websocket_transports_leave_server_side_aec_off_by_default():
+    assert WebSocketTransportConfig.default_echo_cancellation_enabled is False
+    assert WebSocketTransport.default_echo_cancellation_enabled is False
+    assert WebSocketConnectionTransport.default_echo_cancellation_enabled is False
 
 
 @pytest.mark.asyncio

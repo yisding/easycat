@@ -78,7 +78,13 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `enable_noise_reduction` — opt into noise reduction with default settings
   (default `False`).
 - `enable_echo_cancellation` — force AEC on/off; `None` derives a
-  transport-aware default.
+  transport-aware default. Local transport and the `EasyConfig.browser()`
+  WebRTC preset can provide a playback-clocked far-end reference and enable
+  server-side AEC automatically. WebSocket and WebTransport leave it off by
+  default because the server cannot observe browser playout timing; use the browser's
+  `getUserMedia({audio: {echoCancellation: true}})` constraint. Explicit
+  server-side opt-in remains available and records
+  `transport_degraded.reason="aec_reference_degraded"` in the session journal.
 - `smart_turn` — `SmartTurnConfig` or bool enabling semantic endpoint
   detection. When unset, it defaults on for local-microphone transports and
   off for server, browser, and telephony transports.
