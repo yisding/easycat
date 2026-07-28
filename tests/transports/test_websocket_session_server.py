@@ -14,6 +14,7 @@ from easycat.server.websocket import (
     serve_websocket_config_sessions,
     serve_websocket_sessions,
 )
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
@@ -76,6 +77,7 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
     assert len(calls) == 1
     assert callable(calls[0]["process_request"])
     assert calls[0]["compression"] is None
+    assert calls[0]["max_size"] == MAX_WEBSOCKET_MESSAGE_BYTES
 
 
 @pytest.mark.asyncio

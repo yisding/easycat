@@ -18,6 +18,7 @@ from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
 from easycat.transports._base import AudioQueueMixin, make_version_info
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class LocalTransportConfig:
     # partial-fit drop in ``send_audio`` instead of being hidden behind a giant
     # buffer.
     max_pending_out_chunks: int = 500
+    max_pending_in_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 class LocalTransport(AudioQueueMixin):
@@ -85,7 +87,10 @@ class LocalTransport(AudioQueueMixin):
     def __init__(self, config: LocalTransportConfig | None = None) -> None:
         self._config = config or LocalTransportConfig()
         self._audio_format = self._config.audio_format
-        self._init_audio_queue(self._config.max_pending_in_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_in_chunks,
+            self._config.max_pending_in_bytes,
+        )
 
         # Output queue uses stdlib thread-safe queue because the sounddevice
         # output callback runs on a separate audio thread.

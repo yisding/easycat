@@ -48,6 +48,7 @@ from easycat.telephony import (
     twilio_stream_parameters_from_form,
 )
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
@@ -125,7 +126,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        twilio_server = await websockets.serve(handle_twilio_connection, "0.0.0.0", 8766)
+        twilio_server = await websockets.serve(
+            handle_twilio_connection, "0.0.0.0", 8766, max_size=MAX_WEBSOCKET_MESSAGE_BYTES
+        )
         try:
             yield
         finally:

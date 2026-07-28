@@ -33,6 +33,7 @@ from easycat.events import (
 )
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,7 @@ class TwilioTransportConfig:
     max_pending_chunks: int = 200
     stream_token_validator: Callable[[str], bool] | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 def _parse_twilio_start_identity(
@@ -762,6 +764,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             host=self._config.host,
             port=self._config.port,
             max_pending_chunks=self._config.max_pending_chunks,
+            max_pending_bytes=self._config.max_pending_bytes,
         )
         self._audio_format = self._config.audio_format
         self._event_bus = event_bus
@@ -1041,7 +1044,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._call_ended_emitted = False
         self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
         self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
 
     def _current_ws(self) -> ServerConnection | None:

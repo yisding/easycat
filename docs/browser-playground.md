@@ -57,6 +57,11 @@ Inbound (client → server):
   - `{"type": "config", "sample_rate": 16000}` — negotiate the inbound
     audio format.
 
+Each inbound WebSocket message is capped at 64 KiB. Decoded audio is then
+buffered under independent frame-count and byte-count ceilings (200 chunks and
+4 MiB by default); a frame that would exceed either queue limit is dropped and
+reported as `TransportDegraded("inbound_queue_full")`.
+
 Outbound (server → client):
 
 - **Binary frames** — raw PCM16 audio chunks (bot speech).

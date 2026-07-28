@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
+from agent import make_agent
 from fastapi import FastAPI, HTTPException, Request, Response
 from websockets.asyncio.server import ServerConnection
 
-from agent import make_agent
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -23,6 +23,7 @@ from easycat import (
 )
 from easycat.telephony import reconstruct_public_url, validate_twilio_webhook_signature
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
@@ -61,7 +62,13 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         port = int(os.getenv("TWILIO_WS_PORT", "8766"))
-        twilio_ws = await websockets.serve(handle_call, "0.0.0.0", port, compression=None)
+        twilio_ws = await websockets.serve(
+            handle_call,
+            "0.0.0.0",
+            port,
+            compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        )
         try:
             yield
         finally:

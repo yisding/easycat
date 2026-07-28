@@ -2,20 +2,52 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 
 from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
 
 _make_chunk = make_chunk
+
+
+def test_repository_websocket_servers_set_message_size_limit():
+    """Every shipped WebSocket listener must bound decoded message size."""
+    repository_root = Path(__file__).resolve().parents[2]
+    server_calls: list[tuple[Path, int]] = []
+    missing_limit: list[tuple[Path, int]] = []
+
+    for root in (repository_root / "src", repository_root / "examples"):
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            if "websockets.serve(" not in source:
+                continue
+            tree = ast.parse(source, filename=str(path))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "serve"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "websockets"
+                ):
+                    continue
+                server_calls.append((path, node.lineno))
+                if not any(keyword.arg == "max_size" for keyword in node.keywords):
+                    missing_limit.append((path, node.lineno))
+
+    assert server_calls
+    assert missing_limit == []
 
 
 def test_websocket_transport_config_defaults_to_loopback():
@@ -44,7 +76,12 @@ async def test_server_websocket_transports_disable_compression(monkeypatch: pyte
     transport = WebSocketTransport(WebSocketTransportConfig())
     await transport.connect()
     try:
-        assert calls == [{"compression": None}]
+        assert calls == [
+            {
+                "compression": None,
+                "max_size": MAX_WEBSOCKET_MESSAGE_BYTES,
+            }
+        ]
     finally:
         await transport.disconnect()
 
@@ -77,6 +114,23 @@ class TestWebSocketTransport(_UsesPytestTcpPortFactory):
             async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
                 ready = await ws.recv()
                 assert json.loads(ready)["type"] == "ready"
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_server_rejects_message_over_wire_size_limit(self):
+        port = self._unused_port()
+        transport = WebSocketTransport(WebSocketTransportConfig(host="127.0.0.1", port=port))
+        await transport.connect()
+
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                await ws.recv()  # ready
+                await ws.send(bytes(MAX_WEBSOCKET_MESSAGE_BYTES + 1))
+                with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
+                    await ws.recv()
+                assert exc_info.value.rcvd is not None
+                assert exc_info.value.rcvd.code == 1009
         finally:
             await transport.disconnect()
 

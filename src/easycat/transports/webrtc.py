@@ -129,7 +129,10 @@ class WebRTCTransport(AudioQueueMixin):
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
 
         # Peer connection state.
         self._pc: Any | None = None

@@ -18,6 +18,7 @@ from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websoc
 from easycat.server.transports import CapacityGate
 from easycat.session import Session
 from easycat.session_manager import SessionManager
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
@@ -93,6 +94,7 @@ async def serve_websocket_sessions(
         settings.port,
         process_request=process_request,
         compression=None,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
     )
     if announce:
         print(f"\nServer ready. Connect WebSocket clients to ws://{settings.host}:{settings.port}")

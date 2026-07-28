@@ -23,6 +23,10 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
 from easycat.transports._browser_events import BrowserEventForwarder
+from easycat.transports._limits import (
+    DEFAULT_INBOUND_AUDIO_MAX_BYTES,
+    MAX_WEBSOCKET_MESSAGE_BYTES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,52 @@ _DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
 _DEGRADED_EMIT_MIN_INTERVAL_SECONDS = 1.0
 _DEGRADED_MAX_PENDING_TASKS = 64
 _DEGRADED_MAX_DETAIL_CHARS = 256
+
+
+def _require_positive_int(value: int, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be an integer >= 1")
+    return value
+
+
+class _InboundAudioQueue(asyncio.Queue[AudioChunk | None]):
+    """Count- and byte-bounded queue for decoded inbound audio."""
+
+    def __init__(self, max_pending_chunks: int, max_pending_bytes: int) -> None:
+        super().__init__(
+            maxsize=_require_positive_int(
+                max_pending_chunks,
+                name="max_pending_chunks",
+            )
+        )
+        self._max_pending_bytes = _require_positive_int(
+            max_pending_bytes,
+            name="max_pending_bytes",
+        )
+        self._pending_bytes = 0
+
+    @property
+    def pending_bytes(self) -> int:
+        """Number of audio payload bytes currently retained."""
+        return self._pending_bytes
+
+    @property
+    def max_pending_bytes(self) -> int:
+        """Maximum retained audio payload bytes."""
+        return self._max_pending_bytes
+
+    def put_nowait(self, item: AudioChunk | None) -> None:
+        item_bytes = len(item.data) if item is not None else 0
+        if item_bytes > self._max_pending_bytes - self._pending_bytes:
+            raise asyncio.QueueFull
+        super().put_nowait(item)
+        self._pending_bytes += item_bytes
+
+    def get_nowait(self) -> AudioChunk | None:
+        item = super().get_nowait()
+        if item is not None:
+            self._pending_bytes -= len(item.data)
+        return item
 
 
 def _truncate_degraded_detail(detail: str) -> str:
@@ -108,13 +158,14 @@ class AudioQueueMixin:
     when a remote peer has connected.
 
     Users must:
-      - Call ``_init_audio_queue(max_pending_chunks)`` during ``__init__``.
+      - Call ``_init_audio_queue(max_pending_chunks, max_pending_bytes)`` during
+        ``__init__``.
       - Set ``self._connected`` to ``True``/``False`` in ``connect``/``disconnect``.
       - Call ``_enqueue_sentinel()`` during ``disconnect`` to signal end-of-stream.
     """
 
     _connected: bool
-    _in_queue: asyncio.Queue[AudioChunk | None]
+    _in_queue: _InboundAudioQueue
     _client_connected: asyncio.Event
     _event_bus: EventBus | None
     _emit_tasks: set[asyncio.Task[None]]
@@ -122,11 +173,17 @@ class AudioQueueMixin:
     _degraded_suppressed: dict[tuple[str, bool], int]
     _browser_event_forwarder: BrowserEventForwarder | None
 
-    def _init_audio_queue(self, max_pending_chunks: int) -> None:
+    def _init_audio_queue(
+        self,
+        max_pending_chunks: int,
+        max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES,
+    ) -> None:
         self._max_pending_chunks = max_pending_chunks
+        self._max_pending_bytes = max_pending_bytes
         self._connected = False
-        self._in_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
-            maxsize=max_pending_chunks,
+        self._in_queue = _InboundAudioQueue(
+            max_pending_chunks=max_pending_chunks,
+            max_pending_bytes=max_pending_bytes,
         )
         self._client_connected = asyncio.Event()
         # Optional session EventBus.  Attached post-construction by Session
@@ -267,7 +324,10 @@ class AudioQueueMixin:
 
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
-        self._in_queue = asyncio.Queue(maxsize=self._max_pending_chunks)
+        self._in_queue = _InboundAudioQueue(
+            max_pending_chunks=self._max_pending_chunks,
+            max_pending_bytes=self._max_pending_bytes,
+        )
 
     def _drain_audio_queue(self) -> int:
         """Remove all currently queued inbound audio without replacing the queue."""
@@ -365,10 +425,16 @@ class ServerTransportBase(AudioQueueMixin):
 
     _transport_name: str = "Server"
 
-    def __init__(self, host: str, port: int, max_pending_chunks: int) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        max_pending_chunks: int,
+        max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES,
+    ) -> None:
         self._host = host
         self._port = port
-        self._init_audio_queue(max_pending_chunks)
+        self._init_audio_queue(max_pending_chunks, max_pending_bytes)
 
         self._server: Server | None = None
         self._ws: ServerConnection | None = None
@@ -387,6 +453,7 @@ class ServerTransportBase(AudioQueueMixin):
             self._host,
             self._port,
             compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )
         self._connected = True
         logger.info(

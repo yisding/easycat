@@ -798,11 +798,14 @@ class VoiceServer:
         """
         import websockets
 
+        from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+
         return await websockets.serve(
             self._handle_websocket_connection,
             self.config.host,
             self._websocket_port(),
             compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )
 
     def _websocket_port(self) -> int:

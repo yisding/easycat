@@ -9,6 +9,7 @@ from typing import ClassVar
 
 from easycat._net import normalize_auth_token
 from easycat.audio_format import PCM16_MONO_16K, AudioFormat
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports._webrtc_stats import default_webrtc_stats_path
 
 _CORS_ALLOW_METHODS = "POST, GET, OPTIONS"
@@ -92,6 +93,7 @@ class WebRTCTransportConfig:
     stats_max_records: int = 1_000
     stats_max_file_bytes: int = 1_048_576
     stats_max_requests_per_minute: int = 120
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 def _env_flag(name: str) -> bool:
