@@ -76,9 +76,9 @@ processing still affects only the spoken response.
 In `build_output_processors()`, compare:
 
 ```python
-style="ellipsis"
-style="emdash"
-style="ssml"
+style = "ellipsis"
+style = "emdash"
+style = "ssml"
 ```
 
 Use offline preview first. Notice that SSML produces a structured payload,

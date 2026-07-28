@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape, quoteattr
 
@@ -168,6 +168,7 @@ async def twilio_form_items_from_request(
     request: Any,
     *,
     auth_token: str | None = None,
+    public_url: str | None = None,
 ) -> list[tuple[str, str]]:
     """Parse a Twilio webhook form body and optionally validate its signature."""
     body = await request.body()
@@ -179,7 +180,7 @@ async def twilio_form_items_from_request(
 
     if auth_token and not validate_twilio_webhook_signature(
         auth_token=auth_token,
-        url=twilio_public_url_from_request(request),
+        url=public_url or twilio_public_url_from_request(request),
         params=form_items,
         signature=_header_value(getattr(request, "headers", {}), "x-twilio-signature"),
     ):
@@ -190,18 +191,27 @@ async def twilio_form_items_from_request(
 
 def twilio_stream_parameters_from_form(
     form: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    *,
+    extra_fields: Sequence[str] = (),
 ) -> dict[str, str]:
-    """Build caller/call metadata parameters for ``twiml_connect_stream``."""
+    """Build caller/call metadata parameters for ``twiml_connect_stream``.
+
+    The returned fields become Twilio ``start.customParameters``. EasyCat
+    preserves unrecognized parameters in ``CallIdentity.custom_fields``.
+    """
     values = _form_values(form)
     parameters = {"Direction": values.get("Direction") or "inbound"}
     for name in (
         "From",
         "To",
+        "CallerId",
         "CallerName",
+        "ForwardedFrom",
         "FromCity",
         "FromState",
         "FromZip",
         "FromCountry",
+        *extra_fields,
     ):
         if values.get(name):
             parameters[name] = values[name]
@@ -222,6 +232,22 @@ def compute_twilio_webhook_signature(
     )
     digest = hmac.new(auth_token.encode("utf-8"), signed.encode("utf-8"), hashlib.sha1).digest()
     return base64.b64encode(digest).decode("ascii")
+
+
+def twilio_webhook_idempotency_key(
+    *,
+    url: str,
+    params: Mapping[str, Any] | Sequence[tuple[str, Any]],
+    signature: str | None,
+) -> str:
+    """Return a stable key for retries of the same Twilio webhook request."""
+    signed_values = "".join(
+        key + value
+        for key, values in sorted(_twilio_signature_values(params).items())
+        for value in sorted(set(values))
+    )
+    material = f"{url}\0{signed_values}\0{(signature or '').strip()}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _twilio_signature_values(
@@ -261,6 +287,21 @@ def _header_value(headers: Any, name: str) -> str | None:
 
 
 def _request_path_with_query(request: Any) -> str:
+    raw_path = getattr(request, "raw_path", None)
+    if isinstance(raw_path, bytes):
+        raw_path = raw_path.decode("ascii")
+    if isinstance(raw_path, str) and raw_path:
+        return raw_path
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, Mapping):
+        raw_path = scope.get("raw_path")
+        query = scope.get("query_string", b"")
+        if isinstance(raw_path, bytes):
+            raw_path = raw_path.decode("ascii")
+        if isinstance(query, bytes):
+            query = query.decode("ascii")
+        if isinstance(raw_path, str) and raw_path:
+            return f"{raw_path}?{query}" if query else raw_path
     url = getattr(request, "url", None)
     path = str(getattr(url, "path", "/"))
     query = getattr(url, "query", "")
@@ -452,6 +493,45 @@ def twiml_hangup() -> str:
         Complete TwiML ``<Response>`` document as a string.
     """
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+
+
+def twiml_reject(reason: Literal["rejected", "busy"] = "rejected") -> str:
+    """Generate TwiML to reject an inbound call before answering it.
+
+    Twilio accepts only ``"rejected"`` and ``"busy"`` as reject reasons.
+
+    Raises:
+        ValueError: If *reason* is not accepted by Twilio.
+    """
+    if reason not in {"rejected", "busy"}:
+        raise ValueError("reason must be 'rejected' or 'busy'")
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Reject reason={quoteattr(reason)}/></Response>"
+    )
+
+
+def twiml_redirect(
+    url: str,
+    *,
+    method: Literal["GET", "POST"] | None = None,
+) -> str:
+    """Generate TwiML to redirect call handling to another TwiML URL.
+
+    Raises:
+        ValueError: If *url* is blank or *method* is not ``"GET"``, ``"POST"``,
+            or ``None``.
+    """
+    if not url.strip():
+        raise ValueError("url must be non-empty")
+    url = url.strip()
+    if method is not None and method not in {"GET", "POST"}:
+        raise ValueError("method must be 'GET' or 'POST'")
+    method_attr = f" method={quoteattr(method)}" if method else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Redirect{method_attr}>{escape(url)}</Redirect></Response>"
+    )
 
 
 def twiml_say_and_hangup(text: str) -> str:

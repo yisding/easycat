@@ -24,6 +24,7 @@ check it into your test fixtures, and assert on its records. The
 ```python
 from easycat.debug.testing import assert_no_error, assert_tool_called
 
+
 def test_refund_flow_regression(easycat_bundle):
     bundle = easycat_bundle("tests/fixtures/refund_flow.zip")
     assert_no_error(bundle)
@@ -50,6 +51,7 @@ from easycat.debug.testing import (
     assert_turn_completed,
     run_text_turn,
 )
+
 
 async def test_agent_turn():
     result = await run_text_turn(my_agent, "What are your hours?")
@@ -80,6 +82,7 @@ bundles. Its LLM-as-judge rubric is promoted into the library as
 
 ```python
 from easycat.debug.testing import assert_llm_judge
+
 
 async def test_turn_quality():
     result = await run_text_turn(my_agent, "I want a refund")
