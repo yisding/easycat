@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
@@ -157,6 +159,52 @@ async def test_base_end_stream_idempotent():
     await stt.end_stream()
     # Second call should be a no-op
     await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
+    class PausingWebSocketSTT(WebSocketSTTBase):
+        def __init__(self) -> None:
+            super().__init__(provider_name="test", provider_error_name="test")
+            self.send_started = asyncio.Event()
+            self.send_cancelled = asyncio.Event()
+            self.end_called = asyncio.Event()
+
+        async def _on_start(self) -> None:
+            pass
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.send_cancelled.set()
+                raise
+
+        async def _on_end(self) -> None:
+            self.end_called.set()
+
+        def _handle_json_message(self, msg: dict[str, object]) -> None:
+            _ = msg
+
+    stt = PausingWebSocketSTT()
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    await stt.start_stream()
+
+    first_send = asyncio.create_task(stt.send_audio(chunk))
+    await asyncio.wait_for(stt.send_started.wait(), timeout=1)
+    second_send = asyncio.create_task(stt.send_audio(chunk))
+
+    await asyncio.wait_for(stt.end_stream(), timeout=0.1)
+
+    assert stt.end_called.is_set()
+    assert stt.send_cancelled.is_set()
+    assert not second_send.done()
+
+    await asyncio.wait_for(first_send, timeout=1)
+    with pytest.raises(RuntimeError, match="Stream not started"):
+        await asyncio.wait_for(second_send, timeout=1)
 
 
 @pytest.mark.asyncio
