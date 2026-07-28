@@ -89,8 +89,10 @@ class TurnManagerConfig:
     # ``TurnManagerConfig`` object stays the one place callers tune turn/STT
     # segmentation timing.
     stt_segment_silence_ms: int = 0
-    # Pre-roll buffer duration in milliseconds
-    pre_roll_ms: int = 300
+    # Pre-roll buffer duration in milliseconds. The default covers the
+    # 250 ms VAD speech-confirmation gate plus 200 ms of onset context so the
+    # leading consonant is retained even with frame quantization/model attack.
+    pre_roll_ms: int = 450
     # Turn detection mode
     mode: TurnMode = TurnMode.VAD
     # Optional endpoint detector for smart turn-taking.
