@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+_SOURCE_CHECKOUT_ERROR = (
+    "validation lanes require the EasyCat source checkout; run from the EasyCat "
+    "repository root, or set EASYCAT_VALIDATION_PYTEST_COMMAND together with "
+    "EASYCAT_VALIDATION_TEST_PATHS or EASYCAT_VALIDATION_TEST_ROOT"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
@@ -30,6 +36,33 @@ class CommandRunner(Protocol):
         env: Mapping[str, str] | None = None,
         cwd: str | Path | None = None,
     ) -> CommandResult: ...
+
+
+class ValidationSourceCheckoutError(RuntimeError):
+    """Raised when a repository validation lane has no repository tests."""
+
+
+def _is_source_checkout_root(path: Path) -> bool:
+    return (
+        (path / "pyproject.toml").is_file()
+        and (path / "src" / "easycat").is_dir()
+        and (path / "tests").is_dir()
+    )
+
+
+def ensure_validation_source_checkout() -> None:
+    """Require repository tests or explicit installed-wheel test overrides."""
+    if _is_source_checkout_root(Path.cwd()):
+        return
+
+    pytest_override = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
+    test_override = os.environ.get("EASYCAT_VALIDATION_TEST_PATHS") or os.environ.get(
+        "EASYCAT_VALIDATION_TEST_ROOT"
+    )
+    if pytest_override and test_override:
+        return
+
+    raise ValidationSourceCheckoutError(_SOURCE_CHECKOUT_ERROR)
 
 
 def run_subprocess(
@@ -56,6 +89,7 @@ def run_subprocess(
 
 def pytest_command_prefix() -> list[str]:
     """Resolve the pytest executable used by validation lanes."""
+    ensure_validation_source_checkout()
     raw = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
     return shlex.split(raw) if raw else ["uv", "run", "pytest"]
 

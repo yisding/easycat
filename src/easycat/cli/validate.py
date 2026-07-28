@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Annotated, NoReturn, cast
+from typing import IO, Annotated, NoReturn, TypeVar, cast
 
 import typer
 from rich.markup import escape
@@ -14,6 +15,10 @@ from easycat.cli._output import (
     json_envelope,
     stderr_console,
     stdout_console,
+)
+from easycat.validation._runner_support import (
+    ValidationSourceCheckoutError,
+    ensure_validation_source_checkout,
 )
 from easycat.validation.latency import LatencyMode
 from easycat.validation.report import redact_runtime_secrets
@@ -38,10 +43,30 @@ _ARTIFACTS_DIR_HELP = (
 )
 _SHOW_OUTPUT_HELP = "Also print captured validation stdout/stderr while keeping artifacts."
 _MAX_STREAMED_LOG_BYTES = 10 * 1024 * 1024
+_ValidationResultT = TypeVar("_ValidationResultT")
 
 
 def _print_literal(line: str) -> None:
     stdout_console.print(escape(line))
+
+
+def _run_from_source_checkout(
+    command: str,
+    *,
+    json_output: bool,
+    operation: Callable[[], _ValidationResultT],
+) -> _ValidationResultT:
+    try:
+        ensure_validation_source_checkout()
+        return operation()
+    except ValidationSourceCheckoutError as exc:
+        emit_command_error(
+            command,
+            str(exc),
+            json_output=json_output,
+            exit_code=2,
+        )
+        raise typer.Exit(2) from None
 
 
 def _run_slice(
@@ -54,12 +79,16 @@ def _run_slice(
     junit_prefix: str | None,
     show_output: bool,
 ) -> None:
-    result = run_validation_slice(
-        slice_name,
-        artifacts_dir=artifacts_dir,
-        report_path=report,
-        junit_path=junit,
-        junit_prefix=junit_prefix,
+    result = _run_from_source_checkout(
+        f"validate {slice_name}",
+        json_output=json_output,
+        operation=lambda: run_validation_slice(
+            slice_name,
+            artifacts_dir=artifacts_dir,
+            report_path=report,
+            junit_path=junit,
+            junit_prefix=junit_prefix,
+        ),
     )
 
     if show_output:
@@ -490,12 +519,16 @@ def latency(
     mode = LatencyMode.SWEEP if sweep else LatencyMode.SMOKE
     # When the flag is not passed, defer to the runner's mode-aware default
     # (SWEEP requires samples, SMOKE does not) instead of forcing it off.
-    result = run_latency_validation(
-        mode,
-        artifacts_dir=artifacts_dir,
-        report_path=report,
-        require_samples=True if require_samples else None,
-        baseline_path=baseline,
+    result = _run_from_source_checkout(
+        "validate latency",
+        json_output=json_output,
+        operation=lambda: run_latency_validation(
+            mode,
+            artifacts_dir=artifacts_dir,
+            report_path=report,
+            require_samples=True if require_samples else None,
+            baseline_path=baseline,
+        ),
     )
 
     if show_output:
@@ -557,13 +590,17 @@ def live(
     ] = False,
 ) -> None:
     """Run live provider canaries and emit capability reports."""
-    result = run_live_validation(
-        providers=provider,
-        surfaces=surface,
-        strict=strict,
-        release=release,
-        artifacts_dir=artifacts_dir,
-        report_path=report,
+    result = _run_from_source_checkout(
+        "validate live",
+        json_output=json_output,
+        operation=lambda: run_live_validation(
+            providers=provider,
+            surfaces=surface,
+            strict=strict,
+            release=release,
+            artifacts_dir=artifacts_dir,
+            report_path=report,
+        ),
     )
 
     if show_output:
@@ -640,14 +677,18 @@ def release(
         raise typer.Exit(2)
 
     mode = LatencyMode.SMOKE if latency_smoke else LatencyMode.SWEEP
-    result = run_release_validation(
-        artifacts_dir=artifacts_dir,
-        report_path=report,
-        python_version=python_version,
-        extras=extra,
-        providers=provider,
-        surfaces=surface,
-        latency_mode=mode,
+    result = _run_from_source_checkout(
+        "validate release",
+        json_output=json_output,
+        operation=lambda: run_release_validation(
+            artifacts_dir=artifacts_dir,
+            report_path=report,
+            python_version=python_version,
+            extras=extra,
+            providers=provider,
+            surfaces=surface,
+            latency_mode=mode,
+        ),
     )
 
     if show_output:
