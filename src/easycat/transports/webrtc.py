@@ -133,6 +133,7 @@ class WebRTCTransport(AudioQueueMixin):
             self._config.max_pending_chunks,
             self._config.max_pending_bytes,
         )
+        self._offer_request: Any | None = None
 
         # Peer connection state.
         self._pc: Any | None = None
@@ -161,6 +162,11 @@ class WebRTCTransport(AudioQueueMixin):
         # Per-server stats rate-limit / record state, shared with each lazily
         # built signaling-handlers instance (see ``_signaling``).
         self._stats_state = WebRTCStatsState()
+
+    @property
+    def offer_request(self) -> Any | None:
+        """Accepted aiohttp offer request, when this transport was built by a route."""
+        return self._offer_request
 
     # ── Helpers ─────────────────────────────────────────────────
 

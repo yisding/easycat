@@ -21,6 +21,12 @@ subscription = session.subscribe_event(STTFinal, lambda e: print(e.text))
 run_session(session)  # start, wait for shutdown signal, stop
 ```
 
+Construction is safe off the event-loop thread. Async servers that build
+sessions on a connection hot path may use
+`session = await asyncio.to_thread(create_session, config)` to keep filesystem
+and optional model initialization from blocking unrelated calls. Start, use,
+and stop the returned session on the owning event loop.
+
 For manual control, `await session.start()` begins audio capture and
 `await session.stop()` ends it. `async with session:` is the preferred idiom
 for tests and scripts — it calls `stop(force=True)` on exit.
@@ -66,6 +72,15 @@ Between start and stop, the session exposes turn-level controls:
 
 - `session.cancel_turn()` — cancel the in-flight turn (agent + TTS) without
   stopping the session.
+- `await session.prompt_agent(text, role="system", speak=True)` — run a
+  journaled application-initiated agent turn. Spoken prompts use the normal
+  cancellable TTS/playback path and require a started, non-text session; set
+  `speak=False` when the application needs only the response text (this also
+  works before `start()` and in `text_session` mode).
+- `session.set_audio_capture_enabled(enabled)` — pause or resume persisting
+  audio artifacts while leaving transcripts and journal events enabled. A
+  callable consent policy remains authoritative; pass `None` to clear the
+  runtime override.
 - `session.reset_state()` — clear turn state and conversation pointers.
 - `session.send_text(text)` — inject a user turn without audio (text-first
   flows and tests).
