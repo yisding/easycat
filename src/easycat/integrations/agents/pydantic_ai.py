@@ -6,6 +6,7 @@ routes to the appropriate internal path.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -331,13 +332,20 @@ class PydanticAIBridge:
             return
 
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
         except ImportError:
             return
 
         history = self._history_for_key(history_key or self._last_history_key)
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                # The current turn has a user request but no committed
+                # response. Do not walk across that boundary and rewrite the
+                # previous turn's fully delivered assistant text.
+                break
             if isinstance(msg, ModelResponse):
                 text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
                 for idx, part in enumerate(text_parts):
@@ -379,10 +387,14 @@ class PydanticAIBridge:
         rather than the raw LLM output.
         """
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
         except ImportError:
             return
         for msg in reversed(self._history_for_key(self._last_history_key)):
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                return
             if not isinstance(msg, ModelResponse):
                 continue
             text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
@@ -534,6 +546,15 @@ class PydanticAIBridge:
 
                 self._set_history_for_key(history_key, await _run_new_messages(agent_run))
                 self._last_output = await _run_output(agent_run)
+            except BaseException:
+                # A hard task cancel or consumer ``aclose()`` can unwind at the
+                # suspended yield above before normal fall-through commits this
+                # turn. PydanticAI exposes ``new_messages()`` while the run is
+                # still active, so snapshot it before the context exits; the
+                # follow-up interruption rewrite must target this turn rather
+                # than the previous completed assistant response.
+                await self._commit_interrupted_agent_run(history_key, agent_run)
+                raise
             finally:
                 await record_usage_from_result(
                     recorder,
@@ -567,6 +588,9 @@ class PydanticAIBridge:
 
                 self._set_history_for_key(history_key, await _run_new_messages(result))
                 self._last_output = await _run_output(result)
+            except BaseException:
+                await self._commit_interrupted_agent_run(history_key, result)
+                raise
             finally:
                 await record_usage_from_result(
                     recorder,
@@ -574,6 +598,20 @@ class PydanticAIBridge:
                     provider="pydantic_ai",
                     model=self._model_name(),
                 )
+
+    async def _commit_interrupted_agent_run(self, history_key: str, run: Any) -> None:
+        """Best-effort history snapshot while cancellation is already active."""
+        try:
+            self._set_history_for_key(history_key, await _run_new_messages(run))
+            self._last_output = await _run_output(run)
+        except (asyncio.CancelledError, Exception):
+            # Never replace the cancellation/GeneratorExit with a secondary
+            # SDK snapshot failure. The user-boundary guard below still keeps
+            # a missing current turn from clobbering the prior assistant.
+            logger.warning(
+                "Failed to snapshot interrupted PydanticAI run history",
+                exc_info=True,
+            )
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:
