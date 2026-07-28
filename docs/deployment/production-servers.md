@@ -192,7 +192,10 @@ For public Twilio deployments:
 `debug="light"`, which writes nothing to disk) writes a crash-durable SQLite
 journal per session under `EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
-for the exact durability guarantees and storage layout. That promise only
+for the exact durability guarantees and storage layout. Records are committed
+in bounded batches (100 ms / 100 records, plus every turn boundary), and the
+SQLite WAL is auto-checkpointed during long calls; persistent journal work is
+offloaded from the live audio loop. That promise only
 holds if `EASYCAT_DATA_DIR` is a **persistent** path: a container without a
 volume mounted there, or a process directory that gets wiped on redeploy,
 silently discards every journal. The Docker-specific version of this guidance

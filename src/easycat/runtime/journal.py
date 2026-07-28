@@ -25,6 +25,7 @@ from easycat.runtime.records import (
 )
 
 __all__ = [
+    "append_journal_record_async",
     "ExecutionJournal",
     "JournalView",
 ]
@@ -109,6 +110,42 @@ class ExecutionJournal(Protocol):
 
     @property
     def degraded(self) -> bool: ...
+
+
+async def append_journal_record_async(
+    journal: ExecutionJournal,
+    *,
+    kind: JournalRecordKind,
+    name: str,
+    session_id: str,
+    turn_id: str | None = None,
+    data: dict[str, Any] | None = None,
+    error: ErrorInfo | None = None,
+    tags: frozenset[str] = frozenset(),
+    input_ref: str | None = None,
+    output_ref: str | None = None,
+) -> int:
+    """Append without blocking the event loop for disk-backed journals.
+
+    Persistent/custom backends declare ``writes_block = True`` when their
+    synchronous ``append`` path can cross a syscall boundary. Those writes
+    run in the loop's worker pool; in-memory journals stay inline because a
+    thread hop costs more than their lock-and-deque append.
+    """
+    kwargs = {
+        "kind": kind,
+        "name": name,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "data": data,
+        "error": error,
+        "tags": tags,
+        "input_ref": input_ref,
+        "output_ref": output_ref,
+    }
+    if bool(getattr(journal, "writes_block", False)):
+        return await asyncio.to_thread(journal.append, **kwargs)
+    return journal.append(**kwargs)
 
 
 # ── JournalView (read-only surface) ──────────────────────────────

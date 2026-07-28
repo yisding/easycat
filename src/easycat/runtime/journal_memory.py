@@ -38,6 +38,8 @@ class InMemoryRingBuffer:
     record when capacity is exceeded and emits a ``BufferOverflow`` marker.
     """
 
+    writes_block = False
+
     def __init__(
         self,
         capacity: int = 10_000,

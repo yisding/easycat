@@ -8,6 +8,7 @@ and event-bus subscription handlers.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -49,8 +50,8 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
-from easycat.runtime.journal import ExecutionJournal
+from easycat.runtime.artifacts import ArtifactClass, ArtifactStore, FilesystemArtifactStore
+from easycat.runtime.journal import ExecutionJournal, append_journal_record_async
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import redact_value
 
@@ -385,16 +386,67 @@ class SessionJournalSink:
             output_ref=output_ref,
         )
 
+    async def append_record_async(
+        self,
+        *,
+        name: str,
+        kind: JournalRecordKind = JournalRecordKind.EVENT,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        input_bytes: bytes | None = None,
+        output_bytes: bytes | None = None,
+        input_artifact_class: ArtifactClass = "debug_verbose",
+        output_artifact_class: ArtifactClass = "debug_verbose",
+    ) -> None:
+        """Async event-bus write path for persistent journal/store backends."""
+        journal = self.journal
+        if journal is None:
+            return
+
+        async def _store(
+            payload: bytes | None,
+            artifact_class: ArtifactClass,
+        ) -> str | None:
+            if payload is None or self.artifact_store is None:
+                return None
+            store = self.artifact_store
+            writes_block = getattr(store, "writes_block", None)
+            if bool(writes_block) or (
+                writes_block is None and isinstance(store, FilesystemArtifactStore)
+            ):
+                ref = await asyncio.to_thread(
+                    store.put,
+                    payload,
+                    artifact_class=artifact_class,
+                )
+                return ref or None
+            ref = store.put(payload, artifact_class=artifact_class)
+            return ref or None
+
+        input_ref = await _store(input_bytes, input_artifact_class)
+        output_ref = await _store(output_bytes, output_artifact_class)
+        await append_journal_record_async(
+            journal,
+            kind=kind,
+            name=name,
+            session_id=self.session_id,
+            turn_id=self.current_turn_id(turn_id),
+            data=data,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
     def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
 
     def _make_event_handler(self, kind: JournalRecordKind, name: str) -> EventHandler:
-        def _handler(event: Event) -> None:
+        async def _handler(event: Event) -> None:
             journal = self.journal
             if journal is None:
                 return
             projection = _project_journal_event(event)
-            journal.append(
+            await append_journal_record_async(
+                journal,
                 kind=kind,
                 name=name,
                 session_id=getattr(event, "session_id", None) or self.session_id,
@@ -418,8 +470,8 @@ class SessionJournalSink:
         """
         journal_handler = self._make_event_handler(kind, "interruption")
 
-        def _handler(event: Any) -> None:
-            journal_handler(event)
+        async def _handler(event: Any) -> None:
+            await journal_handler(event)
             observability.increment_counter(
                 "easycat.interruption.total",
                 attributes={"easycat.surface": "vad"},
@@ -427,11 +479,11 @@ class SessionJournalSink:
 
         return _handler
 
-    def _handle_tts_audio(self, event: TTSAudio) -> None:
+    async def _handle_tts_audio(self, event: TTSAudio) -> None:
         # TTSStage captures replay-critical audio bytes via ``tts_frame``.
         # The session-level ``tts_audio`` record stays metadata-only for
         # legacy observers.
-        self.append_record(
+        await self.append_record_async(
             name="tts_audio",
             turn_id=event.turn_id,
             data={
@@ -445,17 +497,17 @@ class SessionJournalSink:
             },
         )
 
-    def _handle_tts_markers(self, event: TTSMarkers) -> None:
-        self.append_record(
+    async def _handle_tts_markers(self, event: TTSMarkers) -> None:
+        await self.append_record_async(
             name="tts_markers",
             turn_id=event.turn_id,
             data={"markers": event.markers},
         )
 
-    def _handle_transport_degraded(self, event: TransportDegraded) -> None:
+    async def _handle_transport_degraded(self, event: TransportDegraded) -> None:
         # Fatal teardowns are control-plane events (mirrors ``interruption``);
         # recoverable single-frame drops stay on the EVENT timeline.
-        self.append_record(
+        await self.append_record_async(
             name="transport_degraded",
             kind=JournalRecordKind.CONTROL if event.fatal else JournalRecordKind.EVENT,
             turn_id=event.turn_id,

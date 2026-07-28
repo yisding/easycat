@@ -17,6 +17,7 @@ from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.context import RunContext
+from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
 
@@ -322,15 +323,13 @@ def journal_append_event(
     """
     if ctx.journal is None:
         return None
-    payload: dict[str, Any] = {"stage": stage}
-    if state_before is not None:
-        payload["state_before"] = str(state_before)
-    if state_after is not None:
-        payload["state_after"] = str(state_after)
-    if error is not None:
-        payload["error"] = error
-    if data_extra:
-        payload.update(data_extra)
+    payload = _stage_journal_payload(
+        stage=stage,
+        state_before=state_before,
+        state_after=state_after,
+        error=error,
+        data_extra=data_extra,
+    )
     return ctx.journal.append(
         kind=kind,
         name=name,
@@ -341,6 +340,64 @@ def journal_append_event(
         output_ref=output_ref,
         tags=tags,
     )
+
+
+async def journal_append_event_async(
+    ctx: RunContext,
+    *,
+    stage: str,
+    name: str,
+    turn_id: str | None = None,
+    kind: JournalRecordKind = JournalRecordKind.EVENT,
+    state_before: StageStateSnapshot | None = None,
+    state_after: StageStateSnapshot | None = None,
+    error: str | None = None,
+    input_ref: str | None = None,
+    output_ref: str | None = None,
+    data_extra: dict[str, Any] | None = None,
+    tags: frozenset[str] = frozenset(),
+) -> int | None:
+    """Async stage append that keeps persistent journal I/O off the live loop."""
+    if ctx.journal is None:
+        return None
+    payload = _stage_journal_payload(
+        stage=stage,
+        state_before=state_before,
+        state_after=state_after,
+        error=error,
+        data_extra=data_extra,
+    )
+    return await append_journal_record_async(
+        ctx.journal,
+        kind=kind,
+        name=name,
+        session_id=ctx.session_id,
+        turn_id=turn_id,
+        data=payload,
+        input_ref=input_ref,
+        output_ref=output_ref,
+        tags=tags,
+    )
+
+
+def _stage_journal_payload(
+    *,
+    stage: str,
+    state_before: StageStateSnapshot | None,
+    state_after: StageStateSnapshot | None,
+    error: str | None,
+    data_extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"stage": stage}
+    if state_before is not None:
+        payload["state_before"] = str(state_before)
+    if state_after is not None:
+        payload["state_after"] = str(state_after)
+    if error is not None:
+        payload["error"] = error
+    if data_extra:
+        payload.update(data_extra)
+    return payload
 
 
 def record_stage_failure(

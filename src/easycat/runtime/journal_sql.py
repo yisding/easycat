@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import heapq
+import itertools
 import json
 import logging
 import os
@@ -11,6 +13,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -44,6 +47,56 @@ from easycat.runtime.records import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _SqliteBatchCommitCoordinator:
+    """Run elapsed-time SQLite batch commits on one shared daemon thread.
+
+    A coordinator avoids both a thread per live session and a fresh
+    ``threading.Timer`` for every 100 ms batch. Heap entries carry a journal
+    generation, so stale deadlines become cheap no-ops after a count/turn/
+    lifecycle boundary commits the transaction first.
+    """
+
+    _condition = threading.Condition()
+    _deadlines: list[tuple[float, int, weakref.ReferenceType[Any], int]] = []
+    _counter = itertools.count()
+    _thread: threading.Thread | None = None
+
+    @classmethod
+    def schedule(cls, journal: SqliteJournal, deadline: float, generation: int) -> None:
+        with cls._condition:
+            heapq.heappush(
+                cls._deadlines,
+                (deadline, next(cls._counter), weakref.ref(journal), generation),
+            )
+            if cls._thread is None:
+                cls._thread = threading.Thread(
+                    target=cls._run,
+                    daemon=True,
+                    name="easycat-sqlite-journal-commit",
+                )
+                cls._thread.start()
+            cls._condition.notify()
+
+    @classmethod
+    def _run(cls) -> None:
+        while True:
+            with cls._condition:
+                while True:
+                    if not cls._deadlines:
+                        cls._thread = None
+                        return
+                    deadline, _order, journal_ref, generation = cls._deadlines[0]
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        cls._condition.wait(timeout=remaining)
+                        continue
+                    heapq.heappop(cls._deadlines)
+                    break
+            journal = journal_ref()
+            if journal is not None:
+                journal._commit_scheduled_batch(generation)
 
 
 class _SqlJournalBase:
@@ -212,11 +265,19 @@ class SqliteJournal(_SqlJournalBase):
 
     - ``PRAGMA synchronous=NORMAL`` — writes go to the kernel page cache,
       application-crash durable without fsync on the hot path.
-    - ``PRAGMA wal_autocheckpoint=0`` — no inline checkpoints; checkpoint
-      happens once at clean close via ``PRAGMA wal_checkpoint(TRUNCATE)``.
+    - Appends share a transaction for at most 100 ms or 100 records; turn
+      boundaries and lifecycle flushes commit immediately.
+    - ``PRAGMA wal_autocheckpoint=1000`` — committed WAL pages are folded
+      back into the database throughout long-running sessions.
     - Single-writer discipline via ``threading.Lock``.
     - Eager file-open warmup so the first turn doesn't pay cold-PRAGMA cost.
     """
+
+    writes_block = True
+    _batch_commit_interval_s = 0.1
+    _batch_commit_records = 100
+    _wal_autocheckpoint_pages = 1000
+    _commit_boundary_names = frozenset({"turn_started", "turn_ended"})
 
     def __init__(
         self,
@@ -251,6 +312,9 @@ class SqliteJournal(_SqlJournalBase):
         self._recovered = False
         self._original_session_id = session_id
         self._clean_close_marked = False
+        self._pending_records = 0
+        self._batch_generation = 0
+        self._batch_deadline: float | None = None
 
         # ── Check for prior unclean shutdown ─────────────────────
         existed = self._db_path.exists()
@@ -295,6 +359,8 @@ class SqliteJournal(_SqlJournalBase):
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
             self._insert_recovery_marker(session_id, prior_count)
+            self._pending_records = 1
+            self._schedule_batch_commit_locked()
 
     # ── Startup phases ────────────────────────────────────────────
 
@@ -306,7 +372,7 @@ class SqliteJournal(_SqlJournalBase):
         )
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute(f"PRAGMA wal_autocheckpoint={self._wal_autocheckpoint_pages}")
         harden_sqlite_files(self._db_path)
         return conn
 
@@ -446,7 +512,7 @@ class SqliteJournal(_SqlJournalBase):
         self._closed = True
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked(reopen=False)
                 harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass  # no active transaction or already closed
@@ -481,9 +547,8 @@ class SqliteJournal(_SqlJournalBase):
             return
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked()
                 harden_sqlite_files(self._db_path)
-                self._conn.execute("BEGIN")
             except sqlite3.OperationalError:
                 pass
 
@@ -499,7 +564,7 @@ class SqliteJournal(_SqlJournalBase):
             return
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked(reopen=False)
                 harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -520,6 +585,7 @@ class SqliteJournal(_SqlJournalBase):
             # Restart a transaction so subsequent appends are batched.
             try:
                 self._conn.execute("BEGIN")
+                self._reset_batch_state_locked()
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
 
@@ -608,29 +674,63 @@ class SqliteJournal(_SqlJournalBase):
                         finally:
                             self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
                 raise
-            if clear_clean_close:
-                self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
-                self._clean_close_marked = False
-            else:
-                # Commit on every append so records genuinely survive process
-                # death (SIGKILL/OOM/segfault), honoring the DURABILITY.md
-                # contract.  Under ``synchronous=NORMAL`` this is only a
-                # ``write()`` into the kernel page cache (no fsync), so the
-                # per-turn latency budget still holds.  Reopen a transaction so
-                # ``flush()``/``finalize()``/``close()`` always find an active
-                # one to COMMIT and the post-finalize SAVEPOINT machinery keeps
-                # working.  The post-finalize branch is intentionally NOT
-                # committed here: it must stay rolled-back-able so a crash after
-                # ``finalize()`` leaves the durable DB looking cleanly closed.
-                #
-                # Permissions are hardened once at open (after the WAL PRAGMAs
-                # create the sidecars) and re-hardened at every checkpoint
-                # boundary (flush/finalize/close); re-chmod'ing on every
-                # per-token COMMIT only adds redundant stat/chmod syscalls to the
-                # hot path, so it is intentionally omitted here.
-                self._conn.execute("COMMIT")
-                self._conn.execute("BEGIN")
+            self._finish_append_locked(name, post_finalize=clear_clean_close)
         return seq
+
+    def _finish_append_locked(self, name: str, *, post_finalize: bool) -> None:
+        if post_finalize:
+            self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
+            self._clean_close_marked = False
+        self._pending_records += 1
+        if post_finalize:
+            return
+        if (
+            name in self._commit_boundary_names
+            or self._pending_records >= self._batch_commit_records
+        ):
+            self._commit_transaction_locked()
+            return
+        self._schedule_batch_commit_locked()
+
+    def _schedule_batch_commit_locked(self) -> None:
+        if self._batch_deadline is not None or self._closed:
+            return
+        self._batch_generation += 1
+        generation = self._batch_generation
+        deadline = time.monotonic() + self._batch_commit_interval_s
+        self._batch_deadline = deadline
+        _SqliteBatchCommitCoordinator.schedule(self, deadline, generation)
+
+    def _commit_scheduled_batch(self, generation: int) -> None:
+        """Commit a still-current elapsed-time batch on the coordinator thread."""
+        exc: Exception | None = None
+        with self._lock:
+            if (
+                self._closed
+                or self._degraded
+                or generation != self._batch_generation
+                or self._batch_deadline is None
+                or self._pending_records == 0
+            ):
+                return
+            try:
+                self._commit_transaction_locked()
+            except Exception as commit_exc:
+                exc = commit_exc
+        if exc is not None:
+            self._enter_degraded(self._session_id, exc)
+
+    def _commit_transaction_locked(self, *, reopen: bool = True) -> None:
+        """Commit the open transaction and invalidate any scheduled deadline."""
+        self._conn.execute("COMMIT")
+        self._reset_batch_state_locked()
+        if reopen:
+            self._conn.execute("BEGIN")
+
+    def _reset_batch_state_locked(self) -> None:
+        self._pending_records = 0
+        self._batch_deadline = None
+        self._batch_generation += 1
 
     def _clear_clean_close_marker_before_write(self) -> None:
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
@@ -671,6 +771,8 @@ class LitestreamSqliteJournal:
     DB file.  If the ``litestream`` binary is not on ``$PATH``, logs a
     warning and degrades to plain ``SqliteJournal`` (no crash).
     """
+
+    writes_block = True
 
     def __init__(
         self,
@@ -865,6 +967,8 @@ class LibsqlJournal(_SqlJournalBase):
     and raises ``ImportError`` — the factory catches this and falls back
     to ``SqliteJournal``.
     """
+
+    writes_block = True
 
     def __init__(
         self,
