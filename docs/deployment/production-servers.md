@@ -241,15 +241,19 @@ certificate, HTTP/3, QUIC, and load-balancer support are explicit.
 
 ## Twilio multi-call servers
 
-Use `examples/twilio_app.py:create_app` as the production starting point for
-phone calls. It creates one `TwilioConnectionTransport` and one `Session` per
-Media Stream WebSocket, tracks `CallSid -> session` for status callbacks, and
-stops all sessions during FastAPI lifespan shutdown.
+Use `VoiceApp.run("twilio")` or
+`easycat.telephony.server.serve_twilio_voice_app` as the production starting
+point for phone calls. The reusable helper authenticates Twilio's HTTP
+webhooks and media WebSocket handshake before minting tokens or constructing
+provider sessions, caps concurrent calls, and stops all sessions during
+shutdown. `examples/twilio_app.py:create_app` is the lower-level reference when
+you also need outbound-call, status-callback, or SMS routes.
 
 For public Twilio deployments:
 
 - Generate TwiML with a `wss://` stream URL.
-- Validate Twilio webhook signatures.
+- Validate `X-Twilio-Signature` on both HTTP webhooks and the media WebSocket
+  handshake.
 - Put call-control endpoints behind bearer auth before enabling outbound calls.
 - Preserve Twilio `CallSid` and `StreamSid` in logs and metrics.
 - Send barge-in `clear` messages when interruption policy requires clearing
