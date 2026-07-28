@@ -196,9 +196,11 @@ VAD and noise reduction can each be forced to a single backend via
   cancellation.
 - **Factory functions** — `create_session()`, `create_vad()`,
   `create_noise_reducer()`.
-- **Event bus injection** — Deepgram and ElevenLabs providers require an
-  `EventBus` injected at construction (they emit provider-scoped events).
-  OpenAI providers do not.
+- **Event bus injection** — a provider config that declares optional
+  `event_bus` receives the session bus when unset; no provider requires it.
+  Injected STT/TTS/VAD/noise/AEC/transport instances that emit
+  provider-scoped events expose synchronous `set_event_bus(bus)`. Private
+  attribute probes are compatibility-only.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`,
   `NoopTransport` for test isolation.
 

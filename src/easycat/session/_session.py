@@ -254,9 +254,15 @@ class Session:
 
         # ── Event bus + provider event-bus attach ────────────────
         self.event_bus = cfg.event_bus or EventBus()
-        self._maybe_attach_event_bus(self.stt)
-        self._maybe_attach_event_bus(self.tts)
-        self._maybe_attach_event_bus(self.transport)
+        for provider in (
+            self.stt,
+            self.tts,
+            self.vad,
+            self.noise_reducer,
+            self.echo_canceller,
+            self.transport,
+        ):
+            self._maybe_attach_event_bus(provider)
 
         # ── Noop validation (audio sessions must have real providers) ─
         self._validate_providers(cfg)
@@ -1798,7 +1804,23 @@ class Session:
     # ── Internal helpers ───────────────────────────────────────
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
-        """Attach the session EventBus to provider configs that support it."""
+        """Attach the session bus through the public hook or legacy attributes."""
+        set_event_bus = getattr(provider, "set_event_bus", None)
+        if callable(set_event_bus):
+            try:
+                result = set_event_bus(self.event_bus)
+                if inspect.isawaitable(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise TypeError("set_event_bus() must be synchronous")
+                return
+            except Exception:
+                logger.warning(
+                    "Provider %r rejected set_event_bus(); trying legacy EventBus attachment",
+                    provider,
+                    exc_info=True,
+                )
+
         attached = False
         cfg = getattr(provider, "_config", None)
         if cfg is not None and hasattr(cfg, "event_bus") and cfg.event_bus is None:

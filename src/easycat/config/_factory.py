@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from easycat._provider_catalog import inject_event_bus
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import EventBus
 from easycat.integrations.agents import ExternalAgentBridge
@@ -450,14 +451,32 @@ def _resolve_audio_pipeline(
         tts = _create_tts(config.tts, event_bus)
         auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
         enable_vad = not auto_turn_from_stt_final
-        vad = _register_close(rollback, _create_vad(config.vad)) if enable_vad else None
+        vad_config_or_provider = (
+            config.vad
+            if _is_vad_provider_instance(config.vad)
+            else inject_event_bus(config.vad, event_bus)
+        )
+        vad = (
+            _register_close(rollback, _create_vad(vad_config_or_provider))
+            if enable_vad
+            else None
+        )
+        noise_config_or_provider = (
+            config.noise_reduction
+            if _is_noise_reducer_instance(config.noise_reduction)
+            else inject_event_bus(config.noise_reduction, event_bus)
+        )
         noise_reducer = (
-            _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+            _resolve_noise_reducer(noise_config_or_provider or NoiseReducerConfig())
             if config.enable_noise_reduction or config.noise_reduction is not None
             else None
         )
         # EasyConfig fills this default while preserving pre-built providers.
-        echo_config_or_provider = config.echo_cancellation
+        echo_config_or_provider = (
+            config.echo_cancellation
+            if _is_echo_canceller_instance(config.echo_cancellation)
+            else inject_event_bus(config.echo_cancellation, event_bus)
+        )
         assert echo_config_or_provider is not None
         echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
         enable_echo_cancellation = (

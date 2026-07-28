@@ -85,6 +85,11 @@ run(EasyConfig.mic(vad=EnergyVAD(), agent=my_agent))
 See `examples/custom_vad_provider.py` for a runnable wrapper-style variant,
 and `examples/vad_backends.py` for pinning the built-in backends.
 
+If an injected VAD emits provider-scoped events beyond its returned
+start/stop iterator, implement synchronous `set_event_bus(event_bus)`. Session
+calls this public hook for VAD, noise-reduction, and echo-cancellation
+instances as well as STT, TTS, and transports.
+
 ## Registering a named VAD
 
 Reusable packages can make a config selectable by shortcut from `EasyConfig`,
