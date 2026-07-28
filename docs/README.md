@@ -154,6 +154,10 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout. Run `just guard-ops` when editing
   these operator-facing pages.
+- Choosing a framework: read the [comparison guide](comparison.md) for the
+  capability matrix, EasyCat's explicit non-goals, and the dated,
+  revision-stamped provider-free scheduling benchmark against Pipecat and
+  LiveKit Agents.
 - Validating a change: run `uv run easycat validate quick`, inspect
   `uv run easycat validate report .easycat/validation/latest.json`, or use the
   matching JSON lanes (`uv run easycat validate quick --json`,

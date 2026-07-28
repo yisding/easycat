@@ -136,6 +136,7 @@ nav:
       - Testing and evals: testing-and-evals.md
   - Reference:
       - Architecture: architecture.md
+      - Compare frameworks: comparison.md
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
       - Session lifecycle: reference/session-lifecycle.md

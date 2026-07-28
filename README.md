@@ -4,6 +4,16 @@ Slim, batteries-included voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow.
 
+### Why EasyCat?
+
+EasyCat is the narrow choice for adding voice to agent code you already own:
+keep idiomatic OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, or
+async workflows while EasyCat owns the audio session, interruption, durable
+journal, replay, and provider/transport seams. It is self-hosted and
+audio-first—not a managed cloud or the broadest multimodal ecosystem. See the
+[capability matrix, non-goals, and reproducible scheduling benchmark](docs/comparison.md)
+for a candid comparison with Pipecat and LiveKit Agents.
+
 ### Quickstart (VoiceApp)
 `VoiceApp` is the app-first entry point: one noun for your voice product, with
 one-word mode switching. Build it once with your agent, then pick where it runs:
