@@ -44,6 +44,10 @@ same).
   transport buffer; what the listener will actually hear. Buffered
   transports may defer emission until the chunk crossed their own clearable
   queue.
+- `TransportAudioDelivered` — a transport-level delivery acknowledgement
+  emitted when a chunk crosses a clearable outbound buffer. The session uses
+  it to establish ownership before publishing `AudioOut`; most applications
+  should subscribe to `AudioOut`.
 
 ### Voice Activity Detection
 
@@ -59,6 +63,8 @@ same).
 
 ### Agent
 
+- `AgentRequestStarted` — the runtime is about to call the agent/LLM for the
+  turn; useful as the start point for model latency.
 - `AgentDelta` — a streaming text delta from the agent while it generates a
   reply.
 - `AgentFinal` — the agent's final complete response for the turn; carries
@@ -79,13 +85,56 @@ same).
   complete.
 - `BotStartedSpeaking` — the bot began playing TTS audio.
 - `BotStoppedSpeaking` — the bot finished playing TTS audio.
+
+### Playback And Interruptions
+
 - `Interruption` — the user barged in while the bot was speaking; pending
   TTS for the turn is cancelled.
+- `PlaybackMarkAck` — a transport acknowledged that playback reached a
+  previously queued mark (for example a Twilio Media Stream mark).
+
+### Agent Tools
+
+- `ToolCallStarted` — an agent tool invocation began; carries its tool name
+  and call id.
+- `ToolCallDelta` — a streaming argument/output delta arrived for an
+  in-progress tool call.
+- `ToolCallResult` — the tool invocation completed and produced its recorded
+  result.
+
+### Provider Reconnection
+
+- `ReconnectAttempt` — a reconnecting provider is starting the numbered
+  retry attempt.
+- `ReconnectSuccess` — the provider re-established its connection.
+- `ReconnectFailure` — the reconnect sequence exhausted or failed; carries
+  the provider's error text.
+
+### Transport Diagnostics
+
+- `TransportDegraded` — a transport dropped data or tore down abnormally;
+  carries a transport-owned reason code, bounded detail, and a `fatal` flag.
 
 ### Telephony Lifecycle
 
+- `DTMF` — one DTMF digit was detected.
+- `DTMFAggregated` — the DTMF aggregator completed a multi-digit sequence.
+- `VoicemailDetected` — voicemail/answering-machine detection resolved to
+  `human`, `machine`, or `unknown`.
+- `CallInitiated` — EasyCat placed an outbound call; carries the call id and
+  destination/source numbers.
+- `CallRinging` — the outbound call entered the remote-ringing state.
 - `CallAnswered` — an outbound call was answered (by a human, machine, or
   screener); triggers the configured greeting.
+- `CallScreening` — a platform or carrier call screener was detected.
+- `ScreeningResponse` — the screening detector requested the configured
+  static or agent-generated response.
+- `ScreeningTimedOut` — screening exhausted its maximum turns without
+  resolving.
+- `IVRAction` — the IVR navigator chose a DTMF, speak, wait, hangup, hold, or
+  human-detected action.
+- `CallStateChanged` — the outbound call controller moved between two call
+  states.
 - `CallEnded` — the call terminated, with duration and disposition when
   known.
 - `CallFailed` — the call failed (busy, no answer, rejected, or error).
@@ -97,6 +146,16 @@ same).
 - `SupervisorListenerDetached` — a passive supervisor listener detached from
   session audio.
 
+### Session Actions
+
+- `SessionActionRequested` — an agent-requested session action left the
+  queue and is about to be matched to an executor.
+- `SessionActionStarted` — a matching session-action executor began running.
+- `SessionActionCompleted` — the executor completed successfully and
+  returned a `SessionActionResult`.
+- `SessionActionFailed` — the action had no supporting executor or its
+  executor raised.
+
 ### Errors
 
 - `Error` — wraps an exception from a pipeline stage; carries the
@@ -104,15 +163,13 @@ same).
   stable `EASYCAT_Exxx` code when available so journal records correlate
   with `easycat explain`.
 
-## Beyond the Top-Level Exports
+## Event Groups And Provider Events
 
-The full telephony vocabulary (DTMF aggregation, voicemail detection, call
-screening, IVR actions), reconnect events, transport
-diagnostics, and session-action events live in `easycat.events` alongside
-bulk-subscription groups such as `STT_EVENTS`, `LIFECYCLE_EVENTS`,
-`TELEPHONY_EVENTS`, and `ALL_EVENTS`. Import them from `easycat.events`
-directly when you need them; the top-level package exports only the catalog
-above.
+Every event in the catalog is available from both `easycat` and
+`easycat.events`. Bulk-subscription groups such as `STT_EVENTS`,
+`LIFECYCLE_EVENTS`, `TELEPHONY_EVENTS`, `TRANSPORT_EVENTS`, and `ALL_EVENTS`
+remain in `easycat.events`, along with provider-scoped `STTEvent` and
+`TTSEvent` types used by provider implementations.
 
 ## Related Pages
 

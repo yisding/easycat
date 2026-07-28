@@ -540,6 +540,7 @@ class SessionActionFailed(Event):
 # Semantic groupings of EasyCat-level events for bulk subscription.
 
 AUDIO_EVENTS: tuple[type[Event], ...] = (AudioIn, AudioOut)
+TRANSPORT_EVENTS: tuple[type[Event], ...] = (TransportAudioDelivered, TransportDegraded)
 VAD_EVENTS: tuple[type[Event], ...] = (VADStartSpeaking, VADStopSpeaking)
 STT_EVENTS: tuple[type[Event], ...] = (STTPartial, STTFinal)
 AGENT_EVENTS: tuple[type[Event], ...] = (AgentRequestStarted, AgentDelta, AgentFinal)
@@ -582,6 +583,7 @@ ACTION_EVENTS: tuple[type[Event], ...] = (
 
 ALL_EVENTS: tuple[type[Event], ...] = (
     AUDIO_EVENTS
+    + TRANSPORT_EVENTS
     + VAD_EVENTS
     + STT_EVENTS
     + AGENT_EVENTS

@@ -19,6 +19,7 @@ PUBLIC_IMPORT_SURFACE_ROOTS = (
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
     "AgentFinal",
+    "AgentRequestStarted",
     "AudioChunk",
     "AudioFormat",
     "AudioIn",
@@ -29,7 +30,13 @@ PUBLIC_API_SNAPSHOT = (
     "CallEnded",
     "CallFailed",
     "CallIdentity",
+    "CallInitiated",
+    "CallRinging",
+    "CallScreening",
+    "CallStateChanged",
     "CancelToken",
+    "DTMF",
+    "DTMFAggregated",
     "EasyCatError",
     "EasyConfig",
     "EchoCanceller",
@@ -39,6 +46,7 @@ PUBLIC_API_SNAPSHOT = (
     "Event",
     "EventBus",
     "ICEServer",
+    "IVRAction",
     "Interruption",
     "JournalRecordKind",
     "LocalTransportConfig",
@@ -52,12 +60,22 @@ PUBLIC_API_SNAPSHOT = (
     "PCM16_MONO_8K",
     "PauseProcessor",
     "PhoneticReplacementProcessor",
+    "PlaybackMarkAck",
+    "ReconnectAttempt",
+    "ReconnectFailure",
+    "ReconnectSuccess",
     "RunBundle",
     "STTFinal",
     "STTPartial",
     "STTProvider",
     "STTProviderConfig",
+    "ScreeningResponse",
+    "ScreeningTimedOut",
     "Session",
+    "SessionActionCompleted",
+    "SessionActionFailed",
+    "SessionActionRequested",
+    "SessionActionStarted",
     "SessionActions",
     "SessionAudioBroadcaster",
     "SessionConfig",
@@ -70,7 +88,12 @@ PUBLIC_API_SNAPSHOT = (
     "TTSProvider",
     "TTSProviderConfig",
     "TelephonyConfig",
+    "ToolCallDelta",
+    "ToolCallResult",
+    "ToolCallStarted",
     "Transport",
+    "TransportAudioDelivered",
+    "TransportDegraded",
     "TurnEnded",
     "TurnManagerConfig",
     "TurnMode",
@@ -82,6 +105,7 @@ PUBLIC_API_SNAPSHOT = (
     "VADStartSpeaking",
     "VADStopSpeaking",
     "VoiceApp",
+    "VoicemailDetected",
     "VoicemailDetectionConfig",
     "WebRTCTransportConfig",
     "WebSocketConnectionTransport",
@@ -121,7 +145,7 @@ TRANSPORT_EXTENSION_SURFACE = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 95
+    assert len(easycat.__all__) <= 120
 
 
 def test_public_api_registry_tracks_snapshot() -> None:
