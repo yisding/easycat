@@ -837,6 +837,7 @@ CORS headers by default; if you host the browser UI elsewhere, pass explicit
 ## Repo layout
 - src/easycat: library code
 - tests: unit/integration tests (some are skipped without API keys)
+- [CHANGELOG.md](CHANGELOG.md): release notes and the current unreleased changes
 
 ## Factory APIs
 

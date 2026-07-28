@@ -52,6 +52,11 @@ jobs:
             fi
           done
       - run: uv sync --locked --group dev --python 3.12
+      - name: Verify release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: uv run python scripts/check_release_tag.py "$RELEASE_TAG"
       - run: uv build --sdist --wheel
       - name: Check package metadata
         run: uvx twine check dist/*
@@ -83,6 +88,7 @@ jobs:
           import pathlib
           import re
           import easycat
+          from importlib.metadata import version
 
           package_path = pathlib.Path(easycat.__file__).resolve()
           workspace = pathlib.Path(__import__("os").environ["GITHUB_WORKSPACE"]).resolve()
@@ -97,6 +103,7 @@ jobs:
           documented = tuple(re.findall(r"^- `([^`]+)`", section, flags=re.MULTILINE))
           assert documented
           assert set(documented) == set(easycat.__all__)
+          assert easycat.__version__ == version("easycat")
           for name in documented:
               getattr(easycat, name)
           PY
