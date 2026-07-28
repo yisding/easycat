@@ -25,6 +25,10 @@ def test_context_projection_keeps_only_allowlisted_diagnostics() -> None:
                 "code": "rate_limit",
                 "message": "Bearer secret-token",
                 "traceback": "/home/user/app.py",
+                "notes": (
+                    "stage=agent\nprovider=openai\nelapsed_ms=12.346\n"
+                    "sequence=42\nrecord_key=cp_42"
+                ),
             },
             "tags": {"provider", "retry"},
         }
@@ -43,10 +47,74 @@ def test_context_projection_keeps_only_allowlisted_diagnostics() -> None:
         "refs": {"input_ref": "a" * 64},
         "error": {
             "code": "rate_limit",
+            "notes": {
+                "stage": "agent",
+                "provider": "openai",
+                "elapsed_ms": 12.346,
+                "sequence": 42,
+                "record_key": "cp_42",
+            },
             "type": "ProviderError",
             "omitted_error_fields": 2,
         },
         "tags": ["provider", "retry"],
+    }
+
+
+def test_context_projection_keeps_only_machine_generated_error_note_lines() -> None:
+    projected = project_context_record(
+        {
+            "sequence": 7,
+            "error": {
+                "type": "ProviderError",
+                "notes": (
+                    "stage=tts\n"
+                    "provider=openaitts\n"
+                    "elapsed_ms=0.125\n"
+                    "sequence=7\n"
+                    "record_key=cp_7\n"
+                    "prompt: customer said my SSN is 123-45-6789\n"
+                    "provider=duplicate"
+                ),
+            },
+        }
+    )
+
+    assert projected == {
+        "sequence": 7,
+        "error": {
+            "type": "ProviderError",
+            "notes": {
+                "stage": "tts",
+                "provider": "openaitts",
+                "elapsed_ms": 0.125,
+                "sequence": 7,
+                "record_key": "cp_7",
+            },
+            "omitted_error_note_lines": 2,
+        },
+    }
+
+
+def test_context_projection_rejects_spoofed_machine_error_notes() -> None:
+    projected = project_context_record(
+        {
+            "sequence": 7,
+            "error": {
+                "notes": (
+                    "stage=agent response\n"
+                    "provider=https://sensitive.example\n"
+                    "elapsed_ms=nan\n"
+                    "sequence=07\n"
+                    "record_key=cp_-1"
+                ),
+            },
+        }
+    )
+
+    assert projected == {
+        "sequence": 7,
+        "error": {"omitted_error_fields": 1},
     }
 
 
