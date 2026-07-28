@@ -25,20 +25,26 @@ class _FakeSession:
         self.stopped = asyncio.Event()
         self.force_stopped = asyncio.Event()
         self._hang_until_force = hang_until_force
+        self._closed = False
 
     async def start(self) -> None:
         self.started.set()
 
     async def stop(self, *, force: bool = False) -> None:
+        if self._closed:
+            return
         if force:
             self.force_stopped.set()
             self.stopped.set()
+            self._closed = True
             return
         if self._hang_until_force:
             # Graceful stop hangs; only a forced stop releases it.
             await self.force_stopped.wait()
+            self._closed = True
             return
         self.stopped.set()
+        self._closed = True
 
 
 class _GuardedSession:
@@ -57,25 +63,32 @@ class _GuardedSession:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.graceful_started = asyncio.Event()
+        self.teardown_completed = asyncio.Event()
         self.force_path_ran = False
         self._stopping = False
+        self._closed = False
         self._release = asyncio.Event()
 
     async def start(self) -> None:
         self.started.set()
 
     async def stop(self, *, force: bool = False) -> None:
-        if self._stopping:
+        if self._closed or self._stopping:
             # The real guard: a force call after an in-progress graceful stop is
             # a no-op. The force path is therefore never reached here.
             return
         self._stopping = True
-        if force:
-            self.force_path_ran = True
-            return
-        self.graceful_started.set()
-        # Graceful teardown hangs until the drain cancels this coroutine.
-        await self._release.wait()
+        try:
+            if force:
+                self.force_path_ran = True
+            else:
+                self.graceful_started.set()
+                # Graceful teardown hangs until the drain cancels this coroutine.
+                await self._release.wait()
+            self._closed = True
+            self.teardown_completed.set()
+        finally:
+            self._stopping = False
 
 
 class _HangEvenInForceSession:
@@ -183,6 +196,34 @@ async def test_graceful_stop_drains_active_session_without_force() -> None:
 
 
 @pytest.mark.integration_socket
+async def test_await_natural_end_drain_leaves_live_websocket_until_client_closes() -> None:
+    server, sessions = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=2.0,
+            drain_mode="await_natural_end",
+        )
+    )
+    async with websockets.connect(_ws_url(server)) as client:
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+
+        stop_task = asyncio.create_task(server.stop())
+        await asyncio.sleep(0.1)
+
+        assert stop_task.done() is False
+        assert sessions[0].stopped.is_set() is False
+        assert client.close_code is None
+
+        await client.close()
+        await asyncio.wait_for(stop_task, timeout=3)
+
+    assert sessions[0].stopped.is_set()
+    assert sessions[0].force_stopped.is_set() is False
+
+
+@pytest.mark.integration_socket
 async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
     # A session whose graceful stop hangs must be force-stopped after the (small)
     # drain timeout so teardown cannot block forever.
@@ -195,6 +236,26 @@ async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
         await _wait_until(lambda: server._active_sessions == 1)
         # The handler will hang on graceful stop; ``stop`` escalates to force.
         await asyncio.wait_for(server.stop(), timeout=3)
+    assert sessions[0].force_stopped.is_set()
+
+
+@pytest.mark.integration_socket
+async def test_await_natural_end_drain_force_escalates_after_timeout() -> None:
+    server, sessions = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=0.1,
+            drain_mode="await_natural_end",
+        ),
+        hang=True,
+    )
+    async with websockets.connect(_ws_url(server)):
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+
+        await asyncio.wait_for(server.stop(), timeout=3)
+
     assert sessions[0].force_stopped.is_set()
 
 
@@ -215,10 +276,43 @@ async def test_hung_guarded_session_does_not_deadlock_stop() -> None:
         await _wait_until(lambda: server._active_sessions == 1)
         # Must NOT hang: bounded well under any unbounded ``wait_closed`` wait.
         await asyncio.wait_for(server.stop(), timeout=5)
-    # The drain started the graceful stop and, on timeout, cancelled it. The
-    # force path is a no-op against the guard (as in the real Session) — the
-    # point is that ``stop()`` returned and no handler task is left running.
+    # The drain started the graceful stop and, on timeout, cancelled it before
+    # entering the force path after the guard cleared.
     assert sessions[0].graceful_started.is_set()
+    assert sessions[0].force_path_ran is True
+    assert sessions[0].teardown_completed.is_set()
+    assert server._active_sessions == 0
+    assert not server._ws_handler_tasks
+
+
+@pytest.mark.integration_socket
+async def test_natural_disconnect_near_deadline_remains_force_escalatable() -> None:
+    server, sessions = await _running_guarded_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=0.2,
+            force_shutdown_timeout_s=1.0,
+            drain_mode="await_natural_end",
+        )
+    )
+    async with websockets.connect(_ws_url(server)) as client:
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+        stop_task = asyncio.create_task(server.stop())
+        await asyncio.sleep(0.05)
+
+        # Caller hangup starts SessionManager.remove() while the natural-drain
+        # deadline is still running. The graceful stop then hangs.
+        await client.close()
+        await sessions[0].graceful_started.wait()
+        await asyncio.wait_for(stop_task, timeout=3)
+
+    # The cancelled remove retained the manager entry, allowing the server's
+    # final force sweep to complete teardown after the handler had unwound.
+    assert sessions[0].force_path_ran is True
+    assert sessions[0].teardown_completed.is_set()
+    assert server._manager._sessions == {}
     assert server._active_sessions == 0
     assert not server._ws_handler_tasks
 

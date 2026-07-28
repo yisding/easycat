@@ -480,11 +480,13 @@ The selector changes only the factory configuration. Deepgram's
 pipeline rate:
 
 ```python
-stt = create_stt_provider(STTProviderConfig(
-    provider="deepgram",
-    api_key=dg_key,
-    params={"sample_rate": 24000, "event_bus": EventBus()},
-))
+stt = create_stt_provider(
+    STTProviderConfig(
+        provider="deepgram",
+        api_key=dg_key,
+        params={"sample_rate": 24000, "event_bus": EventBus()},
+    )
+)
 ```
 
 Chapters 3+ use exactly this configuration. The consumer code
@@ -578,6 +580,7 @@ Both scripts write a `RunBundle` to `runs/`. Open one:
 
 ```python
 from easycat.debug.testing import load_bundle
+
 b = load_bundle("docs/teaching/02-transcribe/runs/<file>.bundle")
 for rec in b.records():
     print(rec["sequence"], rec["name"], rec["data"])

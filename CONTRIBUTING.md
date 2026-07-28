@@ -282,6 +282,7 @@ a regression test in the same PR that fixes it:
 ```python
 from easycat.debug.testing import load_bundle, assert_turn_completed, assert_no_error
 
+
 def test_roundtrip_regression():
     bundle = load_bundle("tests/fixtures/roundtrip.zip")
     assert_turn_completed(bundle, turn_id="t1")

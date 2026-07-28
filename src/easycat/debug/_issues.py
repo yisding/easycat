@@ -35,6 +35,14 @@ from easycat.debug._audio_health import (
     detect_dead_air,
 )
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
+from easycat.runtime.records import (
+    BOT_STARTED_SPEAKING_RECORD_NAME,
+    BOT_STOPPED_SPEAKING_RECORD_NAME,
+    CONTROL_SIGNAL_RECORD_NAME,
+    INTERRUPTION_RECORD_NAME,
+    PLAYBACK_MARK_ACK_RECORD_NAME,
+    VAD_START_SPEAKING_RECORD_NAME,
+)
 
 # Severity rank for sorting (higher = more urgent).  Used to surface errors
 # before warnings before info in both the SPA cards and the CLI table.
@@ -269,11 +277,11 @@ def _milestone_issues(
 # quiet on ``bot_stopped_speaking`` / ``playback_mark_ack``; a user starting to
 # talk over the bot is ``vad_start_speaking`` inside a ``bot_started_speaking``
 # → bot-stopped window.
-_INTERRUPTION = "interruption"
-_CONTROL_SIGNAL = "control_signal"
-_BOT_STARTED_SPEAKING = "bot_started_speaking"
-_VAD_START_SPEAKING = "vad_start_speaking"
-_BOT_STOPPED_NAMES = frozenset({"bot_stopped_speaking", "playback_mark_ack"})
+_INTERRUPTION = INTERRUPTION_RECORD_NAME
+_CONTROL_SIGNAL = CONTROL_SIGNAL_RECORD_NAME
+_BOT_STARTED_SPEAKING = BOT_STARTED_SPEAKING_RECORD_NAME
+_VAD_START_SPEAKING = VAD_START_SPEAKING_RECORD_NAME
+_BOT_STOPPED_NAMES = frozenset({BOT_STOPPED_SPEAKING_RECORD_NAME, PLAYBACK_MARK_ACK_RECORD_NAME})
 
 
 def _is_interruption(record: Mapping[str, Any]) -> bool:
