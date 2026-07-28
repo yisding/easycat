@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
+from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, ExecutionCursor
 
 
 def _chunk_text(chunk: Any) -> str:
@@ -218,6 +218,27 @@ def translate_stream_event(
         state=state,
     )
     yield from handler(ctx)
+
+
+def close_top_ended_cursors(
+    recorder: AgentRecorder,
+    open_cursors: dict[str, ExecutionCursor],
+    ended_runs: set[str],
+) -> None:
+    """Close ended framework cursors from the top of the recorder stack.
+
+    LangChain emits start/end events in chronological order, so parallel
+    branches can end while a sibling cursor is still the top of the recorder's
+    strict LIFO stack. Hold each non-top close in ``ended_runs`` and flush it
+    once every obstructing sibling above it has also ended.
+    """
+    while open_cursors:
+        last_run_id = next(reversed(open_cursors))
+        if last_run_id not in ended_runs:
+            break
+        cursor = open_cursors.pop(last_run_id)
+        ended_runs.discard(last_run_id)
+        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
 
 # ── Per-event-type handlers ───────────────────────────────────────

@@ -346,6 +346,11 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
 
+    @property
+    def request(self) -> Any | None:
+        """Accepted WebSocket handshake request, when exposed by ``websockets``."""
+        return getattr(self._ws, "request", None)
+
     async def connect(self) -> None:
         if self._connected:
             return
@@ -373,19 +378,24 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             not self._connected
             and self._ws is None
             and (receive_task is None or receive_task.done())
+            and self._browser_event_forwarder is None
+            and not self._emit_tasks
         ):
             return
         self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
         ws = self._ws
-        if receive_task is not None and not receive_task.done():
-            receive_task.cancel()
+        self._receive_task = None
+        if receive_task is not None and receive_task is not asyncio.current_task():
+            if not receive_task.done():
+                receive_task.cancel()
             try:
                 await receive_task
             except asyncio.CancelledError:
                 pass
-        self._receive_task = None
+            except Exception:
+                logger.debug("WebSocket receive loop failed during disconnect", exc_info=True)
         if ws is not None:
             try:
                 await ws.close()
