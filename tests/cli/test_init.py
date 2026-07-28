@@ -416,7 +416,7 @@ def test_init_twilio_phone_template(
     assert "TwilioConnectionTransport" in server_py
     assert "twiml_connect_stream" in server_py
     pyproject = (project / "pyproject.toml").read_text()
-    assert "openai-agents,telephony" in pyproject
+    assert "openai-agents,telephony,telephony-fastapi" in pyproject
     env_example = (project / ".env.example").read_text()
     assert "TWILIO_STREAM_URL" in env_example
 

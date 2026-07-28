@@ -89,7 +89,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "openai-agents": ("openai-agents", "local"),
     "pydantic-ai": ("pydantic-ai", "local"),
     "pydantic-ai-workflow": ("pydantic-ai", "local"),
-    "twilio-phone": ("openai-agents", "telephony"),
+    "twilio-phone": ("openai-agents", "telephony", "telephony-fastapi"),
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
     "provider": ("openai-agents", "local"),

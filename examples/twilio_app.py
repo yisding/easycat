@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 """Twilio Media Streams example with per-call EasyCat sessions.
 
 Setup:
@@ -11,7 +13,7 @@ Setup:
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
   export TWILIO_CALL_API_TOKEN="dev-only-token"
   export TWILIO_SMS_FROM="+15551234567"  # optional, enables send_sms actions
-  uv sync --extra openai --extra telephony --extra openai-agents --group dev
+  uv sync --extra openai --extra telephony --extra telephony-fastapi --extra openai-agents --group dev
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
   uv run easycat doctor --env-file .env --json  # for parseable checks

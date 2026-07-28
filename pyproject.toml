@@ -70,10 +70,13 @@ elevenlabs = []
 cartesia = []
 telephony = [
     "aiohttp>=3.14.0",
-    "fastapi>=0.139.0",
     "phonenumberslite>=9.0.34",
-    "python-multipart>=0.0.29",
     "twilio>=9.0.0",
+]
+# The bundled lower-level reference app and twilio-phone scaffold use FastAPI
+# and uvicorn; the reusable telephony library itself does not.
+telephony-fastapi = [
+    "fastapi>=0.139.0",
     "uvicorn>=0.51.0",
 ]
 aec = ["livekit>=1.1.13"]
@@ -123,7 +126,6 @@ all = [
     "llama-index-workflows>=2.22.2,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
     "phonenumberslite>=9.0.34",
-    "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",

@@ -80,6 +80,17 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_telephony_library_extra_excludes_reference_server_dependencies() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    telephony = {Requirement(dep).name for dep in extras["telephony"]}
+    fastapi_server = {Requirement(dep).name for dep in extras["telephony-fastapi"]}
+
+    assert telephony == {"aiohttp", "phonenumberslite", "twilio"}
+    assert fastapi_server == {"fastapi", "uvicorn"}
+    for dependencies in extras.values():
+        assert "python-multipart" not in {Requirement(dep).name for dep in dependencies}
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [
