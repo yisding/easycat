@@ -302,13 +302,17 @@ class PydanticAIBridge:
             return
 
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
         except ImportError:
             return
 
         history = self._history_for_key(history_key or self._last_history_key)
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                return
             if isinstance(msg, ModelResponse):
                 text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
                 for idx, part in enumerate(text_parts):
@@ -350,10 +354,14 @@ class PydanticAIBridge:
         rather than the raw LLM output.
         """
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
         except ImportError:
             return
         for msg in reversed(self._history_for_key(self._last_history_key)):
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                return
             if not isinstance(msg, ModelResponse):
                 continue
             text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
@@ -472,30 +480,34 @@ class PydanticAIBridge:
             turn_input.text,
             **self._agent_run_kwargs(agent.iter, turn_input, history_key),
         ) as agent_run:
-            interrupted = False
-            async for node in agent_run:
-                node_cls = type(node).__name__
-                is_tool_node = node_cls == "CallToolsNode"
+            try:
+                interrupted = False
+                async for node in agent_run:
+                    node_cls = type(node).__name__
+                    is_tool_node = node_cls == "CallToolsNode"
 
-                if cancel_token and cancel_token.is_cancelled:
-                    interrupted = True
-                    if not is_tool_node:
-                        break
+                    if cancel_token and cancel_token.is_cancelled:
+                        interrupted = True
+                        if not is_tool_node:
+                            break
 
-                if not hasattr(node, "stream"):
-                    continue
+                    if not hasattr(node, "stream"):
+                        continue
 
-                async with node.stream(agent_run.ctx) as stream:
-                    async for event in stream:
-                        if cancel_token and cancel_token.is_cancelled and not interrupted:
-                            interrupted = True
-                            if not is_tool_node:
-                                break
-                        mapped = translate_event(event, recorder)
-                        if mapped is not None:
-                            if interrupted and mapped.kind == "text_delta":
-                                continue
-                            yield mapped
+                    async with node.stream(agent_run.ctx) as stream:
+                        async for event in stream:
+                            if cancel_token and cancel_token.is_cancelled and not interrupted:
+                                interrupted = True
+                                if not is_tool_node:
+                                    break
+                            mapped = translate_event(event, recorder)
+                            if mapped is not None:
+                                if interrupted and mapped.kind == "text_delta":
+                                    continue
+                                yield mapped
+            except BaseException:
+                await self._preserve_run_history_on_teardown(agent_run, history_key)
+                raise
 
             self._set_history_for_key(history_key, await _run_new_messages(agent_run))
             self._last_output = await _run_output(agent_run)
@@ -512,17 +524,31 @@ class PydanticAIBridge:
             turn_input.text,
             **self._agent_run_kwargs(agent.run_stream, turn_input, history_key),
         ) as result:
-            accumulated = ""
-            async for full_text in result.stream_text():
-                if cancel_token and cancel_token.is_cancelled:
-                    break
-                delta = full_text[len(accumulated) :]
-                if delta:
-                    yield AgentBridgeEvent(kind="text_delta", text=delta)
-                accumulated = full_text
+            try:
+                accumulated = ""
+                async for full_text in result.stream_text():
+                    if cancel_token and cancel_token.is_cancelled:
+                        break
+                    delta = full_text[len(accumulated) :]
+                    if delta:
+                        yield AgentBridgeEvent(kind="text_delta", text=delta)
+                    accumulated = full_text
+            except BaseException:
+                await self._preserve_run_history_on_teardown(result, history_key)
+                raise
 
             self._set_history_for_key(history_key, await _run_new_messages(result))
             self._last_output = await _run_output(result)
+
+    async def _preserve_run_history_on_teardown(self, run: Any, history_key: str) -> None:
+        """Best-effort snapshot of the current turn before cancellation escapes."""
+        try:
+            self._set_history_for_key(history_key, await _run_new_messages(run))
+        except BaseException:
+            # Cleanup must not replace the original GeneratorExit /
+            # CancelledError (or a framework exception) with a secondary
+            # snapshot failure.
+            logger.debug("Failed to preserve PydanticAI turn history on teardown", exc_info=True)
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:
