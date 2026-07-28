@@ -18,12 +18,16 @@ import struct
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import Any, ClassVar
 
 import websockets
 from websockets.asyncio.server import ServerConnection
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
 
 from easycat._audio_utils import resample
+from easycat._net import is_loopback_host
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
     CallAnswered,
@@ -139,12 +143,52 @@ class TwilioTransportConfig:
 
     preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8766
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
     stream_token_validator: Callable[[str], bool] | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
+    unsafe_allow_no_auth: bool = False
+
+
+def twilio_websocket_signature_process_request(
+    auth_token: str,
+    websocket_url: str,
+) -> Callable[[ServerConnection, Request], Response | None]:
+    """Build a handshake hook that authenticates Twilio before session setup.
+
+    Twilio doesn't support query parameters in ``<Stream url>``; custom
+    parameters arrive only after the WebSocket upgrade in the ``start`` frame.
+    Media Streams does sign the initial handshake with ``X-Twilio-Signature``,
+    so validating that header against the exact public ``wss://`` URL is the
+    supported pre-upgrade authentication boundary. The existing one-time
+    start-frame token remains a second, independent check.
+    """
+    from easycat.telephony.twiml import validate_twilio_webhook_signature
+
+    def process_request(_ws: ServerConnection, request: Request) -> Response | None:
+        if validate_twilio_webhook_signature(
+            auth_token=auth_token,
+            url=websocket_url,
+            params=[],
+            signature=request.headers.get("X-Twilio-Signature"),
+        ):
+            return None
+        body = b"Missing or invalid Twilio signature.\n"
+        return Response(
+            HTTPStatus.UNAUTHORIZED.value,
+            HTTPStatus.UNAUTHORIZED.phrase,
+            Headers(
+                [
+                    ("Content-Type", "text/plain; charset=utf-8"),
+                    ("Content-Length", str(len(body))),
+                ]
+            ),
+            body,
+        )
+
+    return process_request
 
 
 def _parse_twilio_start_identity(
@@ -780,6 +824,20 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         self._mark_counter = 0
 
     # ── Transport protocol ────────────────────────────────────────
+
+    async def connect(self) -> None:
+        """Start the media listener after enforcing a safe public bind."""
+        if (
+            not is_loopback_host(self._config.host)
+            and self._config.stream_token_validator is None
+            and not self._config.unsafe_allow_no_auth
+        ):
+            raise ValueError(
+                "TwilioTransportConfig.stream_token_validator is required when "
+                "binding Twilio media to a non-loopback host; pass "
+                "unsafe_allow_no_auth=True only for an intentionally unauthenticated listener"
+            )
+        await super().connect()
 
     def _current_ws(self) -> ServerConnection | None:
         return self._ws

@@ -39,6 +39,8 @@ _LAZY_ATTR: dict[str, str] = {
     "validate_twilio_webhook_signature": "easycat.telephony.twiml",
     # Twilio app settings
     "TwilioAppSettings": "easycat.telephony.twilio_app",
+    "TwilioCallSessionIndex": "easycat.telephony.twilio_app",
+    "bearer_token_matches": "easycat.telephony.twilio_app",
     "twilio_app_settings_from_env": "easycat.telephony.twilio_app",
     # Voicemail
     "VoicemailDetector": "easycat.telephony.voicemail",
@@ -129,7 +131,12 @@ if TYPE_CHECKING:
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,
     )
-    from easycat.telephony.twilio_app import TwilioAppSettings, twilio_app_settings_from_env
+    from easycat.telephony.twilio_app import (
+        TwilioAppSettings,
+        TwilioCallSessionIndex,
+        bearer_token_matches,
+        twilio_app_settings_from_env,
+    )
     from easycat.telephony.twiml import (
         TwilioWebhookSignatureError,
         compute_twilio_webhook_signature,

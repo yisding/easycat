@@ -502,6 +502,7 @@ def test_media_listener_disables_permessage_deflate(monkeypatch: pytest.MonkeyPa
     asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, body))
 
     assert harness.serve_kwargs.get("compression", "MISSING") is None
+    assert callable(harness.serve_kwargs.get("process_request"))
 
 
 # ── session('twilio') still raises ────────────────────────────────────

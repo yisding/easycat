@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 import pytest
 
-from easycat.events import DTMF, EventBus
+from easycat.events import DTMF, CallAnswered, CallEnded, EventBus
 from easycat.telephony import (
+    TwilioCallSessionIndex,
     TwilioWebhookSignatureError,
+    bearer_token_matches,
     compute_twilio_webhook_signature,
     reconstruct_public_url,
     twilio_app_settings_from_env,
@@ -82,6 +85,7 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_CALL_API_TOKEN": "call-token",
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
+            "TWILIO_MAX_SESSIONS": "12",
         }
     )
 
@@ -91,6 +95,7 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.outbound_calling_enabled is True
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
+    assert settings.max_sessions == 12
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"
@@ -111,6 +116,46 @@ def test_twilio_app_settings_stream_url_override_and_missing_error() -> None:
 
     with pytest.raises(RuntimeError, match="TWILIO_STREAM_URL is required"):
         twilio_app_settings_from_env(environ={"TWILIO_STREAM_URL": "   "})
+
+
+def test_twilio_app_settings_can_require_auth_and_validate_session_limit() -> None:
+    with pytest.raises(RuntimeError, match="TWILIO_AUTH_TOKEN is required"):
+        twilio_app_settings_from_env(
+            stream_url="wss://voice.example.com/stream",
+            require_auth_token=True,
+            environ={},
+        )
+
+    for value in ("0", "-1", "many"):
+        with pytest.raises(RuntimeError, match="TWILIO_MAX_SESSIONS"):
+            twilio_app_settings_from_env(
+                stream_url="wss://voice.example.com/stream",
+                environ={"TWILIO_MAX_SESSIONS": value},
+            )
+
+
+@pytest.mark.asyncio
+async def test_twilio_call_session_index_tracks_and_unsubscribes() -> None:
+    bus = EventBus()
+    session = SimpleNamespace(event_bus=bus)
+    index = TwilioCallSessionIndex()
+    cleanup = index.track(session)
+
+    await bus.emit(CallAnswered(call_sid="CA123"))
+    assert index.get("CA123") is session
+    await bus.emit(CallEnded(call_sid="CA123"))
+    assert index.get("CA123") is None
+
+    cleanup()
+    await bus.emit(CallAnswered(call_sid="CA-LATE"))
+    assert index.get("CA-LATE") is None
+
+
+def test_bearer_token_matches_is_constant_time_safe_for_non_ascii() -> None:
+    assert bearer_token_matches("Bearer secret", "secret")
+    assert not bearer_token_matches("Bearer wrong", "secret")
+    assert not bearer_token_matches("Bearer secrét", "secret")
+    assert not bearer_token_matches("Bearer secret", "secrét")
 
 
 def test_twilio_app_settings_treats_whitespace_env_values_as_missing() -> None:

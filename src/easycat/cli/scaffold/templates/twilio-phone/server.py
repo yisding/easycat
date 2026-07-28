@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
+from agent import make_agent
 from fastapi import FastAPI, HTTPException, Request, Response
 from websockets.asyncio.server import ServerConnection
 
-from agent import make_agent
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -22,8 +22,32 @@ from easycat import (
     require_env,
 )
 from easycat.telephony import reconstruct_public_url, validate_twilio_webhook_signature
-from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+from easycat.transports import (
+    TwilioStreamTokenStore,
+    TwilioTransportConfig,
+    twilio_websocket_signature_process_request,
+)
 from easycat.transports.twilio_media import twiml_connect_stream
+
+
+def _public_twilio_url(request: Request, *, trust_proxy_headers: bool) -> str:
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+    return reconstruct_public_url(
+        request.headers,
+        path,
+        trust_proxy=trust_proxy_headers,
+        default_scheme=request.url.scheme,
+    )
+
+
+def _stream_parameters(form: dict[str, str]) -> dict[str, str]:
+    parameters = {"Direction": form.get("Direction") or "inbound"}
+    for name in ("From", "To", "CallerName", "FromCity", "FromState", "FromZip", "FromCountry"):
+        if form.get(name):
+            parameters[name] = form[name]
+    return parameters
 
 
 def create_app() -> FastAPI:
@@ -61,7 +85,17 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         port = int(os.getenv("TWILIO_WS_PORT", "8766"))
-        twilio_ws = await websockets.serve(handle_call, "0.0.0.0", port, compression=None)
+        process_request = twilio_websocket_signature_process_request(
+            twilio_auth_token,
+            stream_url,
+        )
+        twilio_ws = await websockets.serve(
+            handle_call,
+            "0.0.0.0",
+            port,
+            process_request=process_request,
+            compression=None,
+        )
         try:
             yield
         finally:
@@ -71,23 +105,12 @@ def create_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
 
-    def public_twilio_url(request: Request) -> str:
-        path = request.url.path
-        if request.url.query:
-            path = f"{path}?{request.url.query}"
-        return reconstruct_public_url(
-            request.headers,
-            path,
-            trust_proxy=trust_proxy_headers,
-            default_scheme=request.url.scheme,
-        )
-
     async def signed_twilio_form(request: Request) -> list[tuple[str, str]]:
         body = (await request.body()).decode()
         form_items = parse_qsl(body, keep_blank_values=True)
         if not validate_twilio_webhook_signature(
             auth_token=twilio_auth_token,
-            url=public_twilio_url(request),
+            url=_public_twilio_url(request, trust_proxy_headers=trust_proxy_headers),
             params=form_items,
             signature=request.headers.get("x-twilio-signature"),
         ):
@@ -98,21 +121,9 @@ def create_app() -> FastAPI:
     async def twiml(request: Request) -> Response:
         form_items = await signed_twilio_form(request)
         form = dict(form_items)
-        parameters: dict[str, str] = {"Direction": form.get("Direction") or "inbound"}
-        for name in (
-            "From",
-            "To",
-            "CallerName",
-            "FromCity",
-            "FromState",
-            "FromZip",
-            "FromCountry",
-        ):
-            if form.get(name):
-                parameters[name] = form[name]
         xml = twiml_connect_stream(
             stream_url,
-            parameters=parameters,
+            parameters=_stream_parameters(form),
             stream_token=stream_tokens.issue(),
         )
         return Response(content=xml, media_type="application/xml")

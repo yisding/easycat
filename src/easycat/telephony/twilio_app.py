@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from hmac import compare_digest
+from typing import TYPE_CHECKING, Any
 
-from easycat.events import EventBus
+from easycat.events import CallAnswered, CallEnded, CallFailed, EventBus
 
 if TYPE_CHECKING:
     from easycat.telephony.outbound import OutboundCallManager
@@ -17,6 +18,22 @@ if TYPE_CHECKING:
 def _settings_value(value: str | None) -> str:
     """Normalize env/settings values so blank secrets do not count as configured."""
     return (value or "").strip()
+
+
+def _positive_int_setting(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    default: int,
+) -> int:
+    raw = _settings_value(env.get(name))
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +49,7 @@ class TwilioAppSettings:
     call_api_token: str = ""
     sms_from: str = ""
     stream_token_secret: str = ""
+    max_sessions: int = 8
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:
@@ -75,9 +93,57 @@ class TwilioAppSettings:
         return manager
 
 
+class TwilioCallSessionIndex:
+    """Track active call SIDs without duplicating event wiring in app servers."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, Any] = {}
+
+    def track(self, session: Any) -> Callable[[], None]:
+        call_sid: str | None = None
+
+        def remember(event: CallAnswered) -> None:
+            nonlocal call_sid
+            if event.call_sid:
+                call_sid = event.call_sid
+                self._sessions[event.call_sid] = session
+
+        def forget(event: CallEnded | CallFailed) -> None:
+            nonlocal call_sid
+            if event.call_sid:
+                self._sessions.pop(event.call_sid, None)
+            if event.call_sid == call_sid:
+                call_sid = None
+
+        session.event_bus.subscribe(CallAnswered, remember)
+        session.event_bus.subscribe(CallEnded, forget)
+        session.event_bus.subscribe(CallFailed, forget)
+
+        def cleanup() -> None:
+            session.event_bus.unsubscribe(CallAnswered, remember)
+            session.event_bus.unsubscribe(CallEnded, forget)
+            session.event_bus.unsubscribe(CallFailed, forget)
+            if call_sid:
+                self._sessions.pop(call_sid, None)
+
+        return cleanup
+
+    def get(self, call_sid: str) -> Any | None:
+        return self._sessions.get(call_sid)
+
+
+def bearer_token_matches(header: str | None, token: str) -> bool:
+    """Return whether an Authorization header matches without timing leaks."""
+    provided = header or ""
+    expected = f"Bearer {token}"
+    return provided.isascii() and expected.isascii() and compare_digest(provided, expected)
+
+
 def twilio_app_settings_from_env(
     *,
     stream_url: str | None = None,
+    auth_token: str | None = None,
+    require_auth_token: bool = False,
     environ: Mapping[str, str] | None = None,
 ) -> TwilioAppSettings:
     """Read the standard Twilio example/app environment variables."""
@@ -90,18 +156,32 @@ def twilio_app_settings_from_env(
             "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
             "connect to."
         )
+    resolved_auth_token = _settings_value(auth_token) or _settings_value(
+        env.get("TWILIO_AUTH_TOKEN")
+    )
+    if require_auth_token and not resolved_auth_token:
+        raise RuntimeError(
+            "TWILIO_AUTH_TOKEN is required to authenticate Twilio webhooks and "
+            "the media WebSocket handshake."
+        )
 
     return TwilioAppSettings(
         stream_url=resolved_stream_url,
         account_sid=_settings_value(env.get("TWILIO_ACCOUNT_SID")),
-        auth_token=_settings_value(env.get("TWILIO_AUTH_TOKEN")),
+        auth_token=resolved_auth_token,
         voice_from=_settings_value(env.get("TWILIO_VOICE_FROM")),
         twiml_url=_settings_value(env.get("TWILIO_TWIML_URL")),
         status_callback_url=_settings_value(env.get("TWILIO_STATUS_CALLBACK_URL")),
         call_api_token=_settings_value(env.get("TWILIO_CALL_API_TOKEN")),
         sms_from=_settings_value(env.get("TWILIO_SMS_FROM")),
         stream_token_secret=_settings_value(env.get("TWILIO_STREAM_TOKEN_SECRET")),
+        max_sessions=_positive_int_setting(env, "TWILIO_MAX_SESSIONS", default=8),
     )
 
 
-__all__ = ["TwilioAppSettings", "twilio_app_settings_from_env"]
+__all__ = [
+    "TwilioAppSettings",
+    "TwilioCallSessionIndex",
+    "bearer_token_matches",
+    "twilio_app_settings_from_env",
+]

@@ -1052,6 +1052,8 @@ def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
 
     assert 'require_env("TWILIO_AUTH_TOKEN")' in server
     assert "validate_twilio_webhook_signature" in server
+    assert "twilio_websocket_signature_process_request" in server
+    assert "process_request=process_request" in server
     assert "TwilioStreamTokenStore" in server
     assert "TwilioTransportConfig(stream_token_validator=stream_tokens.consume)" in server
     assert "TWILIO_AUTH_TOKEN" in env_example

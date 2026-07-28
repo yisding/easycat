@@ -67,14 +67,12 @@ class TwilioVoiceServerConfig:
     TLS-terminating proxy/load balancer so the public URL Twilio signed is
     reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
 
-    ``max_sessions`` caps concurrent media sessions. The media listener defaults
-    to a public bind (``host="0.0.0.0"``) and builds a full EasyCat session per
-    accepted WebSocket *before* the first ``start`` frame's one-time stream
-    token is validated, so an unauthenticated client could otherwise open
-    idle/invalid sockets and exhaust provider connections or block real calls.
-    The gate bounds that blast radius (mirroring the WebRTC/WebSocket session
-    servers); over-limit connections are rejected with WebSocket close code
-    ``1013`` (Try Again Later).
+    The media listener validates Twilio's ``X-Twilio-Signature`` during the
+    WebSocket handshake, before building a session. The one-time token in the
+    first ``start`` frame remains a defense-in-depth replay check.
+    ``max_sessions`` caps authenticated concurrent media sessions; over-limit
+    connections are rejected with WebSocket close code ``1013`` (Try Again
+    Later).
     """
 
     host: str = "0.0.0.0"
@@ -166,7 +164,11 @@ async def serve_twilio_voice_app(
         reconstruct_public_url,
         validate_twilio_webhook_signature,
     )
-    from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+    from easycat.transports import (
+        TwilioStreamTokenStore,
+        TwilioTransportConfig,
+        twilio_websocket_signature_process_request,
+    )
     from easycat.transports.twilio_media import (
         TwilioConnectionTransport,
         twiml_connect_stream,
@@ -177,12 +179,9 @@ async def serve_twilio_voice_app(
     session_slots = asyncio.Semaphore(config.max_sessions)
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
-        # Gate before building/starting a session: this handler spins up a full
-        # EasyCat session (provider connections included) for every accepted
-        # WebSocket, and the one-time stream token is only validated once the
-        # first ``start`` frame arrives inside the transport. Cap concurrency so
-        # an unauthenticated client cannot exhaust provider connections or block
-        # real calls by opening idle/invalid sockets.
+        # Handshake signature validation has already authenticated this socket.
+        # Keep the capacity gate before session construction so a burst of
+        # legitimate calls still cannot exceed the configured provider budget.
         if session_slots.locked():
             await ws.close(code=1013, reason="Server is at the configured session limit")
             return
@@ -222,10 +221,19 @@ async def serve_twilio_voice_app(
         )
         return web.Response(text=xml, content_type="application/xml")
 
+    process_request = (
+        twilio_websocket_signature_process_request(
+            config.twilio_auth_token,
+            config.stream_url,
+        )
+        if config.twilio_auth_token
+        else None
+    )
     media_server = await websockets.serve(
         handle_twilio_connection,
         config.host,
         config.media_port,
+        process_request=process_request,
         compression=None,
     )
 
