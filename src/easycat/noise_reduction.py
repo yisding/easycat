@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
+from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk, AudioFormat
 
 if TYPE_CHECKING:
@@ -29,6 +30,12 @@ _VALID_NOISE_REDUCER_BACKENDS: tuple[NoiseReducerBackend, ...] = (
     "auto",
     "krisp",
     "rnnoise",
+)
+NOISE_REDUCER_PROVIDER_ENTRY_POINT_GROUP = "easycat.noise_reducer_providers"
+_CATALOG = ProviderCatalog(
+    specs={},
+    kind="noise reducer",
+    entry_point_group=NOISE_REDUCER_PROVIDER_ENTRY_POINT_GROUP,
 )
 NoiseReducerFallbackPolicy: TypeAlias = Literal["passthrough", "error"]
 _VALID_NOISE_REDUCER_FALLBACK_POLICIES: tuple[NoiseReducerFallbackPolicy, ...] = (
@@ -364,7 +371,59 @@ class PassthroughNoiseReducer:
         }
 
 
-def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
+def register_noise_reducer_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str | None = None,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
+) -> None:
+    """Register a third-party noise reducer and its discovery metadata."""
+    normalized = name.strip().lower() if isinstance(name, str) else ""
+    if normalized in _VALID_NOISE_REDUCER_BACKENDS:
+        raise ValueError(
+            f"Noise reducer provider name {normalized!r} is reserved by a built-in backend."
+        )
+    _CATALOG.register(
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
+    )
+
+
+def available_noise_reducer_providers() -> list[str]:
+    """Return every built-in or registered noise-reducer provider name."""
+    return sorted(set(_VALID_NOISE_REDUCER_BACKENDS) | set(_CATALOG.available_names()))
+
+
+def is_noise_reducer_config(value: object) -> bool:
+    """True when ``value`` is a built-in or registered noise-reducer config."""
+    return isinstance(value, NoiseReducerConfig) or _CATALOG.is_config_instance(value)
+
+
+def parse_noise_reducer_string(spec: str) -> Any:
+    """Parse a built-in or registered ``provider/model`` shortcut."""
+    provider, separator, model = spec.partition("/")
+    normalized = provider.strip().lower()
+    if normalized in _VALID_NOISE_REDUCER_BACKENDS:
+        if separator and model.strip():
+            raise ValueError(
+                f"Built-in noise reducer backend {normalized!r} does not accept a model."
+            )
+        return NoiseReducerConfig(backend=normalized)
+    return _CATALOG.parse_string(spec)
+
+
+def create_noise_reducer(config: Any = None) -> Any:
     """Create the best available noise reducer.
 
     Selection order:
@@ -379,7 +438,19 @@ def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
 
     Returns an object satisfying the NoiseReducer protocol.
     """
+    if isinstance(config, str):
+        config = parse_noise_reducer_string(config)
+    if config is not None and callable(getattr(config, "process", None)):
+        return config
+    if _CATALOG.is_config_instance(config):
+        return _CATALOG.create_from_config(config, event_bus=None)
+
     cfg = config or NoiseReducerConfig()
+    if not isinstance(cfg, NoiseReducerConfig):
+        raise ValueError(
+            f"Unsupported noise reducer configuration type: {type(cfg).__name__!r}. "
+            "Pass NoiseReducerConfig, a registered config, or a noise-reducer instance."
+        )
     cfg.backend = _validate_noise_reducer_backend(cfg.backend)
     cfg.fallback_policy = _validate_noise_reducer_fallback_policy(cfg.fallback_policy)
 

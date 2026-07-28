@@ -1,4 +1,4 @@
-"""Shared STT/TTS provider registration, lookup, and metadata."""
+"""Shared provider registration, lookup, discovery, and metadata."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def inject_event_bus(config: Any, event_bus: Any) -> Any:
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    """Classes and discovery metadata for one built-in provider."""
+    """Classes and discovery metadata for one provider."""
 
     provider_cls: Callable[..., Any]
     config_cls: type
@@ -49,7 +49,7 @@ class ProviderSpec:
 
 @dataclass(frozen=True)
 class ProviderCatalog:
-    """Open provider registry shared by the STT and TTS factories."""
+    """Open provider registry shared by audio-stage factories."""
 
     specs: Mapping[str, ProviderSpec]
     kind: str
@@ -299,25 +299,42 @@ def stt_tts_catalogs() -> tuple[ProviderCatalog, ProviderCatalog]:
     return (stt_catalog, tts_catalog)
 
 
+def provider_catalogs() -> tuple[ProviderCatalog, ...]:
+    """Return every discovered provider catalog across the audio pipeline."""
+    from easycat.echo_cancellation import _CATALOG as echo_canceller_catalog
+    from easycat.noise_reduction import _CATALOG as noise_reducer_catalog
+    from easycat.vad.factory import _CATALOG as vad_catalog
+
+    catalogs = (
+        *stt_tts_catalogs(),
+        vad_catalog,
+        noise_reducer_catalog,
+        echo_canceller_catalog,
+    )
+    for catalog in catalogs:
+        catalog.discover()
+    return catalogs
+
+
 def provider_names() -> frozenset[str]:
-    """Every registered STT/TTS provider name, merged across catalogs."""
-    return frozenset(name for catalog in stt_tts_catalogs() for name in catalog.providers)
+    """Every registered provider name, merged across audio-pipeline catalogs."""
+    return frozenset(name for catalog in provider_catalogs() for name in catalog.providers)
 
 
 def provider_env_vars() -> dict[str, str]:
-    """Credentialed provider → API-key env var, merged across both catalogs."""
+    """Credentialed provider → API-key env var, merged across all catalogs."""
     return {
         name: env_var
-        for catalog in stt_tts_catalogs()
+        for catalog in provider_catalogs()
         for name, env_var in catalog.env_vars.items()
         if env_var is not None
     }
 
 
 def provider_extras() -> dict[str, str]:
-    """Provider → optional install extra, merged across the STT and TTS catalogs."""
+    """Provider → optional install extra, merged across all catalogs."""
     return {
-        name: extra for catalog in stt_tts_catalogs() for name, extra in catalog.extras.items()
+        name: extra for catalog in provider_catalogs() for name, extra in catalog.extras.items()
     }
 
 
@@ -325,7 +342,7 @@ def provider_probe_modules() -> dict[str, str]:
     """Install extra → explicit import probe declared by a provider."""
     return {
         extra: probe_module
-        for catalog in stt_tts_catalogs()
+        for catalog in provider_catalogs()
         for name, extra in catalog.extras.items()
         if extra and (probe_module := catalog.probe_modules.get(name)) is not None
     }
@@ -351,7 +368,7 @@ def sensitive_api_domains() -> tuple[str, ...]:
         sorted(
             {
                 domain
-                for catalog in stt_tts_catalogs()
+                for catalog in provider_catalogs()
                 for domains in catalog.api_domains.values()
                 for domain in domains
             }

@@ -62,7 +62,7 @@ A production VAD should also debounce with the configured
 `min_speech_duration_ms` / `min_silence_duration_ms` windows; the turn
 manager tolerates chatty VADs, but debouncing avoids spurious turn churn.
 
-## Injecting it
+## Injecting it directly
 
 ```python
 from easycat import EasyConfig, run
@@ -72,6 +72,50 @@ run(EasyConfig.mic(vad=EnergyVAD(), agent=my_agent))
 
 See `examples/custom_vad_provider.py` for a runnable wrapper-style variant,
 and `examples/vad_backends.py` for pinning the built-in backends.
+
+## Registering a named VAD
+
+Reusable packages can make a config selectable by shortcut from `EasyConfig`,
+`easycat.toml`, and the provider planner:
+
+```python
+from dataclasses import dataclass
+
+from easycat import register_vad_provider
+
+
+@dataclass
+class EnergyVADConfig:
+    threshold: float = 500.0
+
+
+def register() -> None:
+    register_vad_provider(
+        "energy",
+        EnergyVAD,
+        EnergyVADConfig,
+        capabilities=frozenset({"offline"}),
+    )
+```
+
+The provider constructor receives the registered config. `EasyConfig(vad="energy")`
+and a manifest `vad = "energy"` both resolve `EnergyVADConfig()` and construct
+`EnergyVAD(config)` when the session starts. If the config declares a model
+field (or a custom `MODEL_FIELD` class variable), `"energy/model-name"` fills
+that field using the same shortcut grammar as STT/TTS.
+
+For automatic discovery from an installed package, publish the zero-argument
+registrar under the `easycat.vad_providers` entry-point group:
+
+```toml
+[project.entry-points."easycat.vad_providers"]
+energy = "my_energy_vad:register"
+```
+
+EasyCat loads this group lazily on the first VAD lookup. Registration metadata
+also accepts `extra`, `probe_module`, `capabilities`, optional `env_var`, and
+`api_domains`, matching the STT/TTS catalogs. Local VADs normally omit
+`env_var`; no dummy API key is required.
 
 ## Verifying conformance
 

@@ -1,12 +1,11 @@
-"""NET-NEW declarative metadata for the 5 non-catalog planner roles (M6b).
+"""Declarative metadata for built-in non-STT/TTS planner backends.
 
-Only STT and TTS have a :class:`~easycat._provider_catalog.ProviderCatalog`. The
-other five planner roles — ``transport``, ``vad``, ``noise_reducer``,
-``echo_canceller``, and ``agent`` — have NO catalog: resolution is hand-rolled
-(config-type dispatch, try/except fallback chains, or a net-new
-``python:module:function`` resolver). This module is the single declarative
-source the planner reads for those five roles so it can report ``extra`` /
-``required_env`` / ``capabilities`` WITHOUT instantiating a provider.
+Transport and agent resolution are table-driven. VAD, noise reduction, and echo
+cancellation retain table metadata for their built-in fallback chains while
+third-party implementations use
+:class:`~easycat._provider_catalog.ProviderCatalog`. This module lets the
+planner report built-in ``extra`` / ``required_env`` / ``capabilities`` without
+instantiating a provider.
 
 Capabilities are declared NET-NEW here. ``validation/provider_capabilities.py``
 is a LIVE-derived report (it probes a running provider), NOT a static table, so
@@ -61,7 +60,7 @@ EXTRA_PROBE_MODULE: dict[str, str | None] = {
 
 @dataclass(frozen=True)
 class RoleBackend:
-    """Declarative metadata for one backend of a non-catalog planner role.
+    """Declarative metadata for one built-in planner backend.
 
     ``config_type`` is the dataclass/preset name the role resolves to in
     ``create_session`` (e.g. ``"WebRTCTransportConfig"`` / ``"VADConfig"``);
@@ -247,15 +246,17 @@ AGENT_BACKENDS: dict[str, RoleBackend] = {
 DEFAULT_AGENT = "none"
 
 
-# The five roles this module owns (everything EXCEPT stt/tts, which use the
-# catalog). The planner iterates this for the non-catalog roles.
-NON_CATALOG_ROLES: tuple[str, ...] = (
+# The five roles with built-in metadata here. Registered VAD/noise/AEC
+# extensions supplement (rather than replace) these built-in tables.
+BUILTIN_BACKEND_ROLES: tuple[str, ...] = (
     "transport",
     "vad",
     "agent",
     "noise_reducer",
     "echo_canceller",
 )
+# Backward-compatible name from before audio-stage catalogs were introduced.
+NON_CATALOG_ROLES = BUILTIN_BACKEND_ROLES
 
 
 def probe_module_for_extra(
@@ -299,6 +300,7 @@ def probe_module_for_extra(
 
 __all__ = [
     "AGENT_BACKENDS",
+    "BUILTIN_BACKEND_ROLES",
     "DEFAULT_AGENT",
     "DEFAULT_ECHO_CANCELLER",
     "DEFAULT_NOISE_REDUCER",
