@@ -364,6 +364,15 @@ class OutboundCallManager:
         self._set_active_call(event.call_sid)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
+        if event.disposition == "max_duration" and event.call_sid == self._active_call_sid:
+            try:
+                await self.hangup_call(event.call_sid)
+            finally:
+                # Keep local lifecycle state terminal even when Twilio REST
+                # reports an error.  The EventBus will surface that error
+                # according to its configured handler policy.
+                self._clear_active_call(event.call_sid)
+            return
         self._clear_active_call(event.call_sid)
 
     async def _on_call_failed(self, event: CallFailed) -> None:

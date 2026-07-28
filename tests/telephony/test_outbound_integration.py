@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import struct
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -32,6 +33,7 @@ from easycat.telephony.call_state import (
 )
 from easycat.telephony.dtmf import DTMFAggregator
 from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
+from easycat.telephony.outbound import OutboundCallManager, OutboundCallManagerState
 from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningResponse,
@@ -608,19 +610,33 @@ class TestBotToBotDetection:
         bus = EventBus()
         changes: list[CallStateChanged] = []
         bus.subscribe(CallStateChanged, changes.append)
+        manager = OutboundCallManager.__new__(OutboundCallManager)
+        manager._event_bus = bus
+        manager._client = MagicMock()
+        manager._state = OutboundCallManagerState.IDLE
+        manager._active_call_sid = None
+        manager._started = False
+        call_resource = MagicMock()
+        manager._client.calls.return_value = call_resource
         sm = OutboundCallStateMachine(
             bus,
             classification_timeout_s=60,
             max_call_duration_s=0.05,
         )
         sm.start()
+        manager.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="human"))
             assert sm.state == OutboundCallState.HUMAN
             await asyncio.sleep(0.3)
             assert sm.state == OutboundCallState.ENDED
+            manager._client.calls.assert_called_once_with("CA1")
+            call_resource.update.assert_called_once_with(status="completed")
+            assert manager.state == OutboundCallManagerState.IDLE
+            assert manager.active_call_sid is None
         finally:
+            manager.stop()
             sm.stop()
 
     @pytest.mark.asyncio
