@@ -64,7 +64,10 @@ uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port
 Set your Twilio voice webhook to `https://<public-host>/twiml`. Call the number
 and ask to leave a message to see the `take_message` tool fire. Use
 `TWILIO_MAX_SESSIONS` to cap concurrent provider-backed calls for your
-deployment.
+deployment. `TWILIO_DRAIN_TIMEOUT_S` controls the graceful session window;
+`TWILIO_FORCE_SHUTDOWN_TIMEOUT_S` bounds cleanup after that window. Established
+media WebSockets remain open until their session has drained or the deadline
+expires.
 
 Ctrl-C to quit.
 

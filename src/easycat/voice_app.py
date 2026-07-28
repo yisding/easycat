@@ -609,6 +609,14 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
         )
+        drain_timeout_s = kwargs.pop(
+            "drain_timeout_s",
+            TwilioVoiceServerConfig.drain_timeout_s,
+        )
+        force_shutdown_timeout_s = kwargs.pop(
+            "force_shutdown_timeout_s",
+            TwilioVoiceServerConfig.force_shutdown_timeout_s,
+        )
         self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
             host=host,
@@ -621,6 +629,8 @@ class VoiceApp:
             trust_proxy_headers=bool(trust_proxy_headers),
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
             max_sessions=max_sessions,
+            drain_timeout_s=drain_timeout_s,
+            force_shutdown_timeout_s=force_shutdown_timeout_s,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

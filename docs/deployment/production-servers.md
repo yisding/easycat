@@ -49,6 +49,9 @@ run_websocket_config_server(config)
 Set `EASYCAT_WS_TOKEN` before exposing the server beyond loopback, and tune
 `EASYCAT_WS_MAX_SESSIONS` from measured CPU/RAM capacity. Non-browser clients
 should authenticate with `Authorization: Bearer <token>`.
+`EASYCAT_WS_DRAIN_TIMEOUT_S` (default `30`) controls the graceful session
+window, while `EASYCAT_WS_FORCE_SHUTDOWN_TIMEOUT_S` (default `10`) bounds
+forced cleanup.
 
 > **Breaking change — `?token=` query auth is now off by default.** The
 > WebSocket and WebRTC serve helpers used to accept a `?token=` query parameter
@@ -99,10 +102,14 @@ capacity/draining collaborator, not `SessionManager`:
 
 1. Set the draining flag — new connections are rejected (WS close code `1013`,
    reason `Server is draining`).
-2. Close the aiohttp listeners and the raw-`websockets` `/ws` listener.
-3. Wait for active sessions up to `drain_timeout_s` (graceful `session.stop()`).
+2. Stop accepting new HTTP/signaling work and close the raw-`websockets`
+   listener with `close_connections=False`. Established media WebSockets stay
+   open during the drain window.
+3. Wait for active sessions up to `drain_timeout_s` (graceful
+   `session.stop()`) while their media connections remain available.
 4. Force-escalate (`session.stop(force=True)`) anything still active after the
    window; `force_shutdown_timeout_s` bounds the forced phase.
+5. Explicitly close any raw WebSocket that survived session teardown.
 
 `stop(force=True)` collapses the drain window to zero and force-stops
 immediately.

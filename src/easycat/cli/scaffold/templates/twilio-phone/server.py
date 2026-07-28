@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,7 +10,6 @@ from urllib.parse import parse_qsl
 import websockets
 from agent import make_agent
 from fastapi import FastAPI, HTTPException, Request, Response
-from websockets.asyncio.server import ServerConnection
 
 from easycat import (
     EasyConfig,
@@ -21,6 +19,7 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.server.transports import WebSocketSessionRuntime
 from easycat.telephony import reconstruct_public_url, validate_twilio_webhook_signature
 from easycat.transports import (
     TwilioStreamTokenStore,
@@ -56,31 +55,33 @@ def create_app() -> FastAPI:
     twilio_auth_token = require_env("TWILIO_AUTH_TOKEN")
     trust_proxy_headers = os.getenv("TRUST_PROXY_HEADERS", "").lower() in {"1", "true", "yes"}
     max_sessions = int(os.getenv("TWILIO_MAX_SESSIONS", "8"))
+    drain_timeout_s = float(os.getenv("TWILIO_DRAIN_TIMEOUT_S", "30"))
+    force_shutdown_timeout_s = float(os.getenv("TWILIO_FORCE_SHUTDOWN_TIMEOUT_S", "10"))
     manager: SessionManager[int] = SessionManager()
-    session_slots = asyncio.Semaphore(max_sessions)
     stream_tokens = TwilioStreamTokenStore(os.getenv("TWILIO_STREAM_TOKEN_SECRET") or None)
 
-    async def handle_call(ws: ServerConnection) -> None:
-        if session_slots.locked():
-            await ws.close(code=1013, reason="Too many active Twilio sessions")
-            return
+    def build_session(ws: object) -> object:
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
+        )
+        config = EasyConfig(
+            transport=transport,
+            telephony=TelephonyConfig(
+                enable_dtmf_aggregator=True,
+                enable_voicemail_detector=True,
+            ),
+            agent=make_agent(),
+            **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821
+        )
+        return create_session(config)
 
-        async with session_slots:
-            transport = TwilioConnectionTransport(
-                ws,
-                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
-            )
-            config = EasyConfig(
-                transport=transport,
-                telephony=TelephonyConfig(
-                    enable_dtmf_aggregator=True,
-                    enable_voicemail_detector=True,
-                ),
-                agent=make_agent(),
-                **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821
-            )
-            async with manager.connection(id(ws), create_session(config)):
-                await ws.wait_closed()
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=max_sessions,
+        session_factory=build_session,
+        capacity_reason="Too many active Twilio sessions",
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -90,7 +91,7 @@ def create_app() -> FastAPI:
             stream_url,
         )
         twilio_ws = await websockets.serve(
-            handle_call,
+            runtime.handle,
             "0.0.0.0",
             port,
             process_request=process_request,
@@ -99,9 +100,11 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
-            twilio_ws.close()
-            await twilio_ws.wait_closed()
-            await manager.stop_all()
+            await runtime.drain(
+                twilio_ws,
+                drain_timeout_s=max(drain_timeout_s, 0.0),
+                force_timeout_s=max(force_shutdown_timeout_s, 0.0),
+            )
 
     app = FastAPI(lifespan=lifespan)
 

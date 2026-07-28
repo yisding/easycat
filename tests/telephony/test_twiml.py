@@ -86,6 +86,8 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
             "TWILIO_MAX_SESSIONS": "12",
+            "TWILIO_DRAIN_TIMEOUT_S": "15.5",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S": "2.5",
         }
     )
 
@@ -96,6 +98,8 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
     assert settings.max_sessions == 12
+    assert settings.drain_timeout_s == 15.5
+    assert settings.force_shutdown_timeout_s == 2.5
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"
@@ -132,6 +136,14 @@ def test_twilio_app_settings_can_require_auth_and_validate_session_limit() -> No
                 stream_url="wss://voice.example.com/stream",
                 environ={"TWILIO_MAX_SESSIONS": value},
             )
+
+    for name in ("TWILIO_DRAIN_TIMEOUT_S", "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S"):
+        for value in ("-0.1", "later", "nan", "inf"):
+            with pytest.raises(RuntimeError, match=name):
+                twilio_app_settings_from_env(
+                    stream_url="wss://voice.example.com/stream",
+                    environ={name: value},
+                )
 
 
 @pytest.mark.asyncio

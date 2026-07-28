@@ -167,6 +167,8 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
             "TWILIO_WS_PORT",
             "TWILIO_STREAM_TOKEN_SECRET",
             "TWILIO_MAX_SESSIONS",
+            "TWILIO_DRAIN_TIMEOUT_S",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
             "TRUST_PROXY_HEADERS",
         ),
         "description": "Phone-call voice agent with a Twilio WebSocket server.",

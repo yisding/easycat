@@ -40,7 +40,7 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate
+from easycat.server.transports import CapacityGate, close_websocket_connections
 from easycat.session_manager import SessionManager
 
 if TYPE_CHECKING:
@@ -109,6 +109,9 @@ class VoiceServer:
         # ``session.stop(force=True)`` directly (the collaborator drives this;
         # ``SessionManager`` has no draining state).
         self._active_session_objs: dict[int, Any] = {}
+        # Keep the corresponding accepted sockets so shutdown can explicitly
+        # close any connection whose transport survives the session drain.
+        self._active_ws_connections: dict[int, Any] = {}
         # Live ``/ws`` handler tasks. Tracked so :meth:`stop` can cancel a handler
         # that is hung in ``ws.wait_closed()`` (e.g. a client that never closes),
         # which would otherwise keep the raw-ws ``Server._close`` waiter (it
@@ -332,13 +335,14 @@ class VoiceServer:
         1. Set the draining flag (``gate.start_draining()``) so the readiness
            check and the ``/ws`` handler reject new connections.
         2. Stop accepting — ``gate.try_acquire()`` already rejects while
-           draining and ``_handle_websocket_connection`` checks draining.
-        3. Close the raw-ws listener AND the aiohttp site/runner (both kinds).
-        4. Hand the active sessions to :meth:`CapacityGate.drain`. During drain
+           draining, the raw-ws listener closes with
+           ``close_connections=False``, and the aiohttp site/runner stop.
+           Established raw WebSockets remain live during the drain window.
+        3. Hand the active sessions to :meth:`CapacityGate.drain`. During drain
            each handler leaves its session in the active set (the drain OWNS the
            stop — see :meth:`_teardown_ws_session`); the drain starts the single
            graceful ``session.stop()`` per session and waits ``drain_timeout_s``.
-        5. The drain escalates any session whose graceful stop did NOT finish in
+        4. The drain escalates any session whose graceful stop did NOT finish in
            the grace window by calling ``session.stop(force=True)`` and then
            cancelling the still-pending graceful task. Because the DRAIN (not the
            handler) starts the graceful stop, this is the single ``_stopping``
@@ -346,11 +350,13 @@ class VoiceServer:
            cancelled so it cannot block teardown. The real :class:`Session`
            ``_stopping`` guard makes a force-after-graceful a no-op, so the
            cancellation — not the force call — is what unblocks a hung teardown.
-        6. Cancel any handler task still hung in ``ws.wait_closed()`` (e.g. a
+        5. Explicitly close any established raw WebSocket that survived the
+           session drain, then cancel any handler task still hung in
+           ``ws.wait_closed()`` (e.g. a
            client that never completed the close handshake) so the raw-ws
            ``Server._close`` waiter — which ``asyncio.wait``s on its handlers
            rather than cancelling them — cannot block forever.
-        7. ``SessionManager.stop_all()`` ONLY as the final hard sweep, once the
+        6. ``SessionManager.stop_all()`` ONLY as the final hard sweep, once the
            listeners are closed and no handler can still add/remove sessions.
 
         ``force=True`` collapses the grace window to zero so remaining sessions
@@ -362,15 +368,13 @@ class VoiceServer:
         # without an OTel SDK; the registered name cannot raise in sanitize.
         self._emit_draining(True)
 
-        # (3) close the listeners so no new handler task can start AND in-flight
-        # ``/ws`` connections are closed (each handler's ``ws.wait_closed()``
-        # returns). Do NOT ``await ws_server.wait_closed()`` yet: a hung handler
-        # would deadlock it before the drain can force-escalate. The aiohttp
-        # site/runner are torn down now; the raw-ws server is closed now and
-        # awaited AFTER the drain (and the handler cancel).
+        # (2) stop accepting without closing established raw WebSockets. Their
+        # transports must stay alive while the session drain flushes in-flight
+        # output. Do NOT await ``wait_closed`` yet: websockets waits for every
+        # connection handler, and those handlers remain live through the drain.
         ws_server = self._ws_server
         if ws_server is not None:
-            ws_server.close()
+            ws_server.close(close_connections=False)
             self._ws_server = None
         if self._site is not None:
             await self._site.stop()
@@ -379,7 +383,7 @@ class VoiceServer:
             await self._runner.cleanup()
             self._runner = None
 
-        # (4)+(5) wait for active connection tasks up to ``drain_timeout_s``,
+        # (3)+(4) wait for active connection tasks up to ``drain_timeout_s``,
         # then force-escalate the remainder. ``force=True`` skips the grace
         # window entirely. Running BEFORE ``ws_server.wait_closed()`` lets the
         # force-stop own teardown for any handler whose graceful stop is skipped
@@ -394,7 +398,15 @@ class VoiceServer:
             force_timeout_s=self.config.force_shutdown_timeout_s,
         )
 
-        # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
+        # The session drain normally closes each transport. Explicitly close
+        # survivors because a second ``Server.close()`` cannot change the first
+        # call's ``close_connections=False`` mode (``close`` is idempotent).
+        await close_websocket_connections(
+            self._active_ws_connections.values(),
+            timeout_s=self.config.force_shutdown_timeout_s,
+        )
+
+        # (5) cancel any handler still hung in ``ws.wait_closed()``. The drain
         # already force-stopped the sessions; cancelling the surviving handler
         # tasks unblocks the raw-ws ``Server._close`` waiter so the bounded
         # ``wait_closed`` below cannot deadlock.
@@ -427,7 +439,7 @@ class VoiceServer:
             await self._webrtc_routes.cancel_cleanup_tasks()
             self._webrtc_routes = None
 
-        # (7) final hard sweep of the bare registry, then reset the shared gate
+        # (6) final hard sweep of the bare registry, then reset the shared gate
         # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
         # their own untrack/release (the drain owns teardown), so reset the gate
         # here once no handler can still run. The drain already owns the single
@@ -446,6 +458,7 @@ class VoiceServer:
                 self.config.force_shutdown_timeout_s,
             )
         self._active_session_objs.clear()
+        self._active_ws_connections.clear()
         self._reset_gate_bookkeeping()
         # Clear the active-connections gauge on both server_state series so the
         # post-drain reading is 0, not a stale non-zero value (M8 fix).
@@ -912,6 +925,7 @@ class VoiceServer:
                 session = self._build_session(transport)
                 self._gate.track(key)
                 self._active_session_objs[key] = session
+                self._active_ws_connections[key] = ws
                 self._emit_connections_active()
                 await self._manager.add(key, session)
                 try:
@@ -926,6 +940,7 @@ class VoiceServer:
                 if not self._gate.is_draining:
                     self._gate.untrack(key)
                     self._active_session_objs.pop(key, None)
+                    self._active_ws_connections.pop(key, None)
                     self._gate.release()
                     self._emit_connections_active()
         finally:

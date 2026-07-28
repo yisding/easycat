@@ -278,9 +278,10 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
     source = path.read_text(encoding="utf-8")
 
     assert _visible_code_line_count(path) <= 150
-    assert "manager.connection(id(ws), session, runtime_feedback=True)" in source
+    assert "WebSocketSessionRuntime(" in source
+    assert "runtime_feedback=True" in source
     assert "TwilioCallSessionIndex" in source
-    assert "session_slots" in source
+    assert "session_slots" not in source
     assert "twilio_websocket_signature_process_request" in source
     assert "twilio_app_settings_from_env" in source
     assert "twilio_form_items_from_request" in source

@@ -41,6 +41,32 @@ class _FakeSession:
         self.stopped.set()
 
 
+class _HeldGracefulSession:
+    """A session whose graceful stop completes only when the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.graceful_started = asyncio.Event()
+        self.allow_graceful = asyncio.Event()
+        self.stopped = False
+        self.force_stopped = False
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self, *, force: bool = False) -> None:
+        if self.stopped:
+            return
+        if force:
+            self.force_stopped = True
+            self.stopped = True
+            self.allow_graceful.set()
+            return
+        self.graceful_started.set()
+        await self.allow_graceful.wait()
+        self.stopped = True
+
+
 class _GuardedSession:
     """A session-like stub that replicates the real ``Session._stopping`` guard.
 
@@ -183,6 +209,39 @@ async def test_graceful_stop_drains_active_session_without_force() -> None:
 
 
 @pytest.mark.integration_socket
+async def test_graceful_stop_keeps_established_websocket_open_during_drain() -> None:
+    sessions: list[_HeldGracefulSession] = []
+
+    def session_factory(_transport: object) -> _HeldGracefulSession:
+        session = _HeldGracefulSession()
+        sessions.append(session)
+        return session
+
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0, drain_timeout_s=2.0),
+        session_factory=session_factory,
+    )
+    await server.start()
+    async with websockets.connect(_ws_url(server)) as client:
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+        stop_task = asyncio.create_task(server.stop())
+        await asyncio.wait_for(sessions[0].graceful_started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # Listener admission has stopped, but the accepted media socket remains
+        # live until the session finishes its graceful drain.
+        assert client.close_code is None
+        assert stop_task.done() is False
+
+        sessions[0].allow_graceful.set()
+        await asyncio.wait_for(stop_task, timeout=2)
+        await asyncio.wait_for(client.wait_closed(), timeout=1)
+
+    assert sessions[0].stopped is True
+    assert sessions[0].force_stopped is False
+
+
+@pytest.mark.integration_socket
 async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
     # A session whose graceful stop hangs must be force-stopped after the (small)
     # drain timeout so teardown cannot block forever.
@@ -274,7 +333,7 @@ class _HangingWsServer:
     def __init__(self) -> None:
         self.closed = False
 
-    def close(self) -> None:
+    def close(self, close_connections: bool = True) -> None:
         self.closed = True
 
     async def wait_closed(self) -> None:

@@ -7,6 +7,8 @@ Setup:
   export TWILIO_AUTH_TOKEN="..."
   export TWILIO_STREAM_TOKEN_SECRET="..."  # optional, pins stream-token signing key
   export TWILIO_MAX_SESSIONS="8"  # optional
+  export TWILIO_DRAIN_TIMEOUT_S="30"  # optional
+  export TWILIO_FORCE_SHUTDOWN_TIMEOUT_S="10"  # optional
   export TWILIO_VOICE_FROM="+15551234567"  # optional, enables POST /calls
   export TWILIO_TWIML_URL="https://your-public-host/twiml"
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
@@ -22,12 +24,10 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import websockets
-from websockets.asyncio.server import ServerConnection
 
 from easycat import (
     EasyConfig,
@@ -38,6 +38,7 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.server.transports import WebSocketSessionRuntime
 from easycat.telephony import (
     TwilioCallSessionIndex,
     TwilioWebhookSignatureError,
@@ -60,7 +61,6 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     settings = twilio_app_settings_from_env(stream_url=stream_url, require_auth_token=True)
 
     manager: SessionManager[int] = SessionManager()
-    session_slots = asyncio.Semaphore(settings.max_sessions)
     sessions_by_call_sid = TwilioCallSessionIndex()
     stream_tokens = TwilioStreamTokenStore(settings.stream_token_secret_or_auth_token)
     candidate_outbound_bus = EventBus()
@@ -69,7 +69,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         candidate_outbound_bus if outbound_manager is not None else None
     )
 
-    async def run_twilio_connection(ws: ServerConnection) -> None:
+    def build_session(ws: object) -> object:
         from agents import Agent  # type: ignore[import-untyped]
 
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
@@ -92,19 +92,16 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 agent=agent,
             )
         )
-        cleanup_index = sessions_by_call_sid.track(session)
-        try:
-            async with manager.connection(id(ws), session, runtime_feedback=True):
-                await ws.wait_closed()
-        finally:
-            cleanup_index()
+        return session
 
-    async def handle_twilio_connection(ws: ServerConnection) -> None:
-        if session_slots.locked():
-            await ws.close(code=1013, reason="Too many active Twilio sessions")
-            return
-        async with session_slots:
-            await run_twilio_connection(ws)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=settings.max_sessions,
+        session_factory=build_session,
+        runtime_feedback=True,
+        capacity_reason="Too many active Twilio sessions",
+        on_session=sessions_by_call_sid.track,
+    )
 
     from fastapi import FastAPI, HTTPException, Request, Response
 
@@ -120,7 +117,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         twilio_server = await websockets.serve(
-            handle_twilio_connection,
+            runtime.handle,
             "0.0.0.0",
             8766,
             process_request=twilio_websocket_signature_process_request(
@@ -133,9 +130,11 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         finally:
             if outbound_manager is not None:
                 outbound_manager.stop()
-            twilio_server.close()
-            await twilio_server.wait_closed()
-            await manager.stop_all()
+            await runtime.drain(
+                twilio_server,
+                drain_timeout_s=settings.drain_timeout_s,
+                force_timeout_s=settings.force_shutdown_timeout_s,
+            )
 
     app = FastAPI(lifespan=lifespan)
 
@@ -175,9 +174,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 status_code=503,
                 detail="Set TWILIO_CALL_API_TOKEN before exposing POST /calls.",
             )
-        if not bearer_token_matches(
-            request.headers.get("authorization"), settings.call_api_token
-        ):
+        if not bearer_token_matches(request.headers.get("authorization"), settings.call_api_token):
             raise HTTPException(status_code=401)
         payload = await request.json()
         to = str(payload.get("to", "")).strip()

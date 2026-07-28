@@ -188,10 +188,13 @@ Never print the resolved policy, request headers, or token in diagnostics.
 `await server.stop()` performs a bounded supervised shutdown:
 
 1. mark the shared gate draining so new calls are rejected;
-2. close the WebSocket and HTTP/WebRTC listeners;
-3. ask active sessions to stop gracefully for `drain_timeout_s`;
+2. stop accepting new WebSocket and HTTP/WebRTC work while keeping established
+   media WebSockets open;
+3. ask active sessions to stop gracefully for `drain_timeout_s` while their
+   media connections remain live;
 4. force-stop stragglers and bound that phase with
-   `force_shutdown_timeout_s`.
+   `force_shutdown_timeout_s`;
+5. close any media WebSocket that survived session teardown.
 
 `await server.stop(force=True)` skips the graceful window. Use it for process
 failure or an outer deadline, not as the normal deployment path. The process

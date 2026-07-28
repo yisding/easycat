@@ -222,7 +222,8 @@ def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
 def test_twilio_scaffold_keeps_runtime_feedback_opt_in() -> None:
     source = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
 
-    assert "manager.connection(id(ws), create_session(config))" in source
+    assert "WebSocketSessionRuntime(" in source
+    assert "session_factory=build_session" in source
     assert "runtime_feedback=True" not in source
     assert "attach_runtime_feedback" not in source
 
