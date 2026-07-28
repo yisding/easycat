@@ -7,12 +7,14 @@ without depending on CLI presentation code.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id
+from easycat.runtime.records import CALL_ENDED_RECORD_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,10 @@ class _BundleRecordAccumulator:
     records: int = 0
     earliest_wall_ns: int | None = None
     latest_wall_ns: int | None = None
+    call_duration_ms: float | None = None
+    call_sid: str | None = None
+    call_end_observations: int = 0
+    call_duration_ambiguous: bool = False
 
     def observe(self, record: Mapping[str, Any]) -> None:
         """Include one decoded journal record in the projection."""
@@ -81,6 +87,7 @@ class _BundleRecordAccumulator:
         if turn_id is not None:
             self.turn_ids.add(turn_id)
         self._observe_timing(record)
+        self._observe_call_duration(record)
         self._observe_error(record.get("error"), turn_id)
         if record.get("name") == "tool_call_started":
             self.tool_calls += 1
@@ -98,6 +105,38 @@ class _BundleRecordAccumulator:
         if self.latest_wall_ns is None or wall_ns > self.latest_wall_ns:
             self.latest_wall_ns = wall_ns
 
+    def _observe_call_duration(self, record: Mapping[str, Any]) -> None:
+        if record.get("name") != CALL_ENDED_RECORD_NAME:
+            return
+        data = record.get("data")
+        if not isinstance(data, Mapping):
+            return
+        call_sid_value = data.get("call_sid")
+        call_sid = call_sid_value if isinstance(call_sid_value, str) and call_sid_value else None
+        if self.call_end_observations:
+            if self.call_sid is None or call_sid is None or call_sid != self.call_sid:
+                self.call_duration_ambiguous = True
+                self.call_duration_ms = None
+        else:
+            self.call_sid = call_sid
+        self.call_end_observations += 1
+        if self.call_duration_ambiguous:
+            return
+
+        duration_s = data.get("duration_s")
+        if isinstance(duration_s, bool) or not isinstance(duration_s, (int, float)):
+            return
+        if duration_s < 0:
+            return
+        try:
+            duration_ms = float(duration_s) * 1000.0
+        except OverflowError:
+            return
+        if not math.isfinite(duration_ms):
+            return
+
+        self.call_duration_ms = duration_ms
+
     def _observe_error(self, error: object, turn_id: str | None) -> None:
         if not error:
             return
@@ -112,7 +151,9 @@ class _BundleRecordAccumulator:
     def finish(self) -> BundleRecordSummary:
         """Freeze the accumulated state into the public projection."""
         duration_ms = None
-        if self.earliest_wall_ns is not None and self.latest_wall_ns is not None:
+        if self.call_duration_ms is not None:
+            duration_ms = self.call_duration_ms
+        elif self.earliest_wall_ns is not None and self.latest_wall_ns is not None:
             duration_ms = (self.latest_wall_ns - self.earliest_wall_ns) / 1_000_000
         return BundleRecordSummary(
             session_id=self.session_id,

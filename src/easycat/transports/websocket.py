@@ -314,6 +314,11 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         """The current audio format for this transport."""
         return self._audio_format
 
+    @property
+    def request(self) -> Any | None:
+        """Accepted WebSocket handshake request, when exposed by ``websockets``."""
+        return getattr(self._ws, "request", None)
+
     async def connect(self) -> None:
         if self._connected:
             return
@@ -326,18 +331,30 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def disconnect(self) -> None:
-        if not self._connected:
+        # Remote EOF clears ``_connected`` in the receive loop before the
+        # owner calls disconnect. Only skip once every owned teardown resource
+        # has been released; liveness alone does not mean cleanup is complete.
+        if (
+            not self._connected
+            and self._receive_task is None
+            and self._browser_event_forwarder is None
+            and not self._emit_tasks
+        ):
             return
         self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
-        if self._receive_task is not None and not self._receive_task.done():
-            self._receive_task.cancel()
+        receive_task = self._receive_task
+        self._receive_task = None
+        if receive_task is not None and receive_task is not asyncio.current_task():
+            if not receive_task.done():
+                receive_task.cancel()
             try:
-                await self._receive_task
+                await receive_task
             except asyncio.CancelledError:
                 pass
-        self._receive_task = None
+            except Exception:
+                logger.debug("WebSocket receive loop failed during disconnect", exc_info=True)
         try:
             await self._ws.close()
         except Exception:

@@ -5,12 +5,25 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from typing import Protocol
 
 import pytest
 
-from easycat.runtime import InMemoryRingBuffer, JournalView, create_journal
-from easycat.runtime.records import ErrorInfo, JournalRecordKind
+from easycat.runtime import ExecutionJournal, InMemoryRingBuffer, JournalView, create_journal
+from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
+
+
+class _JournalQuery(Protocol):
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]: ...
+
+    def slice(
+        self,
+        *,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
+    ) -> list[JournalRecord]: ...
 
 
 async def _yield_to_scheduled_tasks() -> None:
@@ -566,7 +579,7 @@ class TestSliceFiltersAcrossBackends:
     must forward the new kwargs to its inner SQLite journal without an
     arg-mismatch)."""
 
-    def _seed(self, j) -> None:
+    def _seed(self, j: ExecutionJournal) -> None:
         j.append(
             kind=JournalRecordKind.EVENT,
             name="stt_final",
@@ -581,6 +594,28 @@ class TestSliceFiltersAcrossBackends:
             turn_id="t2",
             tags=frozenset({"stt"}),
         )
+
+    @staticmethod
+    def _assert_in_memory_queries(j: _JournalQuery) -> None:
+        assert [r.name for r in j.read(start=2, limit=1)] == ["tts_frame"]
+        assert [r.name for r in j.slice(turn_id="t1")] == ["stt_final"]
+        assert [r.name for r in j.slice(name="tts_frame")] == ["tts_frame"]
+        assert {r.name for r in j.slice(tags=frozenset({"stt"}))} == {
+            "stt_final",
+            "tts_frame",
+        }
+        assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        with pytest.raises(ValueError, match="limit"):
+            j.read(limit=-1)
+
+    def test_live_and_frozen_in_memory_queries_match(self) -> None:
+        live = InMemoryRingBuffer(capacity=10)
+        self._seed(live)
+        frozen = live.snapshot()
+
+        self._assert_in_memory_queries(live)
+        self._assert_in_memory_queries(frozen)
+        assert live.read() == frozen.read()
 
     def test_sqlite_slice_filters(self, tmp_path):
         from easycat.runtime import SqliteJournal

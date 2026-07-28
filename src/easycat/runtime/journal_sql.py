@@ -11,9 +11,12 @@ import sqlite3
 import subprocess
 import threading
 import time
+import weakref
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import (
@@ -33,7 +36,12 @@ from easycat.runtime._private_files import (
     mkdir_private,
     touch_private_file,
 )
-from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
+from easycat.runtime.crash_sweep import (
+    _copy_journal_to_crash_dump,
+    _pid_alive,
+    _process_birth_identity,
+    sweep_crashed_journals,
+)
 from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
@@ -44,6 +52,120 @@ from easycat.runtime.records import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LIVE_SQLITE_JOURNALS_LOCK = threading.Lock()
+_LIVE_SQLITE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = (
+    weakref.WeakValueDictionary()
+)
+_CRASH_SWEEP_INTERVAL_SECONDS = 60.0
+_CRASH_SWEEP_RETRY_SECONDS = 1.0
+_CRASH_SWEEP_MAX_ROOTS = 128
+_CRASH_SWEEP_STATE_LOCK = threading.Lock()
+
+
+@dataclass
+class _CrashSweepState:
+    lock: threading.Lock
+    last_success: float | None = None
+    timer: threading.Timer | None = None
+
+
+_CRASH_SWEEP_STATES: OrderedDict[Path, _CrashSweepState] = OrderedDict()
+
+
+def _crash_sweep_key(root: Path) -> Path:
+    return root.absolute()
+
+
+def _reset_crash_sweep_state_after_fork() -> None:
+    global _CRASH_SWEEP_STATE_LOCK, _CRASH_SWEEP_STATES
+    _CRASH_SWEEP_STATE_LOCK = threading.Lock()
+    _CRASH_SWEEP_STATES = OrderedDict()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_crash_sweep_state_after_fork)
+
+
+def _clear_crash_sweep_states() -> None:
+    """Cancel scheduled scans and clear process-local coordination state."""
+    with _CRASH_SWEEP_STATE_LOCK:
+        states = list(_CRASH_SWEEP_STATES.values())
+        _CRASH_SWEEP_STATES.clear()
+    for state in states:
+        if state.timer is not None:
+            state.timer.cancel()
+
+
+def _crash_sweep_state(root_key: Path) -> _CrashSweepState:
+    with _CRASH_SWEEP_STATE_LOCK:
+        state = _CRASH_SWEEP_STATES.get(root_key)
+        if state is None:
+            state = _CrashSweepState(lock=threading.Lock())
+            _CRASH_SWEEP_STATES[root_key] = state
+        else:
+            _CRASH_SWEEP_STATES.move_to_end(root_key)
+
+        while len(_CRASH_SWEEP_STATES) > _CRASH_SWEEP_MAX_ROOTS:
+            old_key, old_state = next(iter(_CRASH_SWEEP_STATES.items()))
+            if old_state.timer is not None:
+                old_state.timer.cancel()
+            del _CRASH_SWEEP_STATES[old_key]
+        return state
+
+
+def _schedule_crash_sweep(root_key: Path, state: _CrashSweepState, delay: float) -> None:
+    if state.timer is not None:
+        return
+    timer = threading.Timer(
+        max(0.0, delay),
+        _run_scheduled_crash_sweep,
+        args=(root_key, state),
+    )
+    timer.daemon = True
+    state.timer = timer
+    timer.start()
+
+
+def _run_scheduled_crash_sweep(root_key: Path, state: _CrashSweepState) -> None:
+    with _CRASH_SWEEP_STATE_LOCK:
+        if _CRASH_SWEEP_STATES.get(root_key) is not state:
+            return
+    with state.lock:
+        state.timer = None
+        _run_crash_sweep(root_key, state, skip=None)
+
+
+def _run_crash_sweep(root: Path, state: _CrashSweepState, *, skip: Path | None) -> None:
+    try:
+        sweep_crashed_journals(root, skip=skip)
+    except (OSError, sqlite3.DatabaseError):
+        logger.debug("Crash-journal sweep failed", exc_info=True)
+        _schedule_crash_sweep(root, state, _CRASH_SWEEP_RETRY_SECONDS)
+        return
+
+    state.last_success = time.monotonic()
+    _schedule_crash_sweep(root, state, _CRASH_SWEEP_INTERVAL_SECONDS)
+
+
+def _sweep_crashed_journals_if_due(root: Path, *, skip: Path) -> None:
+    """Periodically scan *root* without putting an O(n) scan on every open."""
+    root_key = _crash_sweep_key(root)
+    state = _crash_sweep_state(root_key)
+    with state.lock:
+        now = time.monotonic()
+        elapsed = None if state.last_success is None else now - state.last_success
+        if elapsed is not None and 0 <= elapsed < _CRASH_SWEEP_INTERVAL_SECONDS:
+            _schedule_crash_sweep(
+                root_key,
+                state,
+                _CRASH_SWEEP_INTERVAL_SECONDS - elapsed,
+            )
+            return
+        if state.timer is not None:
+            state.timer.cancel()
+            state.timer = None
+        _run_crash_sweep(root_key, state, skip=skip)
 
 
 class _SqlJournalBase:
@@ -237,10 +359,7 @@ class SqliteJournal(_SqlJournalBase):
         # same-id recovery path below only fires when *this* session's id is
         # reused; orphaned ids never reopen, so the sweep is what promotes them
         # to crash-dumps/.  Best-effort: never block or fail journal startup.
-        try:
-            sweep_crashed_journals(root, skip=self._db_path)
-        except (OSError, sqlite3.DatabaseError):
-            logger.debug("Crash-journal sweep failed", exc_info=True)
+        _sweep_crashed_journals_if_due(root, skip=self._db_path)
 
         touch_private_file(self._db_path)
         self._session_id = session_id
@@ -260,6 +379,43 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
+        self._claim_live_journal()
+        try:
+            self._initialize_live_journal(session_id, existed=existed)
+        except BaseException:
+            self._release_live_journal()
+            self._conn.close()
+            raise
+
+    # ── Startup phases ────────────────────────────────────────────
+
+    def _claim_live_journal(self) -> None:
+        """Reject a second live writer for this process/path identity."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            current = _LIVE_SQLITE_JOURNALS.get(key)
+            if current is not None and not current._closed:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+
+            row = self._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            if row is not None and row[0] not in (None, ""):
+                try:
+                    live_pid = int(row[0])
+                except (TypeError, ValueError):
+                    live_pid = 0
+                if live_pid != os.getpid() and _pid_alive(live_pid):
+                    raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
+            _LIVE_SQLITE_JOURNALS[key] = self
+
+    def _release_live_journal(self) -> None:
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            if _LIVE_SQLITE_JOURNALS.get(key) is self:
+                _LIVE_SQLITE_JOURNALS.pop(key, None)
+
+    def _initialize_live_journal(self, session_id: str, *, existed: bool) -> None:
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
         # After reconcile the live table is empty (prior rows were promoted
         # or truncated), so the pre-v2 backfill only stamps the version.
@@ -268,17 +424,25 @@ class SqliteJournal(_SqlJournalBase):
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
-        # Stamp our PID as a liveness marker (committed so a separate
+        # Stamp our PID and process-birth identity as liveness markers
+        # (committed so a separate
         # crash-sweep connection can read it).  An idle WAL journal between
         # turns holds no write lock, so the orphan sweep cannot tell "live
         # but idle" from "crashed" by lock alone; the PID lets it skip a
-        # journal whose owning process is still running.  Cleared on clean
-        # close so a cleanly-closed (or crashed-then-PID-reused) file never
-        # masquerades as live.
+        # journal whose owning process is still running. The birth identity
+        # distinguishes that process from a later process that reuses its PID.
         self._conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
             (str(os.getpid()),),
         )
+        process_birth = _process_birth_identity(os.getpid())
+        if process_birth is not None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+                (process_birth,),
+            )
+        else:
+            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
         self._conn.commit()
 
         # Recover sequence counter from any existing records.  Both the
@@ -295,8 +459,6 @@ class SqliteJournal(_SqlJournalBase):
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
             self._insert_recovery_marker(session_id, prior_count)
-
-    # ── Startup phases ────────────────────────────────────────────
 
     def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -456,7 +618,9 @@ class SqliteJournal(_SqlJournalBase):
                 )
                 # Drop the liveness marker: the process is shutting down, so
                 # the journal is no longer "live" for the crash sweep.
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -469,6 +633,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.close()
             except sqlite3.ProgrammingError:
                 pass  # already closed
+        self._release_live_journal()
         # Run retention opportunistically — never block a turn.
         try:
             run_retention(self._root, mode=self._retention_mode, skip=self._db_path)
@@ -507,7 +672,9 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._conn.commit()
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
@@ -663,6 +830,14 @@ def _sanitize_replica_url(url: str) -> str:
         return "<unparseable>"
 
 
+def _session_replica_url(base_url: str, session_id: str) -> str:
+    """Namespace a replica root by session without disturbing URL options."""
+    parsed = urlsplit(base_url)
+    session_path = f"{quote(session_id, safe='')}.sqlite"
+    path = f"{parsed.path.rstrip('/')}/{session_path}"
+    return urlunsplit(parsed._replace(path=path))
+
+
 class LitestreamSqliteJournal:
     """SqliteJournal with a Litestream sidecar for WAL replication.
 
@@ -681,7 +856,8 @@ class LitestreamSqliteJournal:
         retention_mode: Literal["archive", "delete"] = "archive",
     ) -> None:
         self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
-        self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        replica_root = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        self._replica_url = _session_replica_url(replica_root, session_id) if replica_root else ""
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
         self._stderr_thread: threading.Thread | None = None

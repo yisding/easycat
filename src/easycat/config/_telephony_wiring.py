@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from easycat.events import EventBus, TTSAudio
-from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.session.actions import SessionActionExecutor
 
 if TYPE_CHECKING:
@@ -158,25 +157,6 @@ class _OutboundPipelineWiring:
         self._hold_audio_task = loop.create_task(_synthesize_hold())
 
 
-async def _run_agent_once(agent: Any, prompt: str) -> str:
-    """Drive the agent once and return its final text response.
-
-    Works whether ``agent`` is an :class:`AgentRunner` (has ``run()``) or
-    a raw :class:`ExternalAgentBridge` (only implements ``invoke()``), so
-    ``wrap_agent=False`` sessions still support agent-mode screening.
-    """
-    run_fn = getattr(agent, "run", None)
-    if callable(run_fn):
-        return await run_fn(prompt)
-    accumulated = ""
-    async for event in agent.invoke(AgentTurnInput.from_text(prompt), NULL_RECORDER):
-        if event.kind == "text_delta" and event.text:
-            accumulated += event.text
-        elif event.kind == "done" and event.text:
-            accumulated = event.text
-    return accumulated
-
-
 def wire_outbound_pipeline(
     session: Session,
     helpers: TelephonyHelpers,
@@ -204,11 +184,12 @@ def wire_outbound_pipeline(
     async def _on_screening_response(event: ScreeningResponse) -> None:
         if event.mode == "agent" and _screening_detector is not None:
             try:
-                response_text = await _run_agent_once(
-                    session.agent,
+                response_text = await session.prompt_agent(
                     "The callee's phone is screening this outbound call. "
                     "Provide only a brief caller identification for the screening service. "
                     "Do not use tools or take external actions for this screening reply.",
+                    role="system",
+                    speak=False,
                 )
                 in_time = _screening_detector.notify_agent_responded()
                 fallback_spoken = not in_time and _screening_detector.screening_response
