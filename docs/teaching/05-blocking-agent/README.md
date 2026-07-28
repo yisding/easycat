@@ -554,11 +554,14 @@ Open the bundle and list them:
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
 
+
 def format_ms(value):
     return "unavailable" if value is None else f"{value:6.1f} ms"
+
 
 for r in bundle.records():
     if r["name"] == "turn.gap":

@@ -39,12 +39,14 @@ class _PassthroughAEC:
 
     def __init__(self) -> None:
         self.fed: list[AudioChunk] = []
+        self.fed_event = asyncio.Event()
 
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         return chunk
 
     def feed_reference(self, chunk: AudioChunk) -> None:
         self.fed.append(chunk)
+        self.fed_event.set()
 
     def configure(self, **_kw) -> None: ...
 
@@ -158,7 +160,10 @@ async def _drive_session(
         )
     )
     await session.start()
-    await asyncio.sleep(0.3)
+    if enable_aec:
+        await asyncio.wait_for(echo_canceller.fed_event.wait(), timeout=2)
+    else:
+        await asyncio.sleep(0.3)
     await session.stop()
     return journal
 

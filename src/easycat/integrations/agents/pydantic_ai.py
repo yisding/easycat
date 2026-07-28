@@ -11,9 +11,9 @@ import json
 import logging
 import shlex
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -21,6 +21,9 @@ from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import (
     aclose_quietly,
+    bridge_version_info,
+    record_usage_from_result,
+    resolve_model_name,
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
@@ -42,6 +45,16 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+
+def _completion_text(accumulated: str, structured_output: Any) -> str:
+    """Prefer streamed text, falling back to a speakable structured result."""
+    if accumulated:
+        return accumulated
+    if structured_output is None:
+        return ""
+    return str(structured_output)
+
+
 _DEFAULT_HISTORY_KEY = "__default__"
 
 
@@ -52,7 +65,7 @@ class PydanticAIBridge:
     ``state_factory`` and ``initial_node_factory`` (graph mode).
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,
@@ -175,6 +188,22 @@ class PydanticAIBridge:
         return state
 
     # ── ExternalAgentBridge interface ─────────────────────────────
+
+    def version_info(self) -> dict[str, str]:
+        """Return model and SDK metadata for journal reproducibility."""
+        return bridge_version_info(
+            provider="pydantic_ai",
+            model=self._model_name(),
+            distribution="pydantic-ai",
+        )
+
+    def _model_name(self) -> str | None:
+        candidates = [self._agent, *(self._agents or [])]
+        for agent in candidates:
+            model = resolve_model_name(getattr(agent, "model", None))
+            if model is not None:
+                return model
+        return None
 
     async def invoke(
         self,
@@ -444,7 +473,12 @@ class PydanticAIBridge:
                         yield ev
                     raw_output = self._last_output
                 else:
-                    inner = self._stream_via_run_stream(turn_input, cancel_token, history_key)
+                    inner = self._stream_via_run_stream(
+                        turn_input,
+                        recorder,
+                        cancel_token,
+                        history_key,
+                    )
                     async for ev in inner:
                         if ev.kind == "text_delta":
                             accumulated += ev.text
@@ -463,7 +497,7 @@ class PydanticAIBridge:
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
-                text=accumulated,
+                text=_completion_text(accumulated, raw_output),
                 structured_output=raw_output,
             )
 
@@ -505,16 +539,24 @@ class PydanticAIBridge:
                                 if interrupted and mapped.kind == "text_delta":
                                     continue
                                 yield mapped
+
+                self._set_history_for_key(history_key, await _run_new_messages(agent_run))
+                self._last_output = await _run_output(agent_run)
             except BaseException:
                 await self._preserve_run_history_on_teardown(agent_run, history_key)
                 raise
-
-            self._set_history_for_key(history_key, await _run_new_messages(agent_run))
-            self._last_output = await _run_output(agent_run)
+            finally:
+                await record_usage_from_result(
+                    recorder,
+                    agent_run,
+                    provider="pydantic_ai",
+                    model=self._model_name(),
+                )
 
     async def _stream_via_run_stream(
         self,
         turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None,
         history_key: str,
     ) -> AsyncIterator[AgentBridgeEvent]:
@@ -533,12 +575,19 @@ class PydanticAIBridge:
                     if delta:
                         yield AgentBridgeEvent(kind="text_delta", text=delta)
                     accumulated = full_text
+
+                self._set_history_for_key(history_key, await _run_new_messages(result))
+                self._last_output = await _run_output(result)
             except BaseException:
                 await self._preserve_run_history_on_teardown(result, history_key)
                 raise
-
-            self._set_history_for_key(history_key, await _run_new_messages(result))
-            self._last_output = await _run_output(result)
+            finally:
+                await record_usage_from_result(
+                    recorder,
+                    result,
+                    provider="pydantic_ai",
+                    model=self._model_name(),
+                )
 
     async def _preserve_run_history_on_teardown(self, run: Any, history_key: str) -> None:
         """Best-effort snapshot of the current turn before cancellation escapes."""
@@ -629,6 +678,7 @@ class PydanticAIBridge:
         state._easycat_event_handler = _handler
 
         accumulated = ""
+        graph_output: Any = None
         prev_node_name: str | None = None
         prev_cursor: ExecutionCursor | None = None
 
@@ -658,6 +708,7 @@ class PydanticAIBridge:
                         if not graph_units:
                             output = _graph_item_output(graph_item)
                             if output is not _UNSET:
+                                graph_output = output
                                 self._last_output = output
                                 if isinstance(output, str):
                                     accumulated = accumulated or output
@@ -717,10 +768,10 @@ class PydanticAIBridge:
             # Capture result.
             output = await _run_output(graph_run)
             if output is not None:
+                graph_output = output
                 self._last_output = output
                 if isinstance(output, str):
                     accumulated = accumulated or output
-
             # Capture graph run history as a state snapshot record.
             run_history = getattr(graph_run, "history", None)
             if run_history is None:
@@ -794,8 +845,8 @@ class PydanticAIBridge:
 
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
-            structured_output=self._last_output,
+            text=_completion_text(accumulated, graph_output),
+            structured_output=graph_output,
         )
 
 
@@ -842,9 +893,17 @@ class _GraphEventHandler:
             await self._handle_event(args[0])
             return
         if len(args) == 2:
-            _ctx, events = args
-            async for event in events:
-                await self._handle_event(event)
+            ctx, events = args
+            try:
+                async for event in events:
+                    await self._handle_event(event)
+            finally:
+                await record_usage_from_result(
+                    self._recorder,
+                    ctx,
+                    provider="pydantic_ai",
+                    model=resolve_model_name(getattr(ctx, "model", None)),
+                )
             return
         raise TypeError("_GraphEventHandler expects event or (ctx, events)")
 
