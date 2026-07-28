@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
 
 from easycat.runtime.records import (
@@ -33,6 +34,44 @@ __all__ = [
 def _validate_read_limit(limit: int | None) -> None:
     if limit is not None and limit < 0:
         raise ValueError("limit must be >= 0")
+
+
+def _read_records(
+    records: Iterable[JournalRecord],
+    *,
+    start: int = 0,
+    limit: int | None = None,
+) -> list[JournalRecord]:
+    """Apply the in-memory journal read contract to a record snapshot."""
+    _validate_read_limit(limit)
+    out = [record for record in records if record.sequence >= start]
+    if limit is not None:
+        out = out[:limit]
+    return out
+
+
+def _slice_records(
+    records: Iterable[JournalRecord],
+    *,
+    kind: JournalRecordKind | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    name: str | None = None,
+    tags: frozenset[str] | None = None,
+) -> list[JournalRecord]:
+    """Apply the in-memory journal filter contract to a record snapshot."""
+    out = list(records)
+    if kind is not None:
+        out = [record for record in out if record.kind == kind]
+    if session_id is not None:
+        out = [record for record in out if record.session_id == session_id]
+    if turn_id is not None:
+        out = [record for record in out if record.turn_id == turn_id]
+    if name is not None:
+        out = [record for record in out if record.name == name]
+    if tags:
+        out = [record for record in out if tags <= record.tags]
+    return out
 
 
 # ── Protocol ──────────────────────────────────────────────────────

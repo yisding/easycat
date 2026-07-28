@@ -105,6 +105,12 @@ live `Session` from the agent framework's worker context. `SessionActions` is a
 thread-safe, typed request channel with EasyCat-owned execution and audit
 events.
 
+Session actions are not ordinary tool results. The model does not wait for the
+provider side effect, and executor failures are emitted as
+`SessionActionFailed` events rather than returned into the agent framework. When
+the model must know whether a side effect succeeded before saying so, implement
+that operation as a normal agent tool and return a typed result to the model.
+
 The queue also offers transfer, DTMF, SMS, and do-not-call actions. Those need
 the matching transport or application executor; `end_call` works in this
 local lesson. Chapter 10 applies the telephony actions with their real runtime

@@ -16,6 +16,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
     captures_verbose_stage_io,
     journal_append_control_signal,
@@ -24,6 +25,7 @@ from easycat.stages.base import (
     live_replay_input,
     put_artifact_async,
     record_stage_failure,
+    set_audio_capture_allowed,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,11 +48,13 @@ def _serialize_event(event: Any) -> dict[str, Any]:
 class VADStage:
     """Stage wrapper around a :class:`VADProvider`.
 
-    ``execute`` runs the provider on a single chunk and returns the list of
-    events emitted. Full-detail journaling captures raw input bytes for LIVE
-    replay and a serialized event descriptor on ``stage_complete`` for
-    ARTIFACT replay. Light journaling omits those per-frame records and
-    artifacts; the session journal sink still records emitted VAD events.
+    ``execute`` runs the provider on a single chunk, captures the raw
+    input bytes as an ``input_ref`` artifact for LIVE-fidelity replay,
+    and returns the list of events emitted.  ``stage_complete`` carries
+    a serialized descriptor per event in ``data["events"]`` — each a
+    dict of the event's ``type`` plus its dataclass fields (timestamps,
+    correlation ids, etc.) — so ARTIFACT replay can reconstruct the VAD
+    output without re-running the model.
     """
 
     name = "vad"
@@ -69,9 +73,18 @@ class VADStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
-        data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
         capture_detail = captures_verbose_stage_io(ctx)
-        input_ref = await put_artifact_async(ctx, data_bytes) if capture_detail else None
+        data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
+        capture_allowed = audio_capture_allowed(ctx, input)
+        input_ref = (
+            await put_artifact_async(
+                ctx,
+                data_bytes,
+                capture_allowed=capture_allowed,
+            )
+            if capture_detail
+            else None
+        )
         # VAD backends decode the raw byte stream as flat int16 mono (frame
         # boundaries are computed as samples*2). Interleaved multi-channel
         # input would be misread as garbage, so downmix to mono before
@@ -79,12 +92,13 @@ class VADStage:
         # input_ref artifact so replay still reflects the true raw input.
         if isinstance(input, AudioChunk) and input.format.channels > 1:
             input = to_mono_chunk(input)
+            set_audio_capture_allowed(input, capture_allowed)
         start_sequence: int | None = None
         if capture_detail:
             start_extra = {
-                "audio_bytes": (
-                    len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0
-                ),
+                "audio_bytes": len(data_bytes)
+                if isinstance(data_bytes, (bytes, bytearray))
+                else 0,
             }
             start_extra.update(audio_format_fields(input))
             start_sequence = journal_append_event(

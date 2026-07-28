@@ -49,17 +49,31 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   for a crash-survivable on-disk journal and artifacts, or `"off"` to disable
   recording.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
-  `"libsql"`.
+  `"libsql"`. The in-process `"sqlite+litestream"` backend starts one
+  `litestream replicate` subprocess per session; for multi-call production
+  servers, prefer `"sqlite"` plus the sidecar pattern in
+  [docker.md](../deployment/docker.md#litestream-and-libsql-replicas-in-a-container).
 - `journal_capacity` — maximum records retained by the bounded in-memory
   `"light"` journal (default `10_000`). Evictions are counted on
   `session.journal.dropped_records` and carried into exported bundle metadata.
   Persistent `"full"` backends ignore this value.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
+- `data_dir` — optional storage root. With `debug="full"` it contains the
+  session's persistent journal and artifacts; `debug="light"` keeps those
+  resources in memory. Emergency exports and other explicit bundle writes use
+  this root in either mode. Unset falls back to `EASYCAT_DATA_DIR` or
+  `.easycat`.
 - `warmup` — run provider warmup hooks at session start (default `True`).
 - `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
   interactive terminal (default `False`). The
   `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.
+- `capture_audio` — persist live STT, TTS, VAD, transport, and AEC audio
+  artifacts when `True` (default). Pass `False` to keep journal events and
+  transcripts without audio blobs, or a zero-argument predicate for a dynamic
+  consent policy. `session.set_audio_capture_enabled(False)` can pause capture;
+  pass `True` to resume subject to the predicate, or `None` to clear the runtime
+  override. Pre-consent buffered audio is never persisted after capture starts.
 - `capture_aec_reference` — opt in to journaling the echo canceller's far-end
   reference frames (default `False`). The `EASYCAT_CAPTURE_AEC_REFERENCE`
   env var also enables it.
@@ -110,6 +124,12 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `dnc_list` — do-not-call store checked before placing outbound calls.
 - `caller_id_exposure` — how the callee identity reaches the agent:
   `"off"`, `"system_message"`, or `"tools_only"` (default).
+- `on_agent_failure` — optional fallback text or
+  `Callable[[Exception], str]`. When an agent error or timeout delivers no
+  response audio, EasyCat speaks the resolved text through the normal
+  cancellable TTS path. The default `None` preserves silent failure behavior.
+- `session_id` — optional caller-supplied runtime session id; unset generates
+  a `session-...` id.
 - `record_to` — directory path; when set, every session exports a
   timestamped debug bundle there on stop/shutdown ("always be recording").
   Requires `debug != "off"`.

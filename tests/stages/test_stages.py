@@ -8,6 +8,7 @@ import pytest
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -555,6 +556,75 @@ class TestStageExecuteRecording:
             await stage.execute(b"\x00\x00", ctx, _make_turn())
 
         assert [record.name for record in journal.read()] == ["stage_error"]
+
+    async def test_stt_stage_keeps_journal_without_audio_artifact(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: False,
+        )
+
+        await STTStage(_StubSTT(), journal=journal).execute(b"chunk", ctx, _make_turn())
+
+        records = journal.read()
+        assert [record.name for record in records] == ["stage_start", "stage_complete"]
+        assert records[0].input_ref is None
+        assert artifacts._current_bytes == 0
+
+    async def test_chunk_capture_decision_survives_later_consent_change(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        consent = {"enabled": False}
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: consent["enabled"],
+        )
+        chunk = AudioChunk(data=b"\x01\x00" * 160, format=PCM16_MONO_16K)
+        await STTStage(_StubSTT(), journal=journal).execute(chunk, ctx, _make_turn())
+        consent["enabled"] = True
+        await TransportStage(_StubTransport(), journal=journal).execute(
+            chunk,
+            ctx,
+            _make_turn(),
+        )
+
+        assert all(record.input_ref is None for record in journal.read())
+        assert all(record.output_ref is None for record in journal.read())
+        assert artifacts._current_bytes == 0
+
+    async def test_smart_turn_does_not_capture_mixed_consent_window(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: True,
+        )
+        denied = AudioChunk(data=b"\x01\x00" * 160, format=PCM16_MONO_16K)
+        denied._easycat_capture_allowed = False
+        allowed = AudioChunk(data=b"\x02\x00" * 160, format=PCM16_MONO_16K)
+
+        await TurnStage(_StubSmartTurn(), journal=journal).execute(
+            [denied, allowed],
+            ctx,
+            _make_turn(),
+        )
+
+        start = next(record for record in journal.read() if record.name == "stage_start")
+        assert start.input_ref is None
+        assert artifacts._current_bytes == 0
 
     async def test_agent_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)

@@ -175,6 +175,7 @@ class SessionConfig:
     capture_aec_reference: bool = False
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    on_agent_failure: str | Callable[[Exception], str] | None = None
 
     # Interruption behaviour.
     # "truncate" (default): truncate the assistant message to what was
@@ -244,3 +245,6 @@ class SessionConfig:
     #     identity for DNC handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
+
+    # Keep appended for positional compatibility with older SessionConfig calls.
+    capture_audio: bool | Callable[[], bool] = True

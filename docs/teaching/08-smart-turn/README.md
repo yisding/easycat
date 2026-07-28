@@ -869,27 +869,35 @@ timeout alone is never evidence of the total wait.
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 
+
 def format_ms(value):
     return "unavailable" if value is None else f"{value:.0f}ms"
+
 
 for b in sorted(Path("docs/teaching/08-smart-turn/runs/").glob("*.bundle")):
     bundle = load_bundle(b)
     for r in bundle.records():
         if r["name"] == "smart_turn.classify":
             d = r["data"]
-            print(f"  {b.name}  prob={d['probability']:.2f}  "
-                  f"pred={d['prediction']}  infer={d['inference_ms']:.0f}ms")
+            print(
+                f"  {b.name}  prob={d['probability']:.2f}  "
+                f"pred={d['prediction']}  infer={d['inference_ms']:.0f}ms"
+            )
         if r["name"] == "turn.endpoint_commit":
             d = r["data"]
-            print(f"  {b.name}  endpoint_wait={d['endpoint_wait_ms']:.0f}ms  "
-                  f"silence={d['silence_wait_ms']:.0f}ms  "
-                  f"infer={d['classification_inference_ms'] or 0:.0f}ms  "
-                  f"pending={d['pending_wait_ms']:.0f}ms  reason={d['reason']}")
+            print(
+                f"  {b.name}  endpoint_wait={d['endpoint_wait_ms']:.0f}ms  "
+                f"silence={d['silence_wait_ms']:.0f}ms  "
+                f"infer={d['classification_inference_ms'] or 0:.0f}ms  "
+                f"pending={d['pending_wait_ms']:.0f}ms  reason={d['reason']}"
+            )
         if r["name"] == "turn.gap":
             d = r["data"]
-            print(f"  {b.name}  stt_final_to_audio={format_ms(d['total_gap_ms'])}  "
-                  f"speech_end_to_audio="
-                  f"{format_ms(d['estimated_speech_end_to_first_audio_ms'])}")
+            print(
+                f"  {b.name}  stt_final_to_audio={format_ms(d['total_gap_ms'])}  "
+                f"speech_end_to_audio="
+                f"{format_ms(d['estimated_speech_end_to_first_audio_ms'])}"
+            )
 ```
 
 ## The failure modes
