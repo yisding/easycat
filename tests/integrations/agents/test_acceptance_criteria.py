@@ -258,6 +258,7 @@ class TestFrameworkSnapshotSafeDefaultPath:
             kind=JournalRecordKind.FRAMEWORK_TRANSITION,
             name="state_snapshot",
             data={
+                "state_ref": "state:test",
                 "agent_name": "TestAgent",
                 "api_key": "sk-secret-12345",
                 "auth_header": "Bearer abc",

@@ -32,6 +32,7 @@ class FakeTransport:
     def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
         self.chunks = chunks or []
         self.sent: list[AudioChunk] = []
+        self.clear_count = 0
 
     async def connect(self) -> None:
         pass
@@ -47,7 +48,7 @@ class FakeTransport:
         self.sent.append(chunk)
 
     async def clear_audio(self) -> None:
-        pass
+        self.clear_count += 1
 
 
 class FakeVAD:
@@ -116,6 +117,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         super().__init__()
         self.response_prefix = response_prefix
         self.contexts: list[list[dict[str, str]]] = []
+        self.inputs: list[AgentTurnInput] = []
 
     async def invoke(
         self,
@@ -124,6 +126,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         _ = recorder, cancel_token
+        self.inputs.append(turn_input)
         self.contexts.append(list(turn_input.context))
         yield AgentBridgeEvent(kind="done", text=f"{self.response_prefix}:{turn_input.text}")
 

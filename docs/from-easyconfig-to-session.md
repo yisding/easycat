@@ -84,7 +84,7 @@ from easycat import AgentFinal, Interruption, STTFinal, TurnEnded, TurnStarted
 
 session.subscribe_event(STTFinal, lambda e: print("user:", e.text))
 session.subscribe_event(AgentFinal, lambda e: print("bot:", e.text))
-session.subscribe_event(TurnStarted, on_turn_started)   # sync or async handler
+session.subscribe_event(TurnStarted, on_turn_started)  # sync or async handler
 session.subscribe_event(Interruption, on_barge_in)
 ```
 
@@ -182,7 +182,7 @@ from easycat import Session, SessionConfig
 
 session = Session(
     SessionConfig(
-        stt=my_stt,            # live provider instances, not descriptors
+        stt=my_stt,  # live provider instances, not descriptors
         tts=my_tts,
         vad=my_vad,
         transport=my_transport,

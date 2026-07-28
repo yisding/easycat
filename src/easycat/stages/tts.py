@@ -16,6 +16,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
     journal_append_control_signal,
     journal_append_event,
@@ -170,7 +171,11 @@ class TTSStage:
                     audio = getattr(event, "audio", None)
                     audio_bytes = getattr(audio, "data", None) if audio is not None else None
                     if audio_bytes:
-                        output_ref = await put_artifact_async(ctx, audio_bytes)
+                        output_ref = await put_artifact_async(
+                            ctx,
+                            audio_bytes,
+                            capture_allowed=audio_capture_allowed(ctx, audio),
+                        )
                         extra = {
                             "audio_bytes": len(audio_bytes),
                             "frame_index": frame_count,

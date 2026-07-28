@@ -612,14 +612,17 @@ branch that accidentally accumulates into the same buffer as
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
 b = load_bundle(next(Path("docs/teaching/07-tools/runs/").glob("*.bundle")))
 for r in b.records():
     if r["name"] in ("tool.call.started", "tool.call.result"):
         print(r["name"], r["data"].get("tool_call_id"), r["data"].get("filler_enqueued"))
     if r["name"] == "stage.tts.execute":
         d = r["data"]
-        print(f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
-              f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}")
+        print(
+            f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
+            f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}"
+        )
 ```
 
 You will see `filler`-kind TTS spans interleaved with
