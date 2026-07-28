@@ -74,6 +74,10 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _is_sha256_ref(ref: str) -> bool:
+    return len(ref) == 64 and all(char in "0123456789abcdef" for char in ref)
+
+
 # ── In-memory backend ────────────────────────────────────────────
 
 
@@ -142,6 +146,8 @@ class InMemoryArtifactStore:
             return ref in self._store
 
     def delete(self, ref: str) -> None:
+        if not _is_sha256_ref(ref):
+            return
         with self._lock:
             data = self._store.pop(ref, None)
             if data is not None:
@@ -196,8 +202,9 @@ class SnapshotArtifactStore:
 class FilesystemArtifactStore:
     """Persistent artifact store at ``.easycat/artifacts/<session_id>/``.
 
-    Files are ``<sha256>.bin``, permissions ``0o600``.
-    Directories are created lazily on first write with ``0o700``.
+    Files are sharded as ``<sha256[:2]>/<sha256>.bin`` with ``0o600``
+    permissions. Directories are created lazily on first write with ``0o700``.
+    Legacy flat ``<sha256>.bin`` files remain readable.
 
     Bounded by ``max_bytes`` (default 512 MB) so a long or chatty session
     cannot fill the disk: once the running total of stored payloads would
@@ -220,7 +227,7 @@ class FilesystemArtifactStore:
         self._dir = root / "artifacts" / session_id
         self._lock = threading.Lock()
         self._max_bytes = max_bytes
-        self._current_bytes = 0
+        self._current_bytes = self._stored_bytes()
         self._cap_warned = False
 
     def put(
@@ -230,11 +237,11 @@ class FilesystemArtifactStore:
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
         ref = _sha256(payload)
-        path = self._ref_path(ref)
-        if path.exists():
+        existing = self._existing_ref_path(ref)
+        if existing is not None:
             return ref
         with self._lock:
-            if path.exists():
+            if self._existing_ref_path(ref) is not None:
                 return ref
             if self._current_bytes + len(payload) > self._max_bytes:
                 # Refuse the new write rather than delete durable bytes that
@@ -251,6 +258,9 @@ class FilesystemArtifactStore:
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
                 os.chmod(self._dir, 0o700)
+                path = self._ref_path(ref)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(path.parent, 0o700)
                 tmp = path.with_suffix(".tmp")
                 tmp.write_bytes(payload)
                 os.chmod(tmp, 0o600)
@@ -262,7 +272,9 @@ class FilesystemArtifactStore:
         return ref
 
     def get(self, ref: str) -> bytes | None:
-        path = self._ref_path(ref)
+        path = self._existing_ref_path(ref)
+        if path is None:
+            return None
         try:
             return path.read_bytes()
         except OSError:
@@ -270,7 +282,9 @@ class FilesystemArtifactStore:
 
     def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
         """Read a bounded head/tail window without materializing the whole file."""
-        path = self._ref_path(ref)
+        path = self._existing_ref_path(ref)
+        if path is None:
+            return None
         try:
             size = path.stat().st_size
             if byte_cap <= 0 or size <= 2 * byte_cap:
@@ -284,16 +298,51 @@ class FilesystemArtifactStore:
             return None
 
     def has(self, ref: str) -> bool:
-        return self._ref_path(ref).exists()
+        return self._existing_ref_path(ref) is not None
 
     def delete(self, ref: str) -> None:
-        try:
-            self._ref_path(ref).unlink(missing_ok=True)
-        except OSError:
-            pass
+        with self._lock:
+            for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
+                try:
+                    size = path.stat().st_size
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    continue
+                self._current_bytes = max(0, self._current_bytes - size)
 
     def close(self) -> None:
         pass
 
     def _ref_path(self, ref: str) -> Path:
+        return self._dir / ref[:2] / f"{ref}.bin"
+
+    def _legacy_ref_path(self, ref: str) -> Path:
         return self._dir / f"{ref}.bin"
+
+    def _existing_ref_path(self, ref: str) -> Path | None:
+        if not _is_sha256_ref(ref):
+            return None
+        sharded = self._ref_path(ref)
+        if sharded.is_file():
+            return sharded
+        legacy = self._legacy_ref_path(ref)
+        return legacy if legacy.is_file() else None
+
+    def _stored_bytes(self) -> int:
+        if not self._dir.is_dir():
+            return 0
+        total = 0
+        try:
+            paths = self._dir.rglob("*.bin")
+            for path in paths:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return total
+        return total

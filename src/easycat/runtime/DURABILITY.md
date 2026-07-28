@@ -161,7 +161,8 @@ crash-recovery semantics are required.
     <session_id>.sqlite            # live journal (one per session)
   artifacts/
     <session_id>/
-      <sha256>.bin                 # content-addressable artifacts (0600)
+      <sha256[:2]>/
+        <sha256>.bin               # content-addressable artifacts (0600)
   crash-dumps/
     <session_id>.sqlite            # promoted from journals/ on unclean shutdown
   archive/

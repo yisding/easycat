@@ -28,6 +28,7 @@ from easycat.debug.bundle import (
 )
 from easycat.debug.export import export_debug_bundle
 from easycat.debug.testing import load_bundle
+from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind, TimingInfo
 from easycat.runtime.replay import (
     REPLAY_IGNORE_FIELDS,
@@ -541,6 +542,107 @@ class TestBundleExport:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
 
+    def test_export_pages_journal_in_bounded_reads(self, tmp_path):
+        class _PagedJournal:
+            def __init__(self):
+                self.records = [
+                    {"sequence": sequence, "kind": "event", "name": f"event-{sequence}"}
+                    for sequence in range(1, 2_506)
+                ]
+                self.latest_sequence = 2_505
+                self.calls = []
+
+            def read(self, start=0, limit=None):
+                self.calls.append((start, limit))
+                matching = [record for record in self.records if record["sequence"] >= start]
+                return matching[:limit]
+
+        journal = _PagedJournal()
+        path = tmp_path / "paged.zip"
+
+        export_debug_bundle(_FakeSession(debug="full", journal=journal), path)
+
+        assert journal.calls == [(0, 1_000), (1_001, 1_000), (2_001, 1_000)]
+        with zipfile.ZipFile(path) as zf:
+            lines = zf.read("journal.ndjson").splitlines()
+        assert len(lines) == 2_505
+        assert json.loads(lines[0])["sequence"] == 1
+        assert json.loads(lines[-1])["sequence"] == 2_505
+
+    def test_export_streams_sharded_files_without_path_read_bytes(self, tmp_path, monkeypatch):
+        payload = b"streamed-artifact" * 100
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(payload)
+        artifact_path = store._ref_path(ref)
+        assert artifact_path.parent.name == ref[:2]
+
+        original_read_bytes = Path.read_bytes
+
+        def reject_artifact_materialization(self):
+            if self.suffix == ".bin":
+                raise AssertionError("filesystem artifact was materialized")
+            return original_read_bytes(self)
+
+        monkeypatch.setattr(Path, "read_bytes", reject_artifact_materialization)
+        path = tmp_path / "streamed.zip"
+
+        export_debug_bundle(
+            _FakeSession(
+                debug="full",
+                journal=_FakeJournal(),
+                artifact_store=store,
+            ),
+            path,
+        )
+
+        with zipfile.ZipFile(path) as zf:
+            assert zf.read(f"artifacts/{ref}.bin") == payload
+
+    def test_inline_export_streams_sharded_files(self, tmp_path):
+        payload = b"inline-streamed-artifact"
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(payload)
+        path = tmp_path / "inline-streamed.zip"
+
+        export_debug_bundle(
+            _FakeSession(
+                debug="full",
+                journal=_FakeJournal(),
+                artifact_store=store,
+            ),
+            path,
+            inline_artifacts=True,
+        )
+
+        loaded = RunBundle.load(path)
+        assert loaded.artifact_blobs[ref] == payload
+
+    def test_export_rejects_oversize_artifact_before_reading_it(self, tmp_path, monkeypatch):
+        import easycat.debug.export as export_module
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.put(b"seventh")
+        monkeypatch.setattr(export_module, "_ARTIFACT_SIZE_CAP", 6)
+
+        def fail_if_read(_source):
+            raise AssertionError("oversize artifact should fail from stat size")
+
+        monkeypatch.setattr(export_module, "_artifact_chunks", fail_if_read)
+        path = tmp_path / "oversize.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(
+                _FakeSession(
+                    debug="full",
+                    journal=_FakeJournal(),
+                    artifact_store=store,
+                ),
+                path,
+            )
+
+        assert exc_info.value.reason_code == "SIZE_EXCEEDED"
+        assert not path.exists()
+
     def test_export_rejects_invalid_artifact_ref_before_writing(self, tmp_path):
         session = _FakeSession(
             debug="full",
@@ -867,7 +969,7 @@ class TestBundlePartialJournal:
         assert records[0]["sequence"] == 1
 
     def test_from_partial_journal_with_artifacts(self, tmp_path):
-        """Artifacts from the filesystem should be indexed."""
+        """Legacy flat artifacts from the filesystem should be indexed."""
         db_path = tmp_path / "test.sqlite"
         conn = sqlite3.connect(str(db_path))
         conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
@@ -887,6 +989,29 @@ class TestBundlePartialJournal:
         bundle = RunBundle.from_partial_journal(db_path, artifact_root=art_dir)
         assert ref in bundle.artifact_index
         assert bundle.artifact_index[ref].ref == ref
+        assert bundle.artifact_index[ref].size_bytes == len(data)
+
+    def test_from_partial_journal_with_sharded_artifacts(self, tmp_path):
+        db_path = tmp_path / "test.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, json.dumps({"sequence": 1})),
+        )
+        conn.commit()
+        conn.close()
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        data = b"sharded-artifact-content"
+        ref = store.put(data)
+
+        bundle = RunBundle.from_partial_journal(
+            db_path,
+            artifact_root=tmp_path / "artifacts" / "sess",
+        )
+
+        assert bundle.artifact_blobs[ref] == data
         assert bundle.artifact_index[ref].size_bytes == len(data)
 
     def test_from_partial_journal_rejects_artifact_checksum_mismatch(self, tmp_path):
