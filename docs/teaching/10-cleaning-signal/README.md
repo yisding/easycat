@@ -727,7 +727,7 @@ flowchart LR
 
   ```python
   await transport.send_audio(event.audio)
-  aec.feed_reference(event.audio)   # ← only AEC needs this
+  aec.feed_reference(event.audio)  # ← only AEC needs this
   ```
 
 The `NR → AEC → VAD` stage itself is one short coroutine; the
@@ -780,6 +780,7 @@ Every run writes an `audio.config` record with the live backends:
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
 for b in Path("docs/teaching/10-cleaning-signal/runs/").glob("*.bundle"):
     bundle = load_bundle(b)
     for r in bundle.records():

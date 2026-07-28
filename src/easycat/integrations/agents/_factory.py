@@ -13,7 +13,7 @@ from easycat.integrations.agents.base import BridgeInputError, ExternalAgentBrid
 @dataclass(frozen=True, slots=True)
 class _AgentDetector:
     predicate: Callable[[Any], bool]
-    bridge_factory: Callable[[Any], Any]
+    bridge_factory: Callable[[Any], ExternalAgentBridge]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +31,7 @@ _AGENT_DETECTORS: list[_AgentDetector] = []
 
 def register_agent_detector(
     predicate: Callable[[Any], bool],
-    bridge_factory: Callable[[Any], Any],
+    bridge_factory: Callable[[Any], ExternalAgentBridge],
 ) -> None:
     """Register a custom detector for :func:`auto_adapt_agent`.
 
@@ -109,7 +109,13 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     # Custom detectors retain precedence over every built-in framework.
     for detector in _AGENT_DETECTORS:
         if detector.predicate(agent):
-            return detector.bridge_factory(agent)
+            bridge = detector.bridge_factory(agent)
+            if not isinstance(bridge, ExternalAgentBridge):
+                raise BridgeInputError(
+                    "registered agent detector bridge_factory must return "
+                    "an ExternalAgentBridge; got " + type(bridge).__name__
+                )
+            return bridge
 
     for adapter in _BUILTIN_AGENT_ADAPTERS:
         match = adapter(agent, model)

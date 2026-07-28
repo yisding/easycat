@@ -20,6 +20,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.smart_turn import SmartTurnResult
 from easycat.turn_manager import (
     TurnManager,
     TurnManagerConfig,
@@ -52,6 +53,56 @@ class EventCollector:
     @property
     def type_names(self) -> list[str]:
         return [type(e).__name__ for e in self.events]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completion_path", "expected_reason"),
+    [
+        ("manual", "manual_end"),
+        ("silence", "silence_timeout"),
+        ("smart_turn", "smart_turn_complete"),
+    ],
+)
+async def test_user_turn_completion_emits_one_correlated_event_with_reason(
+    completion_path: str,
+    expected_reason: str,
+) -> None:
+    class CompleteDetector:
+        async def detect(self, _audio_chunks: list[AudioChunk]) -> SmartTurnResult:
+            return SmartTurnResult(prediction=1, probability=0.9)
+
+    bus = EventBus()
+    ended: list[TurnEnded] = []
+    started: list[TurnStarted] = []
+    reasons: list[str] = []
+    bus.subscribe(TurnStarted, started.append)
+    bus.subscribe(TurnEnded, ended.append)
+    config = TurnManagerConfig(
+        end_of_turn_silence_ms=0,
+        endpoint_detector=CompleteDetector() if completion_path == "smart_turn" else None,
+    )
+    manager = TurnManager(bus, config=config)
+    manager.bind_session("session-completion")
+    manager.bind_journal_hook(lambda _old, _new, reason, _turn_id: reasons.append(reason))
+
+    await manager.on_vad_event(VADStartSpeaking())
+    if completion_path == "manual":
+        await manager.end_turn()
+    else:
+        if completion_path == "smart_turn":
+            manager.on_audio_frame(_chunk())
+        await manager.on_vad_event(VADStopSpeaking())
+        timer = manager._silence_timer_task
+        assert timer is not None
+        await timer
+
+    assert manager.state == TurnManagerState.PROCESSING
+    assert reasons[-1] == expected_reason
+    assert len(started) == 1
+    assert len(ended) == 1
+    assert ended[0].session_id == started[0].session_id == "session-completion"
+    assert ended[0].turn_id == started[0].turn_id
 
 
 def test_default_endpointing_outlasts_vad_restart_confirmation() -> None:

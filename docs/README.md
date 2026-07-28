@@ -104,6 +104,7 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [architecture explanation](architecture.md) for how the pipeline and
   session collaborators fit together, then use the
   [events reference](reference/events.md), the
+  [journal record reference](reference/journal-records.md), the
   [EasyConfig field reference](reference/easyconfig.md), and the
   [session lifecycle reference](reference/session-lifecycle.md). Run
   `uv run easycat explain events`, `uv run easycat explain turn-taking`, or

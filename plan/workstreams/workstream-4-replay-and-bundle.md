@@ -210,12 +210,14 @@ surprised by non-determinism.
   # cursor.entered_at, cursor.exited_at, *_at_ns, *_monotonic_ns
 
   # Replay extends with artifact-specific and deadline fields
-  REPLAY_IGNORE_FIELDS: frozenset[str] = NONDETERMINISTIC_FIELDS | frozenset({
-      "timing.wall_deadline_ns",
-      # Artifact-specific monotonic derivations
-      "artifact_written_at",
-      "artifact_hashed_at",
-  })
+  REPLAY_IGNORE_FIELDS: frozenset[str] = NONDETERMINISTIC_FIELDS | frozenset(
+      {
+          "timing.wall_deadline_ns",
+          # Artifact-specific monotonic derivations
+          "artifact_written_at",
+          "artifact_hashed_at",
+      }
+  )
   ```
 
   ARTIFACT replay in `fast` timing mode diffs
