@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from easycat.events import CallEnded, CallFailed, CallInitiated, EventBus
@@ -14,6 +16,18 @@ from easycat.telephony.outbound import emit_call_status
 
 
 class TestNumberHealthMonitor:
+    def test_unbalanced_count_log_omits_full_phone_number(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        phone = "+15551234567"
+        monitor = NumberHealthMonitor(EventBus())
+
+        with caplog.at_level(logging.DEBUG, logger="easycat.telephony.number_health"):
+            monitor._decrement_concurrent(phone)
+
+        assert phone not in caplog.text
+        assert "area code 555" in caplog.text.lower()
+
     def test_tracks_answer_rate_per_number(self) -> None:
         bus = EventBus()
         monitor = NumberHealthMonitor(bus)

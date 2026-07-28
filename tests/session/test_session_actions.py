@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
@@ -256,9 +257,12 @@ async def test_drain_session_actions_uses_executor_and_emits_lifecycle_events() 
 
 
 @pytest.mark.asyncio
-async def test_drain_add_to_dnc_applies_to_session_dnc_list() -> None:
+async def test_drain_add_to_dnc_applies_to_session_dnc_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    phone = "+1 (555) 123-4567"
     actions = SessionActions()
-    actions.add_to_dnc("+1 (555) 123-4567", reason="caller requested")
+    actions.add_to_dnc(phone, reason="caller requested")
     dnc = DNCList()
     session = Session(_config(session_actions=actions, dnc_list=dnc))
 
@@ -267,16 +271,19 @@ async def test_drain_add_to_dnc_applies_to_session_dnc_list() -> None:
     session.event_bus.subscribe(SessionActionCompleted, completed.append)
     session.event_bus.subscribe(SessionActionFailed, failed.append)
 
-    should_stop = await session._drain_session_actions()
+    with caplog.at_level(logging.INFO, logger="easycat.session.actions"):
+        should_stop = await session._drain_session_actions()
 
     # Adding to the DNC list must not end the call.
     assert should_stop is False
     # DNCList normalizes to digits, so query with the same formatting it was added with.
-    assert dnc.is_on_dnc("+1 (555) 123-4567")
+    assert dnc.is_on_dnc(phone)
     assert not failed
     assert len(completed) == 1
     assert completed[0].result.metadata["dnc"] == "add"
     assert completed[0].result.metadata["applied"] is True
+    assert phone not in caplog.text
+    assert "area code 555" in caplog.text.lower()
 
 
 @pytest.mark.asyncio
@@ -476,6 +483,22 @@ async def test_drain_add_to_dnc_without_list_is_graceful_noop() -> None:
     assert len(completed) == 1
     assert completed[0].result.metadata["applied"] is False
     assert completed[0].result.metadata["skipped"] == "no_dnc_list"
+
+
+@pytest.mark.asyncio
+async def test_dnc_noop_log_omits_full_phone_number(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    phone = "+15551234567"
+    actions = SessionActions()
+    actions.add_to_dnc(phone)
+    session = Session(_config(session_actions=actions))
+
+    with caplog.at_level(logging.WARNING, logger="easycat.session.actions"):
+        await session._drain_session_actions()
+
+    assert phone not in caplog.text
+    assert "area code 555" in caplog.text.lower()
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 import os
 import stat
 import threading
@@ -49,9 +50,31 @@ class TestCallingHoursEnforcement:
         # Area code 999 is not in the mapping — should block conservatively.
         assert not check_calling_hours("+19995551234")
 
+    def test_unknown_timezone_warnings_omit_full_phone_number(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        phone = "+19995551234"
+
+        with caplog.at_level(logging.WARNING, logger="easycat.telephony.compliance"):
+            assert not check_calling_hours(phone)
+
+        assert phone not in caplog.text
+        assert "area code 999" in caplog.text.lower()
+
     def test_malformed_timezone_override_blocks_call(self) -> None:
         assert not check_calling_hours("+12125551234", timezone_override="/etc/passwd")
         assert not check_calling_hours("+12125551234", timezone_override="../UTC")
+
+    def test_invalid_timezone_warning_omits_full_phone_number(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        phone = "+12125551234"
+
+        with caplog.at_level(logging.WARNING, logger="easycat.telephony.compliance"):
+            assert not check_calling_hours(phone, timezone_override="/invalid")
+
+        assert phone not in caplog.text
+        assert "area code 212" in caplog.text.lower()
 
     def test_non_nanp_number_does_not_resolve_timezone(self) -> None:
         # A non-US E.164 number (UK) must not be misrouted to a US timezone.

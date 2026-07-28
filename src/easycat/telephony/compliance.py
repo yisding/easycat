@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from easycat.telephony._privacy import phone_number_log_label
+
 try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
     import phonenumbers
 except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
@@ -146,9 +148,8 @@ def lookup_timezone(phone: str) -> str | None:
         tz = _AREA_CODE_TZ.get(area_code)
         if tz is None:
             logger.warning(
-                "Area code %s not in timezone mapping for %s — consider using a complete database",
+                "Area code %s not in timezone mapping — consider using a complete database",
                 area_code,
-                phone,
             )
         return tz
     return None
@@ -182,7 +183,10 @@ def check_calling_hours(
     if tz_name is None:
         # Conservative: deny the call when we can't determine timezone.
         # TCPA requires knowledge of the recipient's local time.
-        logger.warning("Cannot determine timezone for %s, blocking call", phone)
+        logger.warning(
+            "Cannot determine timezone for %s, blocking call",
+            phone_number_log_label(phone),
+        )
         return False
 
     try:
@@ -193,7 +197,11 @@ def check_calling_hours(
         now = datetime.now(tz)
         return start_hour <= now.hour < end_hour
     except (KeyError, ValueError):
-        logger.warning("Invalid or unknown timezone %r for %s, blocking call", tz_name, phone)
+        logger.warning(
+            "Invalid or unknown timezone %r for %s, blocking call",
+            tz_name,
+            phone_number_log_label(phone),
+        )
         return False
 
 

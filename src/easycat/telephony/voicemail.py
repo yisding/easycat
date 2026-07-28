@@ -22,6 +22,7 @@ from easycat.events import (
     VADStopSpeaking,
     VoicemailDetected,
 )
+from easycat.telephony._privacy import phone_number_log_label
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +475,10 @@ class VoicemailPolicyHandler:
             "transfer_number": self._config.transfer_number,
             "twiml": twiml,
         }
-        logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
+        logger.info(
+            "Voicemail policy: transferring to %s",
+            phone_number_log_label(self._config.transfer_number),
+        )
 
 
 # ── STT-based greeting classification ──────────────────────────────
