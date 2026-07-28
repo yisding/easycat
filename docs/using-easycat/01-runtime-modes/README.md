@@ -129,6 +129,7 @@ advanced cases, construct the app with a per-connection factory:
 def config_factory(transport):
     return EasyConfig.browser(transport=transport, agent=make_agent())
 
+
 app = VoiceApp(config_factory=config_factory)
 ```
 

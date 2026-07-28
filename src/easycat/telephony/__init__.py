@@ -29,12 +29,15 @@ _LAZY_ATTR: dict[str, str] = {
     "twilio_form_items_from_request": "easycat.telephony.twiml",
     "twilio_public_url_from_request": "easycat.telephony.twiml",
     "twilio_stream_parameters_from_form": "easycat.telephony.twiml",
+    "twilio_webhook_idempotency_key": "easycat.telephony.twiml",
     "TwilioWebhookSignatureError": "easycat.telephony.twiml",
     "twiml_dial_number": "easycat.telephony.twiml",
     "twiml_dial_send_digits": "easycat.telephony.twiml",
     "twiml_gather": "easycat.telephony.twiml",
     "twiml_hangup": "easycat.telephony.twiml",
     "twiml_play_digits": "easycat.telephony.twiml",
+    "twiml_redirect": "easycat.telephony.twiml",
+    "twiml_reject": "easycat.telephony.twiml",
     "twiml_say_and_hangup": "easycat.telephony.twiml",
     "validate_twilio_webhook_signature": "easycat.telephony.twiml",
     # Twilio app settings
@@ -129,7 +132,10 @@ if TYPE_CHECKING:
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,
     )
-    from easycat.telephony.twilio_app import TwilioAppSettings, twilio_app_settings_from_env
+    from easycat.telephony.twilio_app import (
+        TwilioAppSettings,
+        twilio_app_settings_from_env,
+    )
     from easycat.telephony.twiml import (
         TwilioWebhookSignatureError,
         compute_twilio_webhook_signature,
@@ -138,11 +144,14 @@ if TYPE_CHECKING:
         twilio_form_items_from_request,
         twilio_public_url_from_request,
         twilio_stream_parameters_from_form,
+        twilio_webhook_idempotency_key,
         twiml_dial_number,
         twiml_dial_send_digits,
         twiml_gather,
         twiml_hangup,
         twiml_play_digits,
+        twiml_redirect,
+        twiml_reject,
         twiml_say_and_hangup,
         validate_twilio_webhook_signature,
     )
