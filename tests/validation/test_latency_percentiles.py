@@ -278,6 +278,10 @@ def test_default_budgets_cover_required_stages() -> None:
     assert by_stage["llm_ttft_ms"].max_ms == 2500.0
     assert by_stage["llm_ttft_ms"].percentile == "p95"
 
+    assert "interruption_cutoff_ms" in by_stage
+    assert by_stage["interruption_cutoff_ms"].max_ms == 400.0
+    assert by_stage["interruption_cutoff_ms"].percentile == "p95"
+
 
 def test_evaluate_budgets_returns_empty_when_all_pass() -> None:
     percentiles = {
@@ -314,6 +318,27 @@ def test_evaluate_budgets_flags_overall_violation() -> None:
     assert violation.observed_ms == pytest.approx(1700.0)
     assert violation.budget_ms == pytest.approx(1500.0)
     assert violation.scope == "overall"
+
+
+def test_default_budget_flags_slow_interruption_cutoff() -> None:
+    percentiles = {
+        "overall": {
+            "interruption_cutoff_ms": {
+                "p50": 150.0,
+                "p90": 350.0,
+                "p95": 425.0,
+                "p99": 500.0,
+                "count": 20,
+            },
+        },
+        "by_condition": {},
+    }
+
+    violations = evaluate_budgets(percentiles, DEFAULT_BUDGETS)
+
+    assert [violation.stage for violation in violations] == ["interruption_cutoff_ms"]
+    assert violations[0].budget_ms == 400.0
+    assert violations[0].observed_ms == 425.0
 
 
 def test_evaluate_budgets_flags_per_condition_violation() -> None:

@@ -45,6 +45,7 @@ DEFAULT_BUDGETS: tuple[LatencyBudget, ...] = (
     LatencyBudget(stage="total_ms", max_ms=8000.0, percentile="p95"),
     LatencyBudget(stage="tts_ttfb_ms", max_ms=1500.0, percentile="p95"),
     LatencyBudget(stage="llm_ttft_ms", max_ms=2500.0, percentile="p95"),
+    LatencyBudget(stage="interruption_cutoff_ms", max_ms=400.0, percentile="p95"),
 )
 
 

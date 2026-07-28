@@ -53,7 +53,7 @@ def make_wiring(
     caller_id_system_message: Callable[[], str | None] | None = None,
     clear_turn: Callable[[], None] | None = None,
     reset_turn_state: Callable[[], None] | None = None,
-    cancel_turn: Callable[..., Awaitable[None]] | None = None,
+    begin_barge_in: Callable[[], Awaitable[None]] | None = None,
     stop: Callable[[], Awaitable[None]] | None = None,
 ) -> SessionWiringContext:
     """Return a wiring context with no-op defaults; override what a test needs."""
@@ -80,6 +80,6 @@ def make_wiring(
         caller_id_system_message=caller_id_system_message or (lambda: None),
         clear_turn=clear_turn or (lambda: None),
         reset_turn_state=reset_turn_state or (lambda: None),
-        cancel_turn=cancel_turn or _noop_async,
+        begin_barge_in=begin_barge_in or _noop_async,
         stop=stop or _noop_async,
     )

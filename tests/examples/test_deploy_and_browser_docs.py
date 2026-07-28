@@ -360,6 +360,16 @@ def test_docker_guide_serves_browser_client_from_localhost():
     assert 'location.hostname + ":8765"' in client
 
 
+def test_websocket_browser_client_clears_scheduled_audio_on_barge_in():
+    client = (REPO_ROOT / "examples" / "ws_browser_client.html").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs" / "browser-playground.md").read_text(encoding="utf-8")
+
+    assert 'msg.type === "clear"' in client
+    assert "scheduledSources.delete(src)" in client
+    assert "src.stop()" in client
+    assert '`{"type": "clear"}`' in guide
+
+
 def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()

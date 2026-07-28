@@ -100,6 +100,7 @@ var mediaStream = null;
 var workletNode = null;
 var analyser = null;
 var nextPlayTime = 0;
+var scheduledSources = new Set();
 var levelRAF = 0;
 var manualStop = false;
 
@@ -175,11 +176,24 @@ function playAudio(pcm16Buf) {
   var src = playCtx.createBufferSource();
   src.buffer = buffer;
   src.connect(playCtx.destination);
+  scheduledSources.add(src);
+  src.onended = function () {
+    scheduledSources.delete(src);
+  };
 
   var now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now;
   src.start(nextPlayTime);
   nextPlayTime += buffer.duration;
+}
+
+function clearPlayback() {
+  scheduledSources.forEach(function (src) {
+    try { src.stop(); } catch (_) {}
+    try { src.disconnect(); } catch (_) {}
+  });
+  scheduledSources.clear();
+  nextPlayTime = playCtx ? playCtx.currentTime : 0;
 }
 
 // ── Start / Stop ─────────────────────────────────────────────────
@@ -255,6 +269,8 @@ async function start() {
         if (msg.type === "audio_format" && msg.sample_rate) {
           serverPlaybackRate = msg.sample_rate;
           console.log("Server playback rate:", serverPlaybackRate, "Hz");
+        } else if (msg.type === "clear") {
+          clearPlayback();
         } else if (msg.type === "session" && msg.session_id) {
           sessionIdEl.textContent = msg.session_id;
         }
@@ -290,6 +306,7 @@ function stop() {
 
 function cleanup() {
   stopLevelMeter();
+  clearPlayback();
   if (mediaStream) { mediaStream.getTracks().forEach(function (t) { t.stop(); }); mediaStream = null; }
   if (micCtx)  { micCtx.close();  micCtx = null; }
   if (playCtx) { playCtx.close(); playCtx = null; }
