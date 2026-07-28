@@ -33,7 +33,11 @@ from easycat.runtime._private_files import (
     mkdir_private,
     touch_private_file,
 )
-from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
+from easycat.runtime.crash_sweep import (
+    _copy_journal_to_crash_dump,
+    _current_process_identity,
+    sweep_crashed_journals,
+)
 from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
@@ -268,16 +272,16 @@ class SqliteJournal(_SqlJournalBase):
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
-        # Stamp our PID as a liveness marker (committed so a separate
-        # crash-sweep connection can read it).  An idle WAL journal between
-        # turns holds no write lock, so the orphan sweep cannot tell "live
-        # but idle" from "crashed" by lock alone; the PID lets it skip a
-        # journal whose owning process is still running.  Cleared on clean
-        # close so a cleanly-closed (or crashed-then-PID-reused) file never
-        # masquerades as live.
+        # Stamp our process identity as a liveness marker (committed so a
+        # separate crash-sweep connection can read it). An idle WAL journal
+        # between turns holds no write lock, so the orphan sweep cannot tell
+        # "live but idle" from "crashed" by lock alone. On Linux the marker
+        # includes /proc's process start token as well as the PID, preventing
+        # a recycled PID from making a crashed journal look live forever.
+        # Cleared on clean close.
         self._conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
-            (str(os.getpid()),),
+            (_current_process_identity(),),
         )
         self._conn.commit()
 

@@ -17,6 +17,8 @@ import os
 import sqlite3
 import time
 
+import pytest
+
 from easycat.runtime import SqliteJournal, run_retention
 from easycat.runtime.records import JournalRecordKind
 
@@ -204,6 +206,31 @@ def test_age_window_skips_journal_with_live_pid(tmp_path):
     assert removed == 0
     assert live.exists()
     assert not (tmp_path / "archive").exists()
+
+
+def test_age_window_does_not_trust_reused_pid_marker(tmp_path):
+    """An alive PID with a stale process-start token is not a live owner."""
+    from easycat.runtime.crash_sweep import _process_start_token
+
+    start_token = _process_start_token(os.getpid())
+    if start_token is None:
+        pytest.skip("process start identity requires readable Linux /proc")
+    stale = _seed_journal(tmp_path, "reused-sess")
+    conn = sqlite3.connect(str(stale))
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (f"{os.getpid()}:{int(start_token) + 1}",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _backdate(stale, age_days=30)
+
+    removed = run_retention(tmp_path, max_age_days=14, mode="delete")
+
+    assert removed == 1
+    assert not stale.exists()
 
 
 def test_caps_skip_journal_with_live_pid_prune_stale_instead(tmp_path):

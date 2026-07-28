@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import subprocess
 import sys
@@ -12,6 +13,9 @@ from easycat.runtime import SqliteJournal, sweep_crashed_journals
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _crashed_state,
+    _current_process_identity,
+    _process_start_token,
+    is_journal_live,
 )
 from easycat.runtime.records import JournalRecordKind
 
@@ -56,6 +60,43 @@ def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
     assert crash.exists()
     # The source is removed so it stops accumulating in journals/.
     assert not journal.exists()
+
+
+def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:
+    """An alive PID with the wrong start token is not the journal owner."""
+    start_token = _process_start_token(os.getpid())
+    if start_token is None:
+        pytest.skip("process start identity requires readable Linux /proc")
+
+    journal = SqliteJournal("reused", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="reused")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        (f"{os.getpid()}:{int(start_token) + 1}",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    db_path = tmp_path / "journals" / "reused.sqlite"
+
+    assert is_journal_live(db_path) is False
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not db_path.exists()
+    assert (tmp_path / "crash-dumps" / "reused.sqlite").exists()
+
+
+def test_live_owner_marker_includes_process_start_identity(tmp_path) -> None:
+    journal = SqliteJournal("owned", data_dir=tmp_path)
+    try:
+        marker = journal._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'live_pid'"
+        ).fetchone()
+        assert marker is not None
+        assert marker[0] == _current_process_identity()
+        assert is_journal_live(tmp_path / "journals" / "owned.sqlite") is True
+    finally:
+        journal.close()
 
 
 def test_sweep_leaves_clean_closed_journal(tmp_path) -> None:
