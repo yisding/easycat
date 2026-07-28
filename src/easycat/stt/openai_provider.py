@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from easycat._provider_helpers import get_package_version
+from easycat._provider_helpers import ProviderErrorEmitter, get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
-from easycat.events import STTEvent, STTEventType
+from easycat.events import ErrorStage, STTEvent, STTEventType
 from easycat.stt.base import (
     DEFAULT_MAX_AUDIO_BUFFER_BYTES,
     DEFAULT_MAX_AUDIO_CHUNK_BYTES,
@@ -63,6 +63,8 @@ class OpenAISTTConfig:
     max_partial_events: int = 1_000
     # Optional HTTP client override for testing
     http_client: httpx.AsyncClient | None = field(default=None, repr=False)
+    # Optional EventBus for provider-error observability.
+    event_bus: object | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.max_retries < 0:
@@ -96,7 +98,7 @@ class OpenAISTTConfig:
             raise ValueError("OpenAISTTConfig.max_partial_events must be positive")
 
 
-class OpenAISTT(STTBase):
+class OpenAISTT(ProviderErrorEmitter, STTBase):
     """Turn-based STT using OpenAI Audio API streaming transcriptions.
 
     Buffers all audio received via ``send_audio``, then submits the complete
@@ -112,11 +114,15 @@ class OpenAISTT(STTBase):
     guards against custom transports that emit varying formats.
     """
 
+    _error_stage = ErrorStage.STT
+    _provider_error_name = "openai"
+
     def __init__(self, config: OpenAISTTConfig) -> None:
         super().__init__()
         self._config = config
         self._buffer = bytearray()
         self._audio_format: AudioFormat | None = None
+        self._init_emit_tasks()
 
     async def _on_start(self) -> None:
         self._buffer.clear()
@@ -161,11 +167,19 @@ class OpenAISTT(STTBase):
         Each attempt buffers its events internally and only emits on success,
         preserving the emit-on-success-only semantics across retries.
         """
-        return await self._run_with_bounded_retry(
-            lambda: self._attempt_streaming_transcription(wav_data),
-            max_retries=self._config.max_retries,
-            provider_label="OpenAI STT",
-        )
+        try:
+            return await self._run_with_bounded_retry(
+                lambda: self._attempt_streaming_transcription(wav_data),
+                max_retries=self._config.max_retries,
+                provider_label="OpenAI STT",
+            )
+        except Exception as exc:
+            context: dict[str, object] = {}
+            if isinstance(exc, httpx.HTTPStatusError):
+                context["http_status"] = exc.response.status_code
+            self._emit_provider_error(exc, **context)
+            await self._drain_emit_tasks()
+            raise
 
     def _request_form_data(self) -> dict[str, str]:
         """Multipart form fields for the streaming transcription request."""

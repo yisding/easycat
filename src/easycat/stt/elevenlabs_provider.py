@@ -186,6 +186,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # dropped instead of emitting a second FINAL for the same turn.
         self._dropping_pending_final: bool = False
 
+    def _resolve_event_bus(self) -> Any | None:
+        if self._config.mode == "batch":
+            return self._config.event_bus
+        return super()._resolve_event_bus()
+
     def _resolved_model(self) -> str:
         if self._config.model is not None:
             return self._config.model
@@ -598,11 +603,19 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return response.json()
 
         try:
-            return await self._run_with_bounded_retry(
-                _attempt,
-                max_retries=self._config.max_retries,
-                provider_label="ElevenLabs batch STT",
-            )
+            try:
+                return await self._run_with_bounded_retry(
+                    _attempt,
+                    max_retries=self._config.max_retries,
+                    provider_label="ElevenLabs batch STT",
+                )
+            except Exception as exc:
+                context: dict[str, Any] = {}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    context["http_status"] = exc.response.status_code
+                self._emit_provider_error(exc, **context)
+                await self._drain_emit_tasks()
+                raise
         finally:
             if owns_client:
                 await client.aclose()

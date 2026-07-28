@@ -347,6 +347,8 @@ class TestReconnectingWebSocket:
         connect_mock.assert_awaited_once()
         callback.assert_awaited_once()
         assert ws._ws is None
+        assert ws.reconnect_exhausted is True
+        assert ws.reconnect_attempts == 1
 
     async def test_send_waits_for_in_progress_reconnect(self):
         """A send during a recv_iter-driven reconnect blocks for the new socket.
@@ -459,6 +461,8 @@ class TestReconnectingWebSocket:
         # Iterator ends cleanly instead of raising — downstream TTS
         # consumers see a normal end-of-stream, not an unhandled exception.
         assert messages == ["msg1"]
+        assert ws.reconnect_exhausted is True
+        assert ws.reconnect_attempts == 2
 
     async def test_send_fast_fails_after_recv_iter_gives_up(self):
         """Finding 1: a send after recv_iter gives up fast-fails.

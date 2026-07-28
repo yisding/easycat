@@ -352,6 +352,45 @@ async def test_elevenlabs_batch_omits_logging_flag_by_default():
     assert "enable_logging" not in call.kwargs.get("data", {})
 
 
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_api_error_is_emitted_before_propagation():
+    from easycat.events import Error, ErrorStage, EventBus
+
+    response = httpx.Response(
+        status_code=503,
+        request=httpx.Request("POST", "https://api.elevenlabs.io/v1/speech-to-text"),
+    )
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(return_value=response)
+    mock_client.aclose = AsyncMock()
+    bus = EventBus()
+    errors: list[Error] = []
+
+    async def capture_error(event: Error) -> None:
+        errors.append(event)
+
+    bus.subscribe(Error, capture_error)
+    stt = ElevenLabsSTT(
+        ElevenLabsSTTConfig(
+            api_key="k",
+            mode="batch",
+            max_retries=1,
+            http_client=mock_client,
+            event_bus=bus,
+        )
+    )
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await stt.end_stream()
+
+    assert len(errors) == 1
+    assert errors[0].provider == "elevenlabs"
+    assert errors[0].stage is ErrorStage.STT
+    assert "http_status=503" in getattr(errors[0].exception, "__notes__", ())
+
+
 def test_elevenlabs_rejects_too_many_keyterms():
     with pytest.raises(ValueError, match="at most 50 terms"):
         ElevenLabsSTTConfig(api_key="k", realtime_keyterms=[f"t{i}" for i in range(51)])

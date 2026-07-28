@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class ProviderErrorEmitter:
     """Mixin that posts journal-visible ``Error`` events for provider failures.
 
-    The STT and TTS WebSocket bases (and OpenAI's HTTP TTS provider) all need
+    The STT and TTS WebSocket bases (and the HTTP STT/TTS providers) all need
     the same subtle async lifecycle: resolve an event bus, attach context as
     notes on the exception, fire a ``bus.emit(Error(...))`` task, and keep a
     *strong* reference to that task so the event loop (which only holds a weak

@@ -96,3 +96,7 @@ uv run pytest tests/contracts                              # offline protocol co
 - **Events stay provider-scoped** — STT/TTS providers yield `STTEvent` /
   `TTSEvent` objects; Session maps them to EasyCat-level events. Never emit
   `STTFinal` / `TTSAudio` yourself.
+- **Failures stay observable** — attach the injected config `event_bus` and
+  publish provider failures as `Error` events before re-raising. Use the
+  stable factories in `easycat.errors` when an EasyCat code applies (for
+  example `EASYCAT_E304` for a mid-call provider disconnect).

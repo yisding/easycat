@@ -34,8 +34,16 @@ class _RecordingBus:
 class _FakeAbnormalWS:
     """Fake wrapper whose recv_iter ends after a terminal mid-stream death."""
 
-    def __init__(self, died_abnormally: bool) -> None:
+    def __init__(
+        self,
+        died_abnormally: bool,
+        *,
+        reconnect_exhausted: bool = False,
+        reconnect_attempts: int = 0,
+    ) -> None:
         self.died_abnormally = died_abnormally
+        self.reconnect_exhausted = reconnect_exhausted
+        self.reconnect_attempts = reconnect_attempts
 
     async def recv_iter(self):
         # Terminal death mid-utterance: yield nothing then end cleanly (the
@@ -60,8 +68,30 @@ async def test_receive_loop_emits_error_on_abnormal_death():
     errors = [e for e in bus.events if isinstance(e, Error)]
     assert errors, "expected an Error event on abnormal WS death"
     assert errors[0].stage is ErrorStage.STT
+    assert errors[0].code == "EASYCAT_E304"
     # The None sentinel is still queued last so events() terminates cleanly.
     assert probe._event_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_emits_reconnect_exhaustion_error():
+    from easycat.events import Error
+
+    probe = _Probe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _FakeAbnormalWS(  # type: ignore[assignment]
+        died_abnormally=True,
+        reconnect_exhausted=True,
+        reconnect_attempts=4,
+    )
+
+    await probe._receive_loop()
+    await asyncio.gather(*list(probe._emit_tasks))
+
+    errors = [event for event in bus.events if isinstance(event, Error)]
+    assert [error.code for error in errors] == ["EASYCAT_E304", "EASYCAT_E305"]
+    assert "after 4 attempt(s)" in str(errors[-1].exception)
 
 
 @pytest.mark.asyncio

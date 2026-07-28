@@ -196,9 +196,21 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         finally:
             self._on_receive_loop_end()
             if ws.died_abnormally:
+                from easycat.errors import EASYCAT_E304, EASYCAT_E305
+
                 self._emit_provider_error(
-                    ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
+                    EASYCAT_E304(
+                        provider=self._provider_error_name,
+                        detail=f"{self._provider_log_label} STT WebSocket died mid-stream",
+                    )
                 )
+                if getattr(ws, "reconnect_exhausted", False):
+                    self._emit_provider_error(
+                        EASYCAT_E305(
+                            provider=self._provider_error_name,
+                            attempts=getattr(ws, "reconnect_attempts", 0),
+                        )
+                    )
             # Persistent STT providers keep this receive loop alive while
             # ``start_stream`` replaces the logical per-turn event queue. They
             # opt into terminating the current queue if the shared socket dies;

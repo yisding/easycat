@@ -265,14 +265,13 @@ uv run python \
     docs/teaching/13-swap-providers-and-transports/event_bus_probe.py
 ```
 
-The interesting asymmetry is OpenAI: batch STT prints `no`, while HTTP TTS
-prints `yes`. The bus is therefore not synonymous with WebSockets. It carries
-**provider observability**:
+OpenAI's batch STT and HTTP TTS configs both print `yes`, so the bus is not
+synonymous with WebSockets. It carries **provider observability**:
 
 - WebSocket providers use it for provider errors and reconnect lifecycle
   (`ReconnectAttempt`, `ReconnectSuccess`, `ReconnectFailure`).
-- HTTP OpenAI TTS uses it for provider `Error` events, but cannot emit
-  reconnect lifecycle because it has no persistent socket.
+- HTTP STT/TTS providers use it for provider `Error` events, but cannot emit
+  reconnect lifecycle because they have no persistent socket.
 - `STTEvent` and `TTSEvent` data still flow from provider async iterators; the
   session bus is not the audio/transcript stream.
 
