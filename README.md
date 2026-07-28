@@ -132,7 +132,7 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, numpy, onnxruntime, and LiveKit AEC3 echo
+SDK, RNNoise dependencies, NumPy, SoXR, onnxruntime, and LiveKit AEC3 echo
 cancellation. It does not include TEN VAD; install that optional extra
 separately only if you accept its non-permissive license. Silero VAD runs on
 its bundled ONNX model via `onnxruntime` (already in `quickstart`) — no torch
@@ -144,10 +144,10 @@ uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --ext
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + numpy (LocalTransport and local audio buffers): `uv sync --extra local --group dev`
-- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
-- aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
-- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- sounddevice + NumPy + SoXR (LocalTransport and local audio): `uv sync --extra local --group dev`
+- aiortc + aiohttp + SoXR (WebRTCTransport): `uv sync --extra webrtc --group dev`
+- aioquic + SoXR (WebTransportTransport): `uv sync --extra webtransport --group dev`
+- FastAPI + Twilio SDK + SoXR (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
 - OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
 - PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
 - PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
@@ -170,6 +170,10 @@ frameworks, and debugging/audio-processing features:
   or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
+
+The audio transport extras include SoXR for filtered, native-speed sample-rate
+conversion. `easycat doctor` reports the backend in use; a core-only install
+falls back to a dependency-free filtered resampler.
 
 Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
 socket per voice session by default. EasyCat calls the provider's `warmup()`

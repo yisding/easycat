@@ -80,6 +80,14 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_audio_transport_extras_ship_high_quality_resampling() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+
+    for extra in ("local", "webrtc", "webtransport", "telephony", "quickstart", "all"):
+        names = {Requirement(dep).name for dep in extras[extra]}
+        assert {"numpy", "soxr"} <= names, f"{extra} must ship the SoXR audio path"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

@@ -21,7 +21,6 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from easycat._audio_utils import resample
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 
@@ -485,7 +484,7 @@ class SmartTurnONNX:
             return np.zeros(0, dtype=np.float32)
 
         remaining_samples = self._max_audio_samples
-        reversed_samples: list[Any] = []
+        reversed_chunks: list[tuple[bytes, int]] = []
 
         for chunk in reversed(chunks):
             if remaining_samples <= 0:
@@ -501,21 +500,48 @@ class SmartTurnONNX:
             source_samples = len(data) // frame_size
             if source_samples > source_sample_budget:
                 data = data[-source_sample_budget * frame_size :]
-
-            if source_rate != 16000:
-                data = resample(data, source_rate, 16000)
-            samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            if len(samples) > remaining_samples:
-                samples = samples[-remaining_samples:]
-            if len(samples) == 0:
+                source_samples = source_sample_budget
+            if not data or source_samples <= 0:
                 continue
 
-            reversed_samples.append(samples)
-            remaining_samples -= len(samples)
+            reversed_chunks.append((data, source_rate))
+            converted_samples = int(source_samples * 16000 / source_rate)
+            remaining_samples -= min(remaining_samples, converted_samples)
 
-        if not reversed_samples:
+        if not reversed_chunks:
             return np.zeros(0, dtype=np.float32)
-        audio = np.concatenate(list(reversed(reversed_samples)))
+
+        # The common 8-second / 20-ms workload contains ~400 chunks. Group
+        # adjacent chunks with the same source rate and cross the Python/NumPy
+        # boundary once per rate segment rather than once per frame.
+        converted_groups: list[Any] = []
+        grouped_bytes: list[bytes] = []
+        grouped_rate: int | None = None
+
+        def convert_group() -> None:
+            if grouped_rate is None or not grouped_bytes:
+                return
+            samples = (
+                np.frombuffer(b"".join(grouped_bytes), dtype=np.int16).astype(np.float32) / 32768.0
+            )
+            if grouped_rate != 16000 and len(samples):
+                output_length = int(len(samples) * 16000 / grouped_rate)
+                source_positions = np.arange(len(samples), dtype=np.float64)
+                target_positions = (
+                    np.arange(output_length, dtype=np.float64) * grouped_rate / 16000
+                )
+                samples = np.interp(target_positions, source_positions, samples).astype(np.float32)
+            converted_groups.append(samples)
+
+        for data, source_rate in reversed(reversed_chunks):
+            if grouped_rate is not None and source_rate != grouped_rate:
+                convert_group()
+                grouped_bytes = []
+            grouped_rate = source_rate
+            grouped_bytes.append(data)
+        convert_group()
+
+        audio = np.concatenate(converted_groups)
         if len(audio) > self._max_audio_samples:
             audio = audio[-self._max_audio_samples :]
         return audio

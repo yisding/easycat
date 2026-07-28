@@ -1,5 +1,6 @@
 """Tests for audio utilities: resampling, mono downmix, chunk sizing."""
 
+import math
 import struct
 
 import pytest
@@ -243,6 +244,39 @@ def test_resample_runtime_failure_logs_once(monkeypatch, caplog):
 
     warnings = [r for r in caplog.records if "soxr resampling failed" in r.message]
     assert len(warnings) == 1
+
+
+def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
+    """The dependency-free path must not fold a 10 kHz tone into speech."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    from_rate = 48_000
+    to_rate = 16_000
+    sample_count = from_rate // 2
+    amplitude = 20_000
+    source = [
+        int(amplitude * math.sin(2 * math.pi * 10_000 * index / from_rate))
+        for index in range(sample_count)
+    ]
+    output = au.resample(
+        struct.pack(f"<{len(source)}h", *source),
+        from_rate,
+        to_rate,
+    )
+    samples = struct.unpack(f"<{len(output) // 2}h", output)
+    # Ignore the causal FIR's short startup transient.
+    body = samples[len(samples) // 10 :]
+    alias_radians = 2 * math.pi * 6_000 / to_rate
+    alias_amplitude = abs(
+        sum(
+            sample * complex(math.cos(alias_radians * index), -math.sin(alias_radians * index))
+            for index, sample in enumerate(body)
+        )
+    )
+    alias_amplitude *= 2 / len(body)
+    attenuation_db = 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
+    assert attenuation_db < -40
 
 
 def test_resample_chunk_to_48k():

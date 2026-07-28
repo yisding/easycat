@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import struct
 from collections.abc import Iterator
+from functools import lru_cache
 
 from easycat.audio_format import AudioChunk, AudioFormat
 
@@ -82,25 +84,29 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
         if not data:
             return b""
 
-    global _resolved_backend
-
-    # Resolve the best available backend once and cache the result. A runtime
-    # failure does not change this cache, so the high-quality backend is
-    # retried on every chunk and only the (logged-once) failures fall back to
-    # linear for the affected chunk.
-    if _resolved_backend is None:
-        _resolved_backend = _resolve_resample_backend()
-
-    if _resolved_backend == "soxr":
+    backend = resample_backend()
+    if backend == "soxr":
         result = _resample_soxr(data, from_rate, to_rate)
         if result is not None:
             return result
-    elif _resolved_backend == "scipy":
+    elif backend == "scipy":
         result = _resample_scipy(data, from_rate, to_rate)
         if result is not None:
             return result
 
     return _resample_linear(data, from_rate, to_rate)
+
+
+def resample_backend() -> str:
+    """Return the cached resampling backend used by :func:`resample`.
+
+    This diagnostic keeps operator tooling from reaching into the module's
+    private cache.
+    """
+    global _resolved_backend
+    if _resolved_backend is None:
+        _resolved_backend = _resolve_resample_backend()
+    return _resolved_backend
 
 
 def _resolve_resample_backend() -> str:
@@ -202,16 +208,21 @@ def _log_runtime_failure_once(backend: str) -> None:
 
 
 def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Pure-Python linear-interpolation resampler (no optional deps).
+    """Dependency-free filtered linear-interpolation resampler.
 
     Tolerates an odd trailing byte (a 16-bit sample split across a chunk
-    boundary) by dropping it rather than raising ``struct.error``.
+    boundary) by dropping it rather than raising ``struct.error``. Before
+    downsampling, a fixed-tap low-pass prevents out-of-band content from
+    folding into the speech band. This remains a lower-quality fallback than
+    SoXR, but it never degenerates into unfiltered sample dropping.
     """
     # Decode PCM16 LE samples, dropping any odd trailing byte that would
     # otherwise split a 16-bit sample and crash struct.unpack.
     num_samples = len(data) // 2
     data = data[: num_samples * 2]
-    samples = struct.unpack(f"<{num_samples}h", data)
+    samples: tuple[float, ...] | list[float] = struct.unpack(f"<{num_samples}h", data)
+    if to_rate < from_rate:
+        samples = _low_pass_for_downsampling(samples, from_rate, to_rate)
 
     ratio = from_rate / to_rate
     out_len = int(num_samples / ratio)
@@ -230,6 +241,44 @@ def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
         out_samples.append(max(-32768, min(32767, int(round(value)))))
 
     return struct.pack(f"<{len(out_samples)}h", *out_samples)
+
+
+_FALLBACK_FILTER_TAPS = 63
+
+
+@lru_cache(maxsize=32)
+def _downsample_filter(from_rate: int, to_rate: int) -> tuple[float, ...]:
+    """Build a normalized Hamming-windowed sinc filter for one rate pair."""
+    # Leave a 10% transition band below the destination Nyquist frequency.
+    cutoff = 0.45 * to_rate / from_rate
+    midpoint = (_FALLBACK_FILTER_TAPS - 1) / 2
+    taps: list[float] = []
+    for index in range(_FALLBACK_FILTER_TAPS):
+        offset = index - midpoint
+        if offset == 0:
+            sinc = 2 * cutoff
+        else:
+            sinc = math.sin(2 * math.pi * cutoff * offset) / (math.pi * offset)
+        window = 0.54 - 0.46 * math.cos(2 * math.pi * index / (_FALLBACK_FILTER_TAPS - 1))
+        taps.append(sinc * window)
+    scale = sum(taps)
+    return tuple(tap / scale for tap in taps)
+
+
+def _low_pass_for_downsampling(
+    samples: tuple[float, ...] | list[float],
+    from_rate: int,
+    to_rate: int,
+) -> list[float]:
+    """Apply a causal anti-alias filter without optional numeric packages."""
+    taps = _downsample_filter(from_rate, to_rate)
+    filtered: list[float] = []
+    for sample_index in range(len(samples)):
+        value = 0.0
+        for tap_index in range(min(len(taps), sample_index + 1)):
+            value += taps[tap_index] * samples[sample_index - tap_index]
+        filtered.append(value)
+    return filtered
 
 
 def resample_chunk(chunk: AudioChunk, to_rate: int) -> AudioChunk:
