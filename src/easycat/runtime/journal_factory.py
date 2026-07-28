@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from easycat.runtime.journal_memory import InMemoryRingBuffer
@@ -24,7 +25,7 @@ def create_journal(
     debug: Literal["off", "light", "full"] = "light",
     backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     capacity: int = 10_000,
-    data_dir: str | None = None,
+    data_dir: str | Path | None = None,
     artifact_store: InMemoryArtifactStore | None = None,
     retention_mode: Literal["archive", "delete"] = "archive",
 ) -> InMemoryRingBuffer | SqliteJournal | LitestreamSqliteJournal | LibsqlJournal:

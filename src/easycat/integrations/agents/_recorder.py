@@ -18,6 +18,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
     RecorderInvariantError,
 )
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
 if TYPE_CHECKING:
@@ -25,6 +26,14 @@ if TYPE_CHECKING:
     from easycat.runtime.journal import ExecutionJournal
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_COUNT_KEYS = frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+    }
+)
 
 
 class JournalAgentRecorder:
@@ -248,6 +257,45 @@ class JournalAgentRecorder:
             error=error,
         )
 
+    def record_usage(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+    ) -> None:
+        """Record provider-reported token counts without pricing assumptions."""
+        raw_counts = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
+        }
+        counts = {
+            key: value
+            for key, value in raw_counts.items()
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        }
+        if not counts or not any(counts.values()):
+            return
+        if (
+            "cached_input_tokens" in counts
+            and "input_tokens" in counts
+            and counts["cached_input_tokens"] > counts["input_tokens"]
+        ):
+            counts.pop("cached_input_tokens")
+        data: dict[str, Any] = dict(counts)
+        if provider:
+            data["provider"] = provider
+        if model:
+            data["model"] = model
+        self._append(
+            kind=JournalRecordKind.EVENT,
+            name="agent_usage",
+            data=data,
+        )
+
     # ── Atomic interruption records ─────────────────────────────
 
     def record_state_committed(
@@ -300,6 +348,7 @@ class JournalAgentRecorder:
         record_data = {"run_id": self._context.run_id}
         if data:
             record_data.update(data)
+        validate_builtin_record(name=name, kind=kind, data=record_data)
         self._journal.append(
             kind=kind,
             name=name,
@@ -323,7 +372,17 @@ def _scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
 
     def _scrub(value: Any) -> Any:
         if isinstance(value, dict):
-            return {k: _scrub(v) for k, v in value.items() if not _is_secret_name(str(k))}
+            return {
+                k: _scrub(v)
+                for k, v in value.items()
+                if not _is_secret_name(str(k))
+                or (
+                    k in _TOKEN_COUNT_KEYS
+                    and isinstance(v, int)
+                    and not isinstance(v, bool)
+                    and v >= 0
+                )
+            }
         if isinstance(value, list):
             return [_scrub(item) for item in value]
         if isinstance(value, tuple):

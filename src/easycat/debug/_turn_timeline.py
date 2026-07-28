@@ -24,6 +24,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from easycat.runtime.records import (
+    AGENT_DELTA_RECORD_NAME,
+    AGENT_FINAL_RECORD_NAME,
+    AGENT_REQUEST_STARTED_RECORD_NAME,
+    BOT_STARTED_SPEAKING_RECORD_NAME,
+    BOT_STOPPED_SPEAKING_RECORD_NAME,
+    CONTROL_SIGNAL_RECORD_NAME,
+    INTERRUPTION_RECORD_NAME,
+    PLAYBACK_MARK_ACK_RECORD_NAME,
+    STAGE_COMPLETE_RECORD_NAME,
+    STAGE_START_RECORD_NAME,
+    STT_FINAL_RECORD_NAME,
+    TTS_FRAME_RECORD_NAME,
+    VAD_START_SPEAKING_RECORD_NAME,
+)
+
 STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "telephony")
 
 # Milestone journal-record names.  ``vad_stop_speaking`` marks the VAD
@@ -33,18 +49,18 @@ STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "tele
 # ``tts_frame`` / ``tts_audio`` the first synthesized audio bytes.  Splitting at
 # the agent request lets us separate dispatch overhead from raw LLM TTFT.
 _VAD_ENDPOINT = "vad_stop_speaking"
-_STT_FINAL = "stt_final"
-_AGENT_REQUEST = "agent_request_started"
-_AGENT_FIRST = ("agent_delta", "agent_final")
-_TTS_FIRST = ("tts_frame", "tts_audio")
+_STT_FINAL = STT_FINAL_RECORD_NAME
+_AGENT_REQUEST = AGENT_REQUEST_STARTED_RECORD_NAME
+_AGENT_FIRST = (AGENT_DELTA_RECORD_NAME, AGENT_FINAL_RECORD_NAME)
+_TTS_FIRST = (TTS_FRAME_RECORD_NAME, "tts_audio")
 
 # Barge-in milestone record names.  ``bot_started_speaking`` opens a playback
 # window the user can interrupt; the FIRST ``vad_start_speaking`` at/after that
 # is the user starting to barge in, and the FIRST ``bot_stopped_speaking`` /
 # ``playback_mark_ack`` after the barge-in is the bot actually going quiet.
-_BOT_STARTED = "bot_started_speaking"
-_USER_SPEECH_START = "vad_start_speaking"
-_BOT_STOPPED = ("bot_stopped_speaking", "playback_mark_ack")
+_BOT_STARTED = BOT_STARTED_SPEAKING_RECORD_NAME
+_USER_SPEECH_START = VAD_START_SPEAKING_RECORD_NAME
+_BOT_STOPPED = (BOT_STOPPED_SPEAKING_RECORD_NAME, PLAYBACK_MARK_ACK_RECORD_NAME)
 
 
 def record_wall_ns(record: Mapping[str, Any]) -> int | None:
@@ -127,9 +143,9 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if isinstance(stage, str):
                 bucket["stage_counts"][stage] = bucket["stage_counts"].get(stage, 0) + 1
             audio_bytes = data.get("audio_bytes")
-            if r.get("name") == "tts_frame" and isinstance(audio_bytes, int):
+            if r.get("name") == TTS_FRAME_RECORD_NAME and isinstance(audio_bytes, int):
                 bucket["tts_audio_bytes"] += audio_bytes
-            if r.get("name") in ("stage_start", "stt_audio_in"):
+            if r.get("name") in (STAGE_START_RECORD_NAME, "stt_audio_in"):
                 if isinstance(audio_bytes, int) and stage == "stt":
                     bucket["stt_audio_bytes"] += audio_bytes
         # A single barge-in fans an InterruptSignal across all stages, so it
@@ -137,11 +153,11 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # ``interruption`` event. We bookkeep both here and resolve the
         # deduped count in the post-pass below so record order doesn't affect
         # the result.
-        if r.get("name") == "control_signal":
+        if r.get("name") == CONTROL_SIGNAL_RECORD_NAME:
             data = r.get("data") or {}
             if isinstance(data, dict) and data.get("signal_kind") == "interrupt":
                 bucket["_interrupt_signal_ids"].add(data.get("signal_id") or "")
-        elif r.get("name") == "interruption":
+        elif r.get("name") == INTERRUPTION_RECORD_NAME:
             bucket["_legacy_interruptions"] = bucket.get("_legacy_interruptions", 0) + 1
         if r.get("error"):
             bucket["error_count"] += 1
@@ -204,7 +220,7 @@ def build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # synthetic instant-span for stages the turn never actually touched.
         # ``stage_counts`` in ``summarise_turns`` still accounts for the
         # signals.
-        if name == "control_signal":
+        if name == CONTROL_SIGNAL_RECORD_NAME:
             continue
         slot = bucket["stages"].setdefault(
             stage,
@@ -215,11 +231,11 @@ def build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             slot["first_wall_ns"] = wall
         if slot["last_wall_ns"] is None or wall > slot["last_wall_ns"]:
             slot["last_wall_ns"] = wall
-        if name == "stage_start" and (
+        if name == STAGE_START_RECORD_NAME and (
             slot.get("started_wall_ns") is None or wall < slot["started_wall_ns"]
         ):
             slot["started_wall_ns"] = wall
-        if name == "stage_complete" and (
+        if name == STAGE_COMPLETE_RECORD_NAME and (
             slot.get("completed_wall_ns") is None or wall > slot["completed_wall_ns"]
         ):
             slot["completed_wall_ns"] = wall
@@ -435,19 +451,19 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
         seq = r.get("sequence")
         if not isinstance(data, dict):
             continue
-        if name == "stt_final":
+        if name == STT_FINAL_RECORD_NAME:
             txt = data.get("text") or data.get("transcript")
             if isinstance(txt, str) and txt:
                 bucket["user"] = txt
                 bucket["user_seq"] = seq
-        elif name == "stage_complete" and (
+        elif name == STAGE_COMPLETE_RECORD_NAME and (
             data.get("stage") == "agent" or data.get("observed_stage") == "agent"
         ):
             resp = data.get("response")
             if isinstance(resp, str) and resp:
                 bucket["agent"] = resp
                 bucket["agent_seq"] = seq
-        elif name == "agent_delta":
+        elif name == AGENT_DELTA_RECORD_NAME:
             txt = data.get("text")
             if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
                 bucket["agent_delta"].append(txt)

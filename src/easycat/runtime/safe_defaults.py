@@ -39,12 +39,14 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "debug",
         "warmup",
         # Pipeline flags
+        "capture_audio",
         "enable_noise_reduction",
         "enable_echo_cancellation",
         "enable_vad",
         "auto_turn_from_stt_final",
         "strip_markdown",
         "interruption_mode",
+        "on_agent_failure",
         # Journal config (safe to report)
         "journal_backend",
         "journal_retention",
@@ -357,8 +359,14 @@ def apply_write_filter(record: JournalRecord) -> JournalRecord:
     if not isinstance(redacted_data, dict):
         redacted_data = {}
     redacted_error = _redact_error(record.error)
-    if redacted_data == record.data and redacted_error is record.error:
+    if (
+        not record.name.startswith("app.")
+        and redacted_data == record.data
+        and redacted_error == record.error
+    ):
         return record
+    # Application records retain the rebuilt snapshot even when equal to the
+    # input so later caller mutations cannot rewrite an in-memory fact.
     return replace(record, data=redacted_data, error=redacted_error)
 
 

@@ -56,6 +56,11 @@ class FakeTransport:
     async def clear_audio(self) -> None:
         self.clear_calls += 1
 
+    @property
+    def clear_count(self) -> int:
+        """Compatibility alias for older session-test assertions."""
+        return self.clear_calls
+
     def version_info(self) -> dict[str, str]:
         return {"provider": "fake-transport", "api_version": "test"}
 

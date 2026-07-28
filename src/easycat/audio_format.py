@@ -60,6 +60,7 @@ class AudioChunk:
     _easycat_session_id: str | None = field(default=None, repr=False, compare=False)
     _easycat_turn_id: str | None = field(default=None, repr=False, compare=False)
     _easycat_turn_ref: TurnContext | None = field(default=None, repr=False, compare=False)
+    _easycat_capture_allowed: bool | None = field(default=None, repr=False, compare=False)
 
     @property
     def num_samples(self) -> int:

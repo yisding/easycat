@@ -32,6 +32,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         super().__init__()
         self.response_prefix = response_prefix
         self.contexts: list[list[dict[str, str]]] = []
+        self.inputs: list[AgentTurnInput] = []
 
     async def invoke(
         self,
@@ -40,6 +41,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         _ = recorder, cancel_token
+        self.inputs.append(turn_input)
         self.contexts.append(list(turn_input.context))
         yield AgentBridgeEvent(kind="done", text=f"{self.response_prefix}:{turn_input.text}")
 
