@@ -20,6 +20,12 @@ from easycat.telephony import (
     twilio_stream_parameters_from_form,
     validate_twilio_webhook_signature,
 )
+from easycat.telephony import (
+    twiml_redirect as exported_twiml_redirect,
+)
+from easycat.telephony import (
+    twiml_reject as exported_twiml_reject,
+)
 from easycat.telephony.twiml import (
     parse_gather_webhook,
     sanitize_dtmf_digits,
@@ -28,6 +34,8 @@ from easycat.telephony.twiml import (
     twiml_gather,
     twiml_hangup,
     twiml_play_digits,
+    twiml_redirect,
+    twiml_reject,
 )
 
 
@@ -71,6 +79,8 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         "https://voice.example.com/twiml"
     )
     assert issubclass(TwilioWebhookSignatureError, ValueError)
+    assert exported_twiml_redirect("/overflow").startswith("<?xml")
+    assert exported_twiml_reject().startswith("<?xml")
 
 
 def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
@@ -86,8 +96,9 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
             "TWILIO_MAX_SESSIONS": "12",
-            "TWILIO_DRAIN_TIMEOUT_S": "15.5",
-            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S": "2.5",
+            "TWILIO_DRAIN_TIMEOUT_S": "45",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S": "7.5",
+            "TWILIO_PUBLIC_TWIML_URL": "https://voice.example.com/prefix/twiml",
         }
     )
 
@@ -98,8 +109,9 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
     assert settings.max_sessions == 12
-    assert settings.drain_timeout_s == 15.5
-    assert settings.force_shutdown_timeout_s == 2.5
+    assert settings.drain_timeout_s == 45.0
+    assert settings.force_shutdown_timeout_s == 7.5
+    assert settings.public_twiml_url == "https://voice.example.com/prefix/twiml"
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"
@@ -315,13 +327,29 @@ def test_twilio_stream_parameters_from_form_defaults_and_copies_caller_fields() 
             ("Direction", "outbound-api"),
             ("From", "+15551234567"),
             ("To", "+15557654321"),
-            ("CallerName", ""),
+            ("CallerId", "+15550001111"),
+            ("ForwardedFrom", "+15559990000"),
+            ("CallerName", "Ada Lovelace"),
+            ("FromCity", "SEATTLE"),
+            ("FromState", "WA"),
+            ("FromZip", "98101"),
+            ("FromCountry", "US"),
             ("Ignored", "value"),
-        ]
+            ("X-Carrier", "pstn"),
+        ],
+        extra_fields=("X-Carrier",),
     ) == {
         "Direction": "outbound-api",
         "From": "+15551234567",
         "To": "+15557654321",
+        "CallerId": "+15550001111",
+        "ForwardedFrom": "+15559990000",
+        "CallerName": "Ada Lovelace",
+        "FromCity": "SEATTLE",
+        "FromState": "WA",
+        "FromZip": "98101",
+        "FromCountry": "US",
+        "X-Carrier": "pstn",
     }
 
 
@@ -508,6 +536,55 @@ class TestTwimlHangup:
         assert "<Hangup/>" in result
         assert "<Response>" in result
         assert result.startswith('<?xml version="1.0"')
+
+
+class TestTwimlReject:
+    """Tests for twiml_reject."""
+
+    def test_default_reject_reason(self) -> None:
+        result = twiml_reject()
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": "rejected"}
+
+    def test_busy_reject_reason(self) -> None:
+        result = twiml_reject("busy")
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": "busy"}
+
+    @pytest.mark.parametrize("reason", ["", "temporary", "Busy", 'busy" x="1'])
+    def test_rejects_unsupported_reason(self, reason: str) -> None:
+        with pytest.raises(ValueError, match="reason must be 'rejected' or 'busy'"):
+            twiml_reject(reason)  # type: ignore[arg-type]
+
+
+class TestTwimlRedirect:
+    """Tests for twiml_redirect."""
+
+    def test_redirect_url(self) -> None:
+        result = twiml_redirect("https://voice.example.com/overflow?x=1&y=2")
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.text == "https://voice.example.com/overflow?x=1&y=2"
+        assert redirect.attrib == {}
+
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    def test_redirect_method(self, method: str) -> None:
+        result = twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.attrib == {"method": method}
+
+    @pytest.mark.parametrize("url", ["", " ", "\n\t"])
+    def test_rejects_blank_url(self, url: str) -> None:
+        with pytest.raises(ValueError, match="url must be non-empty"):
+            twiml_redirect(url)
+
+    @pytest.mark.parametrize("method", ["", "get", "PUT", 'GET" bad="1'])
+    def test_rejects_unsupported_method(self, method: str) -> None:
+        with pytest.raises(ValueError, match="method must be 'GET' or 'POST'"):
+            twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
 
 
 # ── Finding 1: DTMF charset validation shared across both output paths ──

@@ -527,7 +527,9 @@ class VoiceApp:
         )
         return server_config, unsafe_allow_no_auth
 
-    def _websocket_factory(self) -> Callable[[WebSocketConnectionTransport], EasyConfig]:
+    def _websocket_factory(
+        self,
+    ) -> Callable[[WebSocketConnectionTransport], EasyConfig]:
         return self._per_connection_factory("websocket")
 
     def _run_websocket(self, **kwargs: Any) -> None:
@@ -609,13 +611,35 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
         )
+        start_timeout_s = kwargs.pop(
+            "start_timeout_s",
+            float(
+                os.environ.get(
+                    "TWILIO_START_TIMEOUT_S",
+                    TwilioVoiceServerConfig.start_timeout_s,
+                )
+            ),
+        )
+        public_twiml_url = kwargs.pop("public_twiml_url", None) or os.environ.get(
+            "TWILIO_PUBLIC_TWIML_URL"
+        )
         drain_timeout_s = kwargs.pop(
             "drain_timeout_s",
-            TwilioVoiceServerConfig.drain_timeout_s,
+            float(
+                os.environ.get(
+                    "TWILIO_DRAIN_TIMEOUT_S",
+                    TwilioVoiceServerConfig.drain_timeout_s,
+                )
+            ),
         )
         force_shutdown_timeout_s = kwargs.pop(
             "force_shutdown_timeout_s",
-            TwilioVoiceServerConfig.force_shutdown_timeout_s,
+            float(
+                os.environ.get(
+                    "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+                    TwilioVoiceServerConfig.force_shutdown_timeout_s,
+                )
+            ),
         )
         self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
@@ -629,6 +653,8 @@ class VoiceApp:
             trust_proxy_headers=bool(trust_proxy_headers),
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
             max_sessions=max_sessions,
+            start_timeout_s=start_timeout_s,
+            public_twiml_url=public_twiml_url,
             drain_timeout_s=drain_timeout_s,
             force_shutdown_timeout_s=force_shutdown_timeout_s,
         )

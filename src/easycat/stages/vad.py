@@ -16,6 +16,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
     journal_append_control_signal,
     journal_append_event,
@@ -23,6 +24,7 @@ from easycat.stages.base import (
     live_replay_input,
     put_artifact_async,
     record_stage_failure,
+    set_audio_capture_allowed,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,7 +73,12 @@ class VADStage:
         result_attr = "pass"
         state_before = self.snapshot_state()
         data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-        input_ref = await put_artifact_async(ctx, data_bytes)
+        capture_allowed = audio_capture_allowed(ctx, input)
+        input_ref = await put_artifact_async(
+            ctx,
+            data_bytes,
+            capture_allowed=capture_allowed,
+        )
         # VAD backends decode the raw byte stream as flat int16 mono (frame
         # boundaries are computed as samples*2). Interleaved multi-channel
         # input would be misread as garbage, so downmix to mono before
@@ -79,6 +86,7 @@ class VADStage:
         # input_ref artifact so replay still reflects the true raw input.
         if isinstance(input, AudioChunk) and input.format.channels > 1:
             input = to_mono_chunk(input)
+            set_audio_capture_allowed(input, capture_allowed)
         start_extra = {
             "audio_bytes": len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0,
         }

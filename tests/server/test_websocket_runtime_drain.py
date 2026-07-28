@@ -142,3 +142,24 @@ async def test_runtime_rejects_new_connection_after_drain_starts() -> None:
     assert connection.close_calls == [(1013, "Server is draining")]
     assert manager.sessions == {}
     assert server.close_calls == [False]
+
+
+async def test_runtime_allows_async_preflight_to_reject_before_session_creation() -> None:
+    events: list[str] = []
+    manager = _Manager(events)
+    connection = _Connection(events)
+
+    async def reject_after_preflight(_connection: object) -> None:
+        events.append("preflight_rejected")
+
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=reject_after_preflight,
+    )
+
+    await runtime.handle(connection)
+
+    assert events == ["preflight_rejected"]
+    assert manager.sessions == {}
+    assert runtime.gate.reserved_count == 0

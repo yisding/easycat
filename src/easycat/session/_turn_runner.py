@@ -27,8 +27,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -85,6 +86,8 @@ if TYPE_CHECKING:
     from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
+_APPLICATION_SYSTEM_TRIGGER = "Follow the application instruction above."
+_APPLICATION_PROMPT_CANCEL_DRAIN_S = 0.1
 
 
 def _new_first_tts_payload_gate() -> asyncio.Future[bool]:
@@ -115,6 +118,9 @@ class _StreamingTtsState:
     #: Released after the outer task has emitted (or intentionally skipped)
     #: AgentFinal so fast TTS completion cannot overtake agent output ordering.
     agent_output_settled: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Set before externally cancelling the agent consumer after a provider
+    #: failure/timeout so its finalizer drops incomplete buffered text.
+    agent_stream_aborted: asyncio.Event = field(default_factory=asyncio.Event)
     #: The consumer received its first payload and decided gating/playback.
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
@@ -143,6 +149,7 @@ class TurnRunner:
     """Drives the per-turn agent loop."""
 
     _TEXT_TURN_TASK_NAME = "text_turn"
+    _APPLICATION_PROMPT_TASK_NAME = "application_prompt"
     _PREEMPTIVE_TASK_NAME = "preemptive_agent_generation"
 
     def __init__(
@@ -160,6 +167,7 @@ class TurnRunner:
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
+        on_agent_failure: str | Callable[[Exception], str] | None,
         turn_handle: TurnHandle,
         stt_stage: STTStage,
         session_id: str,
@@ -176,6 +184,7 @@ class TurnRunner:
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
+        self._on_agent_failure = on_agent_failure
         self._turn = turn_handle
         self._stt_stage = stt_stage
         self._stt_provider = wiring.stt
@@ -184,6 +193,7 @@ class TurnRunner:
         self._agent = wiring.agent
         self._drain_session_actions = wiring.drain_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
+        self._cancel_turn = wiring.cancel_turn
         self._stop = wiring.stop
         self._reset_turn_state = wiring.reset_turn_state
         self._emit = wiring.emit
@@ -194,7 +204,10 @@ class TurnRunner:
         self._active_text_turn: asyncio.Task[str] | None = None
         self._text_turn_cancel_token: CancelToken | None = None
         self._text_turn_accumulated: str = ""
-        self._text_turn_lock = asyncio.Lock()
+        self._agent_turn_lock = asyncio.Lock()
+        self._active_application_prompt: asyncio.Task[str] | None = None
+        self._application_prompt_cancel_token: CancelToken | None = None
+        self._application_turn_ids: set[str] = set()
 
         # Voice-only speculative generation. The task may run while the turn
         # manager is confirming an endpoint, but its result is not committed
@@ -222,10 +235,20 @@ class TurnRunner:
     def text_turn_cancel_token(self) -> CancelToken | None:
         return self._text_turn_cancel_token
 
+    @property
+    def active_application_prompt(self) -> asyncio.Task[str] | None:
+        return self._active_application_prompt
+
+    @property
+    def application_prompt_cancel_token(self) -> CancelToken | None:
+        return self._application_prompt_cancel_token
+
     # ── Subscription handlers ─────────────────────────────────────
 
     async def on_turn_started(self, event: TurnStarted) -> None:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
+        if event.turn_id in self._application_turn_ids:
+            return
         if not self._is_running():
             return
         await self.cancel_preemptive_generation()
@@ -376,6 +399,8 @@ class TurnRunner:
         cancel guards against the commit race that surfaced as OpenAI
         Realtime "buffer too small" errors on plan-7.
         """
+        if event.turn_id in self._application_turn_ids:
+            return
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
         current_tts_task = self._tts.active_turn_task
@@ -652,7 +677,9 @@ class TurnRunner:
         *,
         turn: TurnContext | None = None,
         prepared_response: PreparedAgentResponse | None = None,
-    ) -> None:
+        system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
+    ) -> str:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
         Uses :func:`consume_agent_stream` to translate agent events into
@@ -680,7 +707,12 @@ class TurnRunner:
         )
 
         agent_result: AgentStreamResult | None = None
-        system_prefix = self._caller_id_system_message()
+        accumulated_text = ""
+        system_prefix = (
+            system_prefix_override
+            if system_prefix_override is not None
+            else self._caller_id_system_message()
+        )
 
         async def _run_agent_consumer() -> None:
             nonlocal agent_result
@@ -692,6 +724,7 @@ class TurnRunner:
                     cancel_token=token,
                     system_prefix=system_prefix,
                     prepared_response=prepared_response,
+                    input_role=input_role,
                 ),
                 cancel_token=token,
                 tts_queue=st.queue,
@@ -700,6 +733,7 @@ class TurnRunner:
                 strip_md=self._tts.strip_markdown_enabled,
                 turn=turn,
                 first_tts_payload_ready=st.first_tts_payload_ready,
+                abort_event=st.agent_stream_aborted,
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
@@ -727,6 +761,7 @@ class TurnRunner:
                     await self._emit(
                         AgentFinal(text=accumulated_text, structured_output=structured_output)
                     )
+                await self._maybe_speak_agent_failure_fallback(st, agent_error)
             finally:
                 st.agent_output_settled.set()
 
@@ -755,7 +790,7 @@ class TurnRunner:
 
         if st.should_stop:
             await self._stop()
-            return
+            return accumulated_text
 
         self._record_voice_total_latency(turn)
 
@@ -763,8 +798,92 @@ class TurnRunner:
         if self._turn.current is turn and self._turn.generation == st.turn_gen:
             if self._turn_manager.state != TurnManagerState.IDLE:
                 self._reset_turn_state()
+        return accumulated_text
 
     # ── Streaming agent phases ─────────────────────────────────────
+
+    async def _maybe_speak_agent_failure_fallback(
+        self,
+        st: _StreamingTtsState,
+        error: Exception | None,
+    ) -> None:
+        if (
+            error is None
+            or st.error is not None
+            or st.turn.audio_bytes_sent > 0
+            or st.synth_started
+            or not st.queue.empty()
+            or (st.token and st.token.is_cancelled)
+            or self._tts.is_playback_suppressed
+            or self._turn.current is not st.turn
+            or self._turn.generation != st.turn_gen
+            or self._turn_manager.state != TurnManagerState.PROCESSING
+        ):
+            return
+        await self._speak_agent_failure_fallback(st, error)
+
+    def _resolve_agent_failure_fallback(self, error: Exception) -> str | None:
+        policy = self._on_agent_failure
+        if policy is None:
+            return None
+        try:
+            text = policy(error) if callable(policy) else policy
+        except Exception:
+            logger.warning("on_agent_failure callback raised; fallback skipped", exc_info=True)
+            return None
+        if not isinstance(text, str) or not text.strip():
+            logger.warning("on_agent_failure must resolve to non-empty text; fallback skipped")
+            return None
+        return text.strip()
+
+    async def _speak_agent_failure_fallback(
+        self,
+        st: _StreamingTtsState,
+        error: Exception,
+    ) -> None:
+        text = self._resolve_agent_failure_fallback(error)
+        if text is None:
+            return
+        self._journal_sink.append_record(
+            name="agent_failure_fallback",
+            turn_id=st.turn.id,
+            data={
+                "text": text,
+                "error_type": type(error).__name__,
+            },
+        )
+        try:
+            payload = self._tts.prepare(text, is_streaming=False, is_final=True)
+            try:
+                result = await self._synthesize_first_payload(st, payload)
+            finally:
+                st.synth_started = True
+            assert result is not None
+            st.chunks.append(
+                TtsChunk(
+                    _text_for_estimation_timeline(payload),
+                    result.audio_bytes,
+                    result.completed,
+                )
+            )
+            if result.first_audio_time is not None:
+                st.turn.first_tts_audio_time = result.first_audio_time
+            await self._emit(AgentFinal(text=text))
+        except asyncio.CancelledError:
+            raise
+        except TTSTimeoutError as fallback_error:
+            st.error = fallback_error
+            logger.exception("Agent failure fallback TTS timed out")
+        except Exception as fallback_error:
+            st.error = fallback_error
+            logger.exception("Agent failure fallback TTS failed")
+            await self._emit(
+                Error(
+                    exception=fallback_error,
+                    stage=ErrorStage.TTS,
+                    turn_id=st.turn.id,
+                )
+            )
 
     async def _consume_tts_payloads(self, st: _StreamingTtsState) -> None:
         """TTS consumer task: synthesize queued payloads, then settle the turn."""
@@ -801,7 +920,6 @@ class TurnRunner:
     async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
         """Drain the payload queue through the synthesizer until the sentinel."""
         while True:
-            first_synthesis_task = None
             payload = await st.queue.get()
             if payload is None:
                 st.first_tts_lifecycle_ready.set()
@@ -822,30 +940,18 @@ class TurnRunner:
                 # it live later would tear down the turn pointer the gated
                 # replay still needs for mark accounting.
                 try:
-                    st.gated = self._is_gated()
-                    if not st.gated:
-                        first_synthesis_task = await self._tts.begin_synthesis_with_bot_start(
-                            payload,
-                            st.token,
-                            is_active=lambda: (
-                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                            ),
-                            lifecycle_ready=st.first_tts_payload_ready,
-                        )
-                        st.playback_started = (
-                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                        )
-                    elif not await asyncio.shield(st.first_tts_payload_ready):
-                        st.chunks.append(
-                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
-                        )
-                        break
+                    result = await self._synthesize_first_payload(
+                        st,
+                        payload,
+                        lifecycle_ready=st.first_tts_payload_ready,
+                        lifecycle_started=st.first_tts_lifecycle_ready,
+                    )
                 finally:
                     st.synth_started = True
                     st.first_tts_lifecycle_ready.set()
-
-            if first_synthesis_task is not None:
-                result = await self._await_owned_first_synthesis(first_synthesis_task)
+                if result is None:
+                    st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
+                    break
             else:
                 result = await self._tts.synthesizer.synthesize(
                     payload,
@@ -865,6 +971,36 @@ class TurnRunner:
             )
             if result.first_audio_time is not None and st.turn.first_tts_audio_time is None:
                 st.turn.first_tts_audio_time = result.first_audio_time
+
+    async def _synthesize_first_payload(
+        self,
+        st: _StreamingTtsState,
+        payload: TTSInput,
+        *,
+        lifecycle_ready: asyncio.Future[bool] | None = None,
+        lifecycle_started: asyncio.Event | None = None,
+    ) -> TTSSynthResult | None:
+        """Admit the first payload through the shared classification gate."""
+        st.gated = self._is_gated()
+        if st.gated:
+            if lifecycle_ready is not None and not await asyncio.shield(lifecycle_ready):
+                return None
+            return await self._tts.synthesizer.synthesize(
+                payload,
+                st.token,
+                is_active=None,
+            )
+
+        task = await self._tts.begin_synthesis_with_bot_start(
+            payload,
+            st.token,
+            is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+            lifecycle_ready=lifecycle_ready,
+        )
+        if lifecycle_started is not None:
+            lifecycle_started.set()
+        st.playback_started = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        return await self._await_owned_first_synthesis(task)
 
     @staticmethod
     async def _await_owned_first_synthesis(
@@ -916,7 +1052,7 @@ class TurnRunner:
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
         try:
-            return await self._await_agent_task(agent_task, tts_task)
+            return await self._await_agent_task(st, agent_task, tts_task)
         except asyncio.CancelledError:
             self._record_streaming_interruption(
                 st,
@@ -979,10 +1115,11 @@ class TurnRunner:
 
     async def _await_agent_task(
         self,
+        st: _StreamingTtsState,
         agent_task: asyncio.Task[None],
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
-        """Await the agent under its timeout; cancel both tasks on failure."""
+        """Await the agent under its timeout while preserving TTS settlement."""
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
                 await with_agent_timeout(
@@ -995,7 +1132,12 @@ class TurnRunner:
             await self._cancel_and_drain(agent_task, tts_task)
             raise
         except Exception as exc:
-            await self._cancel_and_drain(agent_task, tts_task)
+            # The TTS consumer owns turn settlement and may already be waiting
+            # for ``agent_output_settled`` after receiving its sentinel. Keep
+            # that ownership alive so a configured failure fallback can be
+            # admitted before the consumer finalizes or resets the turn.
+            st.agent_stream_aborted.set()
+            await self._cancel_and_drain(agent_task)
             if isinstance(exc, AgentTimeoutError):
                 # Drain the shielded agent before dispatching handlers so its
                 # cleanup is complete before the turn can advance.
@@ -1081,36 +1223,62 @@ class TurnRunner:
 
     # ── Text mode ──────────────────────────────────────────────────
 
+    async def _cancel_active_text_turn(self, *, source: str) -> None:
+        previous = self._active_text_turn
+        if previous is None or previous.done():
+            return
+        delivered = self._text_turn_accumulated
+        if self._text_turn_cancel_token:
+            self._text_turn_cancel_token.cancel()
+        previous.cancel()
+        await asyncio.gather(previous, return_exceptions=True)
+        self._runtime_scope.discard(previous)
+        notified = _notify_bridge_interruption(
+            self._agent_stage,
+            delivered,
+            self._cancel.interruption_mode,
+            ctx=self._run_ctx,
+        )
+        self._cancel.record_interruption(
+            source=source,
+            mode=self._cancel.interruption_mode,
+            text_spoken=delivered,
+            notified=notified,
+        )
+
+    async def cancel_application_prompt(
+        self,
+        *,
+        drain_timeout_s: float = _APPLICATION_PROMPT_CANCEL_DRAIN_S,
+    ) -> bool:
+        """Signal prompt cancellation and wait only briefly for cleanup.
+
+        Returns whether the prompt finished within the bound. Cancellation-
+        resistant provider cleanup remains owned by its public prompt caller,
+        but cannot stall barge-in, reset, or force stop.
+        """
+        previous = self._active_application_prompt
+        if previous is None or previous.done():
+            return True
+        if self._application_prompt_cancel_token is not None:
+            self._application_prompt_cancel_token.cancel()
+        if previous is asyncio.current_task():
+            return False
+        previous.cancel()
+        done, _ = await asyncio.wait({previous}, timeout=drain_timeout_s)
+        if previous in done:
+            self._runtime_scope.discard(previous)
+            return True
+        self._runtime_scope.discard(previous)
+        return False
+
     async def send_text(self, text: str) -> str:
         """Public text-turn entry point. Mirrors Session.send_text()."""
         # Serialize cancel-and-launch so concurrent send_text() calls
         # cannot both observe the same prev task and launch parallel turns.
-        async with self._text_turn_lock:
-            prev = self._active_text_turn
-            if prev is not None and not prev.done():
-                delivered = self._text_turn_accumulated
-                if self._text_turn_cancel_token:
-                    self._text_turn_cancel_token.cancel()
-                prev.cancel()
-                try:
-                    await prev
-                except (asyncio.CancelledError, Exception):
-                    pass
-                finally:
-                    self._runtime_scope.discard(prev)
-                notified = _notify_bridge_interruption(
-                    self._agent_stage,
-                    delivered,
-                    self._cancel.interruption_mode,
-                    ctx=self._run_ctx,
-                )
-                self._cancel.record_interruption(
-                    source="text_session",
-                    mode=self._cancel.interruption_mode,
-                    text_spoken=delivered,
-                    notified=notified,
-                )
-
+        async with self._agent_turn_lock:
+            await self.cancel_application_prompt()
+            await self._cancel_active_text_turn(source="text_session")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
             self._text_turn_cancel_token = token
@@ -1131,12 +1299,142 @@ class TurnRunner:
             if self._text_turn_cancel_token is token:
                 self._text_turn_cancel_token = None
 
+    async def prompt_agent(
+        self,
+        text: str,
+        *,
+        role: Literal["system", "user"],
+        speak: bool,
+        admit: Callable[[], bool],
+    ) -> str:
+        """Run one application-authored agent turn, optionally through TTS."""
+        async with self._agent_turn_lock:
+            if not admit():
+                raise RuntimeError("Session is stopping")
+            await self._cancel_active_text_turn(source="application_prompt")
+            await self.cancel_application_prompt()
+            if not admit():
+                raise RuntimeError("Session is stopping")
+            if self._turn_manager.state is not TurnManagerState.IDLE:
+                # VAD/PTT can acquire turn ownership after Session.prompt_agent()
+                # performs its first cancellation. Re-cancel at the actual
+                # admission point, then reserve the application turn without
+                # another await so voice work cannot race back in.
+                await self._cancel_turn()
+                if not admit():
+                    raise RuntimeError("Session is stopping")
+            token = CancelToken()
+            turn_id = f"turn-{uuid4().hex[:12]}"
+            turn = TurnContext(turn_id=turn_id, cancel_token=token)
+            self._turn_manager.begin_application_turn(turn_id, token)
+            self._turn.set(turn)
+            self._application_prompt_cancel_token = token
+            self._application_turn_ids.add(turn_id)
+            coroutine = self._execute_application_prompt(
+                text,
+                token,
+                turn=turn,
+                turn_id=turn_id,
+                role=role,
+                speak=speak,
+            )
+            task = self._runtime_scope.create_journaled_task(
+                coroutine,
+                name=self._APPLICATION_PROMPT_TASK_NAME,
+                journal_sink=self._journal_sink,
+                turn_id=turn_id,
+            )
+            task.add_done_callback(self._runtime_scope.log_task_exception)
+            self._active_application_prompt = task
+        try:
+            return await task
+        finally:
+            self._runtime_scope.discard(task)
+            self._application_turn_ids.discard(turn_id)
+            if self._active_application_prompt is task:
+                self._active_application_prompt = None
+            if self._application_prompt_cancel_token is token:
+                self._application_prompt_cancel_token = None
+
+    def _application_agent_input(
+        self,
+        text: str,
+        role: Literal["system", "user"],
+    ) -> tuple[str, str | None]:
+        caller_prefix = self._caller_id_system_message()
+        if role != "system":
+            return text, caller_prefix
+        application_prefix = (
+            f"The application supplied this system instruction for the current turn:\n{text}"
+        )
+        system_prefix = (
+            f"{caller_prefix}\n\n{application_prefix}" if caller_prefix else application_prefix
+        )
+        return _APPLICATION_SYSTEM_TRIGGER, system_prefix
+
+    async def _execute_application_prompt(
+        self,
+        text: str,
+        token: CancelToken,
+        *,
+        turn: TurnContext,
+        turn_id: str,
+        role: Literal["system", "user"],
+        speak: bool,
+    ) -> str:
+        agent_text, system_prefix = self._application_agent_input(text, role)
+        try:
+            if speak:
+                return await self._execute_spoken_application_prompt(
+                    agent_text,
+                    token,
+                    turn=turn,
+                    role=role,
+                    system_prefix=system_prefix,
+                )
+            return await self._execute_text_turn(
+                agent_text,
+                token,
+                turn_id=turn_id,
+                system_prefix_override=system_prefix,
+                input_role=role,
+            )
+        finally:
+            if self._turn.current is turn:
+                self._reset_turn_state()
+
+    async def _execute_spoken_application_prompt(
+        self,
+        text: str,
+        token: CancelToken,
+        *,
+        turn: TurnContext,
+        role: Literal["system", "user"],
+        system_prefix: str | None,
+    ) -> str:
+        turn_token = bind_turn(turn.id)
+        try:
+            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn.id))
+            await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn.id))
+            await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn.id))
+            return await self.run_streaming_agent(
+                text,
+                token,
+                turn=turn,
+                system_prefix_override=system_prefix,
+                input_role=role,
+            )
+        finally:
+            reset_turn(turn_token)
+
     async def _stream_text_turn(
         self,
         text: str,
         cancel_token: CancelToken | None,
         *,
         turn_id: str,
+        system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> tuple[str, object | None]:
         """Drive the agent stream for a text turn; returns (text, structured output).
 
@@ -1148,13 +1446,18 @@ class TurnRunner:
         # Build a turn context for this text turn so AgentStage can
         # stamp records with the right turn_id.
         text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-        system_prefix = self._caller_id_system_message()
+        system_prefix = (
+            system_prefix_override
+            if system_prefix_override is not None
+            else self._caller_id_system_message()
+        )
         stream = self._agent_stage.execute_streaming(
             text,
             self._run_ctx,
             text_turn,
             cancel_token=cancel_token,
             system_prefix=system_prefix,
+            input_role=input_role,
         )
         try:
             async for event in stream:
@@ -1206,6 +1509,8 @@ class TurnRunner:
         cancel_token: CancelToken | None = None,
         *,
         turn_id: str,
+        system_prefix_override: str | None = None,
+        input_role: Literal["system", "user"] = "user",
     ) -> str:
         response = ""
         t0 = time.monotonic()
@@ -1216,7 +1521,11 @@ class TurnRunner:
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
             self._text_turn_accumulated = ""
             response, structured_output = await self._stream_text_turn(
-                text, cancel_token, turn_id=turn_id
+                text,
+                cancel_token,
+                turn_id=turn_id,
+                system_prefix_override=system_prefix_override,
+                input_role=input_role,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
