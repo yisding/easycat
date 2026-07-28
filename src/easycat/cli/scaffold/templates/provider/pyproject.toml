@@ -11,9 +11,13 @@ dependencies = [
 dev = [
     "ruff>=0.9",
     "pytest>=8",
+    "pytest-asyncio>=0.24",
 ]
 
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 $EASYCAT_SOURCES_BLOCK

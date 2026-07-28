@@ -76,12 +76,13 @@ and `examples/vad_backends.py` for pinning the built-in backends.
 ## Verifying conformance
 
 ```python
-from easycat import VADProvider, VADStartSpeaking
+from easycat import VADStartSpeaking
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.testing import VADProviderContractSuite
 
 
-def test_energy_vad_conforms_to_protocol() -> None:
-    assert isinstance(EnergyVAD(), VADProvider)
+class TestEnergyVAD(VADProviderContractSuite):
+    provider_factory = EnergyVAD
 
 
 async def test_energy_vad_detects_loud_audio() -> None:
@@ -91,7 +92,10 @@ async def test_energy_vad_detects_loud_audio() -> None:
     assert isinstance(events[0], VADStartSpeaking)
 ```
 
-The in-tree behavioral contract lives in
+The suite verifies configuration, async event iteration, and balanced speech
+boundaries. `isinstance(provider, VADProvider)` checks member names only and
+is not a behavioral conformance test. The in-tree use of the same installable
+suite lives in
 [`tests/contracts/test_vad_provider_contracts.py`](../../tests/contracts/test_vad_provider_contracts.py).
 
 ## Notes

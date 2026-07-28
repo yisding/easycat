@@ -95,12 +95,12 @@ structurally, so any object with the audio surface above is accepted. See
 ## Verifying conformance
 
 ```python
-from easycat import Transport
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.testing import TransportContractSuite
 
 
-def test_memory_transport_conforms_to_protocol() -> None:
-    assert isinstance(MemoryTransport(), Transport)
+class TestMemoryTransport(TransportContractSuite):
+    provider_factory = MemoryTransport
 
 
 async def test_memory_transport_round_trips_audio() -> None:
@@ -112,7 +112,10 @@ async def test_memory_transport_round_trips_audio() -> None:
     assert len(received) == 1
 ```
 
-The in-tree behavioral contract lives in
+The suite verifies connection/send/disconnect semantics, terminating inbound
+iteration, and idempotent playback clearing. `isinstance(transport,
+Transport)` checks member names only and is not a behavioral conformance
+test. The in-tree use of the same installable suite lives in
 [`tests/contracts/test_transport_contracts.py`](../../tests/contracts/test_transport_contracts.py).
 
 ## Notes

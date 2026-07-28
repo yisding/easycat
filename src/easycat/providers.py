@@ -87,7 +87,10 @@ class STTProvider(VersionedProvider, Protocol):
         """Finalize the current STT segment without ending the stream.
 
         Returns ``True`` when the provider accepted a segment commit request.
-        Providers that do not support segmented commits should return ``False``.
+        ``True`` is a promise that exactly one subsequent
+        :class:`~easycat.events.STTEvent` with type ``FINAL`` will be emitted
+        for that segment. Providers that cannot guarantee that FINAL, or do
+        not support segmented commits, must return ``False``.
         """
         ...
 
@@ -96,7 +99,13 @@ class STTProvider(VersionedProvider, Protocol):
         ...
 
     def events(self) -> AsyncIterator[STTEvent]:
-        """Return an async iterator of provider-scoped STT events."""
+        """Return a fresh async iterator of provider-scoped STT events.
+
+        Every call must return a new iterator for the current stream. It must
+        terminate after :meth:`end_stream`; Session calls ``events()`` again
+        on the next turn and an exhausted cached iterator would silently lose
+        all later transcripts.
+        """
         ...
 
 

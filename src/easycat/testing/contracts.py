@@ -222,6 +222,78 @@ class STTProviderContractSuite(ProviderContractSuite):
             assert finals, "expected at least one FINAL transcript event"
             assert finals[-1].text.strip(), "FINAL transcript text must be non-empty"
 
+    async def test_accepted_segment_commit_emits_exactly_one_final(self, provider: Any) -> None:
+        """``commit_segment() -> True`` promises one FINAL before stream end."""
+        await provider.start_stream()
+        for chunk in self.sample_audio_chunks():
+            await provider.send_audio(chunk)
+
+        final_seen = asyncio.Event()
+
+        async def _collect() -> list[Any]:
+            events: list[Any] = []
+            async for event in provider.events():
+                events.append(event)
+                if isinstance(event, STTEvent) and event.type is STTEventType.FINAL:
+                    final_seen.set()
+            return events
+
+        collector = asyncio.create_task(_collect())
+        await asyncio.sleep(0)
+        committed = await provider.commit_segment()
+        assert isinstance(committed, bool), "commit_segment() must return a bool"
+        timed_out = False
+        if committed:
+            try:
+                await asyncio.wait_for(final_seen.wait(), timeout=self.event_timeout)
+            except TimeoutError:
+                timed_out = True
+
+        await provider.end_stream()
+        events = await asyncio.wait_for(collector, timeout=self.event_timeout)
+        if timed_out:
+            pytest.fail(
+                "commit_segment() returned True but no FINAL arrived before end_stream(); "
+                "accepted commits must emit exactly one subsequent FINAL",
+                pytrace=False,
+            )
+        if committed:
+            finals = [
+                event
+                for event in events
+                if isinstance(event, STTEvent) and event.type is STTEventType.FINAL
+            ]
+            assert len(finals) == 1, (
+                "commit_segment() returned True but did not emit exactly one FINAL "
+                f"(received {len(finals)})"
+            )
+
+    async def test_events_iterator_is_fresh_across_turns(self, provider: Any) -> None:
+        """A second start/end cycle must use a fresh, productive iterator."""
+
+        async def _cycle() -> tuple[AsyncIterator[Any], list[Any]]:
+            await provider.start_stream()
+            for chunk in self.sample_audio_chunks():
+                await provider.send_audio(chunk)
+            await provider.commit_segment()
+            await provider.end_stream()
+            stream = provider.events()
+            return stream, await self.collect_events(stream, source="STTProvider.events()")
+
+        first_stream, first_events = await _cycle()
+        second_stream, second_events = await _cycle()
+
+        assert second_stream is not first_stream, "events() must return a fresh iterator per turn"
+        if self.expects_final_transcript:
+            assert any(
+                isinstance(event, STTEvent) and event.type is STTEventType.FINAL
+                for event in first_events
+            )
+            assert any(
+                isinstance(event, STTEvent) and event.type is STTEventType.FINAL
+                for event in second_events
+            ), "the second stream cycle did not yield a FINAL"
+
     async def test_end_stream_is_idempotent(self, provider: Any) -> None:
         await provider.start_stream()
         await provider.end_stream()

@@ -56,14 +56,14 @@ class _KitSTT:
         del chunk
 
     async def commit_segment(self) -> bool:
+        await self._queue.put(STTEvent(type=STTEventType.PARTIAL, text="kit"))
+        await self._queue.put(STTEvent(type=STTEventType.FINAL, text="kit hello"))
         return True
 
     async def end_stream(self) -> None:
         queue = getattr(self, "_queue", None)
         if queue is None:
             self._queue = queue = asyncio.Queue()
-        await queue.put(STTEvent(type=STTEventType.PARTIAL, text="kit"))
-        await queue.put(STTEvent(type=STTEventType.FINAL, text="kit hello"))
         await queue.put(None)
 
     async def events(self) -> AsyncIterator[STTEvent]:
@@ -273,6 +273,9 @@ async def test_collect_events_fails_on_hung_stream() -> None:
 
 async def test_stt_suite_rejects_stream_without_final_transcript() -> None:
     class _SilentSTT(_KitSTT):
+        async def commit_segment(self) -> bool:
+            return False
+
         async def end_stream(self) -> None:
             queue = getattr(self, "_queue", None)
             if queue is None:
@@ -282,6 +285,37 @@ async def test_stt_suite_rejects_stream_without_final_transcript() -> None:
     suite = _KitSTTSuite()
     with pytest.raises(AssertionError, match="FINAL"):
         await suite.test_stream_lifecycle_yields_normalized_events(_SilentSTT())
+
+
+async def test_stt_suite_rejects_accepted_commit_without_final() -> None:
+    class _MissingCommitFinalSTT(_KitSTT):
+        async def commit_segment(self) -> bool:
+            return True
+
+    class _FastCommitSuite(STTProviderContractSuite):
+        provider_factory = _MissingCommitFinalSTT
+        event_timeout = 0.02
+
+    suite = _FastCommitSuite()
+    with pytest.raises(pytest.fail.Exception, match="returned True but no FINAL"):
+        await suite.test_accepted_segment_commit_emits_exactly_one_final(
+            suite.build_provider()
+        )
+
+
+async def test_stt_suite_rejects_cached_events_iterator() -> None:
+    class _CachedIteratorSTT(_KitSTT):
+        def __init__(self) -> None:
+            self._cached_events: AsyncIterator[STTEvent] | None = None
+
+        def events(self) -> AsyncIterator[STTEvent]:
+            if self._cached_events is None:
+                self._cached_events = super().events()
+            return self._cached_events
+
+    suite = _KitSTTSuite()
+    with pytest.raises(AssertionError, match="fresh iterator"):
+        await suite.test_events_iterator_is_fresh_across_turns(_CachedIteratorSTT())
 
 
 async def test_version_info_test_rejects_leaked_secret_values() -> None:
