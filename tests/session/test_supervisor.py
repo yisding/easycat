@@ -308,6 +308,22 @@ def test_supervisor_auth_token_from_env_and_message_authorization(
     assert supervisor_message_authorized({"token": "secret"}, "secret")
     assert not supervisor_message_authorized({"token": "wrong"}, "secret")
     assert not supervisor_message_authorized({"token": 123}, "secret")
+    assert not supervisor_message_authorized({"token": "café"}, "secret")
+    assert not supervisor_message_authorized({"token": "secret"}, "café")
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_rejects_non_ascii_token_cleanly() -> None:
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "café"})]
+    )
+
+    await serve_supervisor_websocket(ws, {}, expected_token="secret")
+
+    error = await _wait_for_sent_type(ws, "error")
+    assert error["message"] == "Supervisor token is missing or invalid."
+    assert ws.close_code == 4401
+    assert ws.close_reason == "Unauthorized"
 
 
 @pytest.mark.asyncio
