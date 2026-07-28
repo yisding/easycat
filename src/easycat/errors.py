@@ -340,6 +340,21 @@ EASYCAT_E208 = register(
     related=["EASYCAT_E207"],
 )
 
+EASYCAT_E209 = register(
+    "EASYCAT_E209",
+    "PortAudio runtime library is unavailable.",
+    cause=(
+        "The `sounddevice` Python package is installed, but it could not load "
+        "the native PortAudio library required by local microphone and speaker I/O."
+    ),
+    fix=(
+        "Install PortAudio first (Debian/Ubuntu: `sudo apt-get install libportaudio2`; "
+        "macOS: `brew install portaudio`), then retry."
+    ),
+    example="sudo apt-get install libportaudio2  # macOS: brew install portaudio",
+    related=["EASYCAT_E202", "EASYCAT_E206"],
+)
+
 
 # ══════════════════════════════════════════════════════════════════
 # E3xx — runtime (session execution)
@@ -619,6 +634,7 @@ __all__ = [
     "EASYCAT_E206",
     "EASYCAT_E207",
     "EASYCAT_E208",
+    "EASYCAT_E209",
     "EASYCAT_E301",
     "EASYCAT_E302",
     "EASYCAT_E303",

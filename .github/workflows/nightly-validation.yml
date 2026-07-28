@@ -177,6 +177,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
+      - name: Install PortAudio for local-audio extras
+        if: contains(fromJSON('["local", "quickstart", "all"]'), matrix.extra)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libportaudio2
       # matrix.extra comes from scripts/extras_matrix.py (pyproject optional
       # deps), not user input, so the interpolation is safe here.
       - run: uv sync --locked --extra "${{ matrix.extra }}" --group dev --python 3.12 # zizmor: ignore[template-injection]
