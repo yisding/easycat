@@ -20,22 +20,6 @@ def _settings_value(value: str | None) -> str:
     return (value or "").strip()
 
 
-def _positive_int_setting(
-    env: Mapping[str, str],
-    name: str,
-    *,
-    default: int,
-) -> int:
-    raw = _settings_value(env.get(name))
-    try:
-        value = int(raw) if raw else default
-    except ValueError:
-        value = 0
-    if value <= 0:
-        raise RuntimeError(f"{name} must be a positive integer")
-    return value
-
-
 @dataclass(frozen=True, slots=True)
 class TwilioAppSettings:
     """Environment-derived settings for a Twilio Media Streams app."""
@@ -49,7 +33,9 @@ class TwilioAppSettings:
     call_api_token: str = ""
     sms_from: str = ""
     stream_token_secret: str = ""
-    max_sessions: int = 8
+    max_sessions: int = 64
+    start_timeout_s: float = 10.0
+    public_twiml_url: str = ""
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:
@@ -156,6 +142,7 @@ def twilio_app_settings_from_env(
             "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
             "connect to."
         )
+
     resolved_auth_token = _settings_value(auth_token) or _settings_value(
         env.get("TWILIO_AUTH_TOKEN")
     )
@@ -164,6 +151,16 @@ def twilio_app_settings_from_env(
             "TWILIO_AUTH_TOKEN is required to authenticate Twilio webhooks and "
             "the media WebSocket handshake."
         )
+
+    try:
+        max_sessions = int(_settings_value(env.get("TWILIO_MAX_SESSIONS")) or "64")
+    except ValueError as exc:
+        raise RuntimeError("TWILIO_MAX_SESSIONS must be a positive integer") from exc
+    start_timeout_s = float(_settings_value(env.get("TWILIO_START_TIMEOUT_S")) or "10")
+    if max_sessions <= 0:
+        raise RuntimeError("TWILIO_MAX_SESSIONS must be a positive integer")
+    if start_timeout_s <= 0:
+        raise ValueError("TWILIO_START_TIMEOUT_S must be positive")
 
     return TwilioAppSettings(
         stream_url=resolved_stream_url,
@@ -175,7 +172,9 @@ def twilio_app_settings_from_env(
         call_api_token=_settings_value(env.get("TWILIO_CALL_API_TOKEN")),
         sms_from=_settings_value(env.get("TWILIO_SMS_FROM")),
         stream_token_secret=_settings_value(env.get("TWILIO_STREAM_TOKEN_SECRET")),
-        max_sessions=_positive_int_setting(env, "TWILIO_MAX_SESSIONS", default=8),
+        max_sessions=max_sessions,
+        start_timeout_s=start_timeout_s,
+        public_twiml_url=_settings_value(env.get("TWILIO_PUBLIC_TWIML_URL")),
     )
 
 

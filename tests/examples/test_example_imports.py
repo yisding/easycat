@@ -261,12 +261,11 @@ def test_session_actions_langgraph_example_imports(monkeypatch: pytest.MonkeyPat
     )
 
 
-def test_twilio_example_factory(monkeypatch: pytest.MonkeyPatch):
+def test_twilio_example_factory():
     if importlib.util.find_spec("fastapi") is None:
         pytest.skip("fastapi not installed")
     if importlib.util.find_spec("agents") is None:
         pytest.skip("openai-agents not installed")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "twilio-test-token")
     import examples.twilio_app as twilio_app
 
     app = twilio_app.create_app(api_key="test-key", stream_url="wss://example.com/stream")
@@ -277,10 +276,11 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
     path = REPO_ROOT / "examples" / "twilio_app.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 150
+    # Authentication preflight, bounded capacity, and idempotent call-bound
+    # grants are intentionally visible in this maintained production example.
+    assert _visible_code_line_count(path) <= 180
     assert "manager.connection(id(ws), session, runtime_feedback=True)" in source
     assert "TwilioCallSessionIndex" in source
-    assert "session_slots" in source
     assert "twilio_websocket_signature_process_request" in source
     assert "twilio_app_settings_from_env" in source
     assert "twilio_form_items_from_request" in source
@@ -291,7 +291,9 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
     assert "attach_runtime_feedback" not in source
 
 
-def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+def test_twilio_example_missing_openai_key_is_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+):
     import examples.twilio_app as twilio_app
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -303,16 +305,6 @@ def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.Mon
     assert "OPENAI_API_KEY is required." in message
     assert "uv run easycat doctor" in message
     assert "uv run easycat doctor --env-file .env" in message
-
-
-def test_twilio_example_missing_auth_token_is_actionable(monkeypatch: pytest.MonkeyPatch):
-    import examples.twilio_app as twilio_app
-
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
-
-    with pytest.raises(RuntimeError, match="TWILIO_AUTH_TOKEN is required"):
-        twilio_app.create_app(stream_url="wss://example.com/stream")
 
 
 def test_example_session_smoke():

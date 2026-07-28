@@ -420,11 +420,11 @@ EASYCAT_E304 = register(
 
 EASYCAT_E305 = register(
     "EASYCAT_E305",
-    "Provider {provider!r} reconnect exhausted after {attempts} attempt(s).",
+    "Provider {provider!r} exhausted {reason} after {attempts} attempt(s).",
     cause=(
-        "EasyCat retried a dropped provider connection up to the "
-        "configured limit and every attempt failed. The session can no "
-        "longer reach the provider."
+        "EasyCat either exhausted the failed-attempt retry limit or the "
+        "successful reconnect-cycle budget for a dropped provider connection. "
+        "The session can no longer reach the provider."
     ),
     fix=(
         "Check sustained network connectivity and the provider's status "

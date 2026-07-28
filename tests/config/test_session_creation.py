@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+from dataclasses import replace
+
 import pytest
 
 from easycat import (
     EasyConfig,
     create_session,
 )
+from easycat.config import _factory as config_factory
 from easycat.session._types import CallIdentity
+from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport
 from easycat.tts.input import TTSInputPolicy
@@ -55,6 +61,185 @@ class _ProviderShapeVAD:
     async def process(self, chunk):
         if False:
             yield None
+
+
+class _BlockingArtifactStore:
+    writes_block = True
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.refs: set[str] = set()
+
+    def put(self, payload: bytes, *, artifact_class: str = "debug_verbose") -> str:
+        self.started.set()
+        self.release.wait()
+        self.refs.add("blocked-ref")
+        return "blocked-ref"
+
+    def delete(self, ref: str) -> None:
+        self.refs.discard(ref)
+
+
+@pytest.mark.asyncio
+async def test_session_audio_capture_policy_and_runtime_override():
+    consent = {"enabled": False}
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            debug="light",
+            capture_audio=lambda: consent["enabled"],
+        )
+    )
+
+    assert await put_artifact_async(session._run_ctx, b"before-consent") is None
+    consent["enabled"] = True
+    captured_ref = await put_artifact_async(session._run_ctx, b"after-consent")
+    assert captured_ref is not None
+    assert session._artifact_store.get(captured_ref) == b"after-consent"
+
+    session.set_audio_capture_enabled(False)
+    assert await put_artifact_async(session._run_ctx, b"paused") is None
+    session.set_audio_capture_enabled(True)
+    assert await put_artifact_async(session._run_ctx, b"resumed") is not None
+    consent["enabled"] = False
+    assert await put_artifact_async(session._run_ctx, b"revoked") is None
+    session.set_audio_capture_enabled(None)
+    consent["enabled"] = True
+    assert await put_artifact_async(session._run_ctx, b"policy-restored") is not None
+
+
+def test_session_audio_capture_toggle_requires_bool():
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+        )
+    )
+
+    with pytest.raises(TypeError, match="bool"):
+        session.set_audio_capture_enabled(1)  # type: ignore[arg-type]
+
+
+def test_session_audio_capture_predicate_fails_closed():
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=lambda: "yes",  # type: ignore[arg-type,return-value]
+        )
+    )
+
+    assert session._is_audio_capture_enabled() is False
+    assert session._is_audio_capture_enabled() is False
+
+
+def test_enabling_capture_discards_pre_consent_turn_buffers():
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+
+    consent = {"enabled": False}
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=lambda: consent["enabled"],
+        )
+    )
+    assert session._is_audio_capture_enabled() is False
+    session._turn_manager.on_audio_frame(AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K))
+    assert session._turn_manager._pre_roll_buffer
+
+    consent["enabled"] = True
+    assert session._is_audio_capture_enabled() is True
+    assert not session._turn_manager._pre_roll_buffer
+    assert session._turn_manager.turn_audio == []
+
+
+@pytest.mark.asyncio
+async def test_capture_revocation_fences_in_flight_blocking_write():
+    store = _BlockingArtifactStore()
+    session = create_session(
+        EasyConfig(
+            stt=_ProviderShapeSTT(),
+            tts=_ProviderShapeTTS(),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            capture_audio=True,
+        )
+    )
+    ctx = replace(session._run_ctx, artifact_store=store)
+    write_task = asyncio.create_task(put_artifact_async(ctx, b"sensitive"))
+    assert await asyncio.wait_for(asyncio.to_thread(store.started.wait), timeout=1)
+
+    session.set_audio_capture_enabled(False)
+    store.release.set()
+
+    assert await write_task is None
+    assert store.refs == set()
+
+
+def test_create_session_closes_vad_when_later_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vad = _ProviderShapeVAD()
+    vad.closed = False
+    vad.close = lambda: setattr(vad, "closed", True)
+    monkeypatch.setattr(config_factory, "_create_vad", lambda config: vad)
+    monkeypatch.setattr(
+        config_factory,
+        "_resolve_agent",
+        lambda config, mcp_servers: (_ for _ in ()).throw(RuntimeError("agent failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="agent failed"):
+        create_session(
+            EasyConfig(
+                stt=_ProviderShapeSTT(),
+                tts=_ProviderShapeTTS(),
+                vad=_ProviderShapeVAD(),
+                transport=_IdentitySinkTransport(),
+                agent=_DummyAgent(),
+            )
+        )
+
+    assert vad.closed is True
+
+
+@pytest.mark.asyncio
+async def test_create_session_is_safe_to_construct_off_loop(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        debug="full",
+    )
+
+    session = await asyncio.to_thread(create_session, config)
+    try:
+        assert session.session_id
+        assert session._journal is not None
+    finally:
+        await session.stop(force=True)
 
 
 def test_create_session_binds_custom_identity_sink_capability():
@@ -244,6 +429,30 @@ def test_create_session_forwards_warmup_to_runtime_config():
     assert session._warmup.enabled is False
 
 
+def test_create_session_preserves_data_dir_before_emergency_export(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    armed_with: list[object] = []
+    monkeypatch.setattr(
+        "easycat.config._factory.install_emergency_export",
+        lambda session: armed_with.append(session),
+    )
+
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            data_dir=tmp_path,
+            emergency_export=True,
+        )
+    )
+
+    assert session._data_dir == tmp_path
+    assert armed_with == [session]
+
+
 @pytest.mark.asyncio
 async def test_create_session_binds_twilio_connection_identity_sink():
     transport = TwilioConnectionTransport(_DummyWebSocket())
@@ -266,6 +475,15 @@ async def test_create_session_binds_twilio_connection_identity_sink():
                     "From": "+15551234567",
                     "To": "+15557654321",
                     "CallerName": "Alice Example",
+                    "FromCity": "SAN FRANCISCO",
+                    "FromState": "CA",
+                    "FromZip": "94105",
+                    "FromCountry": "US",
+                    "caller_name": "Alias Name",
+                    "from_city": "ALIAS CITY",
+                    "from_state": "ZZ",
+                    "from_zip": "00000",
+                    "from_country": "ZZ",
                 },
             },
         }
@@ -276,6 +494,11 @@ async def test_create_session_binds_twilio_connection_identity_sink():
     assert session.call_identity.caller_number == "+15551234567"
     assert session.call_identity.called_number == "+15557654321"
     assert session.call_identity.display_name == "Alice Example"
+    assert session.call_identity.city == "SAN FRANCISCO"
+    assert session.call_identity.state == "CA"
+    assert session.call_identity.zip_code == "94105"
+    assert session.call_identity.country == "US"
+    assert session.call_identity.custom_fields == {}
 
 
 @pytest.mark.asyncio

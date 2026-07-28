@@ -731,6 +731,19 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Journal records reference",
+        "path": "docs/reference/journal-records.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Look up stable built-in journal record names, kinds, and data-key contracts."
+        ),
+        "commands": (
+            "uv run easycat explain journal",
+            "uv run easycat docs --audience app-builders",
+        ),
+    },
+    {
         "label": "EasyConfig reference",
         "path": "docs/reference/easyconfig.md",
         "audience": "app builders",

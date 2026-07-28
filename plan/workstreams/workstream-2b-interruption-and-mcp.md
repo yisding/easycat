@@ -184,9 +184,9 @@ bridge design is wrong and must be fixed before moving on.
   ```python
   @dataclass(frozen=True)
   class InterruptionPlan:
-      mutation_kind: str              # "interrupt_truncate", "interrupt_drain", ...
-      pre_state_ref: str              # artifact ref to current framework state
-      post_state_ref: str             # artifact ref to post-mutation state
+      mutation_kind: str  # "interrupt_truncate", "interrupt_drain", ...
+      pre_state_ref: str  # artifact ref to current framework state
+      post_state_ref: str  # artifact ref to post-mutation state
       framework_instructions: dict[str, Any]  # bridge-specific patching payload
   ```
 
