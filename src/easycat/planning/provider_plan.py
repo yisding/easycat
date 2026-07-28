@@ -197,7 +197,7 @@ def _select_catalog_role(
         config_type=config_type,
         extra=extra,
         required_env=required_env,
-        capabilities=frozenset(),
+        capabilities=catalog.capabilities_for(provider, config=spec, model=model),
     )
 
 
@@ -469,7 +469,7 @@ def _select_catalog_string(
         config_type=config_cls.__name__,
         extra=catalog.extras.get(provider) or None,
         required_env=catalog.env_vars.get(provider),
-        capabilities=frozenset(),
+        capabilities=catalog.capabilities_for(provider, model=model),
     )
 
 

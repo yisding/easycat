@@ -12,6 +12,8 @@ from typing import Any
 
 logger = logging.getLogger("easycat")
 
+ProviderCapabilityResolver = Callable[[Any, str | None], frozenset[str]]
+
 
 def inject_event_bus(config: Any, event_bus: Any) -> Any:
     """Return *config* with ``event_bus`` structurally injected when possible.
@@ -40,6 +42,9 @@ class ProviderSpec:
     env_var: str
     extra: str
     api_domains: tuple[str, ...]
+    probe_module: str | None = None
+    capabilities: frozenset[str] = field(default_factory=frozenset)
+    capability_resolver: ProviderCapabilityResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,9 @@ class ProviderCatalog:
     env_vars: dict[str, str] = field(init=False)
     extras: dict[str, str] = field(init=False)
     api_domains: dict[str, tuple[str, ...]] = field(init=False)
+    probe_modules: dict[str, str | None] = field(init=False)
+    capabilities: dict[str, frozenset[str]] = field(init=False)
+    capability_resolvers: dict[str, ProviderCapabilityResolver | None] = field(init=False)
     config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
 
@@ -72,6 +80,21 @@ class ProviderCatalog:
         )
         object.__setattr__(
             self,
+            "probe_modules",
+            {name: spec.probe_module for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
+            "capabilities",
+            {name: frozenset(spec.capabilities) for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
+            "capability_resolvers",
+            {name: spec.capability_resolver for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
             "config_to_provider",
             {config_cls: provider_cls for provider_cls, config_cls in providers.values()},
         )
@@ -85,6 +108,9 @@ class ProviderCatalog:
         env_var: str,
         extra: str | None = None,
         api_domains: tuple[str, ...] = (),
+        probe_module: str | None = None,
+        capabilities: frozenset[str] = frozenset(),
+        capability_resolver: ProviderCapabilityResolver | None = None,
     ) -> None:
         """Register a provider; identical registration is idempotent."""
         normalized = name.strip().lower() if isinstance(name, str) else ""
@@ -100,6 +126,9 @@ class ProviderCatalog:
                 self.env_vars[normalized] == env_var
                 and self.extras.get(normalized, "") == (extra or "")
                 and self.api_domains.get(normalized, ()) == tuple(api_domains)
+                and self.probe_modules.get(normalized) == probe_module
+                and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
+                and self.capability_resolvers.get(normalized) is capability_resolver
             )
             if existing == (provider_cls, config_cls) and same_metadata:
                 return
@@ -111,6 +140,9 @@ class ProviderCatalog:
         self.env_vars[normalized] = env_var
         self.extras[normalized] = extra or ""
         self.api_domains[normalized] = tuple(api_domains)
+        self.probe_modules[normalized] = probe_module
+        self.capabilities[normalized] = frozenset(capabilities)
+        self.capability_resolvers[normalized] = capability_resolver
         self.config_to_provider[config_cls] = provider_cls
 
     def discover(self) -> None:
@@ -148,6 +180,38 @@ class ProviderCatalog:
         if provider_cls is None:
             raise ValueError(f"Unsupported {self.kind} configuration type.")
         return provider_cls
+
+    def capabilities_for(
+        self,
+        provider: str,
+        *,
+        config: Any = None,
+        model: str | None = None,
+    ) -> frozenset[str]:
+        """Resolve static and config/model-dependent capabilities."""
+        self.discover()
+        resolved = set(self.capabilities.get(provider, ()))
+        resolver = self.capability_resolvers.get(provider)
+        if resolver is not None:
+            resolved.update(resolver(config, model))
+        return frozenset(resolved)
+
+    def capabilities_for_config(self, config: Any) -> frozenset[str]:
+        """Resolve capabilities for a registered concrete config instance."""
+        self.discover()
+        config_type = type(config)
+        provider = next(
+            (
+                name
+                for name, (_provider, candidate) in self.providers.items()
+                if candidate is config_type
+            ),
+            None,
+        )
+        if provider is None:
+            return frozenset()
+        model = getattr(config, getattr(config_type, "MODEL_FIELD", "model"), None)
+        return self.capabilities_for(provider, config=config, model=model)
 
     def create_provider(
         self,
@@ -249,6 +313,16 @@ def provider_extras() -> dict[str, str]:
     """Provider → optional install extra, merged across the STT and TTS catalogs."""
     return {
         name: extra for catalog in stt_tts_catalogs() for name, extra in catalog.extras.items()
+    }
+
+
+def provider_probe_modules() -> dict[str, str]:
+    """Install extra → explicit import probe declared by a provider."""
+    return {
+        extra: probe_module
+        for catalog in stt_tts_catalogs()
+        for name, extra in catalog.extras.items()
+        if extra and (probe_module := catalog.probe_modules.get(name)) is not None
     }
 
 

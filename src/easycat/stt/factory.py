@@ -29,11 +29,48 @@ STTConfig = (
 )
 STT_PROVIDER_ENTRY_POINT_GROUP = "easycat.stt_providers"
 
+
+def _deepgram_capabilities(config: Any, model: str | None) -> frozenset[str]:
+    selected_model = config.model if isinstance(config, DeepgramSTTConfig) else model
+    selected_model = selected_model or DeepgramSTTConfig.model
+    if selected_model.lower().startswith("flux"):
+        return frozenset({"native_endpointing"})
+    return frozenset()
+
+
+def _cartesia_capabilities(config: Any, model: str | None) -> frozenset[str]:
+    if isinstance(config, CartesiaSTTConfig):
+        selected_model = config.resolved_model
+    else:
+        selected_model = model or CartesiaSTTConfig().resolved_model
+    if selected_model == "ink-2":
+        return frozenset({"native_endpointing"})
+    return frozenset()
+
+
+def _elevenlabs_capabilities(config: Any, model: str | None) -> frozenset[str]:
+    del model
+    if isinstance(config, ElevenLabsSTTConfig):
+        mode = config.mode
+        commit_strategy = config.realtime_commit_strategy
+    else:
+        mode = ElevenLabsSTTConfig.mode
+        commit_strategy = ElevenLabsSTTConfig.realtime_commit_strategy
+    if mode == "realtime" and commit_strategy == "vad":
+        return frozenset({"native_endpointing"})
+    return frozenset()
+
+
 _CATALOG = ProviderCatalog(
     specs={
         # implementation, config, credential env, install extra, API domains
         "openai": ProviderSpec(
-            OpenAISTT, OpenAISTTConfig, "OPENAI_API_KEY", "openai", ("openai.com",)
+            OpenAISTT,
+            OpenAISTTConfig,
+            "OPENAI_API_KEY",
+            "openai",
+            ("openai.com",),
+            probe_module="openai",
         ),
         "openai-realtime": ProviderSpec(
             OpenAIRealtimeSTT,
@@ -41,9 +78,15 @@ _CATALOG = ProviderCatalog(
             "OPENAI_API_KEY",
             "openai",
             ("openai.com",),
+            probe_module="openai",
         ),
         "deepgram": ProviderSpec(
-            DeepgramSTT, DeepgramSTTConfig, "DEEPGRAM_API_KEY", "deepgram", ("deepgram.com",)
+            DeepgramSTT,
+            DeepgramSTTConfig,
+            "DEEPGRAM_API_KEY",
+            "deepgram",
+            ("deepgram.com",),
+            capability_resolver=_deepgram_capabilities,
         ),
         "elevenlabs": ProviderSpec(
             ElevenLabsSTT,
@@ -51,9 +94,15 @@ _CATALOG = ProviderCatalog(
             "ELEVENLABS_API_KEY",
             "elevenlabs",
             ("elevenlabs.io",),
+            capability_resolver=_elevenlabs_capabilities,
         ),
         "cartesia": ProviderSpec(
-            CartesiaSTT, CartesiaSTTConfig, "CARTESIA_API_KEY", "cartesia", ("cartesia.ai",)
+            CartesiaSTT,
+            CartesiaSTTConfig,
+            "CARTESIA_API_KEY",
+            "cartesia",
+            ("cartesia.ai",),
+            capability_resolver=_cartesia_capabilities,
         ),
     },
     kind="STT",
@@ -71,10 +120,19 @@ def register_stt_provider(
     env_var: str,
     extra: str | None = None,
     api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
 ) -> None:
     """Register an STT provider and its discovery metadata."""
     _CATALOG.register(
-        name, provider_cls, config_cls, env_var=env_var, extra=extra, api_domains=api_domains
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
     )
 
 

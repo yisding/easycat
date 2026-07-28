@@ -83,12 +83,26 @@ def restore_catalogs():
                 dict(catalog.env_vars),
                 dict(catalog.extras),
                 dict(catalog.api_domains),
+                dict(catalog.probe_modules),
+                dict(catalog.capabilities),
+                dict(catalog.capability_resolvers),
                 dict(catalog.config_to_provider),
                 catalog._discovered,
             )
         )
     yield
-    for catalog, providers, env_vars, extras, api_domains, reverse, discovered in snapshots:
+    for (
+        catalog,
+        providers,
+        env_vars,
+        extras,
+        api_domains,
+        probe_modules,
+        capabilities,
+        capability_resolvers,
+        reverse,
+        discovered,
+    ) in snapshots:
         catalog.providers.clear()
         catalog.providers.update(providers)
         catalog.env_vars.clear()
@@ -97,6 +111,12 @@ def restore_catalogs():
         catalog.extras.update(extras)
         catalog.api_domains.clear()
         catalog.api_domains.update(api_domains)
+        catalog.probe_modules.clear()
+        catalog.probe_modules.update(probe_modules)
+        catalog.capabilities.clear()
+        catalog.capabilities.update(capabilities)
+        catalog.capability_resolvers.clear()
+        catalog.capability_resolvers.update(capability_resolvers)
         catalog.config_to_provider.clear()
         catalog.config_to_provider.update(reverse)
         object.__setattr__(catalog, "_discovered", discovered)
@@ -181,6 +201,67 @@ def test_registration_requires_name_and_env_var() -> None:
         register_stt_provider("  ", FakeSTT, FakeSTTConfig, env_var="X")
     with pytest.raises(ValueError, match="env_var"):
         register_tts_provider("faketts", FakeTTS, FakeTTSConfig, env_var="")
+
+
+def test_registered_stt_capabilities_drive_endpointing_and_planner() -> None:
+    from easycat.config.easy import _stt_uses_native_endpointing
+    from easycat.planning.provider_plan import _select_catalog_role
+
+    register_stt_provider(
+        "fakestt",
+        FakeSTT,
+        FakeSTTConfig,
+        env_var="FAKESTT_API_KEY",
+        capabilities=frozenset({"native_endpointing", "word_timestamps"}),
+    )
+    config = FakeSTTConfig(api_key="k")
+
+    assert _stt_uses_native_endpointing(config) is True
+    selection = _select_catalog_role("stt", config, catalog=STT_CATALOG)
+    assert selection.capabilities == frozenset({"native_endpointing", "word_timestamps"})
+
+
+def test_registered_probe_module_overrides_non_importable_extra_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    from easycat.planning import build_provider_plan
+    from easycat.planning.transport_registry import probe_module_for_extra
+    from easycat.project.schema import VoiceProfile
+
+    register_stt_provider(
+        "fakestt",
+        FakeSTT,
+        FakeSTTConfig,
+        env_var="FAKESTT_API_KEY",
+        extra="acme-speech",
+        probe_module="acme_speech",
+    )
+
+    assert probe_module_for_extra("acme-speech") == "acme_speech"
+    real_find_spec = importlib.util.find_spec
+    probed: list[str] = []
+
+    def fake_find_spec(name: str, package: str | None = None):
+        probed.append(name)
+        if name == "acme_speech":
+            return object()
+        return real_find_spec(name, package)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    plan = build_provider_plan(
+        VoiceProfile(
+            name="extension",
+            transport="websocket",
+            stt="fakestt",
+            tts="openai",
+        ),
+        environ={"FAKESTT_API_KEY": "x", "OPENAI_API_KEY": "y"},
+    )
+
+    assert "acme_speech" in probed
+    assert "acme-speech" not in plan.missing_extras
 
 
 # ── Layer 2: entry-point discovery ───────────────────────────────

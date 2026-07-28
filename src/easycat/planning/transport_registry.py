@@ -266,17 +266,18 @@ def probe_module_for_extra(extra: str | None) -> str | None:
     that installs no importable package. The planner treats a ``None`` probe as
     "extra is always satisfied" so it never falsely reports it missing.
 
-    Built-in extras have an explicit mapping above (enforced by
-    ``tests/planning/test_transport_registry.py``). A registered third-party
-    STT/TTS provider, however, may carry an ARBITRARY ``extra`` string (via
-    ``register_*_provider`` / entry-point discovery) with no mapping. For those,
-    fall back to probing the extra NAME itself as a best-effort module — so a
-    genuinely-missing third-party install is still flagged. (Returning ``None``
-    would wrongly mark it always-satisfied; a runtime ``KeyError`` would crash
-    the planner and pin ``/health/ready`` for a deployable server.)
+    Provider-catalog metadata wins over the built-in table, allowing a
+    third-party package whose install extra and import module have different
+    names to make readiness accurate. Unmapped extras retain the historical
+    best-effort name-as-module fallback.
     """
     if extra is None:
         return None
+    from easycat._provider_catalog import provider_probe_modules
+
+    declared_probe = provider_probe_modules().get(extra)
+    if declared_probe is not None:
+        return declared_probe
     return EXTRA_PROBE_MODULE.get(extra, extra)
 
 

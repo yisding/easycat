@@ -113,6 +113,8 @@ register_stt_provider(
     YourSTTConfig,
     env_var="YOURS_API_KEY",
     extra="yours",  # optional: install extra shipping your deps
+    probe_module="easycat_yours",  # import checked by /health/ready
+    capabilities=frozenset({"native_endpointing"}),  # if the provider owns turns
     api_domains=("yours.example.com",),  # optional: for URL redaction
 )
 ```
@@ -136,7 +138,13 @@ What each metadata field feeds:
 | --- | --- |
 | `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/model"` shortcuts |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
+| `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
+| `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
+
+When `native_endpointing` is declared, `EasyConfig` drives turns from STT
+FINAL events and disables its own VAD/smart-turn endpointing. Omit it when the
+provider expects EasyCat to commit segments.
 
 ### Auto-registering from a pip-installed package
 
@@ -164,6 +172,8 @@ def register() -> None:
         YourSTTConfig,
         env_var="YOURS_API_KEY",
         extra="yours",
+        probe_module="easycat_yours",
+        capabilities=frozenset({"native_endpointing"}),
         api_domains=("yours.example.com",),
     )
 ```
