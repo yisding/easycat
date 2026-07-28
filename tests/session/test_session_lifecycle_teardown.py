@@ -116,6 +116,44 @@ async def test_stop_unregisters_armed_emergency_export():
 
 
 @pytest.mark.asyncio
+async def test_force_stop_preempts_hung_graceful_stop() -> None:
+    class HungOnceDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.disconnect_started = asyncio.Event()
+            self.disconnect_cancelled = asyncio.Event()
+            self.disconnect_calls = 0
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            if self.disconnect_calls != 1:
+                return
+            self.disconnect_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.disconnect_cancelled.set()
+                raise
+
+    transport = HungOnceDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+
+    graceful = asyncio.create_task(session.stop())
+    await asyncio.wait_for(transport.disconnect_started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await graceful
+    assert transport.disconnect_cancelled.is_set()
+    assert transport.disconnect_calls == 2
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._stop_task is None
+
+
+@pytest.mark.asyncio
 async def test_session_default_construction():
     session = Session(_full_config())
     assert session.turn_state == TurnState.IDLE

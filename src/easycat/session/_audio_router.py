@@ -135,6 +135,12 @@ class AudioRouter:
     _INGRESS_TASK_NAME = "audio_ingress_pipeline"
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
     _INLINE_SEND_TASK_NAME = "audio_inline_send"
+    # The first-frame fast path preserves an in-progress transport write across
+    # caller cancellation so a frame is never half-submitted. Keep that shield
+    # bounded: a half-open transport must not make barge-in or force-stop
+    # permanently uncancellable.
+    _INLINE_SEND_TIMEOUT_S = 0.5
+    _INLINE_SEND_CANCEL_GRACE_S = 0.1
 
     def __init__(
         self,
@@ -431,23 +437,52 @@ class AudioRouter:
                         self._send_outbound_chunk(chunk, turn),
                         name=self._INLINE_SEND_TASK_NAME,
                     )
-                    await self._await_non_cancellable_send(send_task)
+                    await self._await_non_cancellable_send(
+                        send_task,
+                        timeout=self._INLINE_SEND_TIMEOUT_S,
+                    )
                 return True
         finally:
             await self._finish_outbound_send(replayed_chunk=False)
 
     @staticmethod
-    async def _await_non_cancellable_send(task: asyncio.Task[None]) -> None:
-        """Delay caller cancellation until an owned transport send completes."""
+    async def _await_non_cancellable_send(
+        task: asyncio.Task[None],
+        *,
+        timeout: float,
+    ) -> None:
+        """Delay caller cancellation for at most *timeout* seconds.
+
+        The owned send is shielded long enough to preserve the no-half-frame
+        invariant. On expiry it is cancelled and given a short, bounded cleanup
+        window; even a transport that ignores cancellation cannot pin the caller
+        forever.
+        """
         cancellation: asyncio.CancelledError | None = None
+        deadline = asyncio.get_running_loop().time() + timeout
         while not task.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
             try:
-                await asyncio.shield(task)
+                await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+            except TimeoutError:
+                break
             except asyncio.CancelledError as exc:
                 current = asyncio.current_task()
                 if current is None or not current.cancelling():
                     raise
                 cancellation = cancellation or exc
+        if not task.done():
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=AudioRouter._INLINE_SEND_CANCEL_GRACE_S)
+            if not done:
+                logger.warning("Timed-out inline transport audio send ignored cancellation")
+                task.add_done_callback(RuntimeScope.log_task_exception)
+            if cancellation is not None:
+                raise cancellation
+            raise TimeoutError(f"Inline transport audio send timed out after {timeout:.3f}s")
+
         task.result()
         if cancellation is not None:
             raise cancellation

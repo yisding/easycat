@@ -454,6 +454,77 @@ async def test_inline_send_defers_caller_cancellation_until_transport_finishes()
 
 
 @pytest.mark.asyncio
+async def test_inline_send_bounds_cancellation_when_transport_wedges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    transport_cancelled = asyncio.Event()
+
+    class _WedgedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            _ = chunk
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                transport_cancelled.set()
+                raise
+
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_CANCEL_GRACE_S", 0.02)
+    router, state = _make_router(transport=_WedgedTransport())
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    inline.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert transport_cancelled.is_set()
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_inline_send_times_out_without_caller_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport_cancelled = asyncio.Event()
+
+    class _WedgedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            _ = chunk
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                transport_cancelled.set()
+                raise
+
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_CANCEL_GRACE_S", 0.02)
+    router, state = _make_router(transport=_WedgedTransport())
+    router.start_outbound()
+
+    with pytest.raises(TimeoutError, match="Inline transport audio send timed out"):
+        await asyncio.wait_for(
+            router.try_send_first_audio_inline(_make_chunk()),
+            timeout=1,
+        )
+
+    assert transport_cancelled.is_set()
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
 async def test_inline_send_keeps_turn_when_shield_task_starts_late(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
