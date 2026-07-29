@@ -145,6 +145,19 @@ class TestFilesystemArtifactStore:
         store.delete(ref)
         assert not store.has(ref)
 
+    def test_delete_rejects_path_traversal_refs(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(b"legitimate")
+        victim = tmp_path / "victim.bin"
+        victim.write_bytes(b"keep me")
+        stored_bytes = store._current_bytes
+
+        store.delete("../victim")
+
+        assert victim.read_bytes() == b"keep me"
+        assert store.get(ref) == b"legitimate"
+        assert store._current_bytes == stored_bytes
+
     def test_get_missing_returns_none(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         assert store.get("nonexistent") is None

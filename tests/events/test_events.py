@@ -513,6 +513,15 @@ def test_eventbus_rejects_negative_slow_handler_threshold():
         EventBus(slow_handler_threshold_s=-0.001)
 
 
+@pytest.mark.parametrize(
+    "threshold",
+    [float("nan"), float("inf"), float("-inf"), True],
+)
+def test_eventbus_rejects_non_finite_slow_handler_threshold(threshold):
+    with pytest.raises(ValueError, match="slow_handler_threshold_s"):
+        EventBus(slow_handler_threshold_s=threshold)
+
+
 @pytest.mark.asyncio
 async def test_eventbus_raise_error_policy_stops_and_propagates():
     bus = EventBus(handler_error_policy="raise")

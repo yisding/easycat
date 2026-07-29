@@ -720,6 +720,55 @@ class TestToolPolicyEnforcement:
         assert [f.side_effecting for f in tool_frames] == [True, False]
         assert any("result is side-effecting" in rec.message for rec in caplog.records)
 
+    @pytest.mark.parametrize("sequence", [None, "2", True])
+    def test_allow_does_not_execute_tool_with_malformed_sequence(self, tmp_path, sequence):
+        records = [
+            {
+                "sequence": sequence,
+                "kind": "framework_transition",
+                "name": "tool_call",
+                "data": {
+                    "phase": "start",
+                    "tool_name": "get_weather",
+                    "tool_call_id": "c1",
+                },
+            },
+            {
+                "sequence": 3,
+                "kind": "framework_transition",
+                "name": "tool_call",
+                "data": {
+                    "phase": "start",
+                    "tool_name": "in_range",
+                    "tool_call_id": "c2",
+                },
+            },
+            {
+                "sequence": 5,
+                "kind": "framework_transition",
+                "name": "tool_call",
+                "data": {
+                    "phase": "start",
+                    "tool_name": "out_of_range",
+                    "tool_call_id": "c3",
+                },
+            },
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+        executed_records = []
+
+        result = bundle.replay(
+            _spec(
+                from_sequence=2,
+                to_sequence=4,
+                tool_policy=ToolReplayPolicy.ALLOW,
+            ),
+            tool_executor=executed_records.append,
+        )
+
+        assert [record["data"]["tool_name"] for record in executed_records] == ["in_range"]
+        assert result.executed_tool_calls == ["in_range(c2)"]
+
 
 # ── Cassette behaviour (stand-alone, not via runner) ─────────────
 

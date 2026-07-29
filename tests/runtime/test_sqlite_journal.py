@@ -542,6 +542,48 @@ class TestSqliteJournalBatching:
         finally:
             journal.close()
 
+    @pytest.mark.parametrize(
+        ("batch_commit_records", "boundary_name"),
+        [(100, "turn_ended"), (2, "stage_end")],
+    )
+    def test_append_boundary_commit_failure_does_not_persist_failed_row(
+        self,
+        tmp_path,
+        batch_commit_records,
+        boundary_name,
+    ):
+        journal = SqliteJournal("batch-failure", data_dir=tmp_path)
+        journal._batch_commit_interval_s = 1.0
+        journal._batch_commit_records = batch_commit_records
+        try:
+            assert (
+                journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="stage_start",
+                    session_id="batch-failure",
+                )
+                == 1
+            )
+            with mock.patch.object(
+                journal,
+                "_execute_commit_locked",
+                side_effect=sqlite3.OperationalError("injected COMMIT failure"),
+            ):
+                assert (
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name=boundary_name,
+                        session_id="batch-failure",
+                    )
+                    == -1
+                )
+
+            assert journal.degraded is True
+            assert self._durable_names(journal.db_path) == ["journal_degraded"]
+            assert journal.latest_sequence == 0
+        finally:
+            journal.close()
+
     def test_elapsed_time_commits_batch(self, tmp_path):
         journal = SqliteJournal("batch-time", data_dir=tmp_path)
         journal._batch_commit_interval_s = 0.02

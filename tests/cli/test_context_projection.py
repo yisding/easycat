@@ -114,6 +114,21 @@ def test_context_projection_keeps_only_machine_generated_error_note_lines() -> N
     }
 
 
+def test_context_projection_matches_rounded_machine_elapsed_note() -> None:
+    projected = project_context_record(
+        {
+            "sequence": 7,
+            "data": {"elapsed_ms": 12.3456},
+            "error": {
+                "type": "ProviderError",
+                "notes": "elapsed_ms=12.346",
+            },
+        }
+    )
+
+    assert projected["error"]["notes"]["elapsed_ms"] == 12.346
+
+
 def test_context_projection_rejects_valid_syntax_that_conflicts_with_structured_context() -> None:
     projected = project_context_record(
         {

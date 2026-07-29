@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+from easycat.server import transports as server_transports
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session_manager import SessionManager
 
@@ -246,3 +247,57 @@ async def test_bounded_cleanup_keeps_hard_deadline_for_cancellation_resistant_wo
     assert not finished.is_set()
     release.set()
     await asyncio.wait_for(finished.wait(), timeout=1)
+
+
+async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> None:
+    release = asyncio.Event()
+
+    async def resist_cancellation() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    class _StuckServer:
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            await resist_cancellation()
+
+    class _StuckConnection:
+        async def close(self, *, code: int, reason: str) -> None:
+            await resist_cancellation()
+
+    class _StuckManager:
+        async def stop_all(self) -> None:
+            await resist_cancellation()
+
+    runtime = WebSocketSessionRuntime(
+        manager=_StuckManager(),
+        max_sessions=1,
+        session_factory=lambda _connection: None,
+    )
+    runtime._connections[1] = _StuckConnection()
+    handler = asyncio.create_task(resist_cancellation())
+    runtime._handler_tasks.add(handler)
+    await asyncio.sleep(0)
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await runtime.drain(
+        _StuckServer(),
+        drain_timeout_s=0.0,
+        force_timeout_s=0.05,
+    )
+    elapsed = loop.time() - started
+
+    assert elapsed < 0.15
+
+    release.set()
+    await asyncio.gather(
+        handler,
+        *tuple(server_transports._BACKGROUND_TIMEOUT_TASKS),
+        return_exceptions=True,
+    )

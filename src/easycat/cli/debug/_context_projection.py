@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from easycat.debug._turn_timeline import record_wall_ns
+from easycat.events import _render_exception_note_value
 from easycat.validation.redaction import redact_value
 
 _CONTEXT_DATA_KEYS = frozenset(
@@ -123,7 +124,10 @@ def _structured_error_note_context(
         value = data.get(data_key)
         if value is None:
             continue
-        projected = _project_error_note(note_key, str(value))
+        rendered = _render_exception_note_value(value)
+        if rendered is None:
+            continue
+        projected = _project_error_note(note_key, rendered)
         if projected is not None:
             context[note_key] = projected
     return context
