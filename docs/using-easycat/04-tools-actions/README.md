@@ -105,6 +105,12 @@ live `Session` from the agent framework's worker context. `SessionActions` is a
 thread-safe, typed request channel with EasyCat-owned execution and audit
 events.
 
+Session actions are not ordinary tool results. The model does not wait for the
+provider side effect, and executor failures are emitted as
+`SessionActionFailed` events rather than returned into the agent framework. When
+the model must know whether a side effect succeeded before saying so, implement
+that operation as a normal agent tool and return a typed result to the model.
+
 The queue also offers transfer, DTMF, SMS, and do-not-call actions. Those need
 the matching transport or application executor; `end_call` works in this
 local lesson. Chapter 10 applies the telephony actions with their real runtime
@@ -141,11 +147,11 @@ Processor order is significant. This lesson first replaces names, then finds
 a phone-number span and separates its digits. The `minimum_units=7` guard
 prevents short numbers elsewhere in a reply from being paced accidentally.
 
-`PauseProcessor` defaults to SSML breaks. The default OpenAI TTS path accepts
-plain text, so EasyCat would strip unsupported SSML tags before synthesis.
-This lesson selects `style="ellipsis"` explicitly, preserving a plain-text
-pacing hint. When you choose another TTS provider, inspect its input policy and
-prefer native SSML only when the provider supports it.
+`PauseProcessor` defaults to an ellipsis cue that remains plain text through
+every bundled TTS path. This lesson selects `style="ellipsis"` explicitly to
+make that policy visible. Exact `pause_ms` timing requires `style="ssml"` and a
+provider whose input policy advertises native SSML; unsupported SSML tags are
+stripped before synthesis.
 
 Continue with [the exercises](./EXERCISES.md) to trace each boundary and add a
 tool without giving it control over the session.

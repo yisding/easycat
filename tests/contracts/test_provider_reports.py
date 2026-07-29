@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
 from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
 from easycat.tts.input import resolve_tts_input_policy
 from easycat.validation.provider_reports import (
@@ -58,6 +59,25 @@ def test_declared_surfaces_match_live_specs() -> None:
     live = known_live_surfaces()
     assert live <= declared
     assert declared == live
+
+
+@pytest.mark.parametrize(
+    "spec",
+    tuple(spec for spec in LIVE_PROVIDER_SURFACES if spec.surface in {"stt", "tts"}),
+    ids=lambda spec: f"{spec.provider}-{spec.surface}",
+)
+def test_report_model_identifier_matches_registered_config_default(spec) -> None:
+    registry = _STT_REGISTRY if spec.surface == "stt" else _TTS_REGISTRY
+    config_cls = registry[spec.provider][1]
+    config = config_cls()
+    expected = getattr(config, "resolved_model", None)
+    if expected is None:
+        expected = getattr(config, getattr(config_cls, "MODEL_FIELD", "model"))
+
+    payload = _report_payload(spec)
+
+    assert payload["api_version"] == expected
+    assert payload["models"] == [expected]
 
 
 @pytest.mark.parametrize(

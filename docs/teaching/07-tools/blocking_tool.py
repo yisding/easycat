@@ -57,7 +57,7 @@ from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
 PREROLL_FRAMES = 15
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch07-blocking-tool-{int(time.time())}"
 
@@ -131,6 +131,7 @@ async def run_agent_blocking(
     for _ in range(2):
         stream = await client.chat.completions.create(
             model=MODEL,
+            reasoning_effort="none",
             messages=messages,
             tools=TOOLS,
             stream=True,

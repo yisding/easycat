@@ -35,8 +35,9 @@ dependencies = [
     "httpx>=0.28.1",
     "rich>=15.0.0",
     "sentencesplit>=0.1.0",
+    "soxr>=1.0.0",
     "typing-extensions>=4.16.0",
-    "typer>=0.26.8",
+    "typer>=0.27.0",
     "websockets>=15.0.1,<17",
 ]
 
@@ -52,11 +53,11 @@ Repository = "https://github.com/yisding/easycat"
 easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
-openai-agents = ["openai-agents>=0.18.2"]
+openai-agents = ["openai-agents>=0.18.3"]
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.5.1,<3.0.0"]
-langchain = ["langchain-core>=1.4.9"]
-langgraph = ["langchain-core>=1.4.9", "langgraph>=1.2.9"]
+langchain = ["langchain-core>=1.5.1"]
+langgraph = ["langchain-core>=1.5.1", "langgraph>=1.2.9"]
 llama-agents = ["llama-index-workflows>=2.22.2,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
 openai = ["openai>=2.44.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
@@ -70,8 +71,8 @@ elevenlabs = []
 cartesia = []
 telephony = [
     "aiohttp>=3.14.0",
-    "fastapi>=0.139.0",
-    "phonenumberslite>=9.0.34",
+    "fastapi>=0.140.0",
+    "phonenumberslite>=9.0.35",
     "python-multipart>=0.0.29",
     "twilio>=9.0.0",
     "uvicorn>=0.51.0",
@@ -81,14 +82,14 @@ local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 # TEN VAD has a non-permissive license, so we do not vendor its
 # binaries.  Users who accept the license can opt in here.
-ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.27.0", "ten-vad>=1.0.6.8"]
-silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.27.0"]
+ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.28.0", "ten-vad>=1.0.6.8"]
+silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.28.0"]
 funasr-vad = [
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
-    "onnxruntime>=1.27.0",
+    "onnxruntime>=1.28.0",
 ]
-smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.27.0"]
+smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.28.0"]
 # Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
 debugger = [
     "aiohttp>=3.14.0",
@@ -98,11 +99,9 @@ webtransport = ["aioquic>=1.3.0,<2"]
 quickstart = [
     "sounddevice>=0.4.6",
     "openai>=2.44.0",
-    "openai-agents>=0.18.2",
-    "pyrnnoise>=0.3.0",
-    "requests>=2.33.0",
+    "openai-agents>=0.18.3",
     "numpy>=1.24.0",
-    "onnxruntime>=1.27.0",
+    "onnxruntime>=1.28.0",
     "livekit>=1.1.13",
 ]
 # ``all`` is the union of every extra EXCEPT three deliberate exclusions:
@@ -115,14 +114,14 @@ all = [
     "aiortc>=1.15.0",
     "livekit>=1.1.13",
     "aiohttp>=3.14.0",
-    "fastapi>=0.139.0",
+    "fastapi>=0.140.0",
     "openai>=2.44.0",
-    "openai-agents>=0.18.2",
-    "langchain-core>=1.4.9",
+    "openai-agents>=0.18.3",
+    "langchain-core>=1.5.1",
     "langgraph>=1.2.9",
     "llama-index-workflows>=2.22.2,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
-    "phonenumberslite>=9.0.34",
+    "phonenumberslite>=9.0.35",
     "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
@@ -131,11 +130,11 @@ all = [
     "uvicorn>=0.51.0",
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
-    "onnxruntime>=1.27.0",
+    "onnxruntime>=1.28.0",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.28,<0.12.0"]
+requires = ["uv_build>=0.11.0,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -201,10 +200,11 @@ source-exclude = [
 ]
 
 [tool.uv]
-# Read by astral-sh/setup-uv in CI (skips network "latest" resolution) and
-# enforced by local uv, so mismatched versions can't churn uv.lock. Bump
-# deliberately alongside a fresh `uv lock` check.
-required-version = "==0.11.29"
+# Local contributors may use compatible patch releases. CI reads the exact
+# tool pin from each setup-uv step so lock generation remains reproducible;
+# --locked independently rejects dependency drift. Review both deliberately
+# before a uv minor-version upgrade.
+required-version = ">=0.11.0,<0.12.0"
 conflicts = [
     [
         { extra = "pydantic-ai" },
@@ -214,18 +214,21 @@ conflicts = [
 
 [dependency-groups]
 dev = [
-    "diff-cover>=10.3.0",
-    "hypothesis>=6.156.6",
+    "diff-cover>=10.4.1",
+    "hypothesis>=6.161.5",
     "import-linter>=2",
     "mutmut>=3.2.3",
     "mypy>=2.3.0",
-    "pre-commit>=4.6.0",
+    # NumPy 2.5+ requires Python 3.12 and uses 3.12-only syntax in its stubs.
+    # Keep the dev environment compatible with mypy's Python 3.11 target.
+    "numpy<2.5",
+    "pre-commit>=4.6.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.21",
+    "ruff>=0.16.0",
 ]
 
 [tool.ruff]
@@ -270,7 +273,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/debug/bundle.py" = ["C901"]
 "src/easycat/debugger/_records.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/server.py" = ["C901", "PLR0912"]
-"src/easycat/integrations/agents/_agent_runner.py" = ["C901", "PLR0912", "PLR0915", "B904"]
+"src/easycat/integrations/agents/_agent_runner.py" = ["B904"]
 "src/easycat/integrations/agents/generic_workflow.py" = ["C901"]
 "src/easycat/integrations/agents/langchain.py" = ["C901", "PLR0912", "B905"]
 "src/easycat/integrations/agents/langgraph.py" = ["C901", "PLR0912", "B905"]
@@ -330,7 +333,19 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 asyncio_mode = "auto"
 # Surface the slowest tests so regressions in test latency stay visible
 # (core pytest CLI flags, so strict_config=true is unaffected).
-addopts = "--durations=15 --durations-min=1.0"
+#
+# --max-worker-restart=1 is load-bearing, not tuning. `timeout_method =
+# "thread"` force-exits the whole worker PROCESS when a test blocks past
+# `timeout` below, and xdist's default policy is to spawn a replacement
+# worker. The crashing test is reported failed and its remaining queue is
+# redistributed, but xdist's default restart budget is 4x the node count. A
+# run with repeated worker crashes can therefore burn many full `timeout`
+# intervals before it stops. Allow one replacement so a single crashed
+# worker does not abort the rest of the suite, while a second crash ends the
+# run instead of starting a long replacement cycle.
+# Tests that provision external SDKs, binaries, or services run only when
+# explicitly selected with ``-m integration_external``.
+addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_external"'
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
@@ -369,8 +384,8 @@ markers = [
 
 [tool.mypy]
 python_version = "3.11"
-# Never fail on missing optional-dependency stubs (numpy / onnxruntime /
-# openai-agents / livekit etc. are not installed in the lint env).
+# Never fail on missing optional-dependency stubs (onnxruntime /
+# openai-agents / livekit etc. may not be installed in the lint env).
 ignore_missing_imports = true
 namespace_packages = true
 explicit_package_bases = true
@@ -505,17 +520,6 @@ modules = [
     "easycat.tts",
     "easycat.vad",
 ]
-ignore_imports = [
-    # The STT and TTS factories share one central provider-metadata catalog
-    # (_provider_catalog.py). That catalog imports both factories LAZILY
-    # (function-local, inside stt_tts_catalogs()) purely to aggregate metadata
-    # and dodge a module-load cycle — the provider families never reach into
-    # each other directly. Ignore these two shared-catalog edges so the contract
-    # enforces the real invariant: no DIRECT cross-family imports.
-    "easycat._provider_catalog -> easycat.stt.factory",
-    "easycat._provider_catalog -> easycat.tts.factory",
-]
-
 # The WebRTC transport is a leaf: server / cli / debugger must not DIRECTLY
 # depend on it. `allow_indirect_imports` scopes the contract to direct imports,
 # so legitimate lower-layer coupling (config wiring transports) does not red the

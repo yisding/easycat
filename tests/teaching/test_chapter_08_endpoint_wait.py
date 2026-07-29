@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "08-smart-turn"
@@ -24,7 +25,7 @@ def load_probe():
 
 
 def test_endpoint_wait_probe_decomposes_three_commit_paths() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "endpoint_wait_probe.py")],
         cwd=ROOT,
         check=True,

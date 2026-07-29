@@ -140,18 +140,13 @@ class _ReleasePaths:
         self.dist.mkdir(parents=True, exist_ok=True)
 
     def artifacts(self, ctx: LaneRunContext) -> dict[str, ArtifactRef]:
-        artifacts = {
-            **ctx.artifacts,
-            "stdout": ArtifactRef(kind="stdout", path=str(self.stdout)),
-            "stderr": ArtifactRef(kind="stderr", path=str(self.stderr)),
-            "dist": ArtifactRef(kind="directory", path=str(self.dist)),
-        }
-        if ctx.requested_report_path is not None:
-            artifacts["requested_report"] = ArtifactRef(
-                kind="validation_report",
-                path=str(ctx.requested_report_path),
-            )
-        return artifacts
+        return ctx.artifacts_with(
+            {
+                "stdout": ArtifactRef(kind="stdout", path=str(self.stdout)),
+                "stderr": ArtifactRef(kind="stderr", path=str(self.stderr)),
+                "dist": ArtifactRef(kind="directory", path=str(self.dist)),
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)

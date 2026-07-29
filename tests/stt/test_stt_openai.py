@@ -450,6 +450,12 @@ async def test_openai_stt_raises_on_api_error():
 
     with pytest.raises(httpx.HTTPStatusError):
         await stt.end_stream()
+    await stt.close()
+
+    assert len(errors) == 1
+    assert errors[0].provider == "openai"
+    assert errors[0].stage is ErrorStage.STT
+    assert "http_status=500" in getattr(errors[0].exception, "__notes__", ())
 
     assert len(errors) == 1
     assert errors[0].provider == "openai"

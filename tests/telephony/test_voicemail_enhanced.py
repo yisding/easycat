@@ -402,17 +402,34 @@ class TestEnhancedVoicemailIntegration:
     async def test_transcription_unavailable_fallback(self) -> None:
         """When no STT transcript arrives, degrade gracefully to AMD-only."""
         bus = EventBus()
-        results: list[VoicemailDetected] = []
-        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.05)
+        fused_results: list[VoicemailDetected] = []
+        fused_delivered = asyncio.Event()
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.01)
         classifier.start()
-        bus.subscribe(VoicemailDetected, results.append)
+
+        async def capture_fused(event: VoicemailDetected) -> None:
+            if event.source != "fusion":
+                return
+            # Regression guard: the timeout task must remain alive across a
+            # suspending subscriber instead of cancelling itself in _emit().
+            await asyncio.sleep(0)
+            fused_results.append(event)
+            fused_delivered.set()
+
+        bus.subscribe(VoicemailDetected, capture_fused)
         try:
             # AMD says machine but no STT arrives.
-            await bus.emit(VoicemailDetected(result="machine"))
-            # Wait for STT timeout.
-            await asyncio.sleep(0.3)
-            # Should have fallen back to AMD result.
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await asyncio.wait_for(fused_delivered.wait(), timeout=0.5)
+            await asyncio.sleep(0)
+
+            assert len(fused_results) == 1
+            assert fused_results[0].result == "machine"
+            assert fused_results[0].source == "fusion"
+            assert fused_results[0].call_sid == "CA1"
             assert classifier.amd_result == "machine"
             assert classifier._emitted is True
+            assert classifier._tasks.empty
         finally:
             classifier.stop()

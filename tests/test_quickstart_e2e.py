@@ -270,7 +270,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
 
 
 def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None:
-    """The 3-line quickstart sits above the fold, followed by a 4-command install."""
+    """The browser quickstart sits above the fold with all required extras."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert readme.count("## Install") == 1
@@ -280,17 +280,26 @@ def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None
     cli_index = readme.index("## CLI")
 
     assert quickstart_index < install_index < chooser_index < cli_index
-    assert "uv add 'easycat[quickstart]'" in readme
-    assert "uv sync --extra quickstart --group dev" in readme
+    assert "uv add 'easycat[quickstart,webrtc]'" in readme
+    assert 'dependencies = ["easycat[quickstart,webrtc]"]' in readme
     assert "uv run easycat doctor" in readme
     assert "uv run python examples/openai_agents_voice.py" in readme
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in readme
 
+    voice_app_block = readme.split("### Quickstart (VoiceApp)", 1)[1].split(
+        "### Quickstart (EasyConfig)",
+        1,
+    )[0]
+    assert 'app.run("browser")' in voice_app_block
+
     repo_block = readme.split("For this repository, four commands", 1)[1]
     repo_commands = repo_block.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
+    install_command = repo_commands[0]
+    assert "--extra quickstart" in install_command
+    assert "--extra webrtc" in install_command
     assert repo_commands == [
-        "uv sync --extra quickstart --group dev",
+        "uv sync --extra quickstart --extra webrtc --group dev",
         "echo 'OPENAI_API_KEY=your-api-key' > .env",
         "uv run easycat doctor --env-file .env",
         "uv run --env-file .env python examples/openai_agents_voice.py",

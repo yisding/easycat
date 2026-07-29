@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from easycat.audio_format import AudioChunk
-from easycat.events import Event, STTEvent, TTSEvent
+from easycat.events import Event, EventBus, STTEvent, TTSEvent
 
 if TYPE_CHECKING:
     from easycat.tts.input import TTSInput, TTSInputPolicy
@@ -52,6 +52,23 @@ class VersionedProvider(Protocol):
         ...
 
 
+# ── Optional provider capabilities ─────────────────────────────────
+
+
+@runtime_checkable
+class EventBusBindable(Protocol):
+    """Optional capability for a live provider instance to receive the session bus.
+
+    Session calls this synchronous hook during construction before any provider
+    work starts. Implementations should retain an explicitly configured bus and
+    otherwise store the supplied session bus.
+    """
+
+    def set_event_bus(self, event_bus: EventBus) -> None:
+        """Attach the session event bus used for provider-scoped events."""
+        ...
+
+
 # ── STT Provider ───────────────────────────────────────────────────
 
 
@@ -87,7 +104,11 @@ class STTProvider(VersionedProvider, Protocol):
         """Finalize the current STT segment without ending the stream.
 
         Returns ``True`` when the provider accepted a segment commit request.
-        Providers that do not support segmented commits should return ``False``.
+        Acceptance does not guarantee a subsequent ``FINAL``: providers may
+        suppress empty/silent segments or receive an empty backend response.
+        Consumers must use the :meth:`events` stream as the source of
+        transcript completion. Providers that do not support segmented
+        commits return ``False``.
         """
         ...
 
@@ -96,7 +117,13 @@ class STTProvider(VersionedProvider, Protocol):
         ...
 
     def events(self) -> AsyncIterator[STTEvent]:
-        """Return an async iterator of provider-scoped STT events."""
+        """Return a fresh async iterator of provider-scoped STT events.
+
+        Every call must return a new iterator for the current stream. It must
+        terminate after :meth:`end_stream`; Session calls ``events()`` again
+        on the next turn and an exhausted cached iterator would silently lose
+        all later transcripts.
+        """
         ...
 
 

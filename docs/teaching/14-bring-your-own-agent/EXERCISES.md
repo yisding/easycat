@@ -114,9 +114,7 @@ Here is the complete executor contract. Merge the two config fields
        def supports(self, action: SessionAction) -> bool:
            return isinstance(action, CustomAction) and action.name == "play_chime"
 
-       async def execute(
-           self, _session: Any, action: SessionAction
-       ) -> SessionActionResult:
+       async def execute(self, _session: Any, action: SessionAction) -> SessionActionResult:
            assert isinstance(action, CustomAction)
            frequency = action.payload["freq"]
            print(f"BEEP at {frequency} Hz")
@@ -163,7 +161,7 @@ The session dispatches to the *first* executor that returns
 555-867-5309."* After the bundle is written, run the printed
 `easycat journal grep ... --query tts_payload_prepared --json`
 command. Which transformation survived into the provider-ready
-payload, and which guarantee was lost?
+payload, and what timing guarantee does the provider-neutral cue make?
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -196,25 +194,22 @@ The scheduler writes one `tts_payload_prepared` record per payload,
 <details markdown="1">
 <summary>Hint 3 of 4</summary>
 
-None of the four bundled TTS providers currently accepts SSML.
-   `PauseProcessor` first inserts exact 120 ms `<break>` tags between
-   the phone-number digits, then the scheduler strips those tags before
-   calling the provider. The provider-ready plain text keeps the digits
-   separated by spaces, so pronunciation may change, but the exact
-   120 ms timing guarantee is gone. Do not expect identical audio or a
-   precise pause from that fallback.
+`PauseProcessor` now defaults to plain-text ellipsis cues, so the
+   provider-ready payload contains `5 ... 5 ... 5 ...` and the scheduler
+   does not perform an SSML downgrade. The cue asks the model to pace the
+   digits but makes no millisecond timing guarantee; the provider decides
+   how the punctuation is spoken.
 
 </details>
 
 <details markdown="1">
 <summary>Hint 4 of 4</summary>
 
-For provider-neutral pause cues, try
-   `PauseProcessor(..., style="ellipsis")`; it stays plain text, but the
-   provider still decides the timing. Exact break duration requires a
+For exact break duration, try
+   `PauseProcessor(..., style="ssml", pause_ms=120)`. It requires a
    provider whose `input_policy` is `TTSInputPolicy.native_ssml()`.
    With such a provider, the record would show `prepared_format: ssml`
-   and `ssml_downgraded: false`.
+   and `ssml_downgraded: false`; bundled providers strip the tags.
 
 </details>
 <!-- END auto:exercise-hints -->

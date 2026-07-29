@@ -210,6 +210,9 @@ def test_browser_allows_registered_extension_stt_config(
         dict(_CATALOG.env_vars),
         dict(_CATALOG.extras),
         dict(_CATALOG.api_domains),
+        dict(_CATALOG.probe_modules),
+        dict(_CATALOG.capabilities),
+        dict(_CATALOG.capability_resolvers),
         dict(_CATALOG.config_to_provider),
         _CATALOG._discovered,
     )
@@ -230,12 +233,25 @@ def test_browser_allows_registered_extension_stt_config(
         VoiceApp(agent="a", stt=_ExtensionSTTConfig()).run("browser")
         assert "factory" in captured_webrtc
     finally:
-        providers, env_vars, extras, api_domains, reverse, discovered = snapshot
+        (
+            providers,
+            env_vars,
+            extras,
+            api_domains,
+            probe_modules,
+            capabilities,
+            capability_resolvers,
+            reverse,
+            discovered,
+        ) = snapshot
         for attr, restored in (
             ("providers", providers),
             ("env_vars", env_vars),
             ("extras", extras),
             ("api_domains", api_domains),
+            ("probe_modules", probe_modules),
+            ("capabilities", capabilities),
+            ("capability_resolvers", capability_resolvers),
             ("config_to_provider", reverse),
         ):
             current = getattr(_CATALOG, attr)
