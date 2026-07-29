@@ -73,11 +73,12 @@ class LlamaAgentsBridge:
     Local workflow ``Context`` survives normal turns and interrupted turns
     whose handler reports that it reached a terminal state. If cancellation
     leaves the handler non-terminal, reusing its still-active ``Context`` is
-    unsafe, so the bridge drops it, records a ``LlamaWorkflowContextDropped``
-    framework error, and sends an ``easycat_interruption_note`` field with
-    the next start event. The session conversation supplied through
-    ``context_key`` remains available independently of workflow-internal
-    ``ctx.store`` state.
+    unsafe, so the bridge drops it and sends an
+    ``easycat_interruption_note`` field with the next start event. When
+    ``preserve_context=True``, the unexpected loss is also recorded as a
+    ``LlamaWorkflowContextDropped`` framework error. The session conversation
+    supplied through ``context_key`` remains available independently of
+    workflow-internal ``ctx.store`` state.
     """
 
     COMMITTABLE_BOUNDARIES = {
@@ -533,17 +534,18 @@ class LlamaAgentsBridge:
                 self._ctx = None
                 self._pending_local_handler = None
                 self._pending_local_stream = None
-                recorder.record_framework_error(
-                    ErrorInfo(
-                        type="LlamaWorkflowContextDropped",
-                        message=(
-                            "Interrupted local Llama workflow handler did not reach "
-                            "a terminal state; its Context was dropped because it "
-                            "cannot be safely reused. Workflow-internal ctx.store "
-                            "state may be lost."
-                        ),
+                if self._preserve_context:
+                    recorder.record_framework_error(
+                        ErrorInfo(
+                            type="LlamaWorkflowContextDropped",
+                            message=(
+                                "Interrupted local Llama workflow handler did not reach "
+                                "a terminal state; its Context was dropped because it "
+                                "cannot be safely reused. Workflow-internal ctx.store "
+                                "state may be lost."
+                            ),
+                        )
                     )
-                )
             else:
                 self._ctx = getattr(handler, "ctx", self._ctx)
                 if interrupted:

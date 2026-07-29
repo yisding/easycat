@@ -177,6 +177,25 @@ class TestLocalLlamaAgentsBridge:
         assert errors[-1].error.type == "LlamaWorkflowContextDropped"
 
     @pytest.mark.asyncio
+    async def test_nonterminal_interruption_without_preservation_is_not_an_error(
+        self, fake_workflows_modules
+    ):
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        handler.is_done = lambda: False
+        bridge = LlamaAgentsBridge(workflow=workflow, preserve_context=False)
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal))
+        first = await agen.__anext__()
+        assert first.kind == "text_delta"
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["has_context"] is False
+        assert not [record for record in journal.read() if record.name == "framework_error"]
+
+    @pytest.mark.asyncio
     async def test_reset_cancels_paused_local_hitl_handler(self, fake_workflows_modules):
         """reset() after a HITL pause must cancel the paused handler/stream,
         not just drop the references and leak the waiting workflow."""
