@@ -95,7 +95,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
@@ -386,6 +386,7 @@ class _WebTransportSession:
         # reset when that stream ends so a re-opened one re-reads its header.
         self._inbound_rate: int | None = None
         self._inbound_rate_hdr = bytearray()
+        self._inbound_resampler = PCM16StreamResampler(target_sample_rate)
         # Sample rate of the currently-open server→client audio stream, or
         # None when no audio stream is open.  A change opens a fresh stream
         # (see ``_outbound_writer`` / ``_end_audio_stream``).
@@ -431,6 +432,7 @@ class _WebTransportSession:
             except asyncio.CancelledError:
                 pass
         self._writer_task = None
+        self._inbound_resampler.reset()
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
         if stream_id in self._rejected_stream_ids:
@@ -461,6 +463,14 @@ class _WebTransportSession:
             self._pending_tags.pop(stream_id, None)
             self._rejected_stream_ids.discard(stream_id)
             if stream_id == self._inbound_audio_stream_id:
+                tail = self._inbound_resampler.finish()
+                if tail:
+                    _enqueue_inbound_chunk(
+                        self._in_queue,
+                        AudioChunk(data=tail, format=self._audio_format),
+                        emit_degraded=self._emit_degraded,
+                        context="WebTransport",
+                    )
                 self._inbound_audio_stream_id = None
                 # A re-opened audio stream is a fresh, self-describing
                 # stream; force its inline rate header to be re-read.
@@ -608,15 +618,17 @@ class _WebTransportSession:
             if not pcm:
                 return
             data = pcm
-        chunk = AudioChunk(data=data, format=self._inbound_format)
-        if chunk.format.sample_rate != self._target_rate:
-            chunk = resample_chunk(chunk, self._target_rate)
-        _enqueue_inbound_chunk(
-            self._in_queue,
-            chunk,
-            emit_degraded=self._emit_degraded,
-            context="WebTransport",
+        converted = self._inbound_resampler.process(
+            data,
+            self._inbound_format.sample_rate,
         )
+        if converted:
+            _enqueue_inbound_chunk(
+                self._in_queue,
+                AudioChunk(data=converted, format=self._audio_format),
+                emit_degraded=self._emit_degraded,
+                context="WebTransport",
+            )
 
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):

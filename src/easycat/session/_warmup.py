@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from easycat._audio_utils import resample_backend
 from easycat.runtime.capabilities import warmup_if_supported, warmupable
 from easycat.runtime.records import JournalRecordKind
 
@@ -26,6 +27,13 @@ class JournalSink(Protocol):
 
 
 WarmupComponent = tuple[str, Any]
+
+
+class AudioResamplingWarmup:
+    """Resolve optional numeric audio dependencies off the live audio path."""
+
+    async def warmup(self) -> None:
+        await asyncio.to_thread(resample_backend)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,4 +162,4 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 3)
 
 
-__all__ = ["WarmupComponent", "WarmupRunner"]
+__all__ = ["AudioResamplingWarmup", "WarmupComponent", "WarmupRunner"]

@@ -13,9 +13,9 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import resample_chunk, to_mono_chunk
+from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import Event
 from easycat.vad._base import _VADBase
 
@@ -204,6 +204,7 @@ class SileroVAD(_VADBase):
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
         self._buffer_rate: int | None = None
+        self._audio_resampler = PCM16StreamResampler(_SILERO_DEFAULT_RATE)
 
         self._load_model()
 
@@ -259,7 +260,19 @@ class SileroVAD(_VADBase):
         # Silero v6.2.1 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
         # 48 k, …) resamples to 16 kHz to preserve fidelity.
         if chunk.format.sample_rate not in _SILERO_SUPPORTED_RATES:
-            chunk = resample_chunk(chunk, _SILERO_DEFAULT_RATE)
+            chunk = AudioChunk(
+                data=self._audio_resampler.process(
+                    chunk.data,
+                    chunk.format.sample_rate,
+                ),
+                format=PCM16_MONO_16K,
+                timestamp=chunk.timestamp,
+            )
+        elif self._audio_resampler.source_rate is not None:
+            # A native-rate chunk starts a new format segment. The VAD drops
+            # stale frame remainders on rate changes, so discard the old
+            # converter tail rather than mixing 16 kHz output with 8 kHz data.
+            self._audio_resampler.reset()
         target_rate = chunk.format.sample_rate
 
         # A mid-stream 8k<->16k switch would concatenate old-rate remainder
@@ -322,6 +335,7 @@ class SileroVAD(_VADBase):
     def reset(self) -> None:
         """Reset VAD internal state."""
         super().reset()
+        self._audio_resampler.reset()
         self._buffer = b""
         self._buffer_rate = None
         if self._model is not None:

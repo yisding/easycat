@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from easycat._audio_utils import resample
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
@@ -185,6 +185,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # Causes the first subsequent ``committed_transcript`` to be
         # dropped instead of emitting a second FINAL for the same turn.
         self._dropping_pending_final: bool = False
+        self._audio_resampler = PCM16StreamResampler(config.realtime_sample_rate)
 
     def _resolved_model(self) -> str:
         if self._config.model is not None:
@@ -297,6 +298,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     async def _start_realtime(self) -> None:
         headers = {"xi-api-key": self._config.api_key}
+        self._audio_resampler.reset()
         self._final_received = None
         self._audio_pending_commit = False
         self._partial_text = ""
@@ -324,6 +326,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         empty server-side audio buffer, so reset the pending-commit flag
         to match.
         """
+        self._audio_resampler.reset()
         self._audio_pending_commit = False
         # Fresh socket: nothing is buffered server-side and any manual commit
         # we were awaiting will never be acked, so treat everything sent so far
@@ -332,25 +335,29 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._manual_commit_inflight = 0
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
-        if self._ws is not None:
-            payload_audio = chunk.data
-            if chunk.format.sample_rate != self._config.realtime_sample_rate:
-                payload_audio = resample(
-                    payload_audio,
-                    chunk.format.sample_rate,
-                    self._config.realtime_sample_rate,
-                )
-            payload = json.dumps(
-                {
-                    "message_type": "input_audio_chunk",
-                    "audio_base_64": base64.b64encode(payload_audio).decode(),
-                    "commit": False,
-                    "sample_rate": self._config.realtime_sample_rate,
-                }
-            )
-            await self._ws.send(payload)
-            self._audio_pending_commit = True
-            self._audio_epoch += 1
+        payload_audio = self._audio_resampler.process(
+            chunk.data,
+            chunk.format.sample_rate,
+        )
+        await self._append_realtime_audio(payload_audio)
+
+    async def _append_realtime_audio(self, data: bytes) -> None:
+        if self._ws is None or not data:
+            return
+        payload = json.dumps(
+            {
+                "message_type": "input_audio_chunk",
+                "audio_base_64": base64.b64encode(data).decode(),
+                "commit": False,
+                "sample_rate": self._config.realtime_sample_rate,
+            }
+        )
+        await self._ws.send(payload)
+        self._audio_pending_commit = True
+        self._audio_epoch += 1
+
+    async def _flush_audio_resampler(self) -> None:
+        await self._append_realtime_audio(self._audio_resampler.finish())
 
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
@@ -373,7 +380,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
-        if ws is None or not self._audio_pending_commit:
+        if ws is None:
+            return False
+        await self._flush_audio_resampler()
+        if not self._audio_pending_commit:
             return False
 
         final_received = asyncio.Event()

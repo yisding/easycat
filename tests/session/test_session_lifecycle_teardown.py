@@ -68,7 +68,7 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     # ``warmup`` hook to forward to.
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
-    assert warmed == ["stt", "tts", "agent", "transport"]
+    assert warmed == ["stt", "tts", "audio_resampling", "agent", "transport"]
 
 
 @pytest.mark.asyncio
