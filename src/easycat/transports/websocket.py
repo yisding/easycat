@@ -76,6 +76,8 @@ class WebSocketSessionServerConfig:
     port: int = 8765
     auth_token: str | None = None
     max_sessions: int = 10
+    drain_timeout_s: float = 30.0
+    force_shutdown_timeout_s: float = 10.0
 
 
 def websocket_session_server_config_from_env(
@@ -87,6 +89,8 @@ def websocket_session_server_config_from_env(
         port=int(os.getenv(f"{prefix}_PORT", "8765")),
         auth_token=os.getenv(f"{prefix}_TOKEN"),
         max_sessions=int(os.getenv(f"{prefix}_MAX_SESSIONS", "10")),
+        drain_timeout_s=float(os.getenv(f"{prefix}_DRAIN_TIMEOUT_S", "30")),
+        force_shutdown_timeout_s=float(os.getenv(f"{prefix}_FORCE_SHUTDOWN_TIMEOUT_S", "10")),
     )
 
 

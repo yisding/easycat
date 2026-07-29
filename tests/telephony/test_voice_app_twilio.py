@@ -9,7 +9,6 @@ stubbed for the media-lifecycle test. The TwiML/token path exercises the real
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -129,9 +128,11 @@ class _FakeAiohttpWeb:
 class _FakeMediaServer:
     def __init__(self) -> None:
         self.closed = False
+        self.close_connections: bool | None = None
 
-    def close(self) -> None:
+    def close(self, close_connections: bool = True) -> None:
         self.closed = True
+        self.close_connections = close_connections
 
     async def wait_closed(self) -> None:
         return None
@@ -796,7 +797,10 @@ class _FakeSession:
     async def start(self) -> None:
         self._events.append("start")
 
-    async def stop(self) -> None:
+    def subscribe_event(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def stop(self, *, force: bool = False) -> None:
         self._events.append("stop")
 
 
@@ -805,16 +809,15 @@ class _FakeManager:
         self._sessions: dict[int, Any] = {}
         self.events: list[str] = []
 
-    @asynccontextmanager
-    async def connection(self, key: int, session: Any, **kwargs: Any) -> Any:
+    async def add(self, key: int, session: Any) -> None:
         self.events.append("register")
         self._sessions[key] = session
         await session.start()
-        try:
-            yield session
-        finally:
-            self.events.append("unregister")
-            self._sessions.pop(key, None)
+
+    async def remove(self, key: int) -> None:
+        self.events.append("unregister")
+        session = self._sessions.pop(key, None)
+        if session is not None:
             await session.stop()
 
     async def stop_all(self) -> None:
