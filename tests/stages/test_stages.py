@@ -521,6 +521,11 @@ class TestStageExecuteRecording:
         assert complete.data["elapsed_ms"] >= 0
 
     async def test_light_mode_omits_per_frame_stage_records_and_artifacts(self):
+        class _StreamingTTS:
+            async def synthesize(self, payload):
+                _ = payload
+                yield type("_Event", (), {"audio": AudioChunk(b"\x00\x00", PCM16_MONO_16K)})()
+
         journal = InMemoryRingBuffer(capacity=5)
         artifact_store = InMemoryArtifactStore()
         ctx = _make_ctx(
@@ -538,10 +543,32 @@ class TestStageExecuteRecording:
         for _ in range(20):
             for stage in stages:
                 await stage.execute(b"\x00\x00", ctx, turn)
+            await TransportStage(_StubTransport(), journal=journal).execute(
+                b"\x00\x00",
+                ctx,
+                turn,
+            )
+            stream = await TTSStage(_StreamingTTS(), journal=journal).execute("hello", ctx, turn)
+            assert [event async for event in stream]
 
         assert journal.read() == []
         assert journal.dropped_records == 0
         assert artifact_store._store == {}
+
+    def test_run_context_keeps_preexisting_positional_config_snapshot_slot(self):
+        snapshot = {"provider": "test"}
+
+        ctx = RunContext(
+            "run",
+            "session",
+            "chained_pipeline",
+            None,
+            None,
+            snapshot,
+        )
+
+        assert ctx.config_snapshot is snapshot
+        assert ctx.journal_detail == "full"
 
     async def test_light_mode_keeps_stage_failures(self):
         class _BrokenSTT:

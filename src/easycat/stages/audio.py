@@ -70,9 +70,7 @@ class AudioStage:
                 capture_allowed=capture_allowed,
             )
             start_extra = {
-                "audio_bytes": len(raw_bytes)
-                if isinstance(raw_bytes, (bytes, bytearray))
-                else 0,
+                "audio_bytes": len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0,
             }
             start_extra.update(audio_format_fields(input))
             start_sequence = journal_append_event(
