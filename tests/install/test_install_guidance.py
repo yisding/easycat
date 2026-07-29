@@ -42,12 +42,11 @@ def test_optional_extra_guidance_uses_current_uv_commands() -> None:
     )
 
 
-def test_pyproject_does_not_exact_pin_uv() -> None:
-    """Patch releases of uv must be able to run the locked project commands."""
+def test_pyproject_allows_uv_patch_upgrades_within_the_audited_minor() -> None:
+    """Patch releases may advance without silently crossing uv minor releases."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    required_version = pyproject["tool"]["uv"].get("required-version")
 
-    assert required_version is None or not required_version.strip().startswith("==")
+    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.0,<0.12.0"
 
 
 @pytest.mark.parametrize(

@@ -7,103 +7,19 @@ from collections.abc import AsyncIterator
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
-from easycat.events import (
-    Event,
-    STTEvent,
-    STTEventType,
-    TTSEvent,
-    TTSEventType,
-    VADStartSpeaking,
-    VADStopSpeaking,
-)
+from easycat.events import TTSEvent, TTSEventType
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, AgentTurnInput
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 from tests._bridge_helpers import _TestBridgeBase
+from tests._fakes import FakeSTT, FakeTransport, FakeTTS, FakeVAD
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
+__all__ = ["FakeSTT", "FakeTTS", "FakeVAD", "FakeTransport"]
 
 
 def _chunk(n: int = 320) -> AudioChunk:
     return AudioChunk(data=bytes(n), format=PCM16_MONO_16K)
-
-
-class FakeTransport:
-    def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
-        self.chunks = chunks or []
-        self.sent: list[AudioChunk] = []
-
-    async def connect(self) -> None:
-        pass
-
-    async def disconnect(self) -> None:
-        pass
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        for chunk in self.chunks:
-            yield chunk
-
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        self.sent.append(chunk)
-
-    async def clear_audio(self) -> None:
-        pass
-
-
-class FakeVAD:
-    """Emits start on chunk 1, stop on chunk 2."""
-
-    def __init__(self) -> None:
-        self._n = 0
-
-    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        self._n += 1
-        if self._n == 1:
-            yield VADStartSpeaking()
-        elif self._n == 2:
-            yield VADStopSpeaking()
-
-    def configure(self, **kwargs: object) -> None:
-        pass
-
-
-class FakeSTT:
-    def __init__(self, transcript: str = "hello world") -> None:
-        self._transcript = transcript
-        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
-
-    async def start_stream(self) -> None:
-        pass
-
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
-
-    async def end_stream(self) -> None:
-        if self._transcript:
-            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
-        await self._queue.put(None)
-
-    async def events(self) -> AsyncIterator[STTEvent]:
-        while True:
-            event = await self._queue.get()
-            if event is None:
-                break
-            yield event
-
-
-class FakeTTS:
-    def __init__(self) -> None:
-        self.synthesized_texts: list[str] = []
-
-    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-        self.synthesized_texts.append(payload.text)
-        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
-
-    async def stop(self) -> None:
-        pass
-
-    async def cancel(self) -> None:
-        pass
 
 
 class FakeNoiseReducer:
@@ -116,6 +32,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         super().__init__()
         self.response_prefix = response_prefix
         self.contexts: list[list[dict[str, str]]] = []
+        self.inputs: list[AgentTurnInput] = []
 
     async def invoke(
         self,
@@ -124,6 +41,7 @@ class ContextCapturingBridge(_TestBridgeBase):
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         _ = recorder, cancel_token
+        self.inputs.append(turn_input)
         self.contexts.append(list(turn_input.context))
         yield AgentBridgeEvent(kind="done", text=f"{self.response_prefix}:{turn_input.text}")
 

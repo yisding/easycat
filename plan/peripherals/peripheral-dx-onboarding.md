@@ -300,9 +300,11 @@ Target example:
 from agents import Agent
 from easycat import EasyConfig, run
 
-run(EasyConfig.mic(
-    agent=Agent(name="Support", instructions="Help the user."),
-))
+run(
+    EasyConfig.mic(
+        agent=Agent(name="Support", instructions="Help the user."),
+    )
+)
 ```
 
 **`easycat.helpers.run_session(session)`**
@@ -329,10 +331,13 @@ Context manager support matching `httpx.AsyncClient`, `asyncpg`, and
 from agents import Agent
 from easycat import EasyConfig, create_session
 
+
 async def main():
-    session = create_session(EasyConfig.mic(
-        agent=Agent(name="Support", instructions="Help the user."),
-    ))
+    session = create_session(
+        EasyConfig.mic(
+            agent=Agent(name="Support", instructions="Help the user."),
+        )
+    )
     async with session:
         await session.wait_closed()
 ```
@@ -347,12 +352,14 @@ addressable by string, not by adapter construction. Swapping STT or TTS
 becomes a one-word change.
 
 ```python
-run(EasyConfig.mic(
-    agent=Agent(name="Support", instructions="Help the user."),
-    stt="deepgram/flux",
-    tts="cartesia/sonic-3",
-    llm="openai/gpt-4.1-mini",
-))
+run(
+    EasyConfig.mic(
+        agent=Agent(name="Support", instructions="Help the user."),
+        stt="deepgram/flux",
+        tts="cartesia/sonic-3",
+        llm="openai/gpt-4.1-mini",
+    )
+)
 ```
 
 Semantics:
@@ -454,9 +461,11 @@ agent with zero API keys." 2026 makes this viable: Kyutai Pocket TTS
 any laptop; the bundled Smart Turn v3.2 model runs on CPU.
 
 ```python
-run(EasyConfig.offline(
-    agent=Agent(name="Support", instructions="Help the user."),
-))
+run(
+    EasyConfig.offline(
+        agent=Agent(name="Support", instructions="Help the user."),
+    )
+)
 ```
 
 Semantics:

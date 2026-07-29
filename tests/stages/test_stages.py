@@ -8,6 +8,7 @@ import pytest
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -15,6 +16,7 @@ from easycat.integrations.agents.base import (
     NullAgentRecorder,
 )
 from easycat.runtime import InMemoryRingBuffer
+from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
@@ -44,12 +46,16 @@ def _make_ctx(
     *,
     runtime_mode: str = "chained_pipeline",
     journal: InMemoryRingBuffer | None = None,
+    artifact_store: InMemoryArtifactStore | None = None,
+    journal_detail: str = "full",
 ) -> RunContext:
     return RunContext(
         run_id="run-1",
         session_id="sess-1",
         runtime_mode=runtime_mode,
         journal=journal,
+        artifact_store=artifact_store,
+        journal_detail=journal_detail,
     )
 
 
@@ -153,6 +159,7 @@ class TestRunContext:
         assert ctx.runtime_mode == "chained_pipeline"
         assert ctx.journal is None
         assert ctx.artifact_store is None
+        assert ctx.journal_detail == "full"
         assert ctx.config_snapshot == {}
 
     def test_text_session_mode(self):
@@ -169,6 +176,15 @@ class TestRunContext:
                 run_id="r3",
                 session_id="s3",
                 runtime_mode="realtime",
+            )
+
+    def test_invalid_journal_detail(self):
+        with pytest.raises(ValueError, match="Unsupported journal_detail"):
+            RunContext(
+                run_id="r3",
+                session_id="s3",
+                runtime_mode="chained_pipeline",
+                journal_detail="verbose",
             )
 
     def test_frozen(self):
@@ -503,6 +519,139 @@ class TestStageExecuteRecording:
         assert "stage_complete" in names
         complete = next(r for r in records if r.name == "stage_complete")
         assert complete.data["elapsed_ms"] >= 0
+
+    async def test_light_mode_omits_per_frame_stage_records_and_artifacts(self):
+        class _StreamingTTS:
+            async def synthesize(self, payload):
+                _ = payload
+                yield type("_Event", (), {"audio": AudioChunk(b"\x00\x00", PCM16_MONO_16K)})()
+
+        journal = InMemoryRingBuffer(capacity=5)
+        artifact_store = InMemoryArtifactStore()
+        ctx = _make_ctx(
+            journal=journal,
+            artifact_store=artifact_store,
+            journal_detail="light",
+        )
+        turn = _make_turn()
+        stages = (
+            AudioStage(_StubNoiseReducer(), journal=journal),
+            VADStage(_StubVAD(), journal=journal),
+            STTStage(_StubSTT(), journal=journal),
+        )
+
+        for _ in range(20):
+            for stage in stages:
+                await stage.execute(b"\x00\x00", ctx, turn)
+            await TransportStage(_StubTransport(), journal=journal).execute(
+                b"\x00\x00",
+                ctx,
+                turn,
+            )
+            stream = await TTSStage(_StreamingTTS(), journal=journal).execute("hello", ctx, turn)
+            assert [event async for event in stream]
+
+        assert journal.read() == []
+        assert journal.dropped_records == 0
+        assert artifact_store._store == {}
+
+    def test_run_context_keeps_preexisting_positional_config_snapshot_slot(self):
+        snapshot = {"provider": "test"}
+
+        ctx = RunContext(
+            "run",
+            "session",
+            "chained_pipeline",
+            None,
+            None,
+            snapshot,
+        )
+
+        assert ctx.config_snapshot is snapshot
+        assert ctx.journal_detail == "full"
+
+    async def test_light_mode_keeps_stage_failures(self):
+        class _BrokenSTT:
+            async def send_audio(self, chunk):
+                raise RuntimeError("stt failed")
+
+        journal = InMemoryRingBuffer(capacity=5)
+        ctx = _make_ctx(journal=journal, journal_detail="light")
+        stage = STTStage(_BrokenSTT(), journal=journal)
+
+        with pytest.raises(RuntimeError, match="stt failed"):
+            await stage.execute(b"\x00\x00", ctx, _make_turn())
+
+        assert [record.name for record in journal.read()] == ["stage_error"]
+
+    async def test_stt_stage_keeps_journal_without_audio_artifact(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: False,
+        )
+
+        await STTStage(_StubSTT(), journal=journal).execute(b"chunk", ctx, _make_turn())
+
+        records = journal.read()
+        assert [record.name for record in records] == ["stage_start", "stage_complete"]
+        assert records[0].input_ref is None
+        assert artifacts._current_bytes == 0
+
+    async def test_chunk_capture_decision_survives_later_consent_change(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        consent = {"enabled": False}
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: consent["enabled"],
+        )
+        chunk = AudioChunk(data=b"\x01\x00" * 160, format=PCM16_MONO_16K)
+        await STTStage(_StubSTT(), journal=journal).execute(chunk, ctx, _make_turn())
+        consent["enabled"] = True
+        await TransportStage(_StubTransport(), journal=journal).execute(
+            chunk,
+            ctx,
+            _make_turn(),
+        )
+
+        assert all(record.input_ref is None for record in journal.read())
+        assert all(record.output_ref is None for record in journal.read())
+        assert artifacts._current_bytes == 0
+
+    async def test_smart_turn_does_not_capture_mixed_consent_window(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        ctx = RunContext(
+            run_id="run-1",
+            session_id="sess-1",
+            runtime_mode="chained_pipeline",
+            journal=journal,
+            artifact_store=artifacts,
+            audio_capture_enabled=lambda: True,
+        )
+        denied = AudioChunk(data=b"\x01\x00" * 160, format=PCM16_MONO_16K)
+        denied._easycat_capture_allowed = False
+        allowed = AudioChunk(data=b"\x02\x00" * 160, format=PCM16_MONO_16K)
+
+        await TurnStage(_StubSmartTurn(), journal=journal).execute(
+            [denied, allowed],
+            ctx,
+            _make_turn(),
+        )
+
+        start = next(record for record in journal.read() if record.name == "stage_start")
+        assert start.input_ref is None
+        assert artifacts._current_bytes == 0
 
     async def test_agent_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)

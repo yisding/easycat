@@ -139,6 +139,11 @@ class SessionConfig:
     timeout_config: TimeoutConfig | None = None
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
+    # ``light`` omits per-frame Audio/VAD/STT stage spans and artifacts so a
+    # bounded journal retains turn/control history. ``full`` keeps the
+    # replay-heavy frame detail. Direct SessionConfig users retain the
+    # historical full-detail default.
+    journal_detail: Literal["off", "light", "full"] = "full"
     warmup: bool = True
     # Auto-export a timestamped debug bundle to this directory during stop().
     # No-op when the session has no debug journal.
@@ -170,6 +175,7 @@ class SessionConfig:
     capture_aec_reference: bool = False
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
+    on_agent_failure: str | Callable[[Exception], str] | None = None
 
     # Interruption behaviour.
     # "truncate" (default): truncate the assistant message to what was
@@ -239,3 +245,7 @@ class SessionConfig:
     #     identity for DNC handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
+
+    # Keep appended for positional compatibility with older SessionConfig calls.
+    capture_audio: bool | Callable[[], bool] = True
+    journal_redaction: Literal["secrets", "pii"] = "secrets"
