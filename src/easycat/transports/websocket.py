@@ -101,10 +101,11 @@ class WebSocketTransport(ServerTransportBase):
 
     **Outbound (server -> client):**
       - Binary frame: raw PCM16 audio bytes.
-      - Text frame: JSON control message (e.g., ``{"type": "ready"}``) or
-        session event message (``stt_partial``, ``stt_final``, ``agent_delta``,
-        ``agent_final``, ``turn_started``, ``interruption``, ``turn_latency``;
-        see :mod:`easycat.transports._browser_events`).
+      - Text frame: JSON control message (``{"type": "ready"}``,
+        ``{"type": "clear"}``) or session event message (``stt_partial``,
+        ``stt_final``, ``agent_delta``, ``agent_final``, ``turn_started``,
+        ``interruption``, ``turn_latency``; see
+        :mod:`easycat.transports._browser_events`).
 
     The maintained reader-facing description of this protocol lives in
     ``docs/browser-playground.md``.
@@ -165,7 +166,17 @@ class WebSocketTransport(ServerTransportBase):
             return False
 
     async def clear_audio(self) -> None:
-        """No-op — WebSocket sends frames immediately without buffering."""
+        """Tell the client to stop already-received and scheduled playback."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"type": "clear"}))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: client disconnected")
+            if self._ws is ws:
+                self._ws = None
+                self._client_connected.clear()
 
     # ── Server helpers ────────────────────────────────────────────
 
@@ -382,7 +393,15 @@ class WebSocketConnectionTransport(AudioQueueMixin):
             return False
 
     async def clear_audio(self) -> None:
-        """No-op — WebSocket sends frames immediately without buffering."""
+        """Tell the client to stop already-received and scheduled playback."""
+        if not self._connected:
+            return
+        try:
+            await self._ws.send(json.dumps({"type": "clear"}))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: client disconnected")
+            self._connected = False
+            self._client_connected.clear()
 
     async def _send_client_event(self, payload: dict[str, Any]) -> None:
         if not self._connected:

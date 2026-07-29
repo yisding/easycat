@@ -64,6 +64,8 @@ Outbound (server → client):
   - `{"type": "ready"}` — sent once when the connection is accepted.
   - `{"type": "audio_format", "sample_rate": 24000}` — sent before audio
     whenever the outbound sample rate changes.
+  - `{"type": "clear"}` — stop and discard bot audio already scheduled by
+    the client (sent on barge-in and explicit playback cancellation).
   - Session event messages (below).
 
 ### WebRTC transport

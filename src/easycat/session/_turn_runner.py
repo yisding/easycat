@@ -887,10 +887,11 @@ class TurnRunner:
 
     async def _consume_tts_payloads(self, st: _StreamingTtsState) -> None:
         """TTS consumer task: synthesize queued payloads, then settle the turn."""
+        cancelled = False
         try:
             await self._synthesize_queued_payloads(st)
         except asyncio.CancelledError:
-            pass
+            cancelled = True
         except TTSTimeoutError:
             await self._tts.cancel()
         except Exception as exc:
@@ -915,6 +916,8 @@ class TurnRunner:
             if remaining is not None:
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(remaining), 0, False))
 
+        if cancelled:
+            raise asyncio.CancelledError
         await self._settle_turn_after_tts(st)
 
     async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
@@ -959,7 +962,10 @@ class TurnRunner:
                     is_active=(
                         None
                         if self._is_gated()
-                        else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        else lambda: (
+                            not self._tts.is_playback_suppressed
+                            and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        )
                     ),
                 )
             st.chunks.append(
@@ -994,7 +1000,10 @@ class TurnRunner:
         task = await self._tts.begin_synthesis_with_bot_start(
             payload,
             st.token,
-            is_active=lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING,
+            is_active=lambda: (
+                not self._tts.is_playback_suppressed
+                and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+            ),
             lifecycle_ready=lifecycle_ready,
         )
         if lifecycle_started is not None:
