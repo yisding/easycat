@@ -2,7 +2,7 @@
 
 Status: current snapshot.
 
-Snapshot date: 2026-06-12.
+Snapshot date: 2026-07-27.
 
 This is a static inspection snapshot used to keep the planning folder aligned
 with the codebase. Counts below come from tracked files and exclude
@@ -10,8 +10,10 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 217 tracked Python files.
-- `tests/` contains 216 tracked `test_*.py` files.
+- Query source inventory on demand with
+  `git ls-files src/easycat | rg -c '\.py$'`.
+- Query test inventory on demand with
+  `git ls-files tests | rg -c '(^|/)test_[^/]*\.py$'`.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
@@ -77,6 +79,12 @@ with the codebase. Counts below come from tracked files and exclude
 - README provider drift called out in the April cleanup note appears fixed:
   Cartesia is listed, TEN VAD is described as non-permissive, and the
   quickstart extra says it does not include TEN VAD.
+- A root BSD-2-Clause `LICENSE` and PEP 639 package metadata are in place.
+  Project metadata also includes author, keywords, classifiers, and project
+  URLs, and packaging tests guard against local/generated/secret artifacts
+  leaking into release artifacts. CI runs `uv build`, and release validation
+  exercises an installed package through the public CLI and documented
+  top-level API.
 
 ## Still Active Gaps
 
@@ -91,11 +99,6 @@ with the codebase. Counts below come from tracked files and exclude
   161 lines, with the lazy-export registry isolated in `easycat._public_api`.
   The public surface is still broad at 92 lazy top-level exports, but it is
   pinned by a golden snapshot and documented in `docs/public-api.md`.
-- A root `LICENSE` remains active release-bar work. Project metadata now
-  includes author, keywords, classifiers, and project URLs, and packaging tests
-  guard against local/generated/secret artifacts leaking into release artifacts.
-  CI now runs `uv build`, and release validation exercises an installed package
-  through the public CLI and documented top-level API.
 - Broader connection-policy hardening and deeper live/cassette provider
   validation remain cleanup backlog items. Provider WebSocket reconnect policy
   now rejects unsafe retry/backoff values before they can create busy loops or

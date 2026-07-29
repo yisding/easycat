@@ -1123,7 +1123,6 @@ all = [
     { name = "openai-agents" },
     { name = "phonenumberslite" },
     { name = "pyrnnoise" },
-    { name = "python-multipart" },
     { name = "requests" },
     { name = "sounddevice" },
     { name = "twilio" },
@@ -1170,8 +1169,6 @@ quickstart = [
     { name = "onnxruntime" },
     { name = "openai" },
     { name = "openai-agents" },
-    { name = "pyrnnoise" },
-    { name = "requests" },
     { name = "sounddevice" },
 ]
 rnnoise = [
@@ -1188,10 +1185,12 @@ smart-turn = [
 ]
 telephony = [
     { name = "aiohttp" },
-    { name = "fastapi" },
     { name = "phonenumberslite" },
-    { name = "python-multipart" },
     { name = "twilio" },
+]
+telephony-fastapi = [
+    { name = "fastapi" },
+    { name = "python-multipart" },
     { name = "uvicorn" },
 ]
 ten-vad = [
@@ -1226,22 +1225,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'all'", specifier = ">=3.14.0" },
-    { name = "aiohttp", marker = "extra == 'debugger'", specifier = ">=3.14.0" },
-    { name = "aiohttp", marker = "extra == 'telephony'", specifier = ">=3.14.0" },
-    { name = "aiohttp", marker = "extra == 'webrtc'", specifier = ">=3.14.0" },
+    { name = "aiohttp", marker = "extra == 'all'", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'debugger'", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'telephony'", specifier = ">=3.13.3" },
+    { name = "aiohttp", marker = "extra == 'webrtc'", specifier = ">=3.13.3" },
     { name = "aioquic", marker = "extra == 'all'", specifier = ">=1.3.0,<2" },
     { name = "aioquic", marker = "extra == 'webtransport'", specifier = ">=1.3.0,<2" },
     { name = "aiortc", marker = "extra == 'all'", specifier = ">=1.15.0" },
     { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.15.0" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.140.0" },
-    { name = "fastapi", marker = "extra == 'telephony'", specifier = ">=0.140.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "fastapi", marker = "extra == 'telephony-fastapi'", specifier = ">=0.140.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "kaldi-native-fbank", marker = "extra == 'all'", specifier = ">=1.22.3" },
     { name = "kaldi-native-fbank", marker = "extra == 'funasr-vad'", specifier = ">=1.22.3" },
-    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.5.1" },
-    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.5.1" },
-    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.5.1" },
+    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.2.28" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.2.28" },
+    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.2.28" },
     { name = "langgraph", marker = "extra == 'all'", specifier = ">=1.2.9" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.2.9" },
     { name = "livekit", marker = "extra == 'aec'", specifier = ">=1.1.13" },
@@ -1275,14 +1274,12 @@ requires-dist = [
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.99.0,<2.0.0" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2'", specifier = ">=2.5.1,<3.0.0" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
-    { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
     { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.29" },
-    { name = "python-multipart", marker = "extra == 'telephony'", specifier = ">=0.0.29" },
+    { name = "python-multipart", marker = "extra == 'telephony-fastapi'", specifier = ">=0.0.29" },
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.33.0" },
-    { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.33.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.33.0" },
-    { name = "rich", specifier = ">=15.0.0" },
+    { name = "rich", specifier = ">=13.8" },
     { name = "sentencesplit", specifier = ">=0.1.0" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'local'", specifier = ">=0.4.6" },
@@ -1291,13 +1288,13 @@ requires-dist = [
     { name = "ten-vad", marker = "extra == 'ten-vad'", specifier = ">=1.0.6.8" },
     { name = "twilio", marker = "extra == 'all'", specifier = ">=9.0.0" },
     { name = "twilio", marker = "extra == 'telephony'", specifier = ">=9.0.0" },
-    { name = "typer", specifier = ">=0.27.0" },
+    { name = "typer", specifier = ">=0.26" },
     { name = "typing-extensions", specifier = ">=4.16.0" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.51.0" },
-    { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.51.0" },
-    { name = "websockets", specifier = ">=15.0.1,<17" },
+    { name = "uvicorn", marker = "extra == 'telephony-fastapi'", specifier = ">=0.51.0" },
+    { name = "websockets", specifier = ">=14.0,<17" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "telephony-fastapi", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [

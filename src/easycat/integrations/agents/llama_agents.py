@@ -17,6 +17,7 @@ from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -30,6 +31,7 @@ from easycat.integrations.agents.base import (
     UnitKind,
     apply_standard_interruption,
 )
+from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,16 @@ class LlamaAgentsBridge:
     ``turn_input.text`` is mapped into the workflow start event under
     ``input_key`` (default: ``"message"``). Context and turn metadata are
     also exposed to workflows as optional start-event fields.
+
+    Local workflow ``Context`` survives normal turns and interrupted turns
+    whose handler reports that it reached a terminal state. If cancellation
+    leaves the handler non-terminal, reusing its still-active ``Context`` is
+    unsafe, so the bridge drops it and sends an
+    ``easycat_interruption_note`` field with the next start event. When
+    ``preserve_context=True``, the unexpected loss is also recorded as a
+    ``LlamaWorkflowContextDropped`` framework error. The session conversation
+    supplied through ``context_key`` remains available independently of
+    workflow-internal ``ctx.store`` state.
     """
 
     COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
@@ -175,7 +187,7 @@ class LlamaAgentsBridge:
             if self._mode == "remote":
                 stream = self._invoke_remote(turn_input, cancel_token)
             else:
-                stream = self._invoke_local(turn_input, cancel_token)
+                stream = self._invoke_local(turn_input, recorder, cancel_token)
             try:
                 async for event in stream:
                     if event.kind == "text_delta":
@@ -384,6 +396,7 @@ class LlamaAgentsBridge:
     async def _invoke_local(
         self,
         turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncGenerator[AgentBridgeEvent, None]:
         assert self._workflow is not None
@@ -499,7 +512,12 @@ class LlamaAgentsBridge:
             await self._best_effort_cancel(self._cancel_local_handler(handler))
             raise
         finally:
-            if cancelled or failed or (cancel_token is not None and cancel_token.is_cancelled):
+            interrupted = cancelled or (cancel_token is not None and cancel_token.is_cancelled)
+            if failed:
+                self._ctx = None
+                self._pending_local_handler = None
+                self._pending_local_stream = None
+            elif interrupted and not _handler_is_done(handler):
                 # The barge-in closed stream_events() before the terminal
                 # event, and cancel_run() may have returned on its own
                 # timeout without actually stopping the run. Reusing this
@@ -508,15 +526,34 @@ class LlamaAgentsBridge:
                 # rejects a still-running context) or replay the cancelled
                 # response's buffered stream deltas before the new answer.
                 # Drop it so the next turn starts from a clean Context;
-                # assistant-text continuity is carried by apply_interruption()
-                # / append_interruption_note(), not the workflow Context. A
-                # pending HITL handler/stream is interrupted state too, so
-                # drop it rather than resume a cancelled conversation.
+                # the framework error below makes the workflow-internal state
+                # loss visible, while apply_interruption() queues a note for
+                # the next start event. A pending HITL handler/stream is
+                # interrupted state too, so drop it rather than resume a
+                # cancelled conversation.
                 self._ctx = None
                 self._pending_local_handler = None
                 self._pending_local_stream = None
+                if self._preserve_context:
+                    recorder.record_framework_error(
+                        ErrorInfo(
+                            type="LlamaWorkflowContextDropped",
+                            message=(
+                                "Interrupted local Llama workflow handler did not reach "
+                                "a terminal state; its Context was dropped because it "
+                                "cannot be safely reused. Workflow-internal ctx.store "
+                                "state may be lost."
+                            ),
+                        )
+                    )
             else:
                 self._ctx = getattr(handler, "ctx", self._ctx)
+                if interrupted:
+                    # A terminal interrupted handler cannot be resumed as a
+                    # pending HITL run, but its completed Context is safe to
+                    # carry into a fresh workflow.run(ctx=...) call.
+                    self._pending_local_handler = None
+                    self._pending_local_stream = None
             self._active_handler = None
             self._active_handler_id = None
 
@@ -872,6 +909,11 @@ class LlamaAgentsBridge:
         delivered_text = plan.framework_instructions["delivered_text"]
         mode = CancellationMode(plan.framework_instructions["mode"])
         self._last_output_text = replacement
+        # The default session mode is ``truncate``, which calls
+        # apply_interruption() rather than append_interruption_note(). Queue
+        # the note here too so a stock workflow always learns that its prior
+        # run was cut off, even when it has no custom interruption hook.
+        self._pending_interruption_note = INTERRUPTION_NOTE
 
         target = self._workflow if self._mode == "local" else self._client
         fn = getattr(target, "apply_interruption", None)
@@ -916,6 +958,23 @@ def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _handler_is_done(handler: Any) -> bool:
+    """Whether a local WorkflowHandler confirms terminal completion.
+
+    Older or duck-typed handlers may not expose ``is_done``. Treating that
+    uncertainty as non-terminal is the safe choice because an active Context
+    cannot be passed to another ``workflow.run``.
+    """
+    is_done = getattr(handler, "is_done", None)
+    if not callable(is_done):
+        return False
+    try:
+        return bool(is_done())
+    except Exception:
+        logger.warning("Llama workflow handler is_done() probe failed", exc_info=True)
+        return False
 
 
 async def _swallow(awaitable: Any) -> None:

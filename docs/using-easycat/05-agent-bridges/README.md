@@ -142,6 +142,23 @@ Known declarative SDK specs can be reused because EasyCat builds a fresh
 bridge around them per session. A custom `SupportWorkflow` instance is mutable
 application state, so it also belongs inside that per-connection factory.
 
+### Llama workflow state after barge-in
+
+With `preserve_context=True` (the default), a local `LlamaAgentsBridge`
+reuses the workflow handler's `Context` after normal completion. It also keeps
+that Context when an interrupted handler confirms `is_done()`, because the
+completed Context is safe to pass to the next `workflow.run(ctx=...)`.
+
+If cancellation returns while the handler is still non-terminal, the active
+Context cannot be reused safely: doing so can raise `ContextStateError` or
+replay buffered deltas from the cancelled answer. The bridge therefore drops
+that workflow-internal Context and records a
+`LlamaWorkflowContextDropped` framework error. Conversation history still
+arrives through the configured `context_key`, and the next start event carries
+`easycat_interruption_note` so the workflow knows that the prior response was
+cut off. Treat retrieval caches, summaries, and other critical `ctx.store`
+data as recoverable if a workflow step might ignore cancellation.
+
 ## Custom workflows have shallow and deep modes
 
 This chapter's `SupportWorkflow` is shallow:

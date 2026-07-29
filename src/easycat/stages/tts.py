@@ -20,7 +20,7 @@ from easycat.stages.base import (
     audio_format_fields,
     captures_verbose_stage_io,
     journal_append_control_signal,
-    journal_append_event,
+    journal_append_event_async,
     journal_ctx,
     live_replay_input,
     put_artifact_async,
@@ -53,7 +53,7 @@ class TTSStage:
         state_before = self.snapshot_state() if capture_enabled else None
         start_sequence = None
         if capture_enabled:
-            start_sequence = journal_append_event(
+            start_sequence = await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_start",
@@ -85,7 +85,7 @@ class TTSStage:
         if capture_enabled:
             state_after = self.snapshot_state()
             elapsed_ms = (time.perf_counter() - started) * 1000
-            journal_append_event(
+            await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_complete",
@@ -185,7 +185,7 @@ class TTSStage:
                         duration = getattr(audio, "duration_ms", None)
                         if duration is not None:
                             extra["duration_ms"] = duration
-                        journal_append_event(
+                        await journal_append_event_async(
                             ctx,
                             stage=self.name,
                             name="tts_frame",
@@ -220,7 +220,7 @@ class TTSStage:
                 )
         state_after = self.snapshot_state()
         elapsed_ms = (time.perf_counter() - started) * 1000
-        journal_append_event(
+        await journal_append_event_async(
             ctx,
             stage=self.name,
             name="stage_complete",

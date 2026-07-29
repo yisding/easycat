@@ -59,10 +59,12 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- For the live pipeline: `uv sync --extra quickstart --extra deepgram --group dev`.
-- For offline replay only: `uv sync --extra quickstart --group dev`. The
-  checked-in WAV pairs need no microphone or API keys.
-- RNNoise is included in `quickstart`; Krisp requires its own SDK.
+- For the live pipeline:
+  `uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev`.
+- For offline replay with `--nr on`:
+  `uv sync --extra quickstart --extra rnnoise --group dev`. The checked-in WAV
+  pairs need no microphone or API keys.
+- RNNoise uses the opt-in `rnnoise` extra; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 - Running this chapter makes live provider calls that may incur charges.
@@ -145,8 +147,9 @@ hearing.
 +transport accepts a complete TTS chunk.
  
  Dependencies:
-     uv sync --extra quickstart --extra deepgram --group dev
-+    RNNoise is included in quickstart; Krisp requires its own SDK.
+-    uv sync --extra quickstart --extra deepgram --group dev
++    uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
++    RNNoise uses its opt-in extra; Krisp requires its own SDK.
 +    For real AEC:  uv sync --extra aec --group dev
 +    Missing selected backends fall back to passthrough — the
 +    journal tells you which backend is live.

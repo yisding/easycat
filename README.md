@@ -62,6 +62,18 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
+Local microphone/speaker modes also need the PortAudio runtime. Install it
+before the Python extra on Linux or macOS:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install -y libportaudio2
+
+# macOS
+brew install portaudio
+```
+
 EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
@@ -132,24 +144,30 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, NumPy, onnxruntime, and LiveKit AEC3 echo
-cancellation. SoXR is a core dependency because every transport and provider
-can cross a sample-rate boundary. The extra does not include TEN VAD; install
+SDK, NumPy, onnxruntime, and LiveKit AEC3 echo cancellation. SoXR is a core
+dependency because every transport and provider can cross a sample-rate
+boundary. RNNoise is
+opt-in because noise reduction defaults off and its Python binding pulls a
+large multimedia/plotting dependency chain; add the `rnnoise` extra only when
+you enable that backend. `quickstart` also does not include TEN VAD; install
 that optional extra separately only if you accept its non-permissive license.
 Silero VAD runs on its bundled ONNX model via `onnxruntime` (already in
 `quickstart`) — no torch required. If you want a leaner install with Silero,
 add extras individually:
 
 ```bash
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad --extra aec --group dev
+uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
 ```
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + NumPy (LocalTransport and local audio): `uv sync --extra local --group dev`
+- sounddevice + NumPy (LocalTransport and local audio buffers; requires the
+  PortAudio runtime above): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
-- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- Twilio SDK + aiohttp (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- FastAPI + uvicorn telephony server layer: `uv sync --extra telephony-fastapi --group dev`
+- Complete Twilio FastAPI reference app and scaffold: `uv sync --extra telephony --extra telephony-fastapi --group dev`
 - OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
 - PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
 - PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
@@ -172,6 +190,14 @@ frameworks, and debugging/audio-processing features:
   or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
+
+For a broad downstream evaluation install, run
+`uv add 'easycat[all,pydantic-ai]'` for stable PydanticAI v1 or
+`uv add 'easycat[all,pydantic-ai-v2]'` for stable v2. In this repository, use
+`uv sync --extra all --extra pydantic-ai --group dev` or
+`uv sync --extra all --extra pydantic-ai-v2 --group dev`, respectively. The
+`all` extra deliberately omits `ten-vad` because of its non-permissive license
+and omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2` extras.
 
 Every EasyCat install includes SoXR for filtered, native-speed sample-rate
 conversion. `easycat doctor` reports the active backend; the dependency-free
@@ -206,8 +232,9 @@ easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat serve            # serve the browser voice playground on localhost
 easycat plan             # show the provider/capability plan for a manifest profile
 easycat plan --json      # emit the machine-readable provider/capability plan
-easycat docs             # show docs for learning, maintenance, validation, operations
-easycat docs --audience learners # filter docs by reader audience or broad role
+easycat docs             # list route labels and available audience filters
+easycat docs --verbose   # expand every route with descriptions and command hints
+easycat docs --audience learners # expand routes for one reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat docs --audience app-builders # filter docs to scaffold and app-building routes
@@ -861,6 +888,7 @@ CORS headers by default; if you host the browser UI elsewhere, pass explicit
 ## Repo layout
 - src/easycat: library code
 - tests: unit/integration tests (some are skipped without API keys)
+- [CHANGELOG.md](CHANGELOG.md): release notes and the current unreleased changes
 
 ## Factory APIs
 

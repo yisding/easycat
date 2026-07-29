@@ -67,6 +67,8 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
     assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --verbose" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --verbose" in entries["docs/README.md"].get("commands", ())
     assert "easycat docs --audience learners" in entries["README.md#cli"].get("commands", ())
     assert "easycat docs --audience learners --json" in entries["README.md#cli"].get(
         "commands", ()

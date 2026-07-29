@@ -1,13 +1,16 @@
-# ruff: noqa
+# ruff: noqa: B006, B007, C901, F401, F841, I001, PLR0912, PLR0915, UP004, UP006, UP008, UP009, UP034, UP035
 # -*- encoding: utf-8 -*-
 # Copyright FunASR (https://github.com/alibaba-damo-academy/FunASR). All Rights Reserved.
 #  MIT License  (https://opensource.org/licenses/MIT)
 
+import logging
 from enum import Enum
 from typing import List, Tuple, Dict, Any
 
 import math
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class VadStateMachine(Enum):
@@ -358,7 +361,11 @@ class E2EVadModel:
         if end_point_is_sent_end:
             expected_sample_number = max(expected_sample_number, self.data_buf_size)
         if self.data_buf_size < expected_sample_number:
-            print("error in calling pop data_buf\n")
+            logger.warning(
+                "FunASR VAD output buffer underrun: available=%d expected=%d",
+                self.data_buf_size,
+                expected_sample_number,
+            )
 
         if len(self.output_data_buf) == 0 or first_frm_is_start_point:
             self.output_data_buf.append(E2EVadSpeechBufWithDoa())
@@ -368,7 +375,11 @@ class E2EVadModel:
             self.output_data_buf[-1].doa = 0
         cur_seg = self.output_data_buf[-1]
         if cur_seg.end_ms != start_frm * self.vad_opts.frame_in_ms:
-            print("warning\n")
+            logger.debug(
+                "FunASR VAD segment position mismatch: end_ms=%d start_ms=%d",
+                cur_seg.end_ms,
+                start_frm * self.vad_opts.frame_in_ms,
+            )
         out_pos = len(cur_seg.buffer)  # cur_seg.buff现在没做任何操作
         data_to_pop = 0
         if end_point_is_sent_end:
@@ -378,7 +389,11 @@ class E2EVadModel:
                 frm_cnt * self.vad_opts.frame_in_ms * self.vad_opts.sample_rate / 1000
             )
         if data_to_pop > self.data_buf_size:
-            print("VAD data_to_pop is bigger than self.data_buf_size!!!\n")
+            logger.warning(
+                "FunASR VAD requested more samples than buffered: requested=%d available=%d",
+                data_to_pop,
+                self.data_buf_size,
+            )
             data_to_pop = self.data_buf_size
             expected_sample_number = self.data_buf_size
 
@@ -390,7 +405,11 @@ class E2EVadModel:
             # cur_seg.buffer[out_pos++] = data_buf_.back()
             out_pos += 1
         if cur_seg.end_ms != start_frm * self.vad_opts.frame_in_ms:
-            print("Something wrong with the VAD algorithm\n")
+            logger.warning(
+                "FunASR VAD segment position invariant failed: end_ms=%d start_ms=%d",
+                cur_seg.end_ms,
+                start_frm * self.vad_opts.frame_in_ms,
+            )
         self.data_buf_start_frame += frm_cnt
         cur_seg.end_ms = (start_frm + frm_cnt) * self.vad_opts.frame_in_ms
         if first_frm_is_start_point:
@@ -413,7 +432,10 @@ class E2EVadModel:
         if self.vad_opts.do_start_point_detection:
             pass
         if self.confirmed_start_frame != -1:
-            print("not reset vad properly\n")
+            logger.warning(
+                "FunASR VAD start frame was not reset: confirmed_start_frame=%d",
+                self.confirmed_start_frame,
+            )
         else:
             self.confirmed_start_frame = start_frame
 
@@ -429,7 +451,10 @@ class E2EVadModel:
         if self.vad_opts.do_end_point_detection:
             pass
         if self.confirmed_end_frame != -1:
-            print("not reset vad properly\n")
+            logger.warning(
+                "FunASR VAD end frame was not reset: confirmed_end_frame=%d",
+                self.confirmed_end_frame,
+            )
         else:
             self.confirmed_end_frame = end_frame
         if not fake_result:

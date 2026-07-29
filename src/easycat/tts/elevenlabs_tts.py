@@ -52,7 +52,7 @@ class ElevenLabsTTSConfig:
     # rather than the conventional ``model``.
     MODEL_FIELD: ClassVar[str] = "model_id"
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah (default)
     # ``eleven_monolingual_v1`` / ``eleven_multilingual_v1`` are deprecated
     # and rejected on newer accounts (free tier refuses with 1008 policy
