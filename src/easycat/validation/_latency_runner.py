@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -44,6 +43,7 @@ from easycat.validation._runner_support import (
     pytest_command_prefix,
     resolve_validation_test_arg,
     run_subprocess,
+    run_timed_command,
     validation_exit_code_from_pytest,
 )
 from easycat.validation.report import (
@@ -200,7 +200,7 @@ def run_latency_validation(
         exit_code = 1
     status: ValidationStatus = "pass" if exit_code == 0 else "fail"
     check_artifacts = execution.paths.check_artifacts()
-    artifacts = _all_artifacts(execution.ctx, check_artifacts)
+    artifacts = execution.ctx.artifacts_with(check_artifacts)
     failures = _all_failures(
         mode=mode,
         result=execution.result,
@@ -251,10 +251,10 @@ def _execute_latency_lane(
     paths.prepare()
     command = _latency_command(mode, paths.junit)
     secrets = tuple(runtime_secret_values())
-    result, duration_s, finished_at = _execute(
+    result, duration_s, finished_at = run_timed_command(
         command_runner,
         command,
-        paths.command_environment(),
+        env=paths.command_environment(),
     )
     paths.write_redacted(result, secrets)
     return _LatencyExecution(
@@ -272,21 +272,11 @@ def _execute_latency_lane(
 
 def _latency_command(mode: LatencyMode, junit_path: Path) -> list[str]:
     return [
-        *pytest_command_prefix(),
+        *pytest_command_prefix(test_override_mode="root"),
         "-q",
         f"--junitxml={junit_path}",
         *[resolve_validation_test_arg(arg) for arg in latency_pytest_args(mode)],
     ]
-
-
-def _execute(
-    command_runner: CommandRunner,
-    command: list[str],
-    env: Mapping[str, str],
-) -> tuple[CommandResult, float, datetime]:
-    started_monotonic = time.perf_counter()
-    result = command_runner(command, env=env)
-    return result, time.perf_counter() - started_monotonic, datetime.now(UTC)
 
 
 def _load_evidence(
@@ -475,19 +465,6 @@ def _tool_exit_codes(
             else {}
         ),
     }
-
-
-def _all_artifacts(
-    ctx: LaneRunContext,
-    check_artifacts: Mapping[str, ArtifactRef],
-) -> dict[str, ArtifactRef]:
-    artifacts = {**ctx.artifacts, **check_artifacts}
-    if ctx.requested_report_path is not None:
-        artifacts["requested_report"] = ArtifactRef(
-            kind="validation_report",
-            path=str(ctx.requested_report_path),
-        )
-    return artifacts
 
 
 def _redact_runtime_json(value: Any, secrets: Sequence[str]) -> Any:

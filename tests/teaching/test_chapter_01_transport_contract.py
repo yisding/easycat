@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "01-echo"
@@ -43,7 +44,7 @@ async def test_echo_counts_transport_acceptance() -> None:
 
 
 def test_transport_contract_probe_is_device_free_and_executable() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER / "transport_contract_probe.py")],
         cwd=ROOT,
         capture_output=True,

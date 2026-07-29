@@ -73,7 +73,12 @@ def _make_el_stt_realtime(
         connect_meta["url"] = url
         return ws
 
-    config = ElevenLabsSTTConfig(api_key="test-key", mode="realtime", ws_connect=mock_connect)
+    config = ElevenLabsSTTConfig(
+        api_key="test-key",
+        mode="realtime",
+        ws_connect=mock_connect,
+        final_transcript_timeout_s=0.05,
+    )
     return ElevenLabsSTT(config), ws, connect_meta
 
 
@@ -384,6 +389,7 @@ async def test_elevenlabs_batch_api_error_is_emitted_before_propagation():
 
     with pytest.raises(httpx.HTTPStatusError):
         await stt.end_stream()
+    await stt.close()
 
     assert len(errors) == 1
     assert errors[0].provider == "elevenlabs"

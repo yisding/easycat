@@ -63,14 +63,32 @@ run(EasyConfig.mic(tts=SilenceTTS(), agent=my_agent))
 
 See `examples/custom_tts_provider.py` for a runnable wrapper-style variant.
 
+### Receiving the session EventBus
+
+An injected TTS provider that reports provider-scoped errors or lifecycle
+events implements the public synchronous hook:
+
+```python
+from easycat import EventBus
+
+
+def set_event_bus(self, event_bus: EventBus) -> None:
+    if self._event_bus is None:
+        self._event_bus = event_bus
+```
+
+Session calls it before synthesis starts. This contract is independent of how
+the provider stores its config; private `_config` / `_event_bus` probing remains
+only as a compatibility fallback.
+
 ## Verifying conformance
 
 ```python
-from easycat import TTSProvider
+from easycat.testing import TTSProviderContractSuite
 
 
-def test_silence_tts_conforms_to_protocol() -> None:
-    assert isinstance(SilenceTTS(), TTSProvider)
+class TestSilenceTTS(TTSProviderContractSuite):
+    provider_factory = SilenceTTS
 
 
 async def test_silence_tts_streams_audio_events() -> None:
@@ -80,10 +98,12 @@ async def test_silence_tts_streams_audio_events() -> None:
     assert all(event.audio is not None for event in events)
 ```
 
-The in-tree behavioral contract lives in
+The suite verifies the async stream, normalized audio events, and idempotent
+stop/cancel behavior. `isinstance(provider, TTSProvider)` checks member names
+only and is not a behavioral conformance test. The in-tree use of the same
+installable suite lives in
 [`tests/contracts/test_tts_provider_contracts.py`](../../tests/contracts/test_tts_provider_contracts.py);
-mirror its cases (audio event streaming, `cancel()` discarding pending
-output, teardown via `aclose`) when your provider talks to a real backend.
+add live-backend cases for provider-specific cancellation and teardown.
 
 ## Register a shortcut name
 
@@ -101,15 +121,18 @@ register_tts_provider(
     YourTTSConfig,
     env_var="YOURS_API_KEY",
     extra="yours",  # optional: install extra shipping your deps
+    probe_module="easycat_yours",  # import checked by /health/ready
     api_domains=("yours.example.com",),  # optional: for URL redaction
 )
 ```
 
 `YourTTS` must accept a `YourTTSConfig` instance as its constructor argument —
-the same contract built-in providers follow. To receive the session
-`EventBus`, declare `event_bus: EventBus | None = None` on `YourTTSConfig`; the
-factory injects the bus into that optional config field before constructing the
-provider. `YourTTSConfig` also needs an `api_key` field.
+the same contract built-in providers follow. A config that declares
+`event_bus: EventBus | None = None` receives the session bus before provider
+construction; no provider is required to consume it. Live instances use
+`set_event_bus()` as described above. Credentialed providers declare
+`env_var=...` and need an `api_key` field; local/self-hosted providers omit
+both.
 For the `"yours/voice-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
@@ -122,9 +145,26 @@ What each metadata field feeds:
 
 | Field | Consumed by |
 | --- | --- |
-| `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/voice"` shortcuts |
+| `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/voice"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
+| `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
+| `capabilities` | static provider capabilities exposed by `easycat plan` and `/capabilities` |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
+
+For a credential-free local provider, omit `env_var`; shortcut parsing and the
+planner then construct the config without reading an API key:
+
+```python
+register_tts_provider(
+    "local-piper",
+    LocalPiperTTS,
+    LocalPiperConfig,  # no api_key field required
+    extra="local-piper",
+    probe_module="local_piper",
+)
+
+config = EasyConfig(stt=..., tts="local-piper/en_US", agent=...)
+```
 
 ### Auto-registering from a pip-installed package
 
@@ -152,6 +192,7 @@ def register() -> None:
         YourTTSConfig,
         env_var="YOURS_API_KEY",
         extra="yours",
+        probe_module="easycat_yours",
         api_domains=("yours.example.com",),
     )
 ```

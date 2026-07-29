@@ -42,6 +42,13 @@ def test_optional_extra_guidance_uses_current_uv_commands() -> None:
     )
 
 
+def test_pyproject_allows_uv_patch_upgrades_within_the_audited_minor() -> None:
+    """Patch releases may advance without silently crossing uv minor releases."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.0,<0.12.0"
+
+
 @pytest.mark.parametrize(
     ("pattern", "label"),
     [
@@ -131,10 +138,10 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "local",
         "openai",
         "openai-agents",
-        "rnnoise",
         "silero-vad",
         "smart-turn",
     }.issubset(bundled_extras)
+    assert "rnnoise" not in bundled_extras
 
     redundant: list[str] = []
     extra_pattern = "|".join(re.escape(extra) for extra in bundled_extras)
@@ -150,6 +157,17 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "Guidance should not re-add extras that `quickstart` already bundles: "
         + "; ".join(redundant)
     )
+
+
+def test_rnnoise_demos_install_the_opt_in_extra() -> None:
+    command = "uv sync --extra quickstart --extra rnnoise --group dev"
+    for relative_path in (
+        "examples/noise_reduction_backends.py",
+        "examples/README.md",
+        "docs/teaching/10-cleaning-signal/README.md",
+    ):
+        guidance = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert command in guidance, f"{relative_path} must install the RNNoise extra"
 
 
 def test_silero_guidance_uses_bundled_onnx_not_torch() -> None:

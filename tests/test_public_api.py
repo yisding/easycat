@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
+import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -38,6 +41,7 @@ PUBLIC_API_SNAPSHOT = (
     "ErrorStage",
     "Event",
     "EventBus",
+    "EventBusBindable",
     "ICEServer",
     "Interruption",
     "JournalRecordKind",
@@ -93,6 +97,7 @@ PUBLIC_API_SNAPSHOT = (
     "auto_adapt_agent",
     "available_stt_providers",
     "available_tts_providers",
+    "available_vad_providers",
     "create_noise_reducer",
     "create_session",
     "create_stt_provider",
@@ -103,6 +108,7 @@ PUBLIC_API_SNAPSHOT = (
     "export_debug_bundle",
     "register_stt_provider",
     "register_tts_provider",
+    "register_vad_provider",
     "require_env",
     "run",
     "run_webrtc_config_server",
@@ -117,6 +123,99 @@ TRANSPORT_EXTENSION_SURFACE = (
     "ServerTransportBase",
     "TransportDegraded",
 )
+
+TESTING_EXTENSION_SURFACE = (
+    "AGENT_BRIDGE_EVENT_KINDS",
+    "AgentBridgeContractSuite",
+    "ContractSuite",
+    "ProviderCapabilities",
+    "ProviderCapabilityReport",
+    "ProviderContractSuite",
+    "ProviderIdentifier",
+    "RecordingAgentRecorder",
+    "STTProviderContractSuite",
+    "TTSProviderContractSuite",
+    "TransportContractSuite",
+    "VADProviderContractSuite",
+    "contains_unredacted_sensitive_text",
+)
+
+AGENT_BRIDGE_EXTENSION_SURFACE = (
+    "AgentBridgeEvent",
+    "AgentRecorder",
+    "AgentRunner",
+    "AgentRunnerConfig",
+    "AgentTurnInput",
+    "BridgeTemplate",
+    "CancellationMode",
+    "ExternalAgentBridge",
+    "FrameworkStateSnapshot",
+    "GenericWorkflowBridge",
+    "INTERRUPTION_NOTE",
+    "InterruptionPlan",
+    "LangChainBridge",
+    "LangGraphBridge",
+    "LlamaAgentsBridge",
+    "OpenAIAgentsBridge",
+    "PydanticAIBridge",
+    "RemoteResponsesAPIBridge",
+    "auto_adapt_agent",
+    "clear_agent_detectors",
+    "is_reusable_agent_spec",
+    "register_agent_detector",
+)
+
+AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
+    "AgentRunner": "(agent: 'Any', config: 'AgentRunnerConfig | None' = None) -> 'None'",
+    "BridgeTemplate": "(*, display_name: 'str | None' = None) -> 'None'",
+    "GenericWorkflowBridge": ("(workflow: 'Any', *, display_name: 'str | None' = None) -> 'None'"),
+    "LangChainBridge": (
+        "(runnable: 'Any', *, display_name: 'str | None' = None, "
+        "input_key: 'str | None' = 'input', history_key: 'str | None' = 'history', "
+        "messages_input: 'bool' = False, include_types: 'Sequence[str] | None' = None, "
+        "session_id: 'str | None' = None, config: 'dict[str, Any] | None' = None) -> 'None'"
+    ),
+    "LangGraphBridge": (
+        "(graph: 'Any', *, thread_id: 'str | None' = None, "
+        "messages_key: 'str | None' = 'messages', display_name: 'str | None' = None, "
+        "include_types: 'Sequence[str] | None' = None) -> 'None'"
+    ),
+    "LlamaAgentsBridge": (
+        "(workflow: 'Any | None' = None, *, client: 'Any | None' = None, "
+        "base_url: 'str | None' = None, workflow_name: 'str | None' = None, "
+        "input_key: 'str' = 'message', context_key: 'str | None' = 'context', "
+        "turn_id_key: 'str | None' = 'turn_id', "
+        "interruption_note_key: 'str | None' = 'easycat_interruption_note', "
+        "preserve_context: 'bool' = True, run_kwargs: 'dict[str, Any] | None' = None, "
+        "start_event_factory: "
+        "'Callable[[AgentTurnInput, dict[str, Any]], Any] | None' = None, "
+        "event_text_extractor: 'Callable[[Any], str | None] | None' = None, "
+        "human_response_event_factory: "
+        "'Callable[[AgentTurnInput], Any] | None' = None, "
+        "human_response_key: 'str' = 'response', "
+        "human_response_step: 'str | None' = None, "
+        "display_name: 'str | None' = None, "
+        "include_internal_events: 'bool' = False) -> 'None'"
+    ),
+    "OpenAIAgentsBridge": (
+        "(agent: 'Any', *, run_config: 'Any' = None, context: 'Any' = None, "
+        "use_previous_response_id: 'bool' = True, max_turns: 'int | None' = None, "
+        "hooks: 'Any' = None, mcp_servers: 'list[Any] | None' = None) -> 'None'"
+    ),
+    "PydanticAIBridge": (
+        "(*, agent: 'Any | None' = None, deps: 'Any' = None, "
+        "model_settings: 'Any' = None, graph: 'Any | None' = None, "
+        "state_factory: 'Callable[[], Any] | None' = None, "
+        "initial_node_factory: 'Callable[[str, Any], Any] | None' = None, "
+        "agents: 'list[Any] | None' = None, mcp_servers: 'list[Any] | None' = None, "
+        "toolsets: 'list[Any] | None' = None) -> 'None'"
+    ),
+    "RemoteResponsesAPIBridge": (
+        "(base_url: 'str', model: 'str', *, api_key: 'str | None' = None, "
+        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None, "
+        "reasoning_effort: 'str | None' = None) -> 'None'"
+    ),
+}
 
 
 def test_public_api_snapshot() -> None:
@@ -216,6 +315,73 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     assert "extending/" in section
 
 
+def test_provider_testing_extension_surface_is_public_and_documented() -> None:
+    import easycat.testing as testing
+
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Provider Testing Extension Surface", 1)[1].split(
+            "## Agent Bridge Extension Surface", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Provider Testing Extension Surface section"
+        ) from exc
+
+    assert tuple(testing.__all__) == TESTING_EXTENSION_SURFACE
+    for name in TESTING_EXTENSION_SURFACE:
+        assert getattr(testing, name) is not None
+        assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
+
+    assert "from easycat.testing import STTProviderContractSuite" in section
+    assert "extending/" in section
+
+
+def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
+    """`easycat.integrations.agents` exposes the supported bridge seam."""
+    import easycat.integrations.agents as agents
+
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Agent Bridge Extension Surface", 1)[1].split(
+            "## Top-Level Allowlist", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Agent Bridge Extension Surface section"
+        ) from exc
+
+    assert tuple(agents.__all__) == AGENT_BRIDGE_EXTENSION_SURFACE
+    for name in AGENT_BRIDGE_EXTENSION_SURFACE:
+        assert getattr(agents, name) is not None
+        assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
+
+    assert "from easycat.integrations.agents import PydanticAIBridge" in section
+    assert "agent=None" in section
+    assert "graph=None" in section
+
+
+def test_agent_bridge_constructor_signatures_are_stable() -> None:
+    import easycat.integrations.agents as agents
+
+    actual = {
+        name: str(inspect.signature(getattr(agents, name)))
+        for name in AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
+    }
+    assert actual == AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
+
+
+def test_shipped_agent_bridges_satisfy_static_consumer_contract() -> None:
+    fixture = Path("tests/typecheck/agent_bridge_consumer.py")
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--no-incremental", str(fixture)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_server_package_owns_standalone_transport_orchestration() -> None:
     """Process lifecycle helpers belong to ``easycat.server``, not providers."""
     import easycat.server as server
@@ -276,12 +442,14 @@ def test_documented_factory_surface_is_importable() -> None:
         create_stt_provider,
         create_tts_provider,
         create_vad,
+        register_vad_provider,
     )
 
     assert create_session.__name__ == "create_session"
     assert create_stt_provider.__name__ == "create_stt_provider"
     assert create_tts_provider.__name__ == "create_tts_provider"
     assert create_vad.__name__ == "create_vad"
+    assert register_vad_provider.__name__ == "register_vad_provider"
     assert create_noise_reducer.__name__ == "create_noise_reducer"
     assert STTProviderConfig.__name__ == "STTProviderConfig"
     assert TTSProviderConfig.__name__ == "TTSProviderConfig"

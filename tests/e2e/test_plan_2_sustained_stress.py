@@ -41,6 +41,16 @@ from tests.e2e._assertions import (
 
 pytestmark = [pytest.mark.asyncio]
 
+# The global 60s `timeout` in pyproject is a unit-test safety net ("no single
+# test should run for minutes"). These are deliberately sustained: 50 turns
+# and 10 concurrent sessions, ~52s and ~55s including teardown on an idle
+# 8-core box. Under `-n auto` they share that box with seven siblings, so they
+# routinely cross 60s -- and crossing it does not fail the test, it force-exits
+# the worker PROCESS. Give the stress lane a budget that matches what it
+# actually does, so a timeout here means genuinely stuck rather than merely
+# contended.
+_STRESS_TIMEOUT_S = 300
+
 
 def _append_stress_reliability_sample(
     *,
@@ -116,6 +126,7 @@ async def test_ring_buffer_overflow_emits_sentinel() -> None:
 @pytest.mark.integration_socket
 @pytest.mark.slow
 @pytest.mark.stress
+@pytest.mark.timeout(_STRESS_TIMEOUT_S)
 async def test_fifty_turns_single_session_scripted(
     monkeypatch: pytest.MonkeyPatch,
     ws_server_factory,
@@ -221,6 +232,7 @@ async def test_fifty_turns_single_session_scripted(
 @pytest.mark.integration_socket
 @pytest.mark.slow
 @pytest.mark.stress
+@pytest.mark.timeout(_STRESS_TIMEOUT_S)
 async def test_concurrent_sessions_journal_isolation(
     monkeypatch: pytest.MonkeyPatch,
     ws_server_factory,

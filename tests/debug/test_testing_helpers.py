@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import zipfile
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,7 @@ from easycat.debug.bundle import FORMAT_VERSION, RunBundle
 from easycat.debug.testing import (
     JUDGE_RUBRIC,
     TurnResult,
+    _openai_judge,
     assert_exact_match,
     assert_latency,
     assert_llm_judge,
@@ -346,3 +349,44 @@ async def test_assert_llm_judge_default_judge_requires_api_key(monkeypatch):
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         await assert_llm_judge(result)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_reasoning_effort"),
+    [
+        ("gpt-5.6-luna", "none"),
+        ("gpt-4.1-mini", None),
+    ],
+)
+async def test_openai_judge_only_sets_reasoning_for_its_default_model(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    expected_reasoning_effort: str | None,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Completions:
+        async def create(self, **kwargs: object) -> object:
+            calls.append(kwargs)
+            message = SimpleNamespace(
+                content='{"relevance": 5, "fluency": 5, "appropriate_length": 5}'
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    class _AsyncOpenAI:
+        def __init__(self) -> None:
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    openai_stub = ModuleType("openai")
+    openai_stub.AsyncOpenAI = _AsyncOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", openai_stub)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    judge = _openai_judge(model)
+    verdict = await judge("User: hi\nBot: hello", JUDGE_RUBRIC)
+
+    assert verdict["relevance"] == 5
+    if expected_reasoning_effort is None:
+        assert "reasoning_effort" not in calls[0]
+    else:
+        assert calls[0]["reasoning_effort"] == expected_reasoning_effort

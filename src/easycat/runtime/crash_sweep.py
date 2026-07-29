@@ -59,18 +59,15 @@ def _process_start_token(pid: int) -> str | None:
     return token if token.isdecimal() else None
 
 
-def _current_process_identity() -> str:
-    """Return the owner marker persisted in ``session_state.live_pid``."""
-    pid = os.getpid()
+def _process_birth_identity(pid: int) -> str | None:
+    """Return a boot-scoped process start identity where the OS exposes one."""
     start_token = _process_start_token(pid)
     if start_token is None:
-        # Non-Linux or restricted /proc: retain the legacy conservative
-        # marker instead of weakening liveness protection.
-        return str(pid)
+        return None
     boot_id = _boot_id()
     if boot_id is None:
-        return f"{pid}:{start_token}"
-    return f"{pid}:{start_token}:{boot_id}"
+        return None
+    return f"{boot_id}:{start_token}"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -99,8 +96,9 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     across this call (the in-session promoter closes its live connection
     first; the sweep operates on orphaned files no one owns).  We open our
     own short-lived connection to fold any uncheckpointed WAL pages into the
-    main database before the byte copy — with ``wal_autocheckpoint=0`` recent
-    records may live only in the WAL, and a bare copy would lose them.
+    main database before the byte copy — even with bounded auto-checkpointing,
+    recent committed records may live only in the WAL and a bare copy would
+    lose them.
     """
     try:
         conn = sqlite3.connect(str(db_path))
@@ -200,54 +198,27 @@ def _read_only_state(db_path: Path) -> str:
         conn.close()
 
 
-def _parse_process_identity(marker: str) -> tuple[int, str | None, str | None] | None:
-    """Parse a current or legacy journal-owner marker."""
-    marker_parts = marker.split(":")
-    if not 1 <= len(marker_parts) <= 3:
-        return None
-    try:
-        pid = int(marker_parts[0])
-    except (TypeError, ValueError):
-        return None
-    expected_start = marker_parts[1] if len(marker_parts) >= 2 else None
-    expected_boot = marker_parts[2] if len(marker_parts) == 3 else None
-    if expected_start == "" or expected_boot == "":
-        return None
-    return pid, expected_start, expected_boot
-
-
 def _has_live_pid(conn: sqlite3.Connection) -> bool:
-    """True if the journal's owner marker still identifies that process.
-
-    New markers use ``"<pid>:<start-token>:<boot-id>"``. Bare integer and
-    ``"<pid>:<start-token>"`` markers from older EasyCat versions remain
-    supported conservatively.
-    """
+    """True if the journal's PID and process-birth markers identify a live owner."""
     row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
     if row is None or row[0] in (None, ""):
         return False
-    identity = _parse_process_identity(str(row[0]))
-    if identity is None:
+    try:
+        pid = int(row[0])
+    except (TypeError, ValueError):
         return False
-    pid, expected_start, expected_boot = identity
     if not _pid_alive(pid):
         return False
-    if expected_start is None:
+
+    birth_row = conn.execute(
+        "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+    ).fetchone()
+    if birth_row is None or birth_row[0] in (None, ""):
         return True
-    if expected_boot is not None:
-        actual_boot = _boot_id()
-        if actual_boot is None:
-            # The process is alive, but the boot identity is temporarily
-            # unreadable. Preserve the journal rather than risk data loss.
-            return True
-        if actual_boot != expected_boot:
-            return False
-    actual_start = _process_start_token(pid)
-    if actual_start is None:
-        # An alive process whose /proc identity cannot be inspected might
-        # still own the journal. Preserve it rather than risk data loss.
+    current_birth = _process_birth_identity(pid)
+    if current_birth is None:
         return True
-    return actual_start == expected_start
+    return str(birth_row[0]) == current_birth
 
 
 def is_journal_live(db_path: Path) -> bool:

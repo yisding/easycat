@@ -140,10 +140,9 @@ async def probe() -> dict[str, object]:
             "failed": failed.stop_calls,
         },
         "stop_all": {
-            "all_slots_released": (
-                manager.get("sweep-healthy") is None and manager.get("sweep-failing") is None
-            ),
             "expected_error": expected_stop_error,
+            "failed_slot_retained": manager.get("sweep-failing") is sweep_failing,
+            "healthy_slot_released": manager.get("sweep-healthy") is None,
             "start_calls": {
                 "sweep-failing": sweep_failing.start_calls,
                 "sweep-healthy": sweep_healthy.start_calls,

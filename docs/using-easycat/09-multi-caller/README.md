@@ -189,7 +189,8 @@ Never print the resolved policy, request headers, or token in diagnostics.
 
 1. mark the shared gate draining so new calls are rejected;
 2. close the WebSocket and HTTP/WebRTC listeners;
-3. ask active sessions to stop gracefully for `drain_timeout_s`;
+3. ask active sessions to stop gracefully for `drain_timeout_s`
+   (`drain_mode="stop_sessions"`, the default);
 4. force-stop stragglers and bound that phase with
    `force_shutdown_timeout_s`.
 
@@ -197,6 +198,11 @@ Never print the resolved policy, request headers, or token in diagnostics.
 failure or an outer deadline, not as the normal deployment path. The process
 manager's termination grace period must be longer than EasyCat's drain and
 forced-shutdown windows combined.
+
+For rolling deploys where callers should finish naturally, configure
+`VoiceServerConfig(drain_mode="await_natural_end")`; the server rejects new
+connections, leaves existing media sockets open until caller hangup, and only
+force-stops sessions still active after `drain_timeout_s`.
 
 Sticky routing or an external control plane is needed when multiple worker
 processes must address a specific live session: each process owns its own

@@ -98,6 +98,34 @@ class _EmptyAgentRun:
         return []
 
 
+class _StructuredOutputRun(_EmptyAgentRun):
+    output = {"utterance": "hello", "intent": "capture"}
+
+
+class _UsageAgentRun(_EmptyAgentRun):
+    def usage(self) -> dict[str, int]:
+        return {
+            "request_tokens": 23,
+            "response_tokens": 9,
+            "cache_read_tokens": 6,
+        }
+
+
+class _UsageAgent:
+    name = "usage"
+    model = "test-model"
+
+    def iter(
+        self,
+        text: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> _UsageAgentRun:
+        return _UsageAgentRun()
+
+
 class _LegacyMCPAgent:
     name = "legacy"
 
@@ -115,6 +143,18 @@ class _LegacyMCPAgent:
     ) -> _EmptyAgentRun:
         self.seen_mcp_servers = list(self.mcp_servers)
         return _EmptyAgentRun()
+
+
+class _StructuredOutputAgent:
+    def iter(
+        self,
+        text: str,
+        *,
+        message_history: list[Any] | None = None,
+        deps: Any = None,
+        model_settings: Any = None,
+    ) -> _StructuredOutputRun:
+        return _StructuredOutputRun()
 
 
 class _GraphStateForSignature:
@@ -138,6 +178,10 @@ class _NoOpGraphRun:
         raise StopAsyncIteration
 
 
+class _StructuredOutputGraphRun(_NoOpGraphRun):
+    output = {"utterance": "hello", "intent": "capture"}
+
+
 class _AmbiguousKeywordGraph:
     """Mimic a v2 graph whose `state` parameter is positional-capable."""
 
@@ -156,6 +200,38 @@ class _AmbiguousKeywordGraph:
         self.seen_deps = deps
         self.seen_inputs = inputs
         return _NoOpGraphRun()
+
+
+class _StructuredOutputGraph(_AmbiguousKeywordGraph):
+    def iter(
+        self,
+        state: Any = None,
+        deps: Any = None,
+        inputs: Any = None,
+    ) -> _StructuredOutputGraphRun:
+        self.seen_state = state
+        self.seen_deps = deps
+        self.seen_inputs = inputs
+        return _StructuredOutputGraphRun()
+
+
+class _SequenceOutputGraph(_AmbiguousKeywordGraph):
+    def __init__(self, outputs: list[Any]) -> None:
+        super().__init__()
+        self.outputs = iter(outputs)
+
+    def iter(
+        self,
+        state: Any = None,
+        deps: Any = None,
+        inputs: Any = None,
+    ) -> _NoOpGraphRun:
+        self.seen_state = state
+        self.seen_deps = deps
+        self.seen_inputs = inputs
+        run = _NoOpGraphRun()
+        run.output = next(self.outputs)
+        return run
 
 
 class FinalResultEvent:
@@ -262,6 +338,31 @@ async def test_graph_event_handler_accepts_v2_stream_signature() -> None:
     assert handler.accumulated_text == "hello"
 
 
+@pytest.mark.asyncio
+async def test_graph_event_handler_records_context_usage_and_model() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    handler = _GraphEventHandler(_recorder(journal))
+    ctx = type(
+        "GraphRunContext",
+        (),
+        {
+            "usage": {"request_tokens": 11, "response_tokens": 4},
+            "model": "graph-model",
+        },
+    )()
+
+    async def events():
+        if False:
+            yield None
+
+    await handler(ctx, events())
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data["model"] == "graph-model"
+    assert usage.data["input_tokens"] == 11
+    assert usage.data["output_tokens"] == 4
+
+
 def test_bridge_passes_explicit_v2_toolset_objects_to_agent_kwargs() -> None:
     pytest.importorskip("pydantic_ai")
     from pydantic_ai import Agent
@@ -309,6 +410,93 @@ async def test_bridge_assigns_raw_mcp_servers_to_legacy_agent_attribute() -> Non
     assert agent.mcp_servers == ["original"]
     assert events[-1].kind == "done"
     assert events[-1].structured_output == "done"
+
+
+@pytest.mark.asyncio
+async def test_bridge_speaks_structured_output_when_no_text_parts_stream() -> None:
+    bridge = PydanticAIBridge(agent=_StructuredOutputAgent())
+
+    events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [(event.kind, event.text) for event in events] == [
+        ("done", "{'utterance': 'hello', 'intent': 'capture'}")
+    ]
+    assert events[-1].structured_output == {"utterance": "hello", "intent": "capture"}
+
+
+@pytest.mark.asyncio
+async def test_graph_bridge_speaks_structured_output_when_no_text_parts_stream() -> None:
+    state = _GraphStateForSignature()
+    bridge = PydanticAIBridge(
+        graph=_StructuredOutputGraph(),
+        state_factory=lambda: state,
+        initial_node_factory=lambda text, _state: text,
+    )
+
+    events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [(event.kind, event.text) for event in events] == [
+        ("done", "{'utterance': 'hello', 'intent': 'capture'}")
+    ]
+    assert events[-1].structured_output == {"utterance": "hello", "intent": "capture"}
+
+
+@pytest.mark.asyncio
+async def test_graph_bridge_does_not_replay_prior_session_output() -> None:
+    bridge = PydanticAIBridge(
+        graph=_SequenceOutputGraph([{"utterance": "first"}, None]),
+        state_factory=_GraphStateForSignature,
+        initial_node_factory=lambda text, _state: text,
+    )
+    first_recorder = _recorder()
+    second_recorder = JournalAgentRecorder(
+        journal=InMemoryRingBuffer(capacity=1000),
+        artifact_store=None,
+        context=RecorderContext(run_id="r2", session_id="s2", turn_id="t2"),
+    )
+
+    first = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("first"),
+            first_recorder,
+        )
+    ]
+    second = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("second"),
+            second_recorder,
+        )
+    ]
+
+    assert first[-1].structured_output == {"utterance": "first"}
+    assert second[-1].text == ""
+    assert second[-1].structured_output is None
+
+
+@pytest.mark.asyncio
+async def test_bridge_records_v2_usage_accessor() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    bridge = PydanticAIBridge(agent=_UsageAgent())
+
+    _ = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("hi"),
+            _recorder(journal),
+        )
+    ]
+
+    [usage] = [record for record in journal.read() if record.name == "agent_usage"]
+    assert usage.data == {
+        "run_id": "r1",
+        "provider": "pydantic_ai",
+        "model": "test-model",
+        "input_tokens": 23,
+        "output_tokens": 9,
+        "cached_input_tokens": 6,
+    }
 
 
 def test_graph_iter_prefers_inputs_keyword_when_state_is_positional_capable() -> None:

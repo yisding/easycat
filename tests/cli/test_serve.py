@@ -314,18 +314,29 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
     captured: dict[str, Any] = {}
 
     class StubRemoteResponsesAPIBridge:
-        def __init__(self, base_url: str, model: str, *, api_key: str | None = None) -> None:
+        def __init__(
+            self,
+            base_url: str,
+            model: str,
+            *,
+            api_key: str | None = None,
+            reasoning_effort: str | None = None,
+        ) -> None:
             self.base_url = base_url
             self.model = model
             self.api_key = api_key
+            self.reasoning_effort = reasoning_effort
 
         def _build_request_body(self, turn_input: Any) -> dict[str, Any]:
-            return {
+            body = {
                 "model": self.model,
                 "input": [{"role": "user", "content": turn_input.text}],
                 "stream": True,
                 "metadata": {"parent": "kept"},
             }
+            if self.reasoning_effort is not None:
+                body["reasoning"] = {"effort": self.reasoning_effort}
+            return body
 
     def fake_browser(**kwargs: Any) -> Any:
         captured.setdefault("browser_calls", []).append(kwargs)
@@ -357,6 +368,7 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
     assert agent.base_url == "https://api.openai.com"
     assert agent.model == "gpt-test"
     assert agent.api_key == "sk-test"
+    assert agent.reasoning_effort is None
 
     from types import SimpleNamespace
 
@@ -367,6 +379,17 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
         "stream": True,
         "metadata": {"parent": "kept"},
         "instructions": "Speak plainly.",
+    }
+
+    default_factory = serve_mod._playground_config_factory(
+        agent_model=serve_mod._DEFAULT_AGENT_MODEL,
+        instructions="Speak plainly.",
+    )
+    default_config = default_factory(object())
+    default_agent = default_config.kwargs["agent"]
+    assert default_agent.reasoning_effort == "none"
+    assert default_agent._build_request_body(SimpleNamespace(text="hello"))["reasoning"] == {
+        "effort": "none"
     }
 
 

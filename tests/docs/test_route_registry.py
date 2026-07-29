@@ -261,6 +261,7 @@ def test_cli_docs_routes_declare_diataxis_categories() -> None:
     assert diataxis["docs/using-easycat/"] == "tutorial"
     assert diataxis["docs/architecture.md"] == "explanation"
     assert diataxis["docs/reference/events.md"] == "reference"
+    assert diataxis["docs/reference/journal-records.md"] == "reference"
     assert diataxis["docs/reference/easyconfig.md"] == "reference"
     assert diataxis["docs/reference/session-lifecycle.md"] == "reference"
     assert diataxis["docs/public-api.md"] == "reference"

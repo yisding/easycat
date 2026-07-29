@@ -15,6 +15,7 @@ from easycat.transports.webtransport import (
     _TAG_AUDIO,
     WebTransportConnectionTransport,
     WebTransportServer,
+    WebTransportTransport,
     WebTransportTransportConfig,
 )
 
@@ -38,6 +39,12 @@ def test_top_level_lazy_exports() -> None:
     assert _Wt
     assert _RunWt
     assert _ServeWt
+
+
+def test_webtransport_transports_leave_server_side_aec_off_by_default() -> None:
+    assert WebTransportTransportConfig.default_echo_cancellation_enabled is False
+    assert WebTransportConnectionTransport.default_echo_cancellation_enabled is False
+    assert WebTransportTransport.default_echo_cancellation_enabled is False
 
 
 def _write_self_signed_pair(tmp: Path) -> tuple[Path, Path]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from easycat.runtime.journal_memory import InMemoryRingBuffer
@@ -11,6 +12,7 @@ from easycat.runtime.journal_sql import (
     LitestreamSqliteJournal,
     SqliteJournal,
 )
+from easycat.validation.redaction import RedactionPolicy
 
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import InMemoryArtifactStore
@@ -24,9 +26,10 @@ def create_journal(
     debug: Literal["off", "light", "full"] = "light",
     backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     capacity: int = 10_000,
-    data_dir: str | None = None,
+    data_dir: str | Path | None = None,
     artifact_store: InMemoryArtifactStore | None = None,
     retention_mode: Literal["archive", "delete"] = "archive",
+    redaction: RedactionPolicy = "secrets",
 ) -> InMemoryRingBuffer | SqliteJournal | LitestreamSqliteJournal | LibsqlJournal:
     """Create a journal backend based on the debug level and backend selection.
 
@@ -49,6 +52,7 @@ def create_journal(
                 session_id,
                 data_dir=data_dir,
                 retention_mode=retention_mode,
+                redaction=redaction,
             )
             logger.info(
                 "Journal: session=%s backend=%s path=%s",
@@ -60,7 +64,7 @@ def create_journal(
 
         if backend == "libsql":
             try:
-                journal = LibsqlJournal(session_id, data_dir=data_dir)
+                journal = LibsqlJournal(session_id, data_dir=data_dir, redaction=redaction)
                 logger.info(
                     "Journal: session=%s backend=%s path=%s",
                     session_id,
@@ -73,7 +77,12 @@ def create_journal(
                     "libsql_experimental SDK not installed; falling back to SqliteJournal"
                 )
 
-        journal = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
+        journal = SqliteJournal(
+            session_id,
+            data_dir=data_dir,
+            retention_mode=retention_mode,
+            redaction=redaction,
+        )
         logger.info(
             "Journal: session=%s backend=%s path=%s",
             session_id,
@@ -87,4 +96,8 @@ def create_journal(
         session_id,
         capacity,
     )
-    return InMemoryRingBuffer(capacity=capacity, artifact_store=artifact_store)
+    return InMemoryRingBuffer(
+        capacity=capacity,
+        artifact_store=artifact_store,
+        redaction=redaction,
+    )

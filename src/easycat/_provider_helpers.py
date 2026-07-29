@@ -100,6 +100,13 @@ class ProviderErrorEmitter:
         """
         if not self._emit_tasks:
             return
+        current = asyncio.current_task()
+        if current in self._emit_tasks:
+            # An Error subscriber may initiate provider/session teardown from
+            # inside the tracked emit task. Do not await sibling emit tasks
+            # here either: another subscriber can be joining this same
+            # teardown, which would otherwise create a cross-task cycle.
+            return
         # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
         await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
 

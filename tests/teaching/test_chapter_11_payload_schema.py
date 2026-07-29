@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from easycat.runtime import JournalRecord
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "11-journal"
@@ -26,7 +26,7 @@ def _load_probe():
 
 
 def test_payload_schema_probe_preserves_then_rejects_unchecked_type() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(PROBE)],
         cwd=ROOT,
         check=True,
