@@ -1,11 +1,12 @@
 """Echo cancellation using LiveKit's AudioProcessingModule (WebRTC AEC3).
 
-Provides an optional AEC pipeline stage that sits between noise reduction and
-VAD.  The near-end (microphone) signal is cleaned via ``process``, and the
-far-end (speaker) signal is fed as a reference via ``feed_reference``.
+Provides an optional AEC pipeline stage that processes the raw near-end
+(microphone) signal before noise reduction and VAD. The far-end (speaker)
+signal is fed as a reference via ``feed_reference``.
 
 LiveKit APM requires 10 ms int16 PCM frames — the same encoding as EasyCat's
-``AudioChunk``, just needs frame splitting.
+``AudioChunk``. Stateful per-direction buffers submit only complete frames and
+carry partial input into the next chunk without injecting padding silence.
 
 Requires the ``livekit`` package (``uv add 'easycat[aec]'``). From the
 EasyCat repo, use ``uv sync --extra aec --group dev``.
@@ -70,19 +71,6 @@ def _frame_samples_for_rate(sample_rate: int) -> int:
             "(e.g. 16000 or 48000) before echo cancellation."
         )
     return samples
-
-
-def _split_frames(data: bytes, frame_bytes: int) -> list[bytes]:
-    """Split raw PCM data into fixed-size frames, zero-padding the last."""
-    frames: list[bytes] = []
-    offset = 0
-    while offset < len(data):
-        frame = data[offset : offset + frame_bytes]
-        if len(frame) < frame_bytes:
-            frame = frame + b"\x00" * (frame_bytes - len(frame))
-        frames.append(frame)
-        offset += frame_bytes
-    return frames
 
 
 # ── LiveKit AEC ───────────────────────────────────────────────────

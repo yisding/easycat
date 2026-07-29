@@ -4,8 +4,8 @@ The repo ``justfile`` is the single source of truth for the ``guard-*``
 recipes: each recipe's comment is its description and each recipe body is
 the raw no-``just`` fallback command. This script renders that data into:
 
-* ``src/easycat/cli/_guard_commands.py`` — a generated module imported by
-  ``easycat.cli._app`` for the ``easycat docs`` route command hints
+* ``src/easycat/cli/_guard_commands.py`` — the generated ``just guard-*``
+  names imported by ``easycat.cli._app`` for shipped route command hints
   (shipped code cannot read the repo justfile).
 * ``<!-- BEGIN auto:guard-commands format=... -->`` blocks in
   ``docs/validation.md``, ``CLAUDE.md``, ``AGENTS.md``, and
@@ -126,10 +126,6 @@ def _render_module(guards: Sequence[GuardRecipe]) -> str:
         "",
         "DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (",
         *(f'    "just {guard.name}",' for guard in guards),
-        ")",
-        "",
-        "DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (",
-        *(f'    "{guard.command}",' for guard in guards),
         ")",
         "",
     ]

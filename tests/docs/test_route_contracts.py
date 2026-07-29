@@ -57,10 +57,37 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         )
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ONBOARDING_GUARD_COMMANDS
-        + RAW_ONBOARDING_GUARD_COMMANDS
     ):
         assert command in command_section
         assert command in route_commands
+
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in command_section
+        assert command not in route_commands
+
+
+def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
+    route_commands = entries["CLAUDE.md"].get("commands", ())
+
+    for command in (
+        DOCS_MAP_COMMANDS
+        + (
+            "uv run easycat docs --audience maintainers",
+            "uv run easycat docs --audience maintainers --json",
+        )
+        + AGENT_GUIDE_MACHINE_COMMANDS
+        + ("uv run pytest tests/install/test_install_guidance.py",)
+        + ONBOARDING_GUARD_COMMANDS
+    ):
+        assert command in command_section
+        assert command in route_commands
+
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in command_section
+        assert command not in route_commands
 
 
 def test_architecture_explanation_carries_claude_guide_prose() -> None:
@@ -102,6 +129,9 @@ def test_events_reference_tracks_public_event_types() -> None:
     assert "`STTEvent`" in text
     assert "`TTSEvent`" in text
     assert "easycat.events" in text
+    normalized_text = " ".join(text.split())
+    assert "confirmation/take timestamp" in normalized_text
+    assert "not always the start of model work" in normalized_text
 
 
 def test_easyconfig_reference_tracks_config_fields() -> None:
@@ -405,7 +435,9 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
             (
                 "uv sync --group dev",
                 "uv run python docs/using-easycat/10-telephony/main.py",
-                "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+                "uv sync "
+                "--extra openai --extra telephony --extra telephony-fastapi "
+                "--extra openai-agents --group dev",
                 "uv run easycat doctor --env-file .env --json",
                 (
                     "uv run --env-file .env uvicorn examples.twilio_app:create_app "
@@ -512,11 +544,12 @@ def test_public_api_docs_route_matches_contract_guard_commands() -> None:
         "uv run easycat explain json-schema",
         "uv run pytest tests/test_public_api.py",
         "just guard-docs",
-        RAW_ONBOARDING_GUARD_COMMANDS[0],
     ):
         assert command in contract
         assert command in route_commands
 
+    assert RAW_ONBOARDING_GUARD_COMMANDS[0] in contract
+    assert RAW_ONBOARDING_GUARD_COMMANDS[0] not in route_commands
     assert "If `just` is not installed" in contract
     assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in contract
     assert "easycat docs --json" not in route_commands
@@ -699,7 +732,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 
     for command in RAW_ONBOARDING_GUARD_COMMANDS:
         assert command in validation_section
-        assert command in route_commands
+        assert command not in route_commands
 
     for command in validation_commands:
         assert command in validation_section
@@ -747,7 +780,7 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
 
     for command in RAW_ONBOARDING_GUARD_COMMANDS:
         assert command in contributing
-        assert command in route_commands
+        assert command not in route_commands
 
     for command in validation_commands:
         assert command in validation_section
