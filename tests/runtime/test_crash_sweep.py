@@ -15,8 +15,11 @@ import pytest
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
 from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.crash_sweep import (
+    _boot_id,
     _copy_journal_to_crash_dump,
     _crashed_state,
+    _process_birth_identity,
+    _process_start_token,
     is_journal_live,
 )
 from easycat.runtime.records import JournalRecordKind
@@ -300,6 +303,88 @@ def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
     assert crash.exists()
     # The source is removed so it stops accumulating in journals/.
     assert not journal.exists()
+
+
+def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:
+    """An alive PID with the wrong start token is not the journal owner."""
+    start_token = _process_start_token(os.getpid())
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
+        pytest.skip("process start identity requires readable Linux /proc")
+
+    journal = SqliteJournal("reused", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="reused")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        (str(os.getpid()),),
+    )
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+        (f"{boot_id}:{int(start_token) + 1}",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    db_path = tmp_path / "journals" / "reused.sqlite"
+
+    assert is_journal_live(db_path) is False
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not db_path.exists()
+    assert (tmp_path / "crash-dumps" / "reused.sqlite").exists()
+
+
+def test_live_owner_marker_includes_process_start_identity(tmp_path) -> None:
+    start_token = _process_start_token(os.getpid())
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
+        pytest.skip("full process identity requires readable Linux /proc")
+
+    journal = SqliteJournal("owned", data_dir=tmp_path)
+    try:
+        marker = journal._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'live_pid'"
+        ).fetchone()
+        birth_marker = journal._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+        ).fetchone()
+        assert marker is not None
+        assert marker[0] == str(os.getpid())
+        assert birth_marker is not None
+        assert birth_marker[0] == f"{boot_id}:{start_token}"
+        assert birth_marker[0] == _process_birth_identity(os.getpid())
+        assert is_journal_live(tmp_path / "journals" / "owned.sqlite") is True
+    finally:
+        journal.close()
+
+
+def test_sweep_promotes_orphan_when_boot_identity_changed(tmp_path) -> None:
+    """A matching PID/start token from a different boot is not the owner."""
+    start_token = _process_start_token(os.getpid())
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
+        pytest.skip("full process identity requires readable Linux /proc")
+
+    journal = SqliteJournal("prior-boot", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="prior-boot")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        (str(os.getpid()),),
+    )
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+        (f"not-{boot_id}:{start_token}",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    db_path = tmp_path / "journals" / "prior-boot.sqlite"
+
+    assert is_journal_live(db_path) is False
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not db_path.exists()
+    assert (tmp_path / "crash-dumps" / "prior-boot.sqlite").exists()
 
 
 def test_sweep_leaves_clean_closed_journal(tmp_path) -> None:

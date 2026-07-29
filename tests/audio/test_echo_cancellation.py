@@ -1,4 +1,4 @@
-"""Echo cancellation tests: LiveKitAEC, PassthroughAEC, factory, and frame splitting."""
+"""Echo cancellation tests: LiveKitAEC, PassthroughAEC, and factory behavior."""
 
 import struct
 from unittest.mock import MagicMock, patch
@@ -11,38 +11,8 @@ from easycat.echo_cancellation import (
     LiveKitAEC,
     PassthroughAEC,
     _frame_samples_for_rate,
-    _split_frames,
     create_echo_canceller,
 )
-
-# ── Frame splitting tests ──────────────────────────────────────────
-
-
-def test_split_frames_exact():
-    """split_frames with data that is an exact multiple of frame size."""
-    data = b"\x01\x02" * 160  # 320 bytes = 2 frames of 160 bytes
-    frames = _split_frames(data, 160)
-    assert len(frames) == 2
-    assert all(len(f) == 160 for f in frames)
-    assert b"".join(frames) == data
-
-
-def test_split_frames_with_remainder():
-    """split_frames should zero-pad the last frame when data doesn't align."""
-    data = b"\xab" * 200  # 200 bytes with 160-byte frames -> 2 frames
-    frames = _split_frames(data, 160)
-    assert len(frames) == 2
-    assert len(frames[0]) == 160
-    assert len(frames[1]) == 160
-    assert frames[0] == b"\xab" * 160
-    # Last frame: 40 bytes of data + 120 bytes of zero padding
-    assert frames[1] == b"\xab" * 40 + b"\x00" * 120
-
-
-def test_split_frames_empty():
-    """split_frames with empty data returns no frames."""
-    frames = _split_frames(b"", 160)
-    assert frames == []
 
 
 def test_frame_samples_common_rates():

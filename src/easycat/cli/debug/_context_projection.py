@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -54,7 +56,10 @@ _CONTEXT_TOP_LEVEL_KEYS = _CONTEXT_DATA_KEYS | frozenset(
         "bridge_latency_ms",
     }
 )
-_CONTEXT_ERROR_KEYS = frozenset(("type", "code", "status"))
+_CONTEXT_ERROR_KEYS = frozenset(("type", "code", "status", "notes"))
+_CONTEXT_ERROR_NOTE_KEYS = frozenset(("stage", "provider", "elapsed_ms", "sequence", "record_key"))
+_CONTEXT_ERROR_NOTE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_CONTEXT_ERROR_RECORD_KEY = re.compile(r"^cp_(?:0|[1-9][0-9]*)$")
 _IDENTITY_KEYS = ("sequence", "kind", "name", "session_id", "turn_id")
 _REFERENCE_KEYS = ("input_ref", "output_ref")
 _EMPTY_VALUES: tuple[object, ...] = (None, "", [], {})
@@ -78,11 +83,99 @@ def _project_allowlisted(
     return projected, omitted
 
 
-def _project_error(error: object) -> dict[str, Any] | None:
+def _project_error_note(key: str, value: str) -> str | int | float | None:
+    if key in {"stage", "provider"}:
+        if not _CONTEXT_ERROR_NOTE_TOKEN.fullmatch(value):
+            return None
+        redacted = redact_value(value, key)
+        return redacted if isinstance(redacted, str) else None
+    if key == "elapsed_ms":
+        try:
+            elapsed_ms = float(value)
+        except ValueError:
+            return None
+        return elapsed_ms if math.isfinite(elapsed_ms) and elapsed_ms >= 0 else None
+    if key == "sequence":
+        try:
+            sequence = int(value)
+        except ValueError:
+            return None
+        return sequence if sequence >= 0 and value == str(sequence) else None
+    if key == "record_key":
+        return value if _CONTEXT_ERROR_RECORD_KEY.fullmatch(value) else None
+    return None
+
+
+def _structured_error_note_context(
+    record: Mapping[str, Any],
+) -> dict[str, str | int | float]:
+    data = record.get("data")
+    if not isinstance(data, Mapping):
+        return {}
+    context: dict[str, str | int | float] = {}
+    for note_key, data_key in (
+        ("stage", "stage"),
+        ("provider", "provider"),
+        ("elapsed_ms", "elapsed_ms"),
+        ("sequence", "sequence"),
+        ("record_key", "record_ref"),
+    ):
+        value = data.get(data_key)
+        if value is None:
+            continue
+        projected = _project_error_note(note_key, str(value))
+        if projected is not None:
+            context[note_key] = projected
+    return context
+
+
+def _project_error_notes(
+    notes: object,
+    *,
+    trusted_context: Mapping[str, str | int | float],
+) -> tuple[dict[str, str | int | float], int]:
+    if not isinstance(notes, str):
+        return {}, 1
+
+    projected: dict[str, str | int | float] = {}
+    omitted = 0
+    for line in notes.splitlines():
+        key, separator, value = line.partition("=")
+        if (
+            not separator
+            or key not in _CONTEXT_ERROR_NOTE_KEYS
+            or key in projected
+            or (safe_value := _project_error_note(key, value)) is None
+            or trusted_context.get(key) != safe_value
+        ):
+            omitted += 1
+            continue
+        projected[key] = safe_value
+    return projected, omitted
+
+
+def _project_error(
+    error: object,
+    *,
+    trusted_note_context: Mapping[str, str | int | float],
+) -> dict[str, Any] | None:
     if not isinstance(error, Mapping):
         return None
 
     projected, omitted = _project_allowlisted(error, _CONTEXT_ERROR_KEYS)
+    raw_notes = error.get("notes")
+    projected.pop("notes", None)
+    if raw_notes not in _EMPTY_VALUES:
+        notes, omitted_note_lines = _project_error_notes(
+            raw_notes,
+            trusted_context=trusted_note_context,
+        )
+        if notes:
+            projected["notes"] = notes
+            if omitted_note_lines:
+                projected["omitted_error_note_lines"] = omitted_note_lines
+        else:
+            omitted += 1
     if omitted:
         projected["omitted_error_fields"] = omitted
     return projected or None
@@ -132,7 +225,10 @@ def project_context_record(record: Mapping[str, Any]) -> dict[str, Any]:
     )
     projected.update(_project_references(record))
 
-    error = _project_error(record.get("error"))
+    error = _project_error(
+        record.get("error"),
+        trusted_note_context=_structured_error_note_context(record),
+    )
     if error:
         projected["error"] = error
     projected.update(_project_tags(record.get("tags")))
