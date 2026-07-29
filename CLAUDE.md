@@ -25,7 +25,7 @@ raw docs/onboarding guard commands, use the
 ```bash
 uv sync --group dev              # Install project + dev tools
 just                             # List every task
-just check                       # Format check + lint + full serial tests
+just check                       # Format check + lint + full local tests
 just test-one tests/stt/test_stt_openai.py  # Run one test file
 just validate-quick              # Deterministic local validation slice
 ```

@@ -26,6 +26,20 @@ from easycat.runtime._private_files import chmod_private_file, mkdir_private
 logger = logging.getLogger(__name__)
 
 
+def _process_birth_identity(pid: int) -> str | None:
+    """Return a boot-scoped process start identity where the OS exposes one."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        fields_after_comm = stat[stat.rfind(")") + 2 :].split()
+        start_ticks = fields_after_comm[19]
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except (IndexError, OSError):
+        return None
+    if not boot_id or not start_ticks:
+        return None
+    return f"{boot_id}:{start_ticks}"
+
+
 def _pid_alive(pid: int) -> bool:
     """Best-effort check whether *pid* names a running process.
 
@@ -152,7 +166,7 @@ def _read_only_state(db_path: Path) -> str:
 
 
 def _has_live_pid(conn: sqlite3.Connection) -> bool:
-    """True if the journal's ``live_pid`` marker names a running process."""
+    """True if the journal's PID and process-birth markers identify a live owner."""
     row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
     if row is None or row[0] in (None, ""):
         return False
@@ -160,7 +174,18 @@ def _has_live_pid(conn: sqlite3.Connection) -> bool:
         pid = int(row[0])
     except (TypeError, ValueError):
         return False
-    return _pid_alive(pid)
+    if not _pid_alive(pid):
+        return False
+
+    birth_row = conn.execute(
+        "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+    ).fetchone()
+    if birth_row is None or birth_row[0] in (None, ""):
+        return True
+    current_birth = _process_birth_identity(pid)
+    if current_birth is None:
+        return True
+    return str(birth_row[0]) == current_birth
 
 
 def is_journal_live(db_path: Path) -> bool:

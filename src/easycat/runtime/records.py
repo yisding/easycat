@@ -11,14 +11,27 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 # ── Record-name constants ────────────────────────────────────────
-# Stage records are journaled under stable string names (``stage_start``,
-# ``tts_frame``, …) read back by replay, the debugger, and the audio-health
-# rollups.  The AEC far-end reference frame — the bot playback fed into the
-# echo canceller — is the newest of these.  Capturing it lets the debugger
-# align mic-in / reference / post-AEC into one view and compute ERLE.  Kept
-# here as a named constant so the live-path producer (``AudioStage`` /
-# ``AudioRouter``) and the diagnostics consumer (``debugger/_aec``) never
-# drift on the literal.
+# These names are consumed by replay, debugger, and bundle rollups as well as
+# their live-path producers. Keep shared names here so those readers cannot
+# silently drift from the persisted journal vocabulary.
+STAGE_START_RECORD_NAME = "stage_start"
+STAGE_COMPLETE_RECORD_NAME = "stage_complete"
+STT_FINAL_RECORD_NAME = "stt_final"
+AGENT_REQUEST_STARTED_RECORD_NAME = "agent_request_started"
+AGENT_DELTA_RECORD_NAME = "agent_delta"
+AGENT_FINAL_RECORD_NAME = "agent_final"
+TTS_FRAME_RECORD_NAME = "tts_frame"
+BOT_STARTED_SPEAKING_RECORD_NAME = "bot_started_speaking"
+VAD_START_SPEAKING_RECORD_NAME = "vad_start_speaking"
+BOT_STOPPED_SPEAKING_RECORD_NAME = "bot_stopped_speaking"
+PLAYBACK_MARK_ACK_RECORD_NAME = "playback_mark_ack"
+INTERRUPTION_RECORD_NAME = "interruption"
+CONTROL_SIGNAL_RECORD_NAME = "control_signal"
+CALL_ENDED_RECORD_NAME = "call_ended"
+
+# The AEC far-end reference frame is the bot playback fed into the echo
+# canceller. Capturing it lets the debugger align mic-in / reference /
+# post-AEC into one view and compute ERLE.
 AEC_REFERENCE_FRAME_NAME = "aec_reference_frame"
 
 
