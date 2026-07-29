@@ -321,20 +321,30 @@ def provider_names() -> frozenset[str]:
     return frozenset(name for catalog in provider_catalogs() for name in catalog.providers)
 
 
+def _provider_metadata_catalogs() -> tuple[ProviderCatalog, ...]:
+    """Order catalogs so speech-provider metadata wins name collisions."""
+    catalogs = provider_catalogs()
+    audio_stages = tuple(catalog for catalog in catalogs if catalog.kind not in {"STT", "TTS"})
+    speech = tuple(catalog for catalog in catalogs if catalog.kind in {"STT", "TTS"})
+    return (*audio_stages, *speech)
+
+
 def provider_env_vars() -> dict[str, str]:
-    """Credentialed provider → API-key env var, merged across all catalogs."""
+    """Credentialed provider → env var, with STT/TTS names authoritative."""
     return {
         name: env_var
-        for catalog in provider_catalogs()
+        for catalog in _provider_metadata_catalogs()
         for name, env_var in catalog.env_vars.items()
         if env_var is not None
     }
 
 
 def provider_extras() -> dict[str, str]:
-    """Provider → optional install extra, merged across all catalogs."""
+    """Provider → install extra, with STT/TTS names authoritative."""
     return {
-        name: extra for catalog in provider_catalogs() for name, extra in catalog.extras.items()
+        name: extra
+        for catalog in _provider_metadata_catalogs()
+        for name, extra in catalog.extras.items()
     }
 
 

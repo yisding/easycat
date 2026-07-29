@@ -14,6 +14,7 @@ from easycat import (
     create_vad,
     register_vad_provider,
 )
+from easycat._provider_catalog import provider_env_vars, provider_extras
 from easycat.config import EasyConfig
 from easycat.echo_cancellation import (
     _CATALOG as ECHO_CATALOG,
@@ -331,3 +332,16 @@ def test_audio_stage_registration_rejects_builtin_names() -> None:
         register_noise_reducer_provider("rnnoise", FakeNoiseReducer, FakeNoiseConfig)
     with pytest.raises(ValueError, match="reserved"):
         register_echo_canceller_provider("livekit", FakeEchoCanceller, FakeEchoConfig)
+
+
+def test_audio_stage_metadata_cannot_overwrite_speech_provider_names() -> None:
+    register_vad_provider(
+        "deepgram",
+        FakeVAD,
+        FakeVADConfig,
+        env_var="FAKE_VAD_API_KEY",
+        extra="fake-audio",
+    )
+
+    assert provider_env_vars()["deepgram"] == "DEEPGRAM_API_KEY"
+    assert provider_extras()["deepgram"] == "deepgram"
