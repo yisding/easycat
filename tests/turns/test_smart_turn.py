@@ -427,13 +427,15 @@ def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
     assert audio[-1] == 9 / 32768.0
 
 
-def test_chunks_to_float32_16k_batches_same_rate_resampling() -> None:
-    """The default 400-frame window should cross into interpolation once."""
+def test_chunks_to_float32_16k_batches_same_rate_resampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default 400-frame window should cross the filtered resampler once."""
 
     from array import array
     from types import SimpleNamespace
 
-    interpolation_calls = 0
+    resample_calls = 0
 
     class FakeArray(list[float]):
         def astype(self, _dtype):
@@ -451,24 +453,23 @@ def test_chunks_to_float32_16k_batches_same_rate_resampling() -> None:
         samples.frombytes(data)
         return FakeArray(float(value) for value in samples)
 
-    def interp(target, source, samples):
-        nonlocal interpolation_calls
-        del source, samples
-        interpolation_calls += 1
-        return FakeArray(0.0 for _ in target)
+    def filtered_resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
+        nonlocal resample_calls
+        assert from_rate == 24_000
+        assert to_rate == 16_000
+        resample_calls += 1
+        return array("h", [0] * (len(data) // 3)).tobytes()
 
     fake_np = SimpleNamespace(
         float32=float,
-        float64=float,
         int16=int,
-        arange=lambda size, dtype: FakeArray(float(value) for value in range(size)),
         concatenate=lambda arrays: FakeArray(
             value for array_values in arrays for value in array_values
         ),
         frombuffer=frombuffer,
-        interp=interp,
         zeros=lambda size, dtype: FakeArray([0.0] * size),
     )
+    monkeypatch.setattr("easycat.smart_turn.resample", filtered_resample)
 
     provider = SmartTurnONNX(model_path="unused.onnx")
     provider._np = fake_np
@@ -483,7 +484,7 @@ def test_chunks_to_float32_16k_batches_same_rate_resampling() -> None:
     audio = provider._chunks_to_float32_16k(chunks)
 
     assert len(audio) == 8 * 16000
-    assert interpolation_calls == 1
+    assert resample_calls == 1
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,7 @@ class JournalSink(Protocol):
         kind: JournalRecordKind = JournalRecordKind.EVENT,
         turn_id: str | None = None,
         data: dict[str, Any] | None = None,
-    ) -> None: ...
+    ) -> int | None: ...
 
 
 WarmupComponent = tuple[str, Any]

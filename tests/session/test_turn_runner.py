@@ -190,6 +190,21 @@ class _SimpleStreamingAgent(_TestBridgeBase):
         yield AgentBridgeEvent(kind="done", text="Reply.")
 
 
+class _FailingStreamingAgent(_TestBridgeBase):
+    async def run(self, text: str) -> str:
+        return text
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="text_delta", text="")
+        raise RuntimeError("agent unavailable")
+
+
 def _config(**overrides) -> SessionConfig:
     base = dict(
         transport=FakeTransport(),
@@ -942,6 +957,66 @@ async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     session.stop.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_keeps_turn_owned_until_tts_settles() -> None:
+    tts = FakeTTS()
+    session = Session(
+        _config(
+            agent=_FailingStreamingAgent(),
+            tts=tts,
+            on_agent_failure="Please try again.",
+        )
+    )
+    turn = TurnContext("turn-fallback", CancelToken())
+    session._turn_runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    lifecycle: list[str] = []
+
+    async def _record_started(_event: BotStartedSpeaking) -> None:
+        assert session._turn is turn
+        assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        lifecycle.append("started")
+
+    async def _record_audio(_event: TTSAudio) -> None:
+        assert session._turn is turn
+        assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        lifecycle.append("audio")
+
+    session.event_bus.subscribe(BotStartedSpeaking, _record_started)
+    session.event_bus.subscribe(TTSAudio, _record_audio)
+    session.event_bus.subscribe(
+        BotStoppedSpeaking,
+        lambda _event: lifecycle.append("stopped"),
+    )
+
+    await session._turn_runner.run_streaming_agent("hello", turn.cancel_token)
+
+    assert tts.synthesized_texts == ["Please try again."]
+    assert lifecycle == ["started", "audio", "stopped"]
+    assert session._turn is None
+    assert session._turn_manager.state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_respects_playback_suppression() -> None:
+    tts = FakeTTS()
+    session = Session(
+        _config(
+            agent=_FailingStreamingAgent(),
+            tts=tts,
+            on_agent_failure="Please try again.",
+        )
+    )
+    turn = TurnContext("turn-suppressed-fallback", CancelToken())
+    session._turn_runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    session._tts_scheduler.set_playback_suppressed(True)
+
+    await session._turn_runner.run_streaming_agent("hello", turn.cancel_token)
+
+    assert tts.synthesized_texts == []
+
+
 class _Gate:
     """Stateful classification gate: buffering until flushed."""
 
@@ -950,6 +1025,44 @@ class _Gate:
 
     def __call__(self) -> bool:
         return self.buffering
+
+
+@pytest.mark.asyncio
+async def test_agent_failure_fallback_respects_classification_gate() -> None:
+    gate = _Gate()
+    tts = FakeTTS()
+    session = Session(
+        _config(
+            agent=_FailingStreamingAgent(),
+            tts=tts,
+            audio_gate=gate,
+            on_agent_failure="Please try again.",
+        )
+    )
+    turn = TurnContext("turn-gated-fallback", CancelToken())
+    session._turn_runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    audio_events: list[TTSAudio] = []
+    lifecycle: list[str] = []
+    session.event_bus.subscribe(TTSAudio, lambda event: audio_events.append(event))
+    session.event_bus.subscribe(
+        BotStartedSpeaking,
+        lambda _event: lifecycle.append("started"),
+    )
+    session.event_bus.subscribe(
+        BotStoppedSpeaking,
+        lambda _event: lifecycle.append("stopped"),
+    )
+
+    await session._turn_runner.run_streaming_agent("hello", turn.cancel_token)
+
+    assert tts.synthesized_texts == ["Please try again."]
+    assert len(audio_events) == 1
+    assert session._outbound_queue.empty()
+    assert lifecycle == []
+    assert session._turn is turn
+    assert session._turn_manager.state == TurnManagerState.IDLE
+    assert not turn.cancel_token.is_cancelled
 
 
 class _GateFlushingTTS(FakeTTS):

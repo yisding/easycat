@@ -97,6 +97,62 @@ def test_redact_text_preserves_ordinary_text() -> None:
         assert redact_text(value) is value
 
 
+def test_secrets_policy_preserves_replay_content() -> None:
+    value = (
+        "call +1 (415) 555-0123; visit https://acme.example/orders; "
+        "request req_abcdef123; path /Users/alice/report.pdf"
+    )
+
+    assert redact_text(value, policy="secrets") == value
+    assert redact_value(value, "transcript", policy="secrets") == value
+
+
+def test_secrets_policy_still_redacts_credentials() -> None:
+    assert (
+        redact_text(
+            "Authorization: Bearer sk-testsecret123456",
+            policy="secrets",
+        )
+        == f"Authorization: {REDACTED_SECRET}"
+    )
+    assert redact_value(
+        {"transcript": "order 1234567890", "api_key": "short"},
+        policy="secrets",
+    ) == {
+        "api_key": REDACTED_SECRET,
+        "transcript": "order 1234567890",
+    }
+
+
+def test_secrets_policy_scrubs_credentials_inside_urls() -> None:
+    password = "hunter" + "2"
+    authority = "".join(("alice", ":", password, "@", "acme.example"))
+    value = "".join(
+        (
+            "https://",
+            authority,
+            "/orders?order=1234567890&X-Amz-Signature=signed-value",
+        )
+    )
+
+    redacted = redact_text(value, policy="secrets")
+
+    redacted_authority = "".join(("alice", ":", REDACTED_SECRET, "@", "acme.example"))
+    assert redacted == (
+        f"https://{redacted_authority}/orders?order=1234567890&X-Amz-Signature={REDACTED_SECRET}"
+    )
+
+    assert redact_text(
+        "https://maps.example/route?key=maps-secret-value&sig=signed-value",
+        policy="secrets",
+    ) == (f"https://maps.example/route?key={REDACTED_SECRET}&sig={REDACTED_SECRET}")
+
+
+def test_redact_text_rejects_unknown_policy() -> None:
+    with pytest.raises(ValueError, match="Unknown redaction policy"):
+        redact_text("value", policy="everything")  # type: ignore[arg-type]
+
+
 def test_secret_key_classification_cache_is_bounded() -> None:
     redaction_module._is_secret_value_key.cache_clear()
     try:

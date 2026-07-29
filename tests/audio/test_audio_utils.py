@@ -246,11 +246,7 @@ def test_resample_runtime_failure_logs_once(monkeypatch, caplog):
     assert len(warnings) == 1
 
 
-def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
-    """The dependency-free path must not fold a 10 kHz tone into speech."""
-    import easycat._audio_utils as au
-
-    monkeypatch.setattr(au, "_resolved_backend", "linear")
+def _ten_khz_alias_attenuation_db() -> float:
     from_rate = 48_000
     to_rate = 16_000
     sample_count = from_rate // 2
@@ -259,13 +255,13 @@ def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
         int(amplitude * math.sin(2 * math.pi * 10_000 * index / from_rate))
         for index in range(sample_count)
     ]
-    output = au.resample(
+    output = resample(
         struct.pack(f"<{len(source)}h", *source),
         from_rate,
         to_rate,
     )
     samples = struct.unpack(f"<{len(output) // 2}h", output)
-    # Ignore the causal FIR's short startup transient.
+    # Ignore the FIR's short boundary region.
     body = samples[len(samples) // 10 :]
     alias_radians = 2 * math.pi * 6_000 / to_rate
     alias_amplitude = abs(
@@ -275,8 +271,37 @@ def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
         )
     )
     alias_amplitude *= 2 / len(body)
-    attenuation_db = 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
-    assert attenuation_db < -40
+    return 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
+
+
+def test_default_resampler_suppresses_downsampling_alias():
+    """Every install must use the native anti-aliased path by default."""
+    import easycat._audio_utils as au
+
+    assert au.resample_backend() == "soxr"
+    assert _ten_khz_alias_attenuation_db() < -60
+
+
+def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
+    """The dependency-free recovery path must not fold a 10 kHz tone into speech."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    assert _ten_khz_alias_attenuation_db() < -40
+
+
+def test_linear_fallback_does_not_restart_from_zero_for_stream_frames(monkeypatch):
+    """Every constant frame should begin at its signal level, not FIR zero padding."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    frame = struct.pack("<960h", *([12_000] * 960))
+
+    first_samples = [
+        struct.unpack_from("<h", au.resample(frame, 48_000, 16_000))[0] for _ in range(4)
+    ]
+
+    assert min(first_samples) > 11_900
 
 
 def test_resample_chunk_to_48k():

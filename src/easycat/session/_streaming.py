@@ -314,6 +314,7 @@ async def consume_agent_stream(
     strip_md: bool,
     turn: TurnContext,
     first_tts_payload_ready: asyncio.Future[bool] | None = None,
+    abort_event: asyncio.Event | None = None,
 ) -> AgentStreamResult:
     """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
@@ -337,6 +338,7 @@ async def consume_agent_stream(
         strip_md=strip_md,
         turn=turn,
         first_tts_payload_ready=first_tts_payload_ready,
+        abort_event=abort_event,
     )
     return await consumer.run(stream_factory)
 
@@ -360,12 +362,14 @@ class _AgentStreamConsumer:
         strip_md: bool,
         turn: TurnContext,
         first_tts_payload_ready: asyncio.Future[bool] | None,
+        abort_event: asyncio.Event | None,
     ) -> None:
         self._cancel_token = cancel_token
         self._tts_queue = tts_queue
         self._emit = emit
         self._turn = turn
         self._first_tts_payload_ready = first_tts_payload_ready
+        self._abort_event = abort_event
         self._buffer = _SentenceStreamBuffer(
             tts_queue=tts_queue,
             prepare_tts_payload=prepare_tts_payload,
@@ -510,8 +514,10 @@ class _AgentStreamConsumer:
                 await aclose()
 
     async def _finish(self) -> None:
-        stream_succeeded = self.result.error is None and (
-            not self._cancel_token or not self._cancel_token.is_cancelled
+        stream_succeeded = (
+            self.result.error is None
+            and (not self._cancel_token or not self._cancel_token.is_cancelled)
+            and not (self._abort_event and self._abort_event.is_set())
         )
         if stream_succeeded:
             queued = await self._buffer.flush()

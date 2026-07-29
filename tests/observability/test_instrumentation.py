@@ -320,6 +320,30 @@ async def test_transport_send_span_and_audio_counters_emit(
     assert frames_counter.adds == [(1, {"easycat.surface": "tts"})]
 
 
+@pytest.mark.asyncio
+async def test_transport_drop_is_tagged_in_stage_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.stages.transport import TransportStage
+    from tests._fakes import FakeTransport
+
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = TransportStage(FakeTransport(accepted=False))
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+
+    assert await stage.execute(chunk, _make_run_ctx(), _make_turn_ctx()) is False
+    [(duration, attributes)] = meter.histograms["easycat.stage.latency"].records
+    assert duration >= 0
+    assert attributes == {
+        "easycat.stage": "transport",
+        "easycat.result": "drop",
+    }
+
+
 async def test_transport_send_validates_span_without_otel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

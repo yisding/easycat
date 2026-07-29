@@ -390,6 +390,10 @@ async def test_offer_returns_answer_and_one_session_per_offer(
         # Each offer got an isolated per-peer transport.
         assert len(transports) == 2
         assert transports[0] is not transports[1]
+        assert [t.offer_request.path for t in transports] == [
+            "/webrtc/offer",
+            "/webrtc/offer",
+        ]
         for session in sessions:
             await asyncio.wait_for(session.started.wait(), timeout=1)
     finally:
