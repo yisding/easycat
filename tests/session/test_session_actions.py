@@ -283,7 +283,7 @@ async def test_drain_add_to_dnc_applies_to_session_dnc_list(
     assert completed[0].result.metadata["dnc"] == "add"
     assert completed[0].result.metadata["applied"] is True
     assert phone not in caplog.text
-    assert "area code 555" in caplog.text.lower()
+    assert "redacted phone number" in caplog.text.lower()
 
 
 @pytest.mark.asyncio
@@ -498,7 +498,7 @@ async def test_dnc_noop_log_omits_full_phone_number(
         await session._drain_session_actions()
 
     assert phone not in caplog.text
-    assert "area code 555" in caplog.text.lower()
+    assert "redacted phone number" in caplog.text.lower()
 
 
 @pytest.mark.asyncio

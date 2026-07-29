@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from easycat._privacy import redacted_phone_number_label
 from easycat.events import (
     CallAnswered,
     CallInitiated,
@@ -23,7 +24,6 @@ from easycat.events import (
     VoicemailDetected,
 )
 from easycat.runtime.scope import BackgroundTaskScope
-from easycat.telephony._privacy import phone_number_log_label
 
 logger = logging.getLogger(__name__)
 _STT_AMD_TIMEOUT_TASK = "stt_amd_timeout"
@@ -479,7 +479,7 @@ class VoicemailPolicyHandler:
         }
         logger.info(
             "Voicemail policy: transferring to %s",
-            phone_number_log_label(self._config.transfer_number),
+            redacted_phone_number_label(),
         )
 
 

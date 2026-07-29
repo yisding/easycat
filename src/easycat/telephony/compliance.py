@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from easycat.telephony._privacy import phone_number_log_label
+from easycat._privacy import redacted_phone_number_label
 
 try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
     import phonenumbers
@@ -185,7 +185,7 @@ def check_calling_hours(
         # TCPA requires knowledge of the recipient's local time.
         logger.warning(
             "Cannot determine timezone for %s, blocking call",
-            phone_number_log_label(phone),
+            redacted_phone_number_label(),
         )
         return False
 
@@ -200,7 +200,7 @@ def check_calling_hours(
         logger.warning(
             "Invalid or unknown timezone %r for %s, blocking call",
             tz_name,
-            phone_number_log_label(phone),
+            redacted_phone_number_label(),
         )
         return False
 

@@ -26,7 +26,7 @@ class TestNumberHealthMonitor:
             monitor._decrement_concurrent(phone)
 
         assert phone not in caplog.text
-        assert "area code 555" in caplog.text.lower()
+        assert "redacted phone number" in caplog.text.lower()
 
     def test_tracks_answer_rate_per_number(self) -> None:
         bus = EventBus()

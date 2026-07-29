@@ -400,13 +400,13 @@ class CoreSessionActionExecutor(SessionActionExecutor):
             )
             return SessionActionResult(metadata={**meta, "applied": False, "skipped": "no_number"})
         dnc_list = getattr(session, "dnc_list", None)
-        from easycat.telephony._privacy import phone_number_log_label
+        from easycat._privacy import redacted_phone_number_label
 
         if dnc_list is None:
             logger.warning(
                 "DNC %s requested for %s but no dnc_list is configured; ignoring",
                 verb,
-                phone_number_log_label(number),
+                redacted_phone_number_label(),
             )
             return SessionActionResult(
                 metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
@@ -420,7 +420,7 @@ class CoreSessionActionExecutor(SessionActionExecutor):
         logger.info(
             "Agent updated DNC list (%s %s): reason=%s",
             verb,
-            phone_number_log_label(number),
+            redacted_phone_number_label(),
             action.reason,
         )
         return SessionActionResult(metadata={**meta, "applied": True})

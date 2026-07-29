@@ -59,7 +59,7 @@ class TestCallingHoursEnforcement:
             assert not check_calling_hours(phone)
 
         assert phone not in caplog.text
-        assert "area code 999" in caplog.text.lower()
+        assert "redacted phone number" in caplog.text.lower()
 
     def test_malformed_timezone_override_blocks_call(self) -> None:
         assert not check_calling_hours("+12125551234", timezone_override="/etc/passwd")
@@ -74,7 +74,7 @@ class TestCallingHoursEnforcement:
             assert not check_calling_hours(phone, timezone_override="/invalid")
 
         assert phone not in caplog.text
-        assert "area code 212" in caplog.text.lower()
+        assert "redacted phone number" in caplog.text.lower()
 
     def test_non_nanp_number_does_not_resolve_timezone(self) -> None:
         # A non-US E.164 number (UK) must not be misrouted to a US timezone.

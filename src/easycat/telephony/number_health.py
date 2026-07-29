@@ -7,8 +7,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
+from easycat._privacy import redacted_phone_number_label
 from easycat.events import CallEnded, CallFailed, CallInitiated, CallStateChanged, EventBus
-from easycat.telephony._privacy import phone_number_log_label
 from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.outbound import BLOCK_REASONS
 
@@ -258,7 +258,7 @@ class NumberHealthMonitor:
         if prev <= 0:
             logger.debug(
                 "Concurrent count already 0 for %s — possible unbalanced init/end events",
-                phone_number_log_label(number),
+                redacted_phone_number_label(),
             )
             self._concurrent.pop(number, None)
             return

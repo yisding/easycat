@@ -468,7 +468,7 @@ class TestVoicemailPolicyHandler:
             assert handler.last_action["transfer_number"] == phone
             assert "<Dial>" in handler.last_action["twiml"]
             assert phone not in caplog.text
-            assert "area code 555" in caplog.text.lower()
+            assert "redacted phone number" in caplog.text.lower()
         finally:
             handler.stop()
 
