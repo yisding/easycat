@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -19,7 +21,17 @@ from tests.vad._helpers import _assert_extra_hint, _make_chunk
 def test_funasr_state_anomalies_use_logger_not_stdout(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    numpy_stub = ModuleType("numpy")
+    numpy_stub.ndarray = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "numpy", numpy_stub)
+    monkeypatch.delitem(
+        sys.modules,
+        "easycat.vad._funasr_runtime.e2e_vad",
+        raising=False,
+    )
+
     from easycat.vad._funasr_runtime.e2e_vad import E2EVadModel
 
     model = E2EVadModel({})
