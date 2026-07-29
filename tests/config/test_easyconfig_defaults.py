@@ -44,6 +44,33 @@ def test_easycat_config_defaults_debug_to_light():
     assert config.debug == "light"
 
 
+def test_easycat_config_defaults_journal_capacity():
+    config = EasyConfig(openai_api_key="test-key")
+    assert config.journal_capacity == 10_000
+
+
+@pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
+def test_easycat_config_validates_journal_capacity(capacity):
+    with pytest.raises(ValueError, match="journal_capacity must be a positive integer"):
+        EasyConfig(
+            openai_api_key="test-key",
+            journal_capacity=capacity,  # type: ignore[arg-type]
+        )
+
+
+def test_easycat_config_defaults_journal_redaction_to_secrets():
+    config = EasyConfig(openai_api_key="test-key")
+    assert config.journal_redaction == "secrets"
+
+
+def test_easycat_config_validates_journal_redaction():
+    with pytest.raises(ValueError, match="Invalid journal_redaction"):
+        EasyConfig(
+            openai_api_key="test-key",
+            journal_redaction="everything",  # type: ignore[arg-type]
+        )
+
+
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.
@@ -74,6 +101,45 @@ def test_capture_aec_reference_opt_in():
         capture_aec_reference=True,
     )
     assert config.capture_aec_reference is True
+
+
+def test_capture_audio_defaults_on_and_accepts_predicate():
+    consent = False
+    config = EasyConfig(
+        openai_api_key="test-key",
+        capture_audio=lambda: consent,
+    )
+
+    assert callable(config.capture_audio)
+    assert config.capture_audio() is False
+
+
+def test_capture_audio_rejects_invalid_policy():
+    with pytest.raises(ValueError, match="capture_audio"):
+        EasyConfig(openai_api_key="test-key", capture_audio="yes")  # type: ignore[arg-type]
+
+    async def async_policy() -> bool:
+        return True
+
+    with pytest.raises(ValueError, match="synchronous"):
+        EasyConfig(openai_api_key="test-key", capture_audio=async_policy)
+
+
+def test_on_agent_failure_accepts_text_and_callable():
+    static = EasyConfig(openai_api_key="test-key", on_agent_failure="Please try again.")
+    dynamic = EasyConfig(
+        openai_api_key="test-key",
+        on_agent_failure=lambda error: type(error).__name__,
+    )
+
+    assert static.on_agent_failure == "Please try again."
+    assert callable(dynamic.on_agent_failure)
+
+
+@pytest.mark.parametrize("value", [" ", 42])
+def test_on_agent_failure_rejects_invalid_policy(value):
+    with pytest.raises(ValueError, match="on_agent_failure"):
+        EasyConfig(openai_api_key="test-key", on_agent_failure=value)  # type: ignore[arg-type]
 
 
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(

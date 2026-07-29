@@ -202,6 +202,208 @@ VAD and noise reduction can each be forced to a single backend via
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`,
   `NoopTransport` for test isolation.
 
+## Firm Architecture Decisions
+
+**Status: accepted.** These decisions are the default for implementation,
+review, and release work. They exist to prevent a new audit or isolated fix
+from reopening a settled cross-cutting contract. A change that contradicts
+one of them must update this section first, explain the migration and
+compatibility impact, and update the named contract tests in the same pull
+request. A passing implementation test alone is not enough to reverse a
+decision.
+
+### Public API and session lifecycle
+
+- `await session.stop(force=False)` is the single public graceful teardown
+  operation. It drains in-flight work before releasing every owned backend.
+- `await session.stop(force=True)` is the single public forceful teardown
+  operation. It cancels in-flight work first and then performs the same
+  complete backend teardown. `async with session:` uses this mode on exit.
+- `stop()` is idempotent. There are no separate public `close()` or
+  `destroy()` phases and no aliases for them.
+- A clean stop preserves a read-only postmortem view for
+  `session.journal.read()` and `session.export_debug_bundle(...)`.
+- The curated top-level exports and the documented bridge/provider protocols
+  are the public API. New exports require an intentional public-API update;
+  removals require a documented deprecation and migration period, including
+  before 1.0.
+
+This supersedes proposals to restore teardown aliases, expose backend-specific
+close phases, or infer the public API from everything importable. Enforce it in
+`tests/test_public_api.py` and the session lifecycle teardown tests.
+
+### Interruption, cancellation, and agent history
+
+- Barge-in stops audible output immediately: cancel TTS generation and clear
+  buffered transport playback without waiting for agent or tool cleanup.
+- Transport playback acknowledgements are authoritative for what the user
+  heard. When a transport cannot acknowledge playback, EasyCat uses a
+  conservative delivered-audio estimate rather than treating generated text
+  as delivered text.
+- Audio cutoff, model generation cancellation, and tool/action cancellation
+  are separate policies. A non-interruptible tool may finish, but it never
+  keeps audio playing.
+- Assistant history commits only content known to have been delivered. The
+  current user request survives interruption; undelivered assistant output
+  does not.
+- Every stateful bridge is session-owned unless its contract explicitly
+  declares safe sharing. Each turn uses one authoritative history key.
+  Framework checkpoints and conversational history are separate state and
+  must not overwrite each other.
+- Cancellation-resistant tasks remain owned until they finish or their
+  resource boundary is forcibly terminated. A queue, send, journal append, or
+  cleanup task cannot be detached merely to make a timeout appear bounded.
+
+This supersedes generated-text history commits, bridge-global mutable history,
+and coupling audible cutoff to tool completion. Enforce the shared semantics
+through `tests/contracts/test_agent_bridge_contracts.py`, the bridge-specific
+cancellation suites, and session cancellation/lifecycle tests.
+
+### Journal completeness, privacy, and retention
+
+The three debug modes have distinct, stable meanings:
+
+| Mode | Journal contract |
+| --- | --- |
+| `off` | No session journal or captured artifacts. |
+| `light` | Bounded in-memory turn, control, event, and error history; no per-frame audio artifacts. Any eviction is counted and surfaced. |
+| `full` | Durable, replay-complete stage detail and configured artifacts. |
+
+- Audio persistence is controlled by the separate capture-consent policy.
+  Raising the debug mode never bypasses that policy.
+- Raw journals are PII-bearing diagnostic data. The default write policy
+  removes credentials and secrets while preserving replay-critical content.
+  Irreversible PII redaction is an explicit policy choice.
+- Redacted CLI views and coding-agent context exports apply their own
+  share-safe projection regardless of the raw journal policy.
+- Redaction, storage backend, durability, capacity, and retention are
+  independent settings; changing one must not silently change another.
+- Live export reads a stable journal and artifact snapshot or reports a
+  sequence gap. It never presents a racing partial export as complete.
+
+This supersedes treating light mode as per-frame capture, treating raw bundles
+as share-safe, and coupling retention to redaction. Enforce the matrix in the
+EasyConfig default tests, journal backend tests, bundle/export tests, and
+redaction contract tests.
+
+### Provider and extension boundaries
+
+- `providers.py` owns structural protocols. Provider implementations use
+  structural typing and do not need framework inheritance.
+- Provider catalogs are the sole source of construction metadata:
+  implementation/config classes, capabilities, credentials, install extras,
+  probe modules, entry points, and sensitive API domains.
+- Provider identity is role-qualified. STT, TTS, VAD, audio-processing, and
+  transport registrations cannot silently overwrite one another because they
+  reuse a display name or install extra.
+- Factories, doctor, scaffolding, validation, and redaction derive their views
+  from the catalogs. They do not maintain parallel provider lists.
+- Runtime dependencies such as the event bus are injected centrally at the
+  factory boundary.
+- Provider failures map to the stable EasyCat error taxonomy and are published
+  without awaiting application handlers while provider lifecycle locks are
+  held.
+- A public provider guarantee describes observable behavior. An accepted
+  control request is not documented as a guaranteed transcript unless every
+  shipped implementation and the installable contract kit prove it.
+
+This supersedes name-only cross-catalog merges, hand-maintained capability
+tables, and provider-specific exception surfaces. Enforce it through
+`tests/contracts/`, `tests/testing/`, the provider session matrix, and public
+API tests.
+
+### Streaming audio format and clock semantics
+
+- `AudioChunk.format` is authoritative at every boundary. EasyCat has no
+  implicit process-wide sample rate.
+- Resampling and other streaming conversion keep state across chunks. Splitting
+  identical input at different chunk boundaries must not materially change the
+  resulting audio, duration, or sample accounting.
+- Conversion happens once at a named provider or transport boundary. Live
+  paths use the selected quality backend when available and use the documented
+  fallback only when it is not.
+- The AEC far-end reference is the normalized audio accepted for outbound
+  playback, not raw provider output or a pre-send approximation.
+- VAD debounce, pre-roll, playback progress, and interruption estimates use
+  audio position rather than event-loop scheduling time.
+- Observability handlers never sit on the serialized audio delivery path in a
+  way that can delay, abort, or mis-account an already accepted frame.
+
+This supersedes stateless per-frame resampling, repeated implicit conversions,
+and wall-clock VAD accounting. Enforce it with chunk-split equivalence,
+duration-drift, AEC reference, VAD/pre-roll, and transport accounting tests.
+
+### Toolchain, dependency majors, and extras
+
+- CI and lockfile regeneration use one exact version from `.uv-version`.
+  `[tool.uv].required-version` accepts the compatible contributor range that
+  can faithfully consume the committed lockfile. The `uv_build` requirement is
+  an independent bounded build-backend range.
+- A dependency extra never spans behaviorally incompatible SDK majors.
+  PydanticAI v2 is the primary supported line; any v1 compatibility extra is
+  explicitly named, tested separately, and given a documented retirement
+  path.
+- Extras describe dependencies, not whether a capability exists. Provider
+  discovery comes from the catalog, so empty marker extras are not a capability
+  registry.
+- `quickstart` contains the smallest supported happy path. Heavy audio
+  processing, AEC, alternative frameworks, and server stacks remain opt-in.
+- The `all` extra is generated or mechanically validated from the supported
+  dependency extras, with intentional license or major-version exclusions
+  listed once.
+- Minimum-version, current-version, and incompatible-major coverage run in
+  distinct CI lanes; widening a range requires evidence from the corresponding
+  lane.
+
+This supersedes alternating between exact and ranged uv policy in the same
+field, allowing one SDK extra to cross a major boundary, and using empty extras
+as discovery metadata. Enforce it in `tests/test_dependency_policy.py`, extras
+matrix tests, minimum-version CI, and release validation.
+
+### Documentation generation and validation lanes
+
+- Human explanations are authored prose. Route tables, generated command
+  blocks, navigation fragments, and schema-derived references have exactly one
+  generator and one checked-in output.
+- Documentation guards validate commands, links, anchors, schemas, generated
+  drift, and public contracts. They do not snapshot incidental prose wording.
+- Generated-output guards remain in place even when prose-scanning tests are
+  simplified. Tests that execute product behavior remain in the fast product
+  loop rather than being reclassified wholesale as documentation guards.
+- `validate quick` is deterministic, credential-free, and time-bounded.
+  Optional extras, supported minimums, and real installed SDK contracts run in
+  dedicated CI or nightly lanes. Live provider tests remain explicitly marked
+  and separate.
+- In-process documentation/script tests restore every module and global they
+  replace; otherwise they use subprocess isolation.
+
+This supersedes exact-prose guards, multiple generated sources of truth, and
+moving behavioral coverage out of the fast loop for convenience. Enforce it
+with the maintained docs, teaching, examples, validation, and contributing
+guard recipes.
+
+### Transport ingress and server ownership
+
+- Public ingress authenticates and validates resource bounds before minting a
+  stream token, constructing providers, or starting a session.
+- `VoiceServer` and its shared transport/auth helpers own multi-session
+  admission, startup rollback, draining, and shutdown. Runnable examples and
+  scaffolds delegate to those helpers instead of maintaining alternate
+  production lifecycle implementations.
+- In-progress startup is not published as a live session. Shutdown cancels and
+  rolls it back; successfully started sessions are registered before normal
+  handling continues.
+- Inbound audio and outbound event queues are byte/count bounded. Forced
+  shutdown and stalled-send bounds use hard deadlines that do not wait
+  indefinitely for cancellation acknowledgement.
+- Public configuration additions preserve existing positional field order or
+  are keyword-only.
+
+This supersedes authenticate-after-allocation flows, independently managed
+example servers, unbounded transport queues, and soft timeouts presented as
+hard deadlines. Enforce it with transport contracts, server lifecycle tests,
+telephony authentication tests, and public configuration compatibility tests.
+
 ## Related Pages
 
 - [Events reference](reference/events.md) — every public event type and when

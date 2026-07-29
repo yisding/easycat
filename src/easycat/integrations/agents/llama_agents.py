@@ -13,7 +13,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -69,7 +69,7 @@ class LlamaAgentsBridge:
     also exposed to workflows as optional start-event fields.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_NODES,
     }
 

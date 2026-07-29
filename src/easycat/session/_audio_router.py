@@ -52,6 +52,7 @@ from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
+from easycat.stages.base import audio_capture_allowed
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.vad import VADStage
@@ -472,6 +473,11 @@ class AudioRouter:
         """Zero the gated-replay pending counter (Session calls this on turn reset)."""
         self._replay_chunks_pending = 0
 
+    def discard_pending_capture_audio(self) -> None:
+        """Discard raw far-end frames queued before capture became allowed."""
+        if self._transport_has_aec_drain:
+            drain_aec_reference_frames(self._transport)
+
     async def gated_replay(self, events: list[Any]) -> None:
         """Replay buffered TTS audio chunks through the outbound queue.
 
@@ -696,7 +702,14 @@ class AudioRouter:
                 exc_info=True,
             )
             return
-        if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
+        if (
+            self._capture_aec_reference
+            and self._run_ctx.artifact_store is not None
+            and (
+                self._run_ctx.audio_capture_enabled is None
+                or self._run_ctx.audio_capture_enabled()
+            )
+        ):
             await self._maybe_record_aec_reference(chunk, turn)
 
     async def _feed_transport_aec_reference(
@@ -745,6 +758,10 @@ class AudioRouter:
         per-chunk error policy (skip + surface) without conflating it
         with fatal transport-iterator conditions.
         """
+        # Decide at ingress so pre-roll and smart-turn buffers cannot later
+        # inherit a newly granted consent decision.
+        audio_capture_allowed(self._run_ctx, chunk)
+
         # Snapshot the active turn once so all stage calls operate on the
         # same context.
         turn = self._current_turn() or self._no_turn
