@@ -452,6 +452,38 @@ class TestOutboundCallStateMachine:
             sm.stop()
 
     @pytest.mark.asyncio
+    async def test_max_duration_callback_failure_still_ends_and_emits(self) -> None:
+        bus = EventBus()
+        ended: list[CallEnded] = []
+        ended_event = asyncio.Event()
+
+        async def capture(event: CallEnded) -> None:
+            ended.append(event)
+            ended_event.set()
+
+        async def failing_hangup(_call_sid: str) -> None:
+            raise RuntimeError("Twilio unavailable")
+
+        bus.subscribe(CallEnded, capture)
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            max_call_duration_s=0.01,
+        )
+        sm.set_max_duration_hangup(failing_hangup)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await asyncio.wait_for(ended_event.wait(), timeout=0.2)
+
+            assert sm.state == OutboundCallState.ENDED
+            assert len(ended) == 1
+            assert ended[0].call_sid == "CA1"
+            assert ended[0].disposition == "max_duration"
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
     async def test_max_call_duration_timer_cancelled_on_call_end(self) -> None:
         bus = EventBus()
         sm = OutboundCallStateMachine(bus, classification_timeout_s=60, max_call_duration_s=60)
