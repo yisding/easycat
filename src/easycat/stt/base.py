@@ -141,6 +141,15 @@ class STTBase:
         The default implementation returns ``False`` for providers that only
         support whole-stream finalization.
         """
+        if self._allow_end_during_audio_send:
+            # Segment-control writes share the provider socket with audio.
+            # Preserve wire order so a finalize message cannot overtake an
+            # append that is still suspended under transport backpressure.
+            async with self._audio_send_lock:
+                async with self._lifecycle_lock:
+                    if not self._running:
+                        return False
+                    return await self._on_commit_segment()
         async with self._lifecycle_lock:
             if not self._running:
                 return False

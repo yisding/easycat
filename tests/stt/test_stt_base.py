@@ -208,6 +208,41 @@ async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
 
 
 @pytest.mark.asyncio
+async def test_segment_commit_waits_for_in_flight_ordered_send() -> None:
+    class OrderedSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_started = asyncio.Event()
+            self.release_send = asyncio.Event()
+            self.order: list[str] = []
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            await self.release_send.wait()
+            self.order.append("audio")
+
+        async def _on_commit_segment(self) -> bool:
+            self.order.append("commit")
+            return True
+
+    stt = OrderedSTT()
+    await stt.start_stream()
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    send = asyncio.create_task(stt.send_audio(chunk))
+    await stt.send_started.wait()
+    commit = asyncio.create_task(stt.commit_segment())
+
+    await asyncio.sleep(0)
+    assert not commit.done()
+    stt.release_send.set()
+    assert await commit is True
+    await send
+    assert stt.order == ["audio", "commit"]
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
 async def test_base_emits_events():
     stt = EchoSTT(transcript="hello world")
     pcm = generate_pcm_sine(duration_ms=200)
