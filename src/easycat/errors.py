@@ -67,6 +67,26 @@ class EasyCatError(Exception):
             return entry.fix
 
 
+def _attach_error_code(exc: Exception, coded: EasyCatError) -> None:
+    """Tag an existing public exception type with a stable EasyCat code.
+
+    Some established APIs expose domain-specific exceptions such as
+    ``BundleValidationError`` and ``FileNotFoundError``. Replacing those with
+    ``EasyCatError`` would break callers, so boundary code attaches the same
+    machine-readable ``code`` and ``context`` while preserving the original
+    exception type and traceback.
+    """
+    try:
+        exc.code = coded.code  # type: ignore[attr-defined]
+        exc.context = coded.context  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        return
+    note = f"{coded.code}: {coded.message}"
+    notes = getattr(exc, "__notes__", ())
+    if note not in notes:
+        exc.add_note(note)
+
+
 @dataclass
 class ErrorEntry:
     """One entry in the error-code registry.

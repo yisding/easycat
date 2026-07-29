@@ -9,10 +9,7 @@ surface drifts from the justfile.
 
 from __future__ import annotations
 
-from easycat.cli._app import (
-    _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-)
+from easycat.cli._app import _DOCS_ONBOARDING_GUARD_COMMANDS
 from scripts._justfile import just_guard_recipes
 from scripts.regen_guard_commands import ROOT, render_targets
 
@@ -34,4 +31,6 @@ def test_cli_route_hints_import_generated_guard_commands() -> None:
     guards = just_guard_recipes(ROOT)
 
     assert _DOCS_ONBOARDING_GUARD_COMMANDS == tuple(f"just {guard.name}" for guard in guards)
-    assert _DOCS_ONBOARDING_RAW_GUARD_COMMANDS == tuple(guard.command for guard in guards)
+    module = (ROOT / "src/easycat/cli/_guard_commands.py").read_text(encoding="utf-8")
+    assert "DOCS_ONBOARDING_RAW_GUARD_COMMANDS" not in module
+    assert "uv run pytest" not in module

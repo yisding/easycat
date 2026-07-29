@@ -9,7 +9,6 @@ stubbed for the media-lifecycle test. The TwiML/token path exercises the real
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -23,6 +22,7 @@ from easycat.telephony.server import (
     serve_twilio_voice_app,
 )
 from easycat.transports import TwilioStreamTokenStore
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import (
     TWILIO_STREAM_TOKEN_PARAMETER,
     twiml_connect_stream,
@@ -128,9 +128,11 @@ class _FakeAiohttpWeb:
 class _FakeMediaServer:
     def __init__(self) -> None:
         self.closed = False
+        self.close_connections: bool | None = None
 
-    def close(self) -> None:
+    def close(self, close_connections: bool = True) -> None:
         self.closed = True
+        self.close_connections = close_connections
 
     async def wait_closed(self) -> None:
         return None
@@ -508,10 +510,10 @@ def test_media_listener_closed_when_http_startup_fails(
     assert web.runner_cleaned is True
 
 
-def test_media_listener_disables_permessage_deflate(
+def test_media_listener_bounds_messages_and_disables_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Twilio media listener passes ``compression=None`` to ``websockets.serve``.
+    """The Twilio listener bounds messages and disables permessage-deflate.
 
     permessage-deflate must stay off for the raw μ-law media stream; the listener
     otherwise inherits the library default and fragments/buffers the audio frames.
@@ -525,6 +527,7 @@ def test_media_listener_disables_permessage_deflate(
     asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, body))
 
     assert harness.serve_kwargs.get("compression", "MISSING") is None
+    assert harness.serve_kwargs["max_size"] == MAX_WEBSOCKET_MESSAGE_BYTES
     assert callable(harness.serve_kwargs.get("process_request"))
 
 
@@ -794,7 +797,10 @@ class _FakeSession:
     async def start(self) -> None:
         self._events.append("start")
 
-    async def stop(self) -> None:
+    def subscribe_event(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def stop(self, *, force: bool = False) -> None:
         self._events.append("stop")
 
 
@@ -803,16 +809,15 @@ class _FakeManager:
         self._sessions: dict[int, Any] = {}
         self.events: list[str] = []
 
-    @asynccontextmanager
-    async def connection(self, key: int, session: Any, **kwargs: Any) -> Any:
+    async def add(self, key: int, session: Any) -> None:
         self.events.append("register")
         self._sessions[key] = session
         await session.start()
-        try:
-            yield session
-        finally:
-            self.events.append("unregister")
-            self._sessions.pop(key, None)
+
+    async def remove(self, key: int) -> None:
+        self.events.append("unregister")
+        session = self._sessions.pop(key, None)
+        if session is not None:
             await session.stop()
 
     async def stop_all(self) -> None:

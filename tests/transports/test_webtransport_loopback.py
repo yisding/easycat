@@ -15,6 +15,7 @@ from easycat.transports.webtransport import (
     _TAG_AUDIO,
     WebTransportConnectionTransport,
     WebTransportServer,
+    WebTransportTransport,
     WebTransportTransportConfig,
 )
 
@@ -38,6 +39,12 @@ def test_top_level_lazy_exports() -> None:
     assert _Wt
     assert _RunWt
     assert _ServeWt
+
+
+def test_webtransport_transports_leave_server_side_aec_off_by_default() -> None:
+    assert WebTransportTransportConfig.default_echo_cancellation_enabled is False
+    assert WebTransportConnectionTransport.default_echo_cancellation_enabled is False
+    assert WebTransportTransport.default_echo_cancellation_enabled is False
 
 
 def _write_self_signed_pair(tmp: Path) -> tuple[Path, Path]:
@@ -147,6 +154,36 @@ async def _wt_client(port: int, cert_path: Path):
         yield client
 
 
+async def _wt_connect_status(
+    port: int,
+    cert_path: Path,
+    *,
+    path: bytes = b"/easycat",
+    authorization: bytes | None = None,
+) -> bytes | None:
+    from aioquic.h3.events import HeadersReceived
+
+    async with _wt_client(port, cert_path) as client:
+        stream_id = client._quic.get_next_available_stream_id()
+        headers = [
+            (b":method", b"CONNECT"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", path),
+            (b":protocol", b"webtransport"),
+            (b"sec-webtransport-http3-draft02", b"1"),
+        ]
+        if authorization is not None:
+            headers.append((b"authorization", authorization))
+        client.h3.send_headers(stream_id, headers, end_stream=False)
+        client.transmit()
+
+        while True:
+            event = await asyncio.wait_for(client.events.get(), timeout=5)
+            if isinstance(event, HeadersReceived):
+                return dict(event.headers).get(b":status")
+
+
 @pytest.mark.integration_socket
 @pytest.mark.skipif(
     not _aioquic_available(),
@@ -232,6 +269,46 @@ class TestWebTransportServerLoopback:
                     if len(audio_buf) >= 5 + len(pcm_in):
                         break
             result_audio.set_result(bytes(audio_buf[5 : 5 + len(pcm_in)]))
+
+    @pytest.mark.asyncio
+    async def test_connect_requires_configured_bearer_token(
+        self,
+        tmp_path: Path,
+        unused_tcp_port_factory: Callable[[], int],
+    ) -> None:
+        cert_path, key_path = _write_self_signed_pair(tmp_path)
+        port = unused_tcp_port_factory()
+        handler_started = asyncio.Event()
+
+        async def handle(transport: WebTransportConnectionTransport) -> None:
+            handler_started.set()
+            await transport.wait_closed()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                port=port,
+                certfile=str(cert_path),
+                keyfile=str(key_path),
+                auth_token="sekrit",
+            ),
+            handle,
+        )
+        await server.start()
+        try:
+            assert await _wt_connect_status(port, cert_path) == b"401"
+            assert handler_started.is_set() is False
+
+            assert (
+                await _wt_connect_status(
+                    port,
+                    cert_path,
+                    authorization=b"Bearer sekrit",
+                )
+                == b"200"
+            )
+            await asyncio.wait_for(handler_started.wait(), timeout=1)
+        finally:
+            await server.stop()
 
     @pytest.mark.asyncio
     async def test_two_concurrent_clients(

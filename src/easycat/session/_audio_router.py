@@ -37,6 +37,7 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
     TransportAudioDelivered,
+    TransportDegraded,
 )
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
@@ -135,6 +136,7 @@ class AudioRouter:
     _INGRESS_TASK_NAME = "audio_ingress_pipeline"
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
     _INLINE_SEND_TASK_NAME = "audio_inline_send"
+    _AEC_DEGRADED_EMIT_TASK_NAME = "aec_reference_degraded_emit"
     # The first-frame fast path preserves an in-progress transport write across
     # caller cancellation so a frame is never half-submitted. Keep that shield
     # bounded: a half-open transport must not make barge-in or force-stop
@@ -184,6 +186,11 @@ class AudioRouter:
         # and stop re-attempting a feed that will keep failing for the rest
         # of the session, rather than spamming the log per outbound chunk.
         self._aec_reference_failed: bool = False
+        # Latches the observability warning for transports that can only feed
+        # AEC at socket-write time. Explicit server-side AEC remains supported
+        # for these transports, but operators need one durable signal that the
+        # reference is not tied to the remote playout clock.
+        self._aec_reference_degraded_reported: bool = False
 
         # Whether the transport exposes ``drain_aec_reference_frames()`` — a
         # thread-safe queue populated by the output callback at actual playback
@@ -329,6 +336,7 @@ class AudioRouter:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
+        await self._runtime_scope.cancel_and_drain(self._AEC_DEGRADED_EMIT_TASK_NAME)
         # A cancelled first-frame caller can leave its transport write running
         # briefly while the transport is being terminated. Keep shutdown
         # joined to that lifecycle-owned write before reporting outbound idle.
@@ -798,12 +806,19 @@ class AudioRouter:
         frames = drain_aec_reference_frames(self._transport)
         if not frames:
             return
-        for ref_data in frames:
+        for reference in frames:
             if self._aec_reference_failed:
                 break
-            await self._feed_reference_or_disable(
-                AudioChunk(data=ref_data, format=mic_chunk.format), turn
+            # Typed reference frames preserve the actual far-end format.
+            # Legacy third-party transports may still return raw bytes from
+            # the original optional hook; retain the prior mic-format fallback
+            # for compatibility, while built-in transports never need to guess.
+            ref_chunk = (
+                reference
+                if isinstance(reference, AudioChunk)
+                else AudioChunk(data=reference, format=mic_chunk.format)
             )
+            await self._feed_reference_or_disable(ref_chunk, turn)
 
     async def _process_chunk(self, chunk: AudioChunk) -> None:
         """Run a single received frame through the stage pipeline.
@@ -1011,6 +1026,7 @@ class AudioRouter:
         # the shared _feed_reference_or_disable owner.
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
+            await self._report_degraded_aec_reference_once()
             await self._feed_reference_or_disable(chunk, turn)
 
         sent_size = len(chunk.data)
@@ -1035,6 +1051,41 @@ class AudioRouter:
         ):
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
+
+    async def _report_degraded_aec_reference_once(self) -> None:
+        """Record that server-side AEC lacks a playback-timed reference.
+
+        Transports without ``drain_aec_reference_frames`` can preserve the
+        explicit AEC feature only by feeding audio at send time. That reference
+        has gaps during silence and, for remote transports, precedes actual
+        playout by an unknown buffer delay. Emit one durable event before the
+        first such feed so bundle readers can distinguish this best-effort mode
+        from playback-clocked AEC.
+        """
+        if self._aec_reference_degraded_reported:
+            return
+        self._aec_reference_degraded_reported = True
+        provider = str(getattr(self._transport, "transport_kind", "unknown"))
+        detail = (
+            "server-side AEC reference is fed at transport send time and has no "
+            "playout-clocked silence frames; prefer endpoint echo cancellation "
+            "or a transport with drain_aec_reference_frames()"
+        )
+        logger.warning("%s AEC reference degraded: %s", provider, detail)
+        event = TransportDegraded(
+            provider=provider,
+            reason="aec_reference_degraded",
+            detail=detail,
+        )
+
+        async def _emit_degraded() -> None:
+            await self._emit(event)
+
+        task: asyncio.Task[None] = self._runtime_scope.create_task(
+            self._AEC_DEGRADED_EMIT_TASK_NAME,
+            _emit_degraded(),
+        )
+        task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def _maybe_record_aec_reference(
         self,
