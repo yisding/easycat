@@ -120,7 +120,7 @@ def _playground_config_factory(
             base_url="https://api.openai.com",
             model=agent_model,
             api_key=os.environ.get("OPENAI_API_KEY"),
-            reasoning_effort="none",
+            reasoning_effort="none" if agent_model == _DEFAULT_AGENT_MODEL else None,
         )
         return EasyConfig.browser(transport=transport, agent=agent)
 

@@ -368,7 +368,7 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
     assert agent.base_url == "https://api.openai.com"
     assert agent.model == "gpt-test"
     assert agent.api_key == "sk-test"
-    assert agent.reasoning_effort == "none"
+    assert agent.reasoning_effort is None
 
     from types import SimpleNamespace
 
@@ -377,9 +377,19 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
         "model": "gpt-test",
         "input": [{"role": "user", "content": "hello"}],
         "stream": True,
-        "reasoning": {"effort": "none"},
         "metadata": {"parent": "kept"},
         "instructions": "Speak plainly.",
+    }
+
+    default_factory = serve_mod._playground_config_factory(
+        agent_model=serve_mod._DEFAULT_AGENT_MODEL,
+        instructions="Speak plainly.",
+    )
+    default_config = default_factory(object())
+    default_agent = default_config.kwargs["agent"]
+    assert default_agent.reasoning_effort == "none"
+    assert default_agent._build_request_body(SimpleNamespace(text="hello"))["reasoning"] == {
+        "effort": "none"
     }
 
 
