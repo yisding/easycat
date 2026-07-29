@@ -102,7 +102,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
             await transport.disconnect()
             raise
 
-    runtime = WebSocketSessionRuntime(
+    runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=settings.max_sessions,
         session_factory=build_session,

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import functools
-import importlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
+
+from easycat._provider_domains import sensitive_api_domains
 
 REDACTION_VERSION = 1
 
@@ -105,33 +106,6 @@ def _redacted_home_path(match: re.Match[str]) -> str:
 def _redacted_url_secret(match: re.Match[str]) -> str:
     suffix = match.group(2) if match.lastindex == 2 else ""
     return f"{match.group(1)}{REDACTED_SECRET}{suffix}"
-
-
-@functools.lru_cache(maxsize=16)
-def _compile_sensitive_url_re(domains: tuple[str, ...]) -> re.Pattern[str]:
-    return re.compile(
-        r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
-        + "|".join(re.escape(domain) for domain in domains)
-        + r")[^\s\"')\]}]*",
-        re.IGNORECASE,
-    )
-
-
-def _sensitive_url_re() -> re.Pattern[str]:
-    """Load provider-domain aggregation only when artifact validation needs it.
-
-    Provider factories depend on the lightweight redaction helpers through
-    config repr rendering. Importing the cross-family registry eagerly here
-    would therefore make each provider family depend on every other family.
-    The runtime lookup preserves the registry as the metadata source of truth
-    without introducing that static import cycle.
-    """
-    registry = importlib.import_module("easycat._provider_registry")
-    sensitive_api_domains = cast(
-        Callable[[], tuple[str, ...]],
-        registry.sensitive_api_domains,
-    )
-    return _compile_sensitive_url_re(sensitive_api_domains())
 
 
 _TextReplacement = str | Callable[[re.Match[str]], str]
@@ -260,6 +234,22 @@ def contains_unredacted_sensitive_text(value: str) -> bool:
                 continue
             return True
     return False
+
+
+@functools.lru_cache(maxsize=32)
+def _compile_sensitive_url_re(domains: tuple[str, ...]) -> re.Pattern[str]:
+    alternatives = "|".join(re.escape(domain) for domain in domains)
+    if not alternatives:
+        return re.compile(r"(?!x)x")
+    return re.compile(
+        r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:" + alternatives + r")[^\s\"')\]}]*",
+        re.IGNORECASE,
+    )
+
+
+def _sensitive_url_re() -> re.Pattern[str]:
+    """Compile against the current domain snapshot, including plugin registrations."""
+    return _compile_sensitive_url_re(sensitive_api_domains())
 
 
 def redact_command(value: Any, *, policy: RedactionPolicy = "pii") -> Any:

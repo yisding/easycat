@@ -16,6 +16,7 @@ import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
+from easycat._provider_catalog import ProviderCatalog
 from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
@@ -241,6 +242,24 @@ def test_shared_detector_flags_cassette_sensitive_patterns() -> None:
     assert contains_unredacted_sensitive_text("https://api.openai.com/v1/audio")
     assert not contains_unredacted_sensitive_text("https://api.openai.test/v1/audio")
     assert not contains_unredacted_sensitive_text("[REDACTED_SECRET] [REDACTED_URL]")
+
+
+def test_shared_detector_tracks_dynamically_registered_provider_domains() -> None:
+    class Provider:
+        pass
+
+    class Config:
+        pass
+
+    catalog = ProviderCatalog(specs={}, kind="TEST")
+    catalog.register(
+        "custom",
+        Provider,
+        Config,
+        api_domains=("api.custom-provider.invalid",),
+    )
+
+    assert contains_unredacted_sensitive_text("https://api.custom-provider.invalid/v1/transcribe")
 
 
 def test_redact_command_redacts_split_secret_flags() -> None:

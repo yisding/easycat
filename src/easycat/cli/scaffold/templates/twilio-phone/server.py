@@ -102,7 +102,7 @@ def create_app() -> FastAPI:
             await transport.disconnect()
             raise
 
-    runtime = WebSocketSessionRuntime(
+    runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=max_sessions,
         session_factory=build_session,
