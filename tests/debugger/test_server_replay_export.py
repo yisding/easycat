@@ -31,6 +31,35 @@ async def test_api_replay_runs_against_bundle(tmp_path):
         assert body["side_effecting"] is False
 
 
+async def test_api_replay_runs_off_event_loop_thread(tmp_path):
+    """Synchronous wall pacing and stage replay must not block aiohttp."""
+    import threading
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    original_replay = source._replay_fn
+    assert original_replay is not None
+    event_loop_thread = threading.current_thread()
+    replay_threads = []
+
+    def _record_thread(**kwargs):
+        replay_threads.append(threading.current_thread())
+        return original_replay(**kwargs)
+
+    source._replay_fn = _record_thread
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay", json={"fidelity": "artifact"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 200
+
+    assert replay_threads
+    assert replay_threads[0] is not event_loop_thread
+
+
 async def test_api_replay_rejected_for_live_sessions():
     """Live-session sources don't have a bundle to replay; the endpoint
     must respond with 405, not crash."""
@@ -516,6 +545,45 @@ async def test_api_replay_returns_structured_replay_error(tmp_path):
             "nearest_committable_before": 5,
             "nearest_committable_after": 10,
             "stage": "agent",
+        }
+
+
+async def test_api_replay_returns_structured_divergence_error(tmp_path):
+    """Stage output mismatches retain EASYCAT_E403 and digest details."""
+    from easycat.runtime.replay import ReplayDivergenceError
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+
+    def _raise(**_kwargs):
+        raise ReplayDivergenceError(
+            "stage='agent', turn_id='turn-1'",
+            stage="agent",
+            turn_id="turn-1",
+            expected_digest="expected",
+            actual_digest="actual",
+            requested_sequence=7,
+        )
+
+    source._replay_fn = _raise
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact"},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 409
+        body = await resp.json()
+        assert body["error_code"] == "EASYCAT_E403"
+        assert body["details"] == {
+            "requested_sequence": 7,
+            "stage": "agent",
+            "turn_id": "turn-1",
+            "expected_digest": "expected",
+            "actual_digest": "actual",
         }
 
 

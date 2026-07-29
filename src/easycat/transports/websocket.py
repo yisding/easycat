@@ -56,7 +56,10 @@ def _valid_config_sample_rate(value: object) -> int | None:
 class WebSocketTransportConfig:
     """Configuration for :class:`WebSocketTransport`."""
 
-    default_echo_cancellation_enabled: ClassVar[bool] = True
+    # The server sees socket-write time, not the browser's playout clock, so it
+    # cannot supply the continuous render reference AEC3 requires. Browser
+    # clients should use getUserMedia({audio: {echoCancellation: true}}).
+    default_echo_cancellation_enabled: ClassVar[bool] = False
 
     host: str = "127.0.0.1"
     port: int = 8765
@@ -114,7 +117,7 @@ class WebSocketTransport(ServerTransportBase):
     """
 
     transport_kind = "websocket"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
     _transport_name = "WebSocket"
 
     def __init__(self, config: WebSocketTransportConfig | None = None) -> None:
@@ -312,7 +315,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
     """
 
     transport_kind = "websocket"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,

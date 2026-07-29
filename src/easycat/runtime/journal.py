@@ -26,6 +26,7 @@ from easycat.runtime.records import (
 )
 
 __all__ = [
+    "append_journal_record_async",
     "ExecutionJournal",
     "JournalView",
 ]
@@ -148,6 +149,63 @@ class ExecutionJournal(Protocol):
 
     @property
     def degraded(self) -> bool: ...
+
+
+async def append_journal_record_async(
+    journal: ExecutionJournal,
+    *,
+    kind: JournalRecordKind,
+    name: str,
+    session_id: str,
+    turn_id: str | None = None,
+    data: dict[str, Any] | None = None,
+    error: ErrorInfo | None = None,
+    tags: frozenset[str] = frozenset(),
+    input_ref: str | None = None,
+    output_ref: str | None = None,
+) -> int:
+    """Append without blocking the event loop for disk-backed journals.
+
+    Persistent/custom backends declare ``writes_block = True`` when their
+    synchronous ``append`` path can cross a syscall boundary. Those writes
+    run in the loop's worker pool; in-memory journals stay inline because a
+    thread hop costs more than their lock-and-deque append.
+    """
+
+    def _append() -> int:
+        return journal.append(
+            kind=kind,
+            name=name,
+            session_id=session_id,
+            turn_id=turn_id,
+            data=data,
+            error=error,
+            tags=tags,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
+    if bool(getattr(journal, "writes_block", False)):
+        worker = asyncio.create_task(asyncio.to_thread(_append))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Cancelling an asyncio wrapper cannot stop a synchronous worker.
+            # Keep ownership until the append is finished so teardown cannot
+            # close the backend while an untracked write is still in flight.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                worker.result()
+            except BaseException:
+                # Cancellation remains the caller-visible outcome; retrieving
+                # the result prevents a detached worker exception warning.
+                pass
+            raise
+    return _append()
 
 
 # ── JournalView (read-only surface) ──────────────────────────────

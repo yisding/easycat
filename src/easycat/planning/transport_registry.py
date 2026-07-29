@@ -104,7 +104,7 @@ TRANSPORT_BACKENDS: dict[str, RoleBackend] = {
         config_type="WebSocketTransportConfig",
         extra=None,
         capabilities=frozenset({"server", "duplex_audio"}),
-        default_echo_cancellation_enabled=True,
+        default_echo_cancellation_enabled=False,
     ),
     "twilio": RoleBackend(
         config_type="TwilioTransportConfig",

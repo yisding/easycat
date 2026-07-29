@@ -46,6 +46,15 @@ Both browser transports speak the same JSON event vocabulary; the
 implementation lives in `src/easycat/transports/_browser_events.py` and is
 guarded by `uv run pytest tests/transports/test_webrtc_auth_browser_playground.py`.
 
+The maintained WebSocket and WebTransport clients request browser-native echo
+cancellation through `getUserMedia`. Server-side AEC is off by default for
+those transports because socket/datagram write time is not the browser's
+playout clock and cannot provide a continuous, silence-filled far-end
+reference. You can still opt in with `enable_echo_cancellation=True` for a
+custom endpoint, but that best-effort path records
+`aec_reference_degraded` in the session journal. WebRTC can pace its outbound
+reference and retains its transport-aware AEC behavior.
+
 ### WebSocket transport
 
 Inbound (client → server):
@@ -98,5 +107,7 @@ One JSON object per message (`schema_version` 1):
 | `turn_latency` | `turn_id`, `ms` | Final user transcript → first bot audio. |
 
 `turn_id` may be `null` for events outside a tracked turn (for example a
-greeting). Event delivery is best-effort observability: a slow or closed
-channel never blocks the audio pipeline.
+greeting). Event delivery is best-effort observability through a bounded
+32-message writer queue: the audio/event pipeline never awaits transport I/O,
+and a full queue, failed send, or send taking longer than 250 ms drops that
+browser event.

@@ -83,6 +83,15 @@ TLS/QUIC handshake but never sends a valid CONNECT (or targets a wrong
 ``:path`` and gets a 404/503) holds no session resources and is torn down by
 QUIC's ``idle_timeout`` (``_IDLE_TIMEOUT_SEC``); that timeout is the only
 bound on such lingering connections.
+
+Authentication and bind safety
+------------------------------
+The default bind is loopback-only. A non-loopback bind requires
+``auth_token`` unless ``unsafe_allow_no_auth=True`` is set explicitly.
+Token-bearing servers authorize the HTTP/3 CONNECT request before allocating a
+session. ``Authorization: Bearer`` is the default credential path;
+``?token=`` is accepted only with ``allow_query_token=True`` for browser
+clients that cannot set arbitrary CONNECT headers.
 """
 
 from __future__ import annotations
@@ -94,9 +103,11 @@ import struct
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
+from urllib.parse import urlsplit
 
 from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
+from easycat._net import normalize_auth_token
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
@@ -114,6 +125,8 @@ if TYPE_CHECKING:
     from aioquic.asyncio.server import QuicServer
     from aioquic.h3.connection import H3Connection
     from aioquic.quic.configuration import QuicConfiguration
+
+    from easycat.server.auth import AuthPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -277,9 +290,11 @@ class WebTransportTransportConfig:
     :class:`WebTransportServer`.
     """
 
-    default_echo_cancellation_enabled: ClassVar[bool] = True
+    # The server sees datagram/write time, not the browser's playout clock, so
+    # browser endpoint echo cancellation is the safe automatic default.
+    default_echo_cancellation_enabled: ClassVar[bool] = False
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 4433
     certfile: str = ""
     keyfile: str = ""
@@ -292,6 +307,15 @@ class WebTransportTransportConfig:
     # inbound/outbound queues; without a cap a single client IP can open
     # arbitrarily many sessions and exhaust process memory.
     max_concurrent_sessions: int = 64
+    # Bearer auth is enforced on the HTTP/3 CONNECT request before any session
+    # transport or provider-backed EasyCat session is created. These auth fields
+    # stay last to preserve the existing positional config parameter order.
+    auth_token: str | None = None
+    # Browser WebTransport cannot set arbitrary CONNECT headers. Query-token
+    # auth therefore exists as an explicit opt-in and remains off by default.
+    allow_query_token: bool = False
+    # The only way to bind a non-loopback interface without ``auth_token``.
+    unsafe_allow_no_auth: bool = False
     max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
@@ -980,6 +1004,7 @@ def _get_protocol_class() -> type:
             # followed by CONNECTION_CLOSE.
             self._can_accept: Callable[[], bool] = lambda: True
             self._session_config: WebTransportTransportConfig = WebTransportTransportConfig()
+            self._auth_policy: AuthPolicy | None = None
 
         def quic_event_received(self, event: Any) -> None:
             if isinstance(event, quic_events.ConnectionTerminated):
@@ -1051,13 +1076,41 @@ def _get_protocol_class() -> type:
             method = headers.get(b":method", b"").decode("ascii", errors="ignore")
             protocol = headers.get(b":protocol", b"").decode("ascii", errors="ignore")
             path = headers.get(b":path", b"").decode("ascii", errors="ignore")
+            try:
+                request_path = urlsplit(path).path
+            except ValueError:
+                self._h3.send_headers(
+                    event.stream_id,
+                    [(b":status", b"400")],
+                    end_stream=True,
+                )
+                self.transmit()
+                return
 
             if method != "CONNECT" or protocol != "webtransport":
                 self._h3.send_headers(event.stream_id, [(b":status", b"400")], end_stream=True)
                 self.transmit()
                 return
 
-            if path != self._accept_path:
+            auth_policy = getattr(self, "_auth_policy", None)
+            if auth_policy is not None:
+                from easycat.server.auth import from_h3_headers
+
+                auth_result = auth_policy.authorize(from_h3_headers(event.headers, path))
+                if not auth_result.allowed:
+                    logger.warning(
+                        "Rejecting WebTransport CONNECT — bearer authentication %s",
+                        auth_result.reason,
+                    )
+                    self._h3.send_headers(
+                        event.stream_id,
+                        [(b":status", b"401"), (b"www-authenticate", b"Bearer")],
+                        end_stream=True,
+                    )
+                    self.transmit()
+                    return
+
+            if request_path != self._accept_path:
                 self._h3.send_headers(event.stream_id, [(b":status", b"404")], end_stream=True)
                 self.transmit()
                 return
@@ -1127,6 +1180,7 @@ def _protocol_factory(
     on_session: Callable[[WebTransportConnectionTransport], None],
     can_accept: Callable[[], bool],
     session_config: WebTransportTransportConfig,
+    auth_policy: AuthPolicy | None,
 ) -> Callable[..., Any]:
     """Build the ``create_protocol`` callable for :func:`aioquic.asyncio.serve`."""
 
@@ -1138,6 +1192,7 @@ def _protocol_factory(
         proto._on_session = on_session
         proto._can_accept = can_accept
         proto._session_config = session_config
+        proto._auth_policy = auth_policy
         return proto
 
     return factory
@@ -1197,7 +1252,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,
@@ -1428,6 +1483,18 @@ class WebTransportServer:
         self._server: QuicServer | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
         self._started = False
+        token = normalize_auth_token(config.auth_token)
+        if token is None:
+            self._auth_policy: AuthPolicy | None = None
+        else:
+            from easycat.server.auth import BearerTokenAuth
+
+            self._auth_policy = BearerTokenAuth(
+                token=token,
+                allow_query_token=config.allow_query_token,
+            )
+        # Per-session transports need media settings, never the server secret.
+        self._session_config = replace(config, auth_token=None)
 
     def _can_accept_session(self) -> bool:
         """Capacity gate consulted by the protocol *before* it sends the 200.
@@ -1466,6 +1533,13 @@ class WebTransportServer:
     async def start(self) -> None:
         if self._started:
             return
+        from easycat.server.auth import enforce_bind_guard
+
+        enforce_bind_guard(
+            self._config.host,
+            auth=self._auth_policy,
+            unsafe_allow_no_auth=self._config.unsafe_allow_no_auth,
+        )
         quic_config = _build_quic_configuration(self._config.certfile, self._config.keyfile)
         _preflight_aioquic_backpressure_api()
 
@@ -1473,7 +1547,8 @@ class WebTransportServer:
             accept_path=self._config.path,
             on_session=self._dispatch_session,
             can_accept=self._can_accept_session,
-            session_config=self._config,
+            session_config=self._session_config,
+            auth_policy=self._auth_policy,
         )
         aioquic_server = require_module(
             "aioquic.asyncio.server",
@@ -1561,7 +1636,7 @@ class WebTransportTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(self, config: WebTransportTransportConfig | None = None) -> None:
         self._config = config or WebTransportTransportConfig()
