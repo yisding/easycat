@@ -178,6 +178,12 @@ class TestPeriodicHealthChecker:
 
         assert "Periodic health check loop failed for strict-provider" in caplog.text
         assert "health handler failed" in caplog.text
+        assert checker.is_running is False
+
+        provider.checked.clear()
+        checker.start()
+        await asyncio.wait_for(provider.checked.wait(), timeout=0.5)
+        assert checker.is_running is True
         await checker.stop()
 
     async def test_failure_threshold_delays_escalation(self):
