@@ -246,11 +246,7 @@ def test_resample_runtime_failure_logs_once(monkeypatch, caplog):
     assert len(warnings) == 1
 
 
-def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
-    """The dependency-free path must not fold a 10 kHz tone into speech."""
-    import easycat._audio_utils as au
-
-    monkeypatch.setattr(au, "_resolved_backend", "linear")
+def _ten_khz_alias_attenuation_db() -> float:
     from_rate = 48_000
     to_rate = 16_000
     sample_count = from_rate // 2
@@ -259,7 +255,7 @@ def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
         int(amplitude * math.sin(2 * math.pi * 10_000 * index / from_rate))
         for index in range(sample_count)
     ]
-    output = au.resample(
+    output = resample(
         struct.pack(f"<{len(source)}h", *source),
         from_rate,
         to_rate,
@@ -275,8 +271,23 @@ def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
         )
     )
     alias_amplitude *= 2 / len(body)
-    attenuation_db = 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
-    assert attenuation_db < -40
+    return 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
+
+
+def test_default_resampler_suppresses_downsampling_alias():
+    """Every install must use the native anti-aliased path by default."""
+    import easycat._audio_utils as au
+
+    assert au.resample_backend() == "soxr"
+    assert _ten_khz_alias_attenuation_db() < -60
+
+
+def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
+    """The dependency-free recovery path must not fold a 10 kHz tone into speech."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    assert _ten_khz_alias_attenuation_db() < -40
 
 
 def test_linear_fallback_does_not_restart_from_zero_for_stream_frames(monkeypatch):
