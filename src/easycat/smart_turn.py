@@ -21,6 +21,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from easycat._audio_utils import resample
 from easycat._extras import require_module
 from easycat._smart_turn_features import (
     _create_triangular_filter_bank as _create_triangular_filter_bank,
@@ -223,16 +224,10 @@ class SmartTurnONNX:
         def convert_group() -> None:
             if grouped_rate is None or not grouped_bytes:
                 return
-            samples = (
-                np.frombuffer(b"".join(grouped_bytes), dtype=np.int16).astype(np.float32) / 32768.0
-            )
-            if grouped_rate != 16000 and len(samples):
-                output_length = int(len(samples) * 16000 / grouped_rate)
-                source_positions = np.arange(len(samples), dtype=np.float64)
-                target_positions = (
-                    np.arange(output_length, dtype=np.float64) * grouped_rate / 16000
-                )
-                samples = np.interp(target_positions, source_positions, samples).astype(np.float32)
+            payload = b"".join(grouped_bytes)
+            if grouped_rate != 16000:
+                payload = resample(payload, grouped_rate, 16000)
+            samples = np.frombuffer(payload, dtype=np.int16).astype(np.float32) / 32768.0
             converted_groups.append(samples)
 
         for data, source_rate in reversed(reversed_chunks):

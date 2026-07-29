@@ -270,13 +270,21 @@ def _low_pass_for_downsampling(
     from_rate: int,
     to_rate: int,
 ) -> list[float]:
-    """Apply a causal anti-alias filter without optional numeric packages."""
+    """Apply an edge-extended anti-alias filter without numeric packages.
+
+    Centering the symmetric FIR and extending each boundary with its nearest
+    sample avoids injecting a fresh zero-padding transient whenever a caller
+    supplies streamed audio in separate frames.
+    """
     taps = _downsample_filter(from_rate, to_rate)
+    midpoint = len(taps) // 2
     filtered: list[float] = []
     for sample_index in range(len(samples)):
         value = 0.0
-        for tap_index in range(min(len(taps), sample_index + 1)):
-            value += taps[tap_index] * samples[sample_index - tap_index]
+        for tap_index, tap in enumerate(taps):
+            source_index = sample_index + midpoint - tap_index
+            source_index = max(0, min(len(samples) - 1, source_index))
+            value += tap * samples[source_index]
         filtered.append(value)
     return filtered
 
