@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +26,7 @@ from easycat.validation._runner_support import (
     CommandRunner,
     pytest_command_prefix,
     run_subprocess,
+    run_timed_command,
     validation_exit_code_from_pytest,
     validation_test_paths,
 )
@@ -179,15 +179,15 @@ def run_validation_slice(
     command = _slice_command(spec, paths.junit, junit_prefix)
     command_env = _slice_environment(spec, paths)
     secrets = runtime_secret_values()
-    result, duration_s, finished_at = _execute(
+    result, duration_s, finished_at = run_timed_command(
         command_runner or run_subprocess,
         command,
-        command_env,
+        env=command_env,
     )
     paths.write_redacted(result, secrets)
     outcome = _evaluate_result(spec.name, result, paths.reliability_samples, finished_at, secrets)
     check_artifacts = paths.check_artifacts(spec)
-    artifacts = _all_artifacts(ctx, check_artifacts)
+    artifacts = ctx.artifacts_with(check_artifacts)
     return _finish_slice(
         slice_name=spec.name,
         ctx=ctx,
@@ -240,16 +240,6 @@ def _slice_environment(spec: _SliceSpec, paths: _SlicePaths) -> dict[str, str]:
     if spec.captures_webrtc_stats:
         env["EASYCAT_WEBRTC_STATS_PATH"] = str(paths.webrtc_stats)
     return env
-
-
-def _execute(
-    command_runner: CommandRunner,
-    command: list[str],
-    env: Mapping[str, str],
-) -> tuple[CommandResult, float, datetime]:
-    started_monotonic = time.perf_counter()
-    result = command_runner(command, env=env)
-    return result, time.perf_counter() - started_monotonic, datetime.now(UTC)
 
 
 def _evaluate_result(
@@ -320,19 +310,6 @@ def _slice_failures(
     if budget_failure is not None:
         failures.append(budget_failure)
     return failures
-
-
-def _all_artifacts(
-    ctx: LaneRunContext,
-    check_artifacts: Mapping[str, ArtifactRef],
-) -> dict[str, ArtifactRef]:
-    artifacts = {**ctx.artifacts, **check_artifacts}
-    if ctx.requested_report_path is not None:
-        artifacts["requested_report"] = ArtifactRef(
-            kind="validation_report",
-            path=str(ctx.requested_report_path),
-        )
-    return artifacts
 
 
 def _finish_slice(

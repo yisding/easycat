@@ -58,6 +58,7 @@ from .easy import (
     EasyConfigError,
     TextSessionConfig,
     TransportConfig,
+    _AgentSessionConfig,
     _inject_agent_runtime,
 )
 
@@ -208,12 +209,12 @@ def _resolve_echo_canceller(config: Any) -> Any:
 
 
 def _create_artifact_store(
-    session_id: str, debug: str
+    session_id: str, debug: str, *, data_dir: str | Path | None = None
 ) -> InMemoryArtifactStore | FilesystemArtifactStore | None:
     if debug == "off":
         return None
     if debug == "full":
-        return FilesystemArtifactStore(session_id)
+        return FilesystemArtifactStore(session_id, data_dir=data_dir)
     return InMemoryArtifactStore()
 
 
@@ -329,14 +330,16 @@ def _emit_provider_versions(
     journal: Any,
     session_id: str,
     *,
-    stt: Any,
-    tts: Any,
-    transport: Any,
+    stt: Any = None,
+    tts: Any = None,
+    transport: Any = None,
     vad: Any = None,
     noise_reducer: Any = None,
     echo_canceller: Any = None,
+    agent: Any = None,
 ) -> None:
     """Write a single journal record with version info from all providers."""
+    from easycat.runtime.record_contracts import validate_builtin_record
     from easycat.runtime.records import JournalRecordKind
 
     versions: dict[str, dict[str, str]] = {}
@@ -347,11 +350,14 @@ def _emit_provider_versions(
         ("vad", vad),
         ("noise_reducer", noise_reducer),
         ("echo_canceller", echo_canceller),
+        ("agent", agent),
     ]:
         if provider is not None and hasattr(provider, "version_info"):
             versions[role] = provider.version_info()
+    kind = JournalRecordKind.EVENT
+    validate_builtin_record(name="provider_versions", kind=kind, data=versions)
     journal.append(
-        kind=JournalRecordKind.EVENT,
+        kind=kind,
         name="provider_versions",
         session_id=session_id,
         data=versions,
@@ -402,8 +408,15 @@ class _BuiltAudioSession:
     telephony: _TelephonyPipeline
 
 
-def _create_debug_resources(config: EasyConfig, session_id: str) -> _DebugResources:
-    artifact_store = _create_artifact_store(session_id, config.debug)
+def _create_debug_resources(
+    config: _AgentSessionConfig,
+    session_id: str,
+) -> _DebugResources:
+    artifact_store = _create_artifact_store(
+        session_id,
+        config.debug,
+        data_dir=config.data_dir,
+    )
     if config.debug == "off":
         return _DebugResources(artifact_store=artifact_store, journal=None)
     journal = create_journal(
@@ -414,55 +427,84 @@ def _create_debug_resources(config: EasyConfig, session_id: str) -> _DebugResour
             artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
         ),
         retention_mode=config.journal_retention,
+        data_dir=config.data_dir,
     )
     return _DebugResources(artifact_store=artifact_store, journal=journal)
 
 
-def _resolve_audio_pipeline(config: EasyConfig, event_bus: EventBus) -> _AudioPipeline:
-    stt = _create_stt(config.stt, event_bus)
-    tts = _create_tts(config.tts, event_bus)
-    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-    enable_vad = not auto_turn_from_stt_final
-    vad = _create_vad(config.vad) if enable_vad else None
-    noise_reducer = (
-        _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
-        if config.enable_noise_reduction or config.noise_reduction is not None
-        else None
-    )
-    # EasyConfig fills this default while preserving pre-built providers.
-    echo_config_or_provider = config.echo_cancellation
-    assert echo_config_or_provider is not None
-    echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
-    enable_echo_cancellation = (
-        echo_config_or_provider.enabled
-        if isinstance(echo_config_or_provider, EchoCancellationConfig)
-        else False
-    )
-    return _AudioPipeline(
-        stt=stt,
-        tts=tts,
-        vad=vad,
-        noise_reducer=noise_reducer,
-        echo_canceller=echo_canceller,
-        transport=_create_transport(config.transport, event_bus),
-        auto_turn_from_stt_final=auto_turn_from_stt_final,
-        enable_vad=enable_vad,
-        enable_echo_cancellation=enable_echo_cancellation,
-    )
+def _register_close(rollback: ExitStack, resource: Any) -> Any:
+    close = getattr(resource, "close", None)
+    if callable(close):
+        rollback.callback(close)
+    return resource
 
 
-def _resolve_agent(config: EasyConfig, mcp_servers: tuple[str, ...]) -> Any | None:
-    if config.agent is None:
-        return None
-    agent = auto_adapt_agent(config.agent, model=config.agent_model)
-    _inject_agent_runtime(
-        agent,
-        mcp_servers=mcp_servers,
-        agent_model=config.agent_model,
-        remote_agent_api_key=config.remote_agent_api_key,
-    )
-    _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
-    if config.wrap_agent and not isinstance(agent, AgentRunner):
+def _resolve_audio_pipeline(
+    config: EasyConfig,
+    event_bus: EventBus,
+) -> _AudioPipeline:
+    with ExitStack() as rollback:
+        stt = _create_stt(config.stt, event_bus)
+        tts = _create_tts(config.tts, event_bus)
+        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+        enable_vad = not auto_turn_from_stt_final
+        vad = _register_close(rollback, _create_vad(config.vad)) if enable_vad else None
+        noise_reducer = (
+            _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+            if config.enable_noise_reduction or config.noise_reduction is not None
+            else None
+        )
+        # EasyConfig fills this default while preserving pre-built providers.
+        echo_config_or_provider = config.echo_cancellation
+        assert echo_config_or_provider is not None
+        echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
+        enable_echo_cancellation = (
+            echo_config_or_provider.enabled
+            if isinstance(echo_config_or_provider, EchoCancellationConfig)
+            else False
+        )
+        pipeline = _AudioPipeline(
+            stt=stt,
+            tts=tts,
+            vad=vad,
+            noise_reducer=noise_reducer,
+            echo_canceller=echo_canceller,
+            transport=_create_transport(config.transport, event_bus),
+            auto_turn_from_stt_final=auto_turn_from_stt_final,
+            enable_vad=enable_vad,
+            enable_echo_cancellation=enable_echo_cancellation,
+        )
+        rollback.pop_all()
+        return pipeline
+
+
+def _resolve_agent(
+    config: _AgentSessionConfig,
+    mcp_servers: tuple[str, ...],
+    *,
+    default_agent: Any | None = None,
+) -> Any | None:
+    """Resolve shared agent settings while preserving caller-specific absence.
+
+    Audio construction leaves ``default_agent`` as ``None``. Text construction
+    supplies ``NoopAgent()`` so its historical echo fallback is still wrapped
+    according to ``wrap_agent``. Runtime settings and shape validation apply
+    only to an explicitly configured agent, matching both factories' previous
+    behavior.
+    """
+    configured_agent = config.agent
+    if configured_agent is None:
+        agent = default_agent
+    else:
+        agent = auto_adapt_agent(configured_agent, model=config.agent_model)
+        _inject_agent_runtime(
+            agent,
+            mcp_servers=mcp_servers,
+            agent_model=config.agent_model,
+            remote_agent_api_key=config.remote_agent_api_key,
+        )
+        _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
+    if agent is not None and config.wrap_agent and not isinstance(agent, AgentRunner):
         agent = AgentRunner(agent, config.agent_runner or AgentRunnerConfig())
     return agent
 
@@ -557,9 +599,11 @@ def _make_session_config(
         enable_noise_reduction=config.enable_noise_reduction,
         enable_echo_cancellation=audio.enable_echo_cancellation,
         capture_aec_reference=config.capture_aec_reference,
+        capture_audio=config.capture_audio,
         auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
         strip_markdown=config.strip_markdown,
         output_processors=config.output_processors,
+        on_agent_failure=config.on_agent_failure,
         session_actions=config.session_actions,
         action_executors=telephony.action_executors,
         audio_gate=_audio_gate_for(telephony.outbound_state_machine),
@@ -583,9 +627,12 @@ def _build_audio_session(
     config: EasyConfig,
     session_id: str,
     debug: _DebugResources,
+    rollback: ExitStack,
 ) -> _BuiltAudioSession:
     event_bus = EventBus()
     audio = _resolve_audio_pipeline(config, event_bus)
+    if audio.vad is not None:
+        _register_close(rollback, audio.vad)
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
     agent = _resolve_agent(config, mcp_servers)
     if debug.journal is not None:
@@ -598,6 +645,7 @@ def _build_audio_session(
             vad=audio.vad,
             noise_reducer=audio.noise_reducer,
             echo_canceller=audio.echo_canceller,
+            agent=agent,
         )
     telephony = _resolve_telephony(config, event_bus)
     session_config = _make_session_config(
@@ -677,6 +725,7 @@ def _maybe_arm_dev_session(session: Session) -> None:
 def _finalize_audio_session(config: EasyConfig, built: _BuiltAudioSession) -> None:
     session = built.session
     session._easycat_config = _safe_config_ns(config)
+    session._data_dir = config.data_dir
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
     _wire_outbound_pipeline(built)
@@ -708,13 +757,13 @@ def create_session(config: EasyConfig) -> Session:
     an :class:`easycat.errors.EasyCatError` subclass when a selected
     provider's credentials or optional extra are missing.
     """
-    session_id = f"session-{uuid4().hex[:12]}"
+    session_id = config.session_id or f"session-{uuid4().hex[:12]}"
     debug = _create_debug_resources(config, session_id)
     with ExitStack() as rollback:
         close_journal = getattr(debug.journal, "close", None)
         if callable(close_journal):
             rollback.callback(close_journal)
-        built = _build_audio_session(config, session_id, debug)
+        built = _build_audio_session(config, session_id, debug, rollback)
         _finalize_audio_session(config, built)
         rollback.pop_all()
         return built.session
@@ -891,6 +940,9 @@ def create_text_session(
     remote_agent_api_key: str | None = None,
     mcp_servers: list[str] | None = None,
     record_to: str | Path | None = None,
+    capture_audio: bool | Callable[[], bool] = True,
+    data_dir: str | Path | None = None,
+    emergency_export: bool = False,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -926,51 +978,26 @@ def create_text_session(
         remote_agent_api_key=remote_agent_api_key,
         mcp_servers=mcp_servers,
         record_to=record_to,
+        capture_audio=capture_audio,
+        data_dir=data_dir,
+        emergency_export=emergency_export,
     )
 
-    agent = config.agent
-    session_id = config.session_id
-    debug = config.debug
-    journal_backend = config.journal_backend
-    journal_retention = config.journal_retention
-    wrap_agent = config.wrap_agent
-    agent_runner = config.agent_runner
-    agent_model = config.agent_model
-    remote_agent_api_key = config.remote_agent_api_key
-    mcp_servers = config.mcp_servers
-    record_to = config.record_to
-
-    sid = session_id or f"session-{uuid4().hex[:12]}"
-    artifact_store = _create_artifact_store(sid, debug)
-    journal = (
-        create_journal(
-            sid,
-            debug=debug,
-            backend=journal_backend,
-            artifact_store=(
-                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-            ),
-            retention_mode=journal_retention,
-        )
-        if debug != "off"
-        else None
-    )
-    try:
+    sid = config.session_id or f"session-{uuid4().hex[:12]}"
+    debug_resources = _create_debug_resources(config, sid)
+    with ExitStack() as rollback:
+        close_journal = getattr(debug_resources.journal, "close", None)
+        if callable(close_journal):
+            rollback.callback(close_journal)
         event_bus = EventBus()
-
-        adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
-        _mcp = list(mcp_servers) if mcp_servers else []
-        if agent is not None:
-            _inject_agent_runtime(
-                adapted,
-                mcp_servers=_mcp,
-                agent_model=agent_model,
-                remote_agent_api_key=remote_agent_api_key,
-            )
-            _validate_agent_shape(adapted, wrap_agent=wrap_agent)
-        if wrap_agent and not isinstance(adapted, AgentRunner):
-            runner_cfg = agent_runner or AgentRunnerConfig()
-            adapted = AgentRunner(adapted, runner_cfg)
+        resolved_mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+        adapted = _resolve_agent(
+            config,
+            resolved_mcp_servers,
+            default_agent=NoopAgent(),
+        )
+        if debug_resources.journal is not None:
+            _emit_provider_versions(debug_resources.journal, sid, agent=adapted)
 
         # Text sessions use noop providers — validation is skipped because
         # runtime_mode="text_session" never enters the audio pipeline.
@@ -984,30 +1011,32 @@ def create_text_session(
                 transport=NoopTransport(),
                 agent=adapted,
                 event_bus=event_bus,
-                journal=journal,
-                artifact_store=artifact_store,
+                journal=debug_resources.journal,
+                artifact_store=debug_resources.artifact_store,
+                capture_audio=config.capture_audio,
                 warmup=config.warmup,
-                record_to=record_to,
+                record_to=config.record_to,
                 session_id=sid,
                 runtime_mode="text_session",
-                mcp_servers=tuple(_mcp),
+                mcp_servers=resolved_mcp_servers,
             )
         )
-    except Exception:
-        if journal is not None and hasattr(journal, "close"):
-            journal.close()
-        raise
+        rollback.pop_all()
     # Stash user-facing settings so debug bundle export can snapshot them
     # instead of serializing live provider instances from SessionConfig.
     from types import SimpleNamespace
 
     session._easycat_config = SimpleNamespace(
-        debug=debug,
-        journal_backend=journal_backend,
-        journal_retention=journal_retention,
+        debug=config.debug,
+        journal_backend=config.journal_backend,
+        journal_retention=config.journal_retention,
+        capture_audio=config.capture_audio,
         warmup=config.warmup,
-        record_to=record_to,
+        record_to=config.record_to,
     )
-    session._agent_model = agent_model
-    session._remote_agent_api_key = remote_agent_api_key
+    session._data_dir = config.data_dir
+    session._agent_model = config.agent_model
+    session._remote_agent_api_key = config.remote_agent_api_key
+    if config.debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
     return session

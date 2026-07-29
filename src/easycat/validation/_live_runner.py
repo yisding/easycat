@@ -165,16 +165,12 @@ class _LiveAccumulator:
 
     @classmethod
     def create(cls, ctx: LaneRunContext, paths: _LivePaths) -> _LiveAccumulator:
-        artifacts = {
-            **ctx.artifacts,
-            "stdout": ArtifactRef(kind="stdout", path=str(paths.stdout)),
-            "stderr": ArtifactRef(kind="stderr", path=str(paths.stderr)),
-        }
-        if ctx.requested_report_path is not None:
-            artifacts["requested_report"] = ArtifactRef(
-                kind="validation_report",
-                path=str(ctx.requested_report_path),
-            )
+        artifacts = ctx.artifacts_with(
+            {
+                "stdout": ArtifactRef(kind="stdout", path=str(paths.stdout)),
+                "stderr": ArtifactRef(kind="stderr", path=str(paths.stderr)),
+            }
+        )
         return cls(artifacts=artifacts)
 
     def add_selector_failure(self, failure: ValidationFailure) -> None:
