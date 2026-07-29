@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +12,7 @@ import pytest
 
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "08-smart-turn"
@@ -47,7 +47,7 @@ def _bundle(tmp_path: Path) -> Path:
 
 
 def test_unlabeled_sweep_reports_decision_changes_not_false_positives(tmp_path: Path) -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(SWEEP), str(_bundle(tmp_path))],
         cwd=ROOT,
         check=True,
@@ -71,7 +71,7 @@ def test_labeled_sweep_distinguishes_helpful_acceptance_from_false_positive(
 ) -> None:
     labels = tmp_path / "labels.json"
     labels.write_text(json.dumps({"1": False, "2": False, "3": True, "4": True}))
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(SWEEP), str(_bundle(tmp_path)), "--labels", str(labels)],
         cwd=ROOT,
         check=True,
@@ -147,7 +147,7 @@ def test_incomplete_or_unknown_labels_are_rejected(
     labels_path = tmp_path / "labels.json"
     labels_path.write_text(json.dumps(labels))
 
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(SWEEP), str(_bundle(tmp_path)), "--labels", str(labels_path)],
         cwd=ROOT,
         check=False,

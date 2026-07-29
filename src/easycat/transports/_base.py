@@ -186,12 +186,11 @@ class AudioQueueMixin:
             max_pending_bytes=max_pending_bytes,
         )
         self._client_connected = asyncio.Event()
-        # Optional session EventBus.  Attached post-construction by Session
-        # via ``_maybe_attach_event_bus`` (which only sets ``_event_bus``
-        # while it is None), so ``_emit_degraded`` reads it live.  Preserve a
-        # value a subclass already set via constructor injection (e.g.
-        # Twilio transports pass ``event_bus`` before calling this) — only
-        # default it when unset.
+        # Optional session EventBus. Attached post-construction through the
+        # public ``set_event_bus`` capability, so ``_emit_degraded`` reads it
+        # live. Preserve a value a subclass already set via constructor
+        # injection (e.g. Twilio transports pass ``event_bus`` before calling
+        # this) — only default it when unset.
         self._event_bus = getattr(self, "_event_bus", None)
         # Fire-and-forget ``bus.emit`` tasks, tracked so they are not GC'd
         # mid-flight.  Observability must never block a transport hot path,
@@ -203,6 +202,11 @@ class AudioQueueMixin:
         # Browser event channel (transcripts / interruptions / latency) for
         # transports that opt in via ``_ensure_browser_event_forwarder``.
         self._browser_event_forwarder = getattr(self, "_browser_event_forwarder", None)
+
+    def set_event_bus(self, event_bus: EventBus) -> None:
+        """Attach the session bus unless construction supplied an explicit bus."""
+        if self._event_bus is None:
+            self._event_bus = event_bus
 
     def _record_transport_disconnect(self, reason: str) -> None:
         """Count one abnormal transport disconnect (a drop, not a clean close).

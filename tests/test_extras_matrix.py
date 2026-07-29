@@ -67,6 +67,16 @@ def test_extras_matrix_main_emits_github_output_json_assignment() -> None:
     assert "ten-vad" not in extras
 
 
+def test_nightly_extra_cells_execute_sdk_gated_bridge_tests() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "nightly-validation.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'pytest tests/contracts tests/integrations/agents -q -m "not integration_live"' in workflow
+    )
+
+
 def test_smoke_adapter_targets_derive_from_required_extra_mapping() -> None:
     extras_smoke = _load_script("extras_smoke")
     from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS

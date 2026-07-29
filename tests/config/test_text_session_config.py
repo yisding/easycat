@@ -35,6 +35,8 @@ def test_create_text_session_preserves_debug_snapshot_shape(tmp_path):
     assert vars(session._easycat_config) == {
         "debug": "off",
         "journal_backend": "sqlite",
+        "journal_capacity": 10_000,
+        "journal_redaction": "secrets",
         "journal_retention": "delete",
         "capture_audio": True,
         "warmup": False,
@@ -47,6 +49,39 @@ def test_text_session_config_defaults_debug_to_light():
 
     config = TextSessionConfig(agent=_DummyAgent())
     assert config.debug == "light"
+
+
+def test_text_session_config_defaults_journal_capacity():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    assert config.journal_capacity == 10_000
+
+
+def test_create_text_session_forwards_journal_capacity():
+    session = create_text_session(agent=_DummyAgent(), journal_capacity=321)
+    try:
+        assert session._easycat_config.journal_capacity == 321
+        assert session._journal._capacity == 321
+        assert session._run_ctx.journal_detail == "light"
+    finally:
+        session._journal.close()
+
+
+def test_text_session_config_defaults_journal_redaction_to_secrets():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    assert config.journal_redaction == "secrets"
+
+
+def test_create_text_session_forwards_journal_redaction():
+    session = create_text_session(agent=_DummyAgent(), journal_redaction="pii")
+    try:
+        assert session._easycat_config.journal_redaction == "pii"
+        assert session._journal._redaction == "pii"
+    finally:
+        session._journal.close()
 
 
 def test_create_text_session_defaults_build_memory_journal(
@@ -128,6 +163,23 @@ def test_text_session_config_validates_debug():
 
     with pytest.raises(ValueError, match="Invalid debug"):
         TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_text_session_config_validates_journal_capacity():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="journal_capacity must be a positive integer"):
+        TextSessionConfig(agent=_DummyAgent(), journal_capacity=0)
+
+
+def test_text_session_config_validates_journal_redaction():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="Invalid journal_redaction"):
+        TextSessionConfig(
+            agent=_DummyAgent(),
+            journal_redaction="everything",  # type: ignore[arg-type]
+        )
 
 
 def test_create_text_session_rejects_config_plus_loose_kwargs():

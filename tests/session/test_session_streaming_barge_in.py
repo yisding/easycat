@@ -12,6 +12,7 @@ from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
+    BotStartedSpeaking,
     BotStoppedSpeaking,
     Event,
     ToolCallResult,
@@ -43,12 +44,34 @@ from tests.session._session_streaming_helpers import (
 )
 
 
+def _arm_first_agent_delta(session: Session) -> asyncio.Event:
+    """Return an event set when the active turn emits its first text delta."""
+    first_delta = asyncio.Event()
+    session.event_bus.subscribe(AgentDelta, lambda _event: first_delta.set())
+    return first_delta
+
+
+async def _wait_for_active_cancel_token(
+    session: Session,
+    first_delta: asyncio.Event,
+) -> CancelToken:
+    """Wait for real agent output and return the turn token that produced it."""
+    await asyncio.wait_for(first_delta.wait(), timeout=1.0)
+    token = session.cancel_token
+    assert token is not None
+    return token
+
+
 @pytest.mark.asyncio
 async def test_session_streaming_barge_in_cancellation():
     """Barge-in during streaming should stop agent output via cancel token."""
 
     class InterruptibleAgent(_TestBridgeBase):
         """Agent that checks cancel token and stops."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_observed = asyncio.Event()
 
         async def invoke(
             self,
@@ -60,6 +83,7 @@ async def test_session_streaming_barge_in_cancellation():
             _ = recorder, text
             for word in ["Hello ", "world. ", "This ", "is ", "a ", "long ", "response."]:
                 if cancel_token and cancel_token.is_cancelled:
+                    self.cancel_observed.set()
                     break
                 yield AgentBridgeEvent(kind="text_delta", text=word)
                 await asyncio.sleep(0.03)
@@ -98,20 +122,18 @@ async def test_session_streaming_barge_in_cancellation():
     session = Session(config)
 
     deltas: list[AgentDelta] = []
-    session.event_bus.subscribe(AgentDelta, lambda e: deltas.append(e))
+    first_delta = _arm_first_agent_delta(session)
+    session.event_bus.subscribe(AgentDelta, deltas.append)
 
     await session.start()
-    await asyncio.sleep(0.1)
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        token.cancel()
+        await asyncio.wait_for(agent.cancel_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
-    # Simulate barge-in by cancelling the token
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.2)
-    await session.stop()
-
-    # Agent should not have produced all 7 deltas
-    assert len(deltas) < 7
+    assert 1 <= len(deltas) <= 2
 
 
 @pytest.mark.asyncio
@@ -186,15 +208,15 @@ async def test_session_barge_in_calls_notify_interruption():
         turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
+    first_delta = _arm_first_agent_delta(session)
 
     await session.start()
-    await asyncio.sleep(0.1)
-
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.3)
-    await session.stop()
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        token.cancel()
+        await asyncio.wait_for(agent.interruption_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert agent.interruption_notified
     # Text never reached TTS (single sentence fragment still in buffer),
@@ -330,15 +352,15 @@ async def test_session_barge_in_message_mode():
         interruption_mode="message",
     )
     session = Session(config)
+    first_delta = _arm_first_agent_delta(session)
 
     await session.start()
-    await asyncio.sleep(0.1)
-
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.3)
-    await session.stop()
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        token.cancel()
+        await asyncio.wait_for(agent.interruption_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert agent.interruption_notified
     assert agent.interruption_mode == "message"
@@ -347,7 +369,8 @@ async def test_session_barge_in_message_mode():
 @pytest.mark.asyncio
 async def test_session_barge_in_with_agent_runner_adds_single_interruption_note():
     """Wrapped AgentRunner should record exactly one interruption note."""
-    runner = AgentRunner(SlowToolCallingAgent())
+    agent = SlowToolCallingAgent()
+    runner = AgentRunner(agent)
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
     config = SessionConfig(
         transport=transport,
@@ -360,15 +383,15 @@ async def test_session_barge_in_with_agent_runner_adds_single_interruption_note(
         interruption_mode="message",
     )
     session = Session(config)
+    first_delta = _arm_first_agent_delta(session)
 
     await session.start()
-    await asyncio.sleep(0.1)
-
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.3)
-    await session.stop()
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        token.cancel()
+        await asyncio.wait_for(agent.interruption_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     interruption_notes = [
         entry
@@ -381,12 +404,13 @@ async def test_session_barge_in_with_agent_runner_adds_single_interruption_note(
 @pytest.mark.asyncio
 async def test_session_barge_in_without_tool_calls_stops_immediately():
     """Barge-in with no tool calls in flight should stop the stream quickly."""
+    agent = SlowStreamingAgent()
     transport = FakeTransport(chunks=[_chunk(), _chunk()])
     config = SessionConfig(
         transport=transport,
         vad=FakeVAD(),
         stt=FakeSTT(transcript="test"),
-        agent=SlowStreamingAgent(),
+        agent=agent,
         tts=FakeTTS(),
         noise_reducer=FakeNoiseReducer(),
         turn_manager_config=_FAST_TURN,
@@ -394,22 +418,18 @@ async def test_session_barge_in_without_tool_calls_stops_immediately():
     session = Session(config)
 
     deltas: list[AgentDelta] = []
-    session.event_bus.subscribe(AgentDelta, lambda e: deltas.append(e))
+    first_delta = _arm_first_agent_delta(session)
+    session.event_bus.subscribe(AgentDelta, deltas.append)
 
     await session.start()
-    await asyncio.sleep(0.1)
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        token.cancel()
+        await asyncio.wait_for(agent.cancel_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.2)
-    await session.stop()
-
-    # Stream should not have produced extra text beyond the agent's
-    # natural output.  The SlowStreamingAgent only yields 2 words, so
-    # it may finish before cancel arrives — what matters is it did not
-    # hang waiting for more output.
-    assert len(deltas) <= 2
+    assert 1 <= len(deltas) <= 2
 
 
 @pytest.mark.asyncio
@@ -474,18 +494,19 @@ async def test_session_barge_in_during_tts_playback():
         turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
+    first_delta = _arm_first_agent_delta(session)
+    playback_started = asyncio.Event()
+    session.event_bus.subscribe(BotStartedSpeaking, lambda _event: playback_started.set())
 
     await session.start()
-    # Wait for TTS playback to start, then cancel mid-playback.
-    await tts.started.wait()
-    await asyncio.sleep(0.15)
-
-    # Cancel during TTS playback (agent stream already done)
-    if session.cancel_token:
-        session.cancel_token.cancel()
-
-    await asyncio.sleep(0.3)
-    await session.stop()
+    try:
+        token = await _wait_for_active_cancel_token(session, first_delta)
+        await asyncio.wait_for(tts.started.wait(), timeout=1.0)
+        await asyncio.wait_for(playback_started.wait(), timeout=1.0)
+        token.cancel()
+        await asyncio.wait_for(agent.interruption_observed.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert agent.interruption_notified
     assert agent.interruption_mode == "truncate"
@@ -782,14 +803,15 @@ async def test_session_barge_in_after_full_playback_does_not_notify_interruption
         )
     )
 
+    first_delta = _arm_first_agent_delta(session)
     playback_finished = _arm_playback_finished(session)
     await session.start()
+    token = await _wait_for_active_cancel_token(session, first_delta)
     await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
     # Cancel after playback has already completed; this should not be treated
     # as an interruption that mutates agent history.
-    if session.cancel_token:
-        session.cancel_token.cancel()
+    token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()
@@ -839,12 +861,13 @@ async def test_session_barge_in_after_full_playback_keeps_agent_runner_history()
         )
     )
 
+    first_delta = _arm_first_agent_delta(session)
     playback_finished = _arm_playback_finished(session)
     await session.start()
+    token = await _wait_for_active_cancel_token(session, first_delta)
     await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
-    if session.cancel_token:
-        session.cancel_token.cancel()
+    token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()
@@ -889,12 +912,13 @@ async def test_session_barge_in_after_full_multichunk_playback_keeps_history():
         )
     )
 
+    first_delta = _arm_first_agent_delta(session)
     playback_finished = _arm_playback_finished(session)
     await session.start()
+    token = await _wait_for_active_cancel_token(session, first_delta)
     await asyncio.wait_for(playback_finished.wait(), timeout=5.0)
 
-    if session.cancel_token:
-        session.cancel_token.cancel()
+    token.cancel()
 
     await asyncio.sleep(0.1)
     await session.stop()

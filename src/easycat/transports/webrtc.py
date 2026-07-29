@@ -368,7 +368,9 @@ class WebRTCTransport(AudioQueueMixin):
 
         from easycat._audio_utils import resample
 
-        # Resample to 48 kHz for Opus encoding.
+        # Transport sends have a per-call delivery result and no tail-send
+        # phase. Keep this fallback conversion immediate; normal configured
+        # sessions already perform stateful output alignment in TTSBase.
         if chunk.format.sample_rate != WEBRTC_SAMPLE_RATE:
             pcm_data = resample(chunk.data, chunk.format.sample_rate, WEBRTC_SAMPLE_RATE)
         else:
@@ -691,10 +693,11 @@ class WebRTCTransport(AudioQueueMixin):
         Always enqueues a sentinel on exit so that ``receive_audio()`` does not
         block indefinitely if the track ends without a connection-state callback.
         """
-        from easycat._audio_utils import resample, to_mono
+        from easycat._audio_utils import PCM16StreamResampler, to_mono
 
         target_rate = self._config.audio_format.sample_rate
         target_format = self._config.audio_format
+        resampler = PCM16StreamResampler(target_rate)
 
         logger.info("Consuming WebRTC audio track (target %d Hz)", target_rate)
 
@@ -713,12 +716,10 @@ class WebRTCTransport(AudioQueueMixin):
                 if channels > 1:
                     raw = to_mono(raw, channels)
 
-                # Resample to pipeline target rate.
-                if frame_rate != target_rate:
-                    raw = resample(raw, frame_rate, target_rate)
+                raw = resampler.process(raw, frame_rate)
 
                 chunk = AudioChunk(data=raw, format=target_format)
-                if self._is_current_peer_generation(peer_generation):
+                if raw and self._is_current_peer_generation(peer_generation):
                     self._enqueue_chunk(chunk, context="WebRTC")
 
         except StopAsyncIteration:
@@ -735,6 +736,12 @@ class WebRTCTransport(AudioQueueMixin):
                     f"inbound audio track failed: {type(exc).__name__}: {exc}",
                 )
         finally:
+            tail = resampler.finish()
+            if tail and self._is_current_peer_generation(peer_generation):
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=target_format),
+                    context="WebRTC",
+                )
             # Ensure the pipeline unblocks even if on_ended/connectionstatechange
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
             # one stops receive_audio() and extras are cleared on next connection.

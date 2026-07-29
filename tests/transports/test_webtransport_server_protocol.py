@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import easycat.transports.webtransport as webtransport_module
 from easycat.server.webtransport import (
     run_webtransport_config_server,
     serve_webtransport_config_sessions,
@@ -16,12 +18,94 @@ from easycat.transports.webtransport import (
     WebTransportServer,
     WebTransportTransportConfig,
     _get_protocol_class,
+    _preflight_aioquic_backpressure_api,
 )
 
 from ._webtransport_helpers import _aioquic_available, _FakeH3, _FakeQuicProtocol
 
 
 class TestWebTransportServerWiring:
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not _aioquic_available(),
+        reason="aioquic not installed ([webtransport] extra)",
+    )
+    async def test_installed_aioquic_passes_backpressure_preflight(self) -> None:
+        _preflight_aioquic_backpressure_api()
+
+    @pytest.mark.asyncio
+    async def test_backpressure_preflight_rejects_missing_private_buffer(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class FakeConfiguration:
+            def __init__(self, *, is_client: bool) -> None:
+                self.is_client = is_client
+
+        class FakeQuic:
+            def __init__(self, *, configuration: object) -> None:
+                self.configuration = configuration
+                self._streams: dict[int, object] = {}
+
+            def get_next_available_stream_id(self) -> int:
+                return 0
+
+            def send_stream_data(self, stream_id: int, _data: bytes) -> None:
+                self._streams[stream_id] = SimpleNamespace(sender=object())
+
+        class FakeProtocol:
+            def __init__(self, quic: FakeQuic) -> None:
+                self._quic = quic
+
+        modules = {
+            "aioquic.quic.configuration": SimpleNamespace(QuicConfiguration=FakeConfiguration),
+            "aioquic.quic.connection": SimpleNamespace(QuicConnection=FakeQuic),
+        }
+        monkeypatch.setattr(
+            webtransport_module,
+            "require_module",
+            lambda name, **_kwargs: modules[name],
+        )
+        monkeypatch.setattr(webtransport_module, "_get_protocol_class", lambda: FakeProtocol)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"QuicStream\.sender\._buffer missing.*Required access path",
+        ):
+            _preflight_aioquic_backpressure_api()
+
+    @pytest.mark.asyncio
+    async def test_start_preflights_before_binding(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def _noop(transport: WebTransportConnectionTransport) -> None:
+            await transport.wait_closed()
+
+        monkeypatch.setattr(
+            webtransport_module,
+            "_build_quic_configuration",
+            lambda _cert, _key: object(),
+        )
+
+        def fail_preflight() -> None:
+            raise RuntimeError("incompatible aioquic")
+
+        monkeypatch.setattr(
+            webtransport_module,
+            "_preflight_aioquic_backpressure_api",
+            fail_preflight,
+        )
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            _noop,
+        )
+        with pytest.raises(RuntimeError, match="incompatible aioquic"):
+            await server.start()
+        assert server._server is None  # noqa: SLF001
+        assert server._started is False  # noqa: SLF001
+
     @pytest.mark.asyncio
     async def test_start_requires_cert(self) -> None:
         async def _noop(transport: WebTransportConnectionTransport) -> None:

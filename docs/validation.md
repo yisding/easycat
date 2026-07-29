@@ -30,7 +30,7 @@ directly:
 
 <!-- BEGIN auto:guard-commands format=raw-bash -->
 ```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
+uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
@@ -50,6 +50,14 @@ the fast dev loop (`just test-fast`, `just cov`, and
 still run them. Some named guard lanes also own behavioral CLI and runtime
 tests, so `uv run pytest -m guard` is useful for the prose overlay but is not a
 replacement for the relevant named guard command above.
+
+Tests marked `integration_external` provision SDKs, binaries, or services and
+are excluded from bare `pytest`, `just test`, and `just check`. Run that lane
+explicitly with `uv run pytest -m integration_external`.
+Tests marked `integration_live` are also excluded from the xdist-backed
+`just test` and `just check` recipes; run their provider lane explicitly and
+serially so session-scoped paid fixtures are not duplicated across workers.
+
 Each run writes an isolated report under
 `.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
 logs, and updates `.easycat/validation/latest.json` after the report is

@@ -9,6 +9,10 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
+from agent import make_agent
+from fastapi import FastAPI, HTTPException, Request, Response
+from websockets.asyncio.server import ServerConnection
+
 from easycat import (
     EasyConfig,
     SessionManager,
@@ -22,13 +26,13 @@ from easycat.telephony import (
     twilio_webhook_idempotency_key,
     validate_twilio_webhook_signature,
 )
-from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+from easycat.transports import (
+    TwilioStreamTokenStore,
+    TwilioTransportConfig,
+    twilio_websocket_signature_process_request,
+)
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
-from fastapi import FastAPI, HTTPException, Request, Response
-from websockets.asyncio.server import ServerConnection
-
-from agent import make_agent
 
 
 def create_app() -> FastAPI:
@@ -55,9 +59,7 @@ def create_app() -> FastAPI:
         async with session_slots:
             transport = TwilioConnectionTransport(
                 ws,
-                config=TwilioTransportConfig(
-                    stream_token_validator=stream_tokens.consume_start
-                ),
+                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
             )
             if not await transport.wait_for_start(timeout_s=start_timeout_s):
                 return
@@ -81,10 +83,15 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         port = int(os.getenv("TWILIO_WS_PORT", "8766"))
+        process_request = twilio_websocket_signature_process_request(
+            twilio_auth_token,
+            stream_url,
+        )
         twilio_ws = await websockets.serve(
             handle_call,
             "0.0.0.0",
             port,
+            process_request=process_request,
             compression=None,
             max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )

@@ -93,6 +93,7 @@ class LatencyStageDurations:
     llm_ttft_ms: float | None = None
     tts_ttfb_ms: float | None = None
     transport_ms: float | None = None
+    interruption_cutoff_ms: float | None = None
     total_ms: float | None = None
 
     def to_dict(self) -> dict[str, float | None]:

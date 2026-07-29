@@ -258,20 +258,16 @@ def test_vad_factory_ten_fallback_after_funasr(monkeypatch: pytest.MonkeyPatch):
 
     import sys
 
-    sys.modules["ten_vad"] = mock_ten_vad
+    monkeypatch.setitem(sys.modules, "ten_vad", mock_ten_vad)
 
     import types
 
     fake_numpy = types.SimpleNamespace(int16="int16", frombuffer=lambda data, dtype: data)
-    sys.modules["numpy"] = fake_numpy
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
 
-    try:
-        vad = create_vad(VADConfig(backend="auto"))
-        assert isinstance(vad, TenVAD)
-        assert abs(vad._threshold - 0.6) < 1e-9
-    finally:
-        del sys.modules["ten_vad"]
-        del sys.modules["numpy"]
+    vad = create_vad(VADConfig(backend="auto"))
+    assert isinstance(vad, TenVAD)
+    assert abs(vad._threshold - 0.6) < 1e-9
 
 
 def test_vad_factory_ten_respects_explicit_sensitivity(monkeypatch: pytest.MonkeyPatch):
@@ -282,20 +278,16 @@ def test_vad_factory_ten_respects_explicit_sensitivity(monkeypatch: pytest.Monke
 
     import sys
 
-    sys.modules["ten_vad"] = mock_ten_vad
+    monkeypatch.setitem(sys.modules, "ten_vad", mock_ten_vad)
 
     import types
 
     fake_numpy = types.SimpleNamespace(int16="int16", frombuffer=lambda data, dtype: data)
-    sys.modules["numpy"] = fake_numpy
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
 
-    try:
-        vad = create_vad(VADConfig(backend="ten", sensitivity=0.7))
-        assert isinstance(vad, TenVAD)
-        assert abs(vad._threshold - 0.3) < 1e-9
-    finally:
-        del sys.modules["ten_vad"]
-        del sys.modules["numpy"]
+    vad = create_vad(VADConfig(backend="ten", sensitivity=0.7))
+    assert isinstance(vad, TenVAD)
+    assert abs(vad._threshold - 0.3) < 1e-9
 
 
 def test_vad_factory_applies_config():
@@ -362,23 +354,20 @@ def test_silero_onnx_model_close_drops_session():
     assert model._session is None
 
 
-def test_ten_vad_close_releases_handle():
+def test_ten_vad_close_releases_handle(monkeypatch: pytest.MonkeyPatch):
     """TenVAD.close() drops the native ten_vad handle."""
     import sys
 
     mock_ten_vad = MagicMock()
     mock_ten_vad.TenVad.return_value = MagicMock()
-    sys.modules["ten_vad"] = mock_ten_vad
-    sys.modules["numpy"] = types.SimpleNamespace(int16="int16")
-    try:
-        vad = TenVAD()
-        assert vad._ten_vad is not None
-        vad.close()
-        assert vad._ten_vad is None
-        assert vad._buffer == b""
-    finally:
-        del sys.modules["ten_vad"]
-        del sys.modules["numpy"]
+    monkeypatch.setitem(sys.modules, "ten_vad", mock_ten_vad)
+    monkeypatch.setitem(sys.modules, "numpy", types.SimpleNamespace(int16="int16"))
+
+    vad = TenVAD()
+    assert vad._ten_vad is not None
+    vad.close()
+    assert vad._ten_vad is None
+    assert vad._buffer == b""
 
 
 def test_funasr_vad_close_releases_model(monkeypatch: pytest.MonkeyPatch):

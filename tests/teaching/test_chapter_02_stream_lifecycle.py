@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
 
 
 def test_stream_lifecycle_probe_covers_acquisition_and_sibling_failures() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "stream_lifecycle_probe.py")],
         cwd=ROOT,
         check=True,

@@ -193,6 +193,24 @@ class TestWebSocketTransport(_UsesPytestTcpPortFactory):
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_clear_audio_sends_client_playback_reset(self):
+        port = self._unused_port()
+        transport = WebSocketTransport(WebSocketTransportConfig(host="127.0.0.1", port=port))
+        await transport.connect()
+
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                await ws.recv()  # ready
+                await asyncio.wait_for(transport.wait_for_client(), timeout=2.0)
+
+                await transport.clear_audio()
+
+                message = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                assert json.loads(message) == {"type": "clear"}
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_server_forwards_session_events_as_json_text_frames(self):
         """Session events reach the browser as JSON control messages."""
         from easycat.events import STTFinal

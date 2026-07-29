@@ -109,6 +109,7 @@ def _capture_session_bundle(
         format_version=FORMAT_VERSION,
         provider_versions=_collect_provider_versions(session),
         config_snapshot=safe_config_snapshot_from_session(session),
+        journal_dropped_records=_journal_dropped_records(journal),
         sharing_banner=_sharing_banner(),
     )
     return _CapturedSessionBundle(
@@ -123,6 +124,11 @@ def _serialize_journal(journal: _JournalReader | None) -> bytes:
         return b""
     lines = [json.dumps(record_to_dict(record), default=str) for record in journal.read()]
     return "\n".join(lines).encode("utf-8")
+
+
+def _journal_dropped_records(journal: _JournalReader | None) -> int:
+    value = getattr(journal, "dropped_records", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def _collect_artifacts(session: object) -> dict[str, bytes]:

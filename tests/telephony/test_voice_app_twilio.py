@@ -527,6 +527,7 @@ def test_media_listener_bounds_messages_and_disables_compression(
 
     assert harness.serve_kwargs.get("compression", "MISSING") is None
     assert harness.serve_kwargs["max_size"] == MAX_WEBSOCKET_MESSAGE_BYTES
+    assert callable(harness.serve_kwargs.get("process_request"))
 
 
 # ── session('twilio') still raises ────────────────────────────────────

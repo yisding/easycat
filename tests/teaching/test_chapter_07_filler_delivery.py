@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "07-tools"
 
 
 def test_filler_delivery_probe_distinguishes_enqueue_from_acceptance() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "filler_delivery_probe.py")],
         cwd=ROOT,
         check=True,
