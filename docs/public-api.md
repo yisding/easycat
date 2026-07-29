@@ -36,6 +36,9 @@ route discovery or run `uv run easycat explain json-schema`.
   submodules instead.
 - The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
   CI parses this section rather than accepting incidental mentions elsewhere.
+- `easycat.__version__` reports the installed distribution version for feature
+  detection. As conventional package metadata, it is deliberately outside the
+  app-facing `__all__` allowlist and loads lazily with the rest of this module.
 - After changing top-level exports, run
   `just guard-docs` before opening the PR. It includes
   `uv run pytest tests/test_public_api.py`. If `just` is not installed, use the
@@ -358,3 +361,8 @@ for the complete composition.
 Stable symbols normally carry a machine-visible deprecation signal before
 removal. During the pre-release period, obsolete APIs may be removed directly
 when retaining them would preserve ownership ambiguity.
+
+Starting with version 1.0.0, EasyCat follows Semantic Versioning: incompatible
+changes to this documented public API require a major release,
+backward-compatible additions require a minor release, and
+backward-compatible fixes require a patch release.

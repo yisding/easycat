@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.check_wheel_size import MAX_WHEEL_BYTES
 from tests._release_artifacts import release_artifact_offenders
 
 pytestmark = pytest.mark.integration_local
@@ -111,6 +112,10 @@ def _wheel_metadata(wheel_path: Path) -> Message:
             name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
         )
         return email.message_from_bytes(zf.read(metadata_name))
+
+
+def test_wheel_stays_within_deliberate_size_budget(built_wheel: Path) -> None:
+    assert built_wheel.stat().st_size <= MAX_WHEEL_BYTES
 
 
 @pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)

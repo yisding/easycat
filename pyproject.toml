@@ -79,10 +79,15 @@ telephony = [
     # 3.13.3 fixes the request parsing and resource-exhaustion advisories
     # published for every aiohttp release through 3.13.2.
     "aiohttp>=3.13.3",
-    "fastapi>=0.140.0",
     "phonenumberslite>=9.0.35",
-    "python-multipart>=0.0.29",
     "twilio>=9.0.0",
+]
+# The bundled lower-level reference app and twilio-phone scaffold use FastAPI
+# and uvicorn; the reusable telephony library itself does not. FastAPI form
+# handling also requires python-multipart for Twilio webhook endpoints.
+telephony-fastapi = [
+    "fastapi>=0.140.0",
+    "python-multipart>=0.0.29",
     "uvicorn>=0.51.0",
 ]
 aec = ["livekit>=1.1.13"]

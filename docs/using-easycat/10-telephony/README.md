@@ -242,7 +242,7 @@ caller would still hear provider-buffered audio.
 Install and preflight the live example deliberately:
 
 ```bash
-uv sync --extra openai --extra telephony --extra openai-agents --group dev
+uv sync --extra openai --extra telephony --extra telephony-fastapi --extra openai-agents --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env

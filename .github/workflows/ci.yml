@@ -281,4 +281,6 @@ jobs:
       # No project sync: `uv build` resolves the build backend in its own
       # isolated environment and twine runs via uvx.
       - run: uv build
+      - name: Enforce 13 MiB wheel size budget
+        run: python scripts/check_wheel_size.py dist/*.whl
       - run: uvx twine check dist/*
