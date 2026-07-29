@@ -275,6 +275,20 @@ class TestTwilioStreamTokenValidation:
         with pytest.raises(ValueError, match=message):
             TwilioTransportConfig(**kwargs)  # type: ignore[arg-type]
 
+    def test_audio_byte_limit_preserves_existing_positional_timeout(self) -> None:
+        config = TwilioTransportConfig(
+            "127.0.0.1",
+            8766,
+            PCM16_MONO_16K,
+            200,
+            None,
+            TWILIO_STREAM_TOKEN_PARAMETER,
+            0.25,
+        )
+
+        assert config.stream_token_validation_timeout_s == 0.25
+        assert config.max_pending_bytes == TwilioTransportConfig().max_pending_bytes
+
     @pytest.mark.asyncio
     async def test_server_transport_consumes_token_and_hides_parameter(self) -> None:
         store = TwilioStreamTokenStore("secret")
