@@ -135,16 +135,26 @@ class WebSocketSessionRuntime:
             session = await created if isinstance(created, Awaitable) else created
             if session is None:
                 return
+            # The connection must be visible to shutdown immediately, but the
+            # session is not drainable until manager.add() has completed
+            # Session.start(). A drain during startup closes the connection and
+            # cancels this handler, leaving Session.start() to roll itself back.
+            self._connections[key] = connection
             if self._on_session is not None:
                 cleanup = self._on_session(session)
-            self.gate.track(key)
-            self._sessions[key] = session
-            self._connections[key] = connection
             if self._runtime_feedback:
                 from easycat.helpers import attach_runtime_feedback
 
                 attach_runtime_feedback(session)
             await self.manager.add(key, session)
+            if self.gate.is_draining:
+                # Shutdown began in the final scheduling window of startup.
+                # Roll the newly-started session back instead of publishing it
+                # after the drain snapshot has already been taken.
+                await self.manager.remove(key)
+                return
+            self.gate.track(key)
+            self._sessions[key] = session
             try:
                 await connection.wait_closed()  # type: ignore[attr-defined]
             finally:
@@ -153,11 +163,10 @@ class WebSocketSessionRuntime:
         finally:
             if cleanup is not None:
                 cleanup()
-            if not self.gate.is_draining:
-                self.gate.untrack(key)
-                self._sessions.pop(key, None)
-                self._connections.pop(key, None)
-                self.gate.release()
+            self.gate.untrack(key)
+            self._sessions.pop(key, None)
+            self._connections.pop(key, None)
+            self.gate.release()
 
     def start_draining(self, server: object) -> None:
         """Reject new work and stop accepting without severing live sockets."""
@@ -212,9 +221,8 @@ class WebSocketSessionRuntime:
         timeout_s: float,
         label: str,
     ) -> None:
-        try:
-            await asyncio.wait_for(awaitable, timeout=timeout_s)
-        except TimeoutError:
+        completed = await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+        if not completed:
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
 
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from easycat.server.transports import WebSocketSessionRuntime
+from easycat.session_manager import SessionManager
 
 
 class _Server:
@@ -163,3 +165,84 @@ async def test_runtime_allows_async_preflight_to_reject_before_session_creation(
     assert events == ["preflight_rejected"]
     assert manager.sessions == {}
     assert runtime.gate.reserved_count == 0
+
+
+async def test_drain_cancels_startup_before_session_becomes_active() -> None:
+    events: list[str] = []
+    manager = SessionManager[int]()
+    server = _Server(events)
+    connection = _Connection(events)
+
+    class _SlowStartingSession:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.rollback_started = asyncio.Event()
+            self.allow_rollback = asyncio.Event()
+            self.starting = False
+            self.stop_during_start = False
+
+        async def start(self) -> None:
+            self.starting = True
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.rollback_started.set()
+                await self.allow_rollback.wait()
+                self.starting = False
+                raise
+
+        async def stop(self, *, force: bool = False) -> None:
+            self.stop_during_start = self.stop_during_start or self.starting
+
+    session = _SlowStartingSession()
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=lambda _connection: session,
+    )
+    handler = asyncio.create_task(runtime.handle(connection))
+    await asyncio.wait_for(session.started.wait(), timeout=1)
+
+    drain = asyncio.create_task(runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0))
+    await asyncio.wait_for(session.rollback_started.wait(), timeout=1)
+
+    assert runtime.gate.active_count == 0
+    assert session.stop_during_start is False
+
+    session.allow_rollback.set()
+    await asyncio.wait_for(drain, timeout=2)
+    with contextlib.suppress(asyncio.CancelledError):
+        await handler
+
+    assert manager.get(id(connection)) is None
+    assert runtime.gate.reserved_count == 0
+
+
+async def test_bounded_cleanup_keeps_hard_deadline_for_cancellation_resistant_work() -> None:
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def _resist_cancellation() -> None:
+        try:
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+        finally:
+            finished.set()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+
+    await WebSocketSessionRuntime._bounded_cleanup(
+        _resist_cancellation(),
+        timeout_s=0.01,
+        label="test cleanup",
+    )
+
+    assert loop.time() - started < 0.2
+    assert not finished.is_set()
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=1)
