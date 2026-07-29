@@ -12,6 +12,7 @@ import json
 import re
 import shlex
 import subprocess
+from dataclasses import dataclass
 from difflib import get_close_matches
 from importlib.resources import files
 from pathlib import Path
@@ -23,7 +24,7 @@ import typer
 from rich.markup import escape
 from rich.prompt import Prompt
 
-from easycat._provider_catalog import provider_env_vars, provider_extras
+from easycat._provider_registry import provider_env_vars, provider_extras
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
     emit_command_error,
@@ -83,21 +84,13 @@ def _provider_to_env_var() -> dict[str, str]:
     return provider_env_vars()
 
 
-# Per-template baseline extras that must always be present in the
-# generated ``pyproject.toml`` regardless of provider choices.
-_TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
-    "openai-agents": ("openai-agents", "local"),
-    "pydantic-ai": ("pydantic-ai", "local"),
-    "pydantic-ai-workflow": ("pydantic-ai", "local"),
-    "twilio-phone": ("openai-agents", "telephony"),
-    "webrtc-browser": ("openai-agents", "webrtc"),
-    "text-chat": ("openai-agents",),
-    "provider": ("openai-agents", "local"),
-}
 _FALLBACK_EASYCAT_VERSION_FLOOR = "0.1.0"
 
 
-class _TemplateCatalogMetadata(TypedDict):
+@dataclass(frozen=True, slots=True)
+class _TemplateSpec:
+    """Single source of template metadata and scaffold capabilities."""
+
     mode: str
     transport: str
     framework: str
@@ -105,10 +98,22 @@ class _TemplateCatalogMetadata(TypedDict):
     required_env: tuple[str, ...]
     optional_env: tuple[str, ...]
     description: str
+    base_extras: tuple[str, ...]
+    run_command: str = "uv run --env-file .env python agent.py"
+    check_files: tuple[str, ...] = ("agent.py",)
+    expected_transport: str | None = None
+    supports_audio_config: bool = False
 
 
-class _TemplateCatalogEntry(_TemplateCatalogMetadata):
+class _TemplateCatalogEntry(TypedDict):
     name: str
+    mode: str
+    transport: str
+    framework: str
+    best_for: str
+    required_env: tuple[str, ...]
+    optional_env: tuple[str, ...]
+    description: str
     base_extras: tuple[str, ...]
     base_requirement: str
     files: tuple[str, ...]
@@ -120,86 +125,112 @@ class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     fix_command: str
 
 
-_TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
-    "openai-agents": {
-        "mode": "voice",
-        "transport": "local mic",
-        "framework": "OpenAI Agents",
-        "best_for": "First local voice agent and default OpenAI Agents scaffold.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": (),
-        "description": "Local microphone/speaker voice agent.",
-    },
-    "pydantic-ai": {
-        "mode": "voice",
-        "transport": "local mic",
-        "framework": "Pydantic AI",
-        "best_for": "Teams already building agents with Pydantic AI.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": (),
-        "description": "Local voice agent using Pydantic AI.",
-    },
-    "pydantic-ai-workflow": {
-        "mode": "voice",
-        "transport": "local mic",
-        "framework": "Pydantic AI workflow",
-        "best_for": "Small workflow examples around a Pydantic AI agent.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": (),
-        "description": "Local voice agent with a small workflow object.",
-    },
-    "text-chat": {
-        "mode": "text",
-        "transport": "terminal",
-        "framework": "OpenAI Agents",
-        "best_for": "Testing agent behavior without microphone or speaker setup.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": (),
-        "description": "Text-only REPL for testing agent behavior without audio.",
-    },
-    "twilio-phone": {
-        "mode": "voice",
-        "transport": "Twilio",
-        "framework": "OpenAI Agents",
-        "best_for": "Phone-call prototypes and Twilio Media Streams servers.",
-        "required_env": ("OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"),
-        "optional_env": (
+_TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
+    "openai-agents": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="OpenAI Agents",
+        best_for="First local voice agent and default OpenAI Agents scaffold.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="Local microphone/speaker voice agent.",
+        base_extras=("openai-agents", "local"),
+        expected_transport="local",
+        supports_audio_config=True,
+    ),
+    "pydantic-ai": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="Pydantic AI",
+        best_for="Teams already building agents with Pydantic AI.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="Local voice agent using Pydantic AI.",
+        base_extras=("pydantic-ai", "local"),
+        expected_transport="local",
+        supports_audio_config=True,
+    ),
+    "pydantic-ai-workflow": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="Pydantic AI workflow",
+        best_for="Small workflow examples around a Pydantic AI agent.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="Local voice agent with a small workflow object.",
+        base_extras=("pydantic-ai", "local"),
+        expected_transport="local",
+        supports_audio_config=True,
+    ),
+    "text-chat": _TemplateSpec(
+        mode="text",
+        transport="terminal",
+        framework="OpenAI Agents",
+        best_for="Testing agent behavior without microphone or speaker setup.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="Text-only REPL for testing agent behavior without audio.",
+        base_extras=("openai-agents",),
+    ),
+    "twilio-phone": _TemplateSpec(
+        mode="voice",
+        transport="Twilio",
+        framework="OpenAI Agents",
+        best_for="Phone-call prototypes and Twilio Media Streams servers.",
+        required_env=("OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"),
+        optional_env=(
             "TWILIO_WS_PORT",
             "TWILIO_STREAM_TOKEN_SECRET",
             "TWILIO_MAX_SESSIONS",
+            "TWILIO_START_TIMEOUT_S",
+            "TWILIO_DRAIN_TIMEOUT_S",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+            "TWILIO_PUBLIC_TWIML_URL",
             "TRUST_PROXY_HEADERS",
         ),
-        "description": "Phone-call voice agent with a Twilio WebSocket server.",
-    },
-    "webrtc-browser": {
-        "mode": "voice",
-        "transport": "WebRTC",
-        "framework": "OpenAI Agents",
-        "best_for": "Browser-based voice apps using WebRTC.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": ("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
-        "description": "Browser voice agent using WebRTC audio.",
-    },
-    "provider": {
-        "mode": "voice",
-        "transport": "local mic",
-        "framework": "OpenAI Agents",
-        "best_for": "Publishing a custom EasyCat provider package out of tree.",
-        "required_env": ("OPENAI_API_KEY",),
-        "optional_env": (),
-        "description": "External provider package skeleton with conformance test and live demo.",
-    },
-}
-
-_TEMPLATE_RUN_COMMANDS: dict[str, str] = {
-    "twilio-phone": (
-        "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
+        description="Phone-call voice agent with a Twilio WebSocket server.",
+        base_extras=("openai-agents", "telephony", "telephony-fastapi"),
+        run_command=(
+            "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
+        ),
+        check_files=("agent.py", "server.py"),
+        expected_transport="twilio",
+        supports_audio_config=True,
+    ),
+    "webrtc-browser": _TemplateSpec(
+        mode="voice",
+        transport="WebRTC",
+        framework="OpenAI Agents",
+        best_for="Browser-based voice apps using WebRTC.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
+        description="Browser voice agent using WebRTC audio.",
+        base_extras=("openai-agents", "webrtc"),
+        expected_transport="webrtc",
+        supports_audio_config=True,
+    ),
+    "provider": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="OpenAI Agents",
+        best_for="Publishing a custom EasyCat provider package out of tree.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="External provider package skeleton with conformance test and live demo.",
+        base_extras=("openai-agents", "local"),
+        check_files=("agent.py", "custom_vad.py", "test_custom_vad.py"),
     ),
 }
-_TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
-    "provider": ("agent.py", "custom_vad.py", "test_custom_vad.py"),
-    "twilio-phone": ("agent.py", "server.py"),
-}
+_UNKNOWN_TEMPLATE_SPEC = _TemplateSpec(
+    mode="unknown",
+    transport="unknown",
+    framework="unknown",
+    best_for="Template selection guidance has not been documented yet.",
+    required_env=(),
+    optional_env=(),
+    description="Template metadata has not been documented yet.",
+    base_extras=(),
+)
 _INIT_COMMAND_NOTE = (
     "create_command uses installed CLI form; repo_create_command runs from this repository "
     "root; catalog next_step_commands preview the my-agent post-create sequence; "
@@ -221,27 +252,6 @@ _NEXT_STEP_APP_BUILDER_DOCS_COMMAND = "uv run easycat docs --audience app-builde
 _NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND = "uv run easycat docs --audience app-builders --json"
 _NEXT_STEP_DOCS_JSON_COMMAND = "uv run easycat docs --json"
 _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND = "uv run easycat explain json-schema"
-
-# Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
-# instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
-# the audio pipeline entirely, so those fields are rejected up front.
-_VOICE_TEMPLATES: frozenset[str] = frozenset(
-    {
-        "openai-agents",
-        "pydantic-ai",
-        "pydantic-ai-workflow",
-        "twilio-phone",
-        "webrtc-browser",
-    }
-)
-
-_TEMPLATE_TRANSPORTS: dict[str, str] = {
-    "openai-agents": "local",
-    "pydantic-ai": "local",
-    "pydantic-ai-workflow": "local",
-    "twilio-phone": "twilio",
-    "webrtc-browser": "webrtc",
-}
 
 _TRANSPORT_ALIASES: dict[str, str] = {
     "browser": "webrtc",
@@ -302,7 +312,8 @@ def _template_file_names(template_name: str) -> tuple[str, ...]:
 
 def _base_requirement(template_name: str) -> str:
     """Return the EasyCat package requirement generated for template defaults."""
-    extras = ",".join(_TEMPLATE_BASE_EXTRAS.get(template_name, ()))
+    spec = _TEMPLATE_SPECS.get(template_name, _UNKNOWN_TEMPLATE_SPEC)
+    extras = ",".join(spec.base_extras)
     version = _easycat_version_floor()
     return f"easycat[{extras}]>={version}" if extras else f"easycat>={version}"
 
@@ -407,22 +418,18 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
     """Return template metadata in the same order as ``available_templates()``."""
     catalog: list[_TemplateCatalogEntry] = []
     for name in available_templates():
-        metadata = _TEMPLATE_CATALOG.get(
-            name,
-            {
-                "mode": "unknown",
-                "transport": "unknown",
-                "framework": "unknown",
-                "best_for": "Template selection guidance has not been documented yet.",
-                "required_env": (),
-                "optional_env": (),
-                "description": "Template metadata has not been documented yet.",
-            },
-        )
+        spec = _TEMPLATE_SPECS.get(name, _UNKNOWN_TEMPLATE_SPEC)
         catalog.append(
             {
                 "name": name,
-                "base_extras": _TEMPLATE_BASE_EXTRAS.get(name, ()),
+                "mode": spec.mode,
+                "transport": spec.transport,
+                "framework": spec.framework,
+                "best_for": spec.best_for,
+                "required_env": spec.required_env,
+                "optional_env": spec.optional_env,
+                "description": spec.description,
+                "base_extras": spec.base_extras,
                 "base_requirement": _base_requirement(name),
                 "files": _template_file_names(name),
                 "create_command": _create_template_command(name),
@@ -431,7 +438,6 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "run_command": _next_step_run_command(name),
                 "check_command": _next_step_check_command(name),
                 "fix_command": _next_step_fix_command(name),
-                **metadata,
             }
         )
     return catalog
@@ -490,18 +496,18 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
 
 def _next_step_run_command(template: str) -> str:
     """Return the primary run command for the scaffold success footer."""
-    return _TEMPLATE_RUN_COMMANDS.get(template, "uv run --env-file .env python agent.py")
+    return _TEMPLATE_SPECS.get(template, _UNKNOWN_TEMPLATE_SPEC).run_command
 
 
 def _next_step_check_command(template: str) -> str:
     """Return the scaffold-local lint/syntax check command for the success footer."""
-    filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
+    filenames = _TEMPLATE_SPECS.get(template, _UNKNOWN_TEMPLATE_SPEC).check_files
     return "uv run ruff check " + " ".join(filenames)
 
 
 def _next_step_fix_command(template: str) -> str:
     """Return the scaffold-local auto-fix command for Ruff-fixable lint findings."""
-    filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
+    filenames = _TEMPLATE_SPECS.get(template, _UNKNOWN_TEMPLATE_SPEC).check_files
     return "uv run ruff check --fix " + " ".join(filenames)
 
 
@@ -560,7 +566,8 @@ def _validate_for_template(cfg: InitConfig) -> None:
             )
         )
 
-    expected_transport = _TEMPLATE_TRANSPORTS.get(cfg.template)
+    template_spec = _TEMPLATE_SPECS.get(cfg.template, _UNKNOWN_TEMPLATE_SPEC)
+    expected_transport = template_spec.expected_transport
     if cfg.transport is not None:
         requested_transport = _transport_name(cfg.transport)
         if expected_transport is None:
@@ -579,7 +586,7 @@ def _validate_for_template(cfg: InitConfig) -> None:
                 )
             )
 
-    if cfg.template not in _VOICE_TEMPLATES:
+    if not template_spec.supports_audio_config:
         for field_name in ("stt", "tts"):
             if getattr(cfg, field_name) is not None:
                 raise EASYCAT_E102(
@@ -645,7 +652,7 @@ def _config_extra_kwargs(cfg: InitConfig) -> str:
     Rendering replaces that sentinel with this comma-separated keyword
     argument fragment.
     """
-    if cfg.template not in _VOICE_TEMPLATES:
+    if not _TEMPLATE_SPECS.get(cfg.template, _UNKNOWN_TEMPLATE_SPEC).supports_audio_config:
         return ""
     parts: list[str] = []
     if cfg.stt:
@@ -661,7 +668,7 @@ def _config_extra_kwargs(cfg: InitConfig) -> str:
 
 def _extras_for(cfg: InitConfig) -> str:
     """Render the comma-separated extras list for ``pyproject.toml``."""
-    extras = list(_TEMPLATE_BASE_EXTRAS.get(cfg.template, ()))
+    extras = list(_TEMPLATE_SPECS.get(cfg.template, _UNKNOWN_TEMPLATE_SPEC).base_extras)
     seen = set(extras)
     for spec in (cfg.stt, cfg.tts):
         if not spec:

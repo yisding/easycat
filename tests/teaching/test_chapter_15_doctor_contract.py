@@ -43,6 +43,7 @@ def test_scoped_production_reports_distinguish_credentials_from_liveness(
         "easycat_version",
         "env_openai",
         "onnxruntime",
+        "audio_resampling",
         "journal_writable",
         "disk_space",
     ]

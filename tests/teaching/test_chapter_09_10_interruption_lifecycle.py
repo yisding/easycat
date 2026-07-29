@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).parents[2]
 TEACHING = ROOT / "docs" / "teaching"
@@ -246,7 +247,7 @@ async def test_coordinator_shutdown_closes_incomplete_stt(path: Path) -> None:
 
 
 def test_barge_in_probe_uses_real_router() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER_9 / "barge_in_turn_probe.py")],
         cwd=ROOT,
         check=True,

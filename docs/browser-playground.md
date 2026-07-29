@@ -46,6 +46,15 @@ Both browser transports speak the same JSON event vocabulary; the
 implementation lives in `src/easycat/transports/_browser_events.py` and is
 guarded by `uv run pytest tests/transports/test_webrtc_auth_browser_playground.py`.
 
+The maintained WebSocket and WebTransport clients request browser-native echo
+cancellation through `getUserMedia`. Server-side AEC is off by default for
+those transports because socket/datagram write time is not the browser's
+playout clock and cannot provide a continuous, silence-filled far-end
+reference. You can still opt in with `enable_echo_cancellation=True` for a
+custom endpoint, but that best-effort path records
+`aec_reference_degraded` in the session journal. WebRTC can pace its outbound
+reference and retains its transport-aware AEC behavior.
+
 ### WebSocket transport
 
 Inbound (client → server):
@@ -57,6 +66,11 @@ Inbound (client → server):
   - `{"type": "config", "sample_rate": 16000}` — negotiate the inbound
     audio format.
 
+Each inbound WebSocket message is capped at 64 KiB. Decoded audio is then
+buffered under independent frame-count and byte-count ceilings (200 chunks and
+4 MiB by default); a frame that would exceed either queue limit is dropped and
+reported as `TransportDegraded("inbound_queue_full")`.
+
 Outbound (server → client):
 
 - **Binary frames** — raw PCM16 audio chunks (bot speech).
@@ -64,6 +78,8 @@ Outbound (server → client):
   - `{"type": "ready"}` — sent once when the connection is accepted.
   - `{"type": "audio_format", "sample_rate": 24000}` — sent before audio
     whenever the outbound sample rate changes.
+  - `{"type": "clear"}` — stop and discard bot audio already scheduled by
+    the client (sent on barge-in and explicit playback cancellation).
   - Session event messages (below).
 
 ### WebRTC transport
@@ -91,5 +107,7 @@ One JSON object per message (`schema_version` 1):
 | `turn_latency` | `turn_id`, `ms` | Final user transcript → first bot audio. |
 
 `turn_id` may be `null` for events outside a tracked turn (for example a
-greeting). Event delivery is best-effort observability: a slow or closed
-channel never blocks the audio pipeline.
+greeting). Event delivery is best-effort observability through a bounded
+32-message writer queue: the audio/event pipeline never awaits transport I/O,
+and a full queue, failed send, or send taking longer than 250 ms drops that
+browser event.

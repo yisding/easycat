@@ -21,19 +21,23 @@ to resume a paused graph — the human-in-the-loop *is* the caller).
 Interruption patches the last AI message via LangGraph's native
 ``update_state``.  Because LangGraph's ``add_messages`` reducer dedupes
 by message ``id``, we re-send the edited message under the same id so
-it replaces instead of appending.
+it replaces instead of appending. State access is async-first; synchronous
+savers run in worker threads, while the bridge's synchronous history hooks
+stage their writes for an async flush before the next turn or bridge close.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import inspect
 import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -44,9 +48,11 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
+    close_top_ended_cursors,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
+    NULL_RECORDER,
     AgentBridgeEvent,
     AgentRecorder,
     AgentTurnInput,
@@ -59,7 +65,6 @@ from easycat.integrations.agents.base import (
     UnitKind,
     apply_standard_interruption,
 )
-from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
 
 # ``stream_mode`` values whose payloads LangGraph folds into top-level
@@ -120,6 +125,13 @@ class _LangGraphTurnAccumulator:
     model_text_streamed: bool = False
 
 
+@dataclass(frozen=True)
+class _PendingStateMutation:
+    kind: str
+    payload: Any
+    config: dict[str, Any]
+
+
 class LangGraphBridge:
     """Wraps a LangGraph ``CompiledStateGraph``.
 
@@ -151,7 +163,7 @@ class LangGraphBridge:
         performance demands it for a very chatty graph.
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_NODES,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
@@ -198,6 +210,22 @@ class LangGraphBridge:
                 "Call graph.compile(checkpointer=InMemorySaver()) (or another "
                 "checkpointer) before passing it to LangGraphBridge."
             )
+        try:
+            from langgraph.checkpoint.base import BaseCheckpointSaver
+
+            if isinstance(checkpointer, BaseCheckpointSaver):
+                saver_type = type(checkpointer)
+                has_sync = saver_type.get_tuple is not BaseCheckpointSaver.get_tuple
+                has_async = saver_type.aget_tuple is not BaseCheckpointSaver.aget_tuple
+                if not has_sync and not has_async:
+                    raise BridgeInputError(
+                        f"{saver_type.__name__} implements neither get_tuple() nor "
+                        "aget_tuple(); use a functional sync or async LangGraph checkpointer."
+                    )
+        except ImportError:
+            # Duck-typed tests and optional-SDK import surfaces are validated
+            # by the graph state-method probes below.
+            pass
         self._graph = graph
         # An explicit ``thread_id=`` wins; otherwise fall back to a
         # thread id the caller bound onto the graph via
@@ -216,6 +244,15 @@ class LangGraphBridge:
         # turns aren't re-recorded — without an extra ``get_state``
         # round-trip to the checkpointer at turn start.
         self._last_checkpoint_id: str | None = None
+        self._last_state_snapshot: Any = None
+        self._pending_state_mutations: list[_PendingStateMutation] = []
+        # Real compiled graphs expose async state methods even when their
+        # saver is synchronous. Use that surface to keep sync protocol hooks
+        # I/O-free; duck-typed graphs without it retain their immediate
+        # in-memory behaviour for compatibility.
+        self._async_state_surface = callable(getattr(graph, "aget_state", None)) and callable(
+            getattr(graph, "aupdate_state", None)
+        )
         # A caller can bind ``configurable.checkpoint_id`` onto the graph
         # via ``graph.with_config(...)`` (a LangGraph resume / time-travel
         # config: "run from this checkpoint").  It is a *one-shot* resume
@@ -228,7 +265,9 @@ class LangGraphBridge:
         self._resume_checkpoint_id: str | None = _bound_checkpoint_id(graph)
         # Resuming an existing thread: the checkpointer may already hold
         # an arbitrarily long history.  Seed the trail baseline from the
-        # thread's current checkpoint *now* (one-time, at construction)
+        # thread's current checkpoint once before the first turn
+        # (construction-time only for sync-only duck-typed graphs; real
+        # compiled graphs seed asynchronously at invoke start)
         # so the first turn's ``_record_checkpoint_trail`` walk stops at
         # the already-persisted history instead of re-recording every
         # prior checkpoint as if this turn created it (O(total history)
@@ -240,13 +279,16 @@ class LangGraphBridge:
         # there is no prior history, so ``None`` is already correct and
         # the round-trip would be wasted.  A graph-bound thread id is a
         # resume just like an explicit one, so seed its baseline too.
-        if thread_id is not None or bound_thread_id is not None:
+        self._checkpoint_baseline_needs_seed = thread_id is not None or bound_thread_id is not None
+        if self._checkpoint_baseline_needs_seed and not self._async_state_surface:
             try:
                 # Seed against the resume cursor (if any) so a time-travel
                 # resume baselines at the pinned checkpoint — otherwise the
                 # first turn's trail walk re-records the forked-from history.
                 existing_state = self._graph.get_state(self._resume_config())
                 self._last_checkpoint_id = _get_checkpoint_id(existing_state)
+                self._last_state_snapshot = existing_state
+                self._checkpoint_baseline_needs_seed = False
             except Exception:
                 logger.debug(
                     "Failed to seed checkpoint baseline for resumed thread",
@@ -372,6 +414,9 @@ class LangGraphBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
+        await self._seed_checkpoint_baseline(recorder)
+        await self._flush_pending_state_mutations(recorder)
+
         agent_cursor = ExecutionCursor(
             unit_id=f"agent-{uuid4().hex[:8]}",
             unit_kind=UnitKind.AGENT,
@@ -389,6 +434,11 @@ class LangGraphBridge:
         # turn's response — the fallback degrades to this turn's streamed
         # text instead.
         self._last_output = None
+        # ``snapshot_state`` / interruption serialization use this cache so
+        # synchronous protocol hooks never block on a remote checkpointer.
+        # Clear it with the output: a failed final-state read must not expose
+        # the previous turn's checkpoint as if it belonged to this turn.
+        self._last_state_snapshot = None
         # Cleared each turn; re-armed only if this turn ends before it
         # produces any assistant output (see the cancel paths below).
         self._turn_produced_no_assistant = False
@@ -446,7 +496,7 @@ class LangGraphBridge:
         # before the checkpoint trail is read so the recorded post-turn
         # state (and every following turn) is free of the per-turn
         # system prefix.
-        self._purge_transient_context()
+        await self._purge_transient_context(recorder)
 
         # Record the real per-step checkpoint trail + capture the last
         # message for ``structured_output``.  Best-effort: a graph
@@ -458,8 +508,9 @@ class LangGraphBridge:
         # LangGraph versions), inspect ``state.tasks[i].interrupts`` and
         # fail loudly so the voice doesn't go silently dead.
         try:
-            final_state = self._graph.get_state(config)
-            self._record_checkpoint_trail(
+            final_state = await self._get_state(config)
+            self._last_state_snapshot = final_state
+            await self._record_checkpoint_trail(
                 config, baseline_checkpoint_id, recorder, seen_checkpoints
             )
             # Advance the baseline so the *next* turn's trail starts
@@ -470,10 +521,11 @@ class LangGraphBridge:
             if pending:
                 self._raise_hitl_unsupported(pending, agent_cursor, open_cursors, recorder)
         except BridgeInputError:
-            self._purge_transient_context()
+            await self._purge_transient_context(recorder)
             raise
-        except Exception:  # pragma: no cover — best-effort.
-            logger.debug("Failed to fetch final LangGraph state", exc_info=True)
+        except Exception as exc:  # pragma: no cover — best-effort.
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            logger.warning("Failed to fetch final LangGraph state", exc_info=True)
 
         finalize = self._finalize_done(acc, agent_cursor, recorder)
         try:
@@ -558,7 +610,7 @@ class LangGraphBridge:
                     # truncates *this* turn's AI message instead of
                     # rewriting the previous turn's and corrupting prior
                     # LangGraph conversation state.
-                    self._commit_partial_assistant(acc.accumulated)
+                    await self._commit_partial_assistant(acc.accumulated, recorder)
                     if not acc.accumulated:
                         # Nothing committed (cancelled before the first
                         # token): there is no current-turn AI message,
@@ -597,7 +649,7 @@ class LangGraphBridge:
                 recorder.safe_exit_cursor(cursor)
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
-            self._purge_transient_context()
+            await self._purge_transient_context(recorder)
             raise
         except BaseException:
             # The default ``AgentRunner`` enforces its timeout by
@@ -619,14 +671,14 @@ class LangGraphBridge:
             # *this* turn's AI message — without this the rewrite targets
             # the previous turn's last AI message and barge-in corrupts
             # prior conversation state.
-            self._commit_partial_assistant(acc.accumulated)
+            await self._commit_partial_assistant(acc.accumulated, recorder)
             if not acc.accumulated:
                 # Cancelled before the first token: nothing committed and
                 # the node never wrote an AIMessage, so a follow-up
                 # interruption rewrite must no-op (the only AI message in
                 # the checkpoint belongs to the *previous* turn).
                 self._turn_produced_no_assistant = True
-            self._purge_transient_context()
+            await self._purge_transient_context(recorder)
             raise
 
     async def _finalize_done(
@@ -703,14 +755,17 @@ class LangGraphBridge:
             "thread_id": self._thread_id,
         }
         try:
-            state = self._graph.get_state(self._config())
-            fields["checkpoint_id"] = _get_checkpoint_id(state)
-            next_nodes = getattr(state, "next", None)
-            if next_nodes is not None:
-                fields["next_nodes"] = list(next_nodes)
-            metadata = getattr(state, "metadata", None) or {}
-            if isinstance(metadata, dict):
-                fields["step"] = metadata.get("step")
+            state = self._last_state_snapshot
+            if state is None and not self._async_state_surface:
+                state = self._graph.get_state(self._config())
+            if state is not None:
+                fields["checkpoint_id"] = _get_checkpoint_id(state)
+                next_nodes = getattr(state, "next", None)
+                if next_nodes is not None:
+                    fields["next_nodes"] = list(next_nodes)
+                metadata = getattr(state, "metadata", None) or {}
+                if isinstance(metadata, dict):
+                    fields["step"] = metadata.get("step")
         except Exception:  # pragma: no cover — missing checkpointer or fresh graph.
             logger.debug("snapshot_state: failed to fetch graph state", exc_info=True)
         return FrameworkStateSnapshot(
@@ -733,6 +788,11 @@ class LangGraphBridge:
         # apply (it would pin the fresh thread to a foreign checkpoint).
         self._resume_checkpoint_id = None
         self._last_output = None
+        self._last_state_snapshot = None
+        # Pending async writes retain the old thread's captured config and must
+        # survive reset. The next invoke or aclose flushes them to that original
+        # thread before the bridge can be discarded.
+        self._checkpoint_baseline_needs_seed = False
         # New thread → no prior checkpoint, so the next turn's trail
         # starts from scratch instead of stopping at a stale baseline.
         self._last_checkpoint_id = None
@@ -744,7 +804,20 @@ class LangGraphBridge:
 
     def replace_last_assistant_text(self, text: str) -> None:
         """Rewrite the last AI message in graph state to ``text``."""
-        self._rewrite_last_ai_message(text)
+        if self._async_state_surface:
+            state = self._last_state_snapshot
+            if state is None:
+                self._pending_state_mutations.append(
+                    _PendingStateMutation("rewrite", text, self._config())
+                )
+                return
+            update = self._rewrite_update_for_state(state, text)
+            if update is not None:
+                self._pending_state_mutations.append(
+                    _PendingStateMutation("state_update", update, self._config())
+                )
+        else:
+            self._rewrite_last_ai_message(text)
 
     def append_interruption_note(self, note: str) -> None:
         """Append an interruption note to graph history so the next turn sees it."""
@@ -752,6 +825,11 @@ class LangGraphBridge:
         # the whole messages list with just this note, dropping the
         # conversation; only append when the channel accumulates.
         if not self._messages_key_uses_add_messages():
+            return
+        if self._async_state_surface:
+            self._pending_state_mutations.append(
+                _PendingStateMutation("append_note", note, self._config())
+            )
             return
         try:
             from langchain_core.messages import SystemMessage
@@ -775,7 +853,128 @@ class LangGraphBridge:
         except Exception:
             logger.debug("Failed to append interruption note to LangGraph", exc_info=True)
 
+    async def aclose(self) -> None:
+        """Persist staged history mutations before bridge teardown."""
+        await self._flush_pending_state_mutations(NULL_RECORDER)
+
     # ── Internal ─────────────────────────────────────────────────
+
+    async def _get_state(self, config: dict[str, Any]) -> Any:
+        async_get = getattr(self._graph, "aget_state", None)
+        if callable(async_get):
+            try:
+                result = async_get(config)
+                return await result if inspect.isawaitable(result) else result
+            except NotImplementedError:
+                pass
+        return await asyncio.to_thread(self._graph.get_state, config)
+
+    async def _update_state(self, config: dict[str, Any], values: dict[str, Any]) -> Any:
+        async_update = getattr(self._graph, "aupdate_state", None)
+        if callable(async_update):
+            try:
+                result = async_update(config, values)
+                return await result if inspect.isawaitable(result) else result
+            except NotImplementedError:
+                pass
+        return await asyncio.to_thread(self._graph.update_state, config, values)
+
+    async def _checkpoint_ids_since(
+        self, config: dict[str, Any], baseline_checkpoint_id: str | None
+    ) -> list[str]:
+        async_history = getattr(self._graph, "aget_state_history", None)
+        if callable(async_history):
+            turn_ids: list[str] = []
+            try:
+                result = async_history(config)
+                if inspect.isawaitable(result):
+                    result = await result
+                async for snapshot in result:
+                    checkpoint_id = _get_checkpoint_id(snapshot)
+                    if not checkpoint_id or checkpoint_id == baseline_checkpoint_id:
+                        break
+                    turn_ids.append(checkpoint_id)
+                return turn_ids
+            except NotImplementedError:
+                if turn_ids:
+                    raise
+
+        return await asyncio.to_thread(
+            _sync_checkpoint_ids_since,
+            self._graph,
+            config,
+            baseline_checkpoint_id,
+        )
+
+    async def _seed_checkpoint_baseline(self, recorder: AgentRecorder) -> None:
+        if not self._checkpoint_baseline_needs_seed:
+            return
+        self._checkpoint_baseline_needs_seed = False
+        try:
+            existing_state = await self._get_state(self._resume_config())
+        except Exception as exc:
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            logger.warning(
+                "Failed to seed checkpoint baseline for resumed thread",
+                exc_info=True,
+            )
+            return
+        self._last_checkpoint_id = _get_checkpoint_id(existing_state)
+        self._last_state_snapshot = existing_state
+
+    async def _flush_pending_state_mutations(self, recorder: AgentRecorder) -> None:
+        pending = self._pending_state_mutations
+        if not pending:
+            return
+        self._pending_state_mutations = []
+
+        for index, mutation in enumerate(pending):
+            try:
+                if mutation.kind == "rewrite":
+                    state = await self._get_state(mutation.config)
+                    if _config_thread_id(mutation.config) == self._thread_id:
+                        self._last_state_snapshot = state
+                    update = self._rewrite_update_for_state(state, str(mutation.payload))
+                    if update is None:
+                        continue
+                elif mutation.kind == "append_note":
+                    update = self._interruption_note_update(str(mutation.payload))
+                    if update is None:
+                        continue
+                else:
+                    update = mutation.payload
+
+                updated = await self._update_state(mutation.config, update)
+                try:
+                    if _config_thread_id(mutation.config) == self._thread_id:
+                        await self._advance_checkpoint_baseline_async(updated)
+                except Exception as exc:
+                    # The state write already succeeded. Do not retry it (an
+                    # append would duplicate); only the trail baseline is
+                    # degraded, and the next final-state read can recover it.
+                    recorder.record_framework_error(ErrorInfo.from_exception(exc))
+                    logger.warning(
+                        "Failed to advance LangGraph checkpoint baseline after state write",
+                        exc_info=True,
+                    )
+            except Exception as exc:
+                # Preserve this operation and every later one for a retry
+                # instead of silently discarding state mutations.
+                self._pending_state_mutations = pending[index:] + self._pending_state_mutations
+                recorder.record_framework_error(ErrorInfo.from_exception(exc))
+                logger.error("Failed to flush pending LangGraph state mutation", exc_info=True)
+                raise
+
+    def _interruption_note_update(self, note: str) -> dict[str, Any] | None:
+        if not self._messages_key_uses_add_messages():
+            return None
+        try:
+            from langchain_core.messages import SystemMessage
+
+            new_msg: Any = SystemMessage(content=note)
+        except ImportError:
+            new_msg = {"role": "system", "content": note}
+        return {self._messages_key or "messages": [new_msg]}
 
     def _build_input(
         self,
@@ -826,7 +1025,7 @@ class LangGraphBridge:
         messages.append({"role": "user", "content": text})
         return {self._messages_key: messages}
 
-    def _purge_transient_context(self) -> None:
+    async def _purge_transient_context(self, recorder: AgentRecorder) -> None:
         """Delete this turn's injected transient context from graph state.
 
         The per-turn system/developer context forwarded by
@@ -859,11 +1058,12 @@ class LangGraphBridge:
             # still observable for assertions.
             removals = [{"role": "system", "content": "", "id": mid} for mid in ids]
         try:
-            self._graph.update_state(self._config(), {self._messages_key or "messages": removals})
-        except Exception:
-            logger.debug("Failed to purge transient context from LangGraph", exc_info=True)
+            await self._update_state(self._config(), {self._messages_key or "messages": removals})
+        except Exception as exc:
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            logger.warning("Failed to purge transient context from LangGraph", exc_info=True)
 
-    def _commit_partial_assistant(self, text: str) -> None:
+    async def _commit_partial_assistant(self, text: str, recorder: AgentRecorder) -> None:
         """Append the cancelled turn's partial assistant text to state.
 
         A turn cancelled mid-stream never let its node return, so the
@@ -890,9 +1090,10 @@ class LangGraphBridge:
         except ImportError:
             msg = {"role": "assistant", "content": text, "id": msg_id}
         try:
-            self._graph.update_state(self._config(), {self._messages_key or "messages": [msg]})
-        except Exception:
-            logger.debug("Failed to commit partial LangGraph turn on cancel", exc_info=True)
+            await self._update_state(self._config(), {self._messages_key or "messages": [msg]})
+        except Exception as exc:
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            logger.warning("Failed to commit partial LangGraph turn on cancel", exc_info=True)
 
     def _extract_graph_stream_chunk(self, event: dict[str, Any]) -> tuple[str, Any] | None:
         """Return ``(mode_name, payload)`` when ``event`` carries a graph-level
@@ -1091,7 +1292,7 @@ class LangGraphBridge:
             run_id = str(event.get("run_id") or "")
             if run_id and run_id in open_cursors:
                 ended_runs.add(run_id)
-                _close_top_ended_cursors(recorder, open_cursors, ended_runs)
+                close_top_ended_cursors(recorder, open_cursors, ended_runs)
 
     def _nearest_parent_id(
         self,
@@ -1118,7 +1319,7 @@ class LangGraphBridge:
                 return cursor.unit_id
         return default
 
-    def _record_checkpoint_trail(
+    async def _record_checkpoint_trail(
         self,
         config: dict[str, Any],
         baseline_checkpoint_id: str | None,
@@ -1140,29 +1341,21 @@ class LangGraphBridge:
         re-recorded, then emit this turn's checkpoints in chronological
         order.  Dedupe via ``seen`` keeps each id to one record.
         """
-        try:
-            history_iter = iter(self._graph.get_state_history(config))
-        except Exception:  # pragma: no cover — best-effort; duck-typed graph.
-            logger.debug("get_state_history unavailable; skipping checkpoint trail", exc_info=True)
-            return
         # ``get_state_history`` yields newest→oldest and may be backed by
         # a persistent/remote checkpointer that fetches each checkpoint
         # lazily.  Iterate (don't ``list()``) and stop at the turn's
         # baseline so a long or resumed thread doesn't pay O(total
         # history) fetches and memory every turn — only this turn's new
         # checkpoints are read.
-        turn_ids: list[str] = []
         try:
-            for snapshot in history_iter:  # newest → oldest
-                cid = _get_checkpoint_id(snapshot)
-                if not cid or cid == baseline_checkpoint_id:
-                    break
-                turn_ids.append(cid)
-        except Exception:  # pragma: no cover — best-effort; remote checkpointer error.
-            logger.debug(
-                "Checkpoint history walk failed; recording partial trail",
+            turn_ids = await self._checkpoint_ids_since(config, baseline_checkpoint_id)
+        except Exception as exc:  # pragma: no cover — best-effort; remote checkpointer error.
+            recorder.record_framework_error(ErrorInfo.from_exception(exc))
+            logger.warning(
+                "Checkpoint history walk failed; skipping checkpoint trail",
                 exc_info=True,
             )
+            turn_ids = []
         for cid in reversed(turn_ids):  # chronological
             if cid in seen:
                 continue
@@ -1170,9 +1363,13 @@ class LangGraphBridge:
             recorder.record_state_snapshot(ref=f"langgraph:{cid}")
 
     def _serialize_framework_state(self) -> bytes:
-        try:
-            state = self._graph.get_state(self._config())
-        except Exception:
+        state = self._last_state_snapshot
+        if state is None and not self._async_state_surface:
+            try:
+                state = self._graph.get_state(self._config())
+            except Exception:
+                return b"{}"
+        if state is None:
             return b"{}"
         values = getattr(state, "values", None)
         if values is None:
@@ -1199,7 +1396,7 @@ class LangGraphBridge:
 
     def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
         replacement = plan.framework_instructions["replacement"]
-        self._rewrite_last_ai_message(replacement)
+        self.replace_last_assistant_text(replacement)
 
     def _rewrite_last_ai_message(self, replacement: str) -> None:
         """Replace the last AI message in graph state with ``replacement``.
@@ -1242,11 +1439,28 @@ class LangGraphBridge:
         except Exception:
             logger.debug("rewrite_last_ai: get_state failed", exc_info=True)
             return
+        update = self._rewrite_update_for_state(state, replacement)
+        if update is None:
+            return
+        updated = self._graph.update_state(self._config(), update)
+        self._advance_checkpoint_baseline(updated)
+
+    def _rewrite_update_for_state(self, state: Any, replacement: str) -> dict[str, Any] | None:
+        """Mutate the cached last AI message and return its state update."""
+        if self._turn_produced_no_assistant:
+            logger.debug(
+                "rewrite_last_ai: last turn produced no assistant output; "
+                "skipping so the prior turn's reply isn't corrupted"
+            )
+            return None
+        if not self._messages_key_uses_add_messages():
+            logger.debug("rewrite_last_ai: messages channel has no reducer; skipping")
+            return None
         values = getattr(state, "values", None) or {}
         key = self._messages_key or "messages"
         messages = values.get(key) if isinstance(values, dict) else None
         if not messages:
-            return
+            return None
 
         for i in range(len(messages) - 1, -1, -1):
             msg = messages[i]
@@ -1262,7 +1476,7 @@ class LangGraphBridge:
                     "rewrite_last_ai: no AI message after the latest user "
                     "message; skipping so prior history isn't corrupted"
                 )
-                return
+                return None
             if _message_is_ai(msg):
                 content = _content_of(msg)
                 if isinstance(content, list):
@@ -1278,9 +1492,8 @@ class LangGraphBridge:
                         _set_content(msg, replacement)
                 else:
                     _set_content(msg, replacement)
-                updated = self._graph.update_state(self._config(), {key: [msg]})
-                self._advance_checkpoint_baseline(updated)
-                return
+                return {key: [msg]}
+        return None
 
     def _advance_checkpoint_baseline(self, updated_config: Any) -> None:
         """Move the checkpoint-trail baseline past a between-turn write.
@@ -1303,12 +1516,7 @@ class LangGraphBridge:
         graphs, and leave the baseline untouched on any failure (degrades
         to the pre-fix behaviour, never a hard error).
         """
-        cid: str | None = None
-        if isinstance(updated_config, dict):
-            configurable = updated_config.get("configurable")
-            if isinstance(configurable, dict):
-                cp = configurable.get("checkpoint_id")
-                cid = str(cp) if cp else None
+        cid = _checkpoint_id_from_config(updated_config)
         if cid is None:
             try:
                 cid = _get_checkpoint_id(self._graph.get_state(self._config()))
@@ -1321,8 +1529,42 @@ class LangGraphBridge:
         if cid:
             self._last_checkpoint_id = cid
 
+    async def _advance_checkpoint_baseline_async(self, updated_config: Any) -> None:
+        cid = _checkpoint_id_from_config(updated_config)
+        if cid is None:
+            state = await self._get_state(self._config())
+            self._last_state_snapshot = state
+            cid = _get_checkpoint_id(state)
+        if cid:
+            self._last_checkpoint_id = cid
+
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _sync_checkpoint_ids_since(
+    graph: Any,
+    config: dict[str, Any],
+    baseline_checkpoint_id: str | None,
+) -> list[str]:
+    """Walk a lazy sync history entirely in one worker thread."""
+    turn_ids: list[str] = []
+    for snapshot in graph.get_state_history(config):
+        checkpoint_id = _get_checkpoint_id(snapshot)
+        if not checkpoint_id or checkpoint_id == baseline_checkpoint_id:
+            break
+        turn_ids.append(checkpoint_id)
+    return turn_ids
+
+
+def _checkpoint_id_from_config(config: Any) -> str | None:
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    checkpoint_id = configurable.get("checkpoint_id")
+    return str(checkpoint_id) if checkpoint_id else None
 
 
 def _is_add_messages_reducer(operator: Any) -> bool:
@@ -1447,6 +1689,15 @@ def _bound_config(graph: Any) -> dict[str, Any]:
     if configurable:
         merged["configurable"] = configurable
     return merged
+
+
+def _config_thread_id(config: dict[str, Any]) -> str | None:
+    """Return the thread id captured in a pending mutation's config."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    thread_id = configurable.get("thread_id")
+    return str(thread_id) if thread_id else None
 
 
 def _bound_checkpoint_id(graph: Any) -> str | None:

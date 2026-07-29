@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import threading
+from typing import Protocol
 
 import pytest
 
-from easycat.runtime import InMemoryRingBuffer, JournalView, create_journal
-from easycat.runtime.records import ErrorInfo, JournalRecordKind
+from easycat.runtime import ExecutionJournal, InMemoryRingBuffer, JournalView, create_journal
+from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
+
+
+class _JournalQuery(Protocol):
+    def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]: ...
+
+    def slice(
+        self,
+        *,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
+    ) -> list[JournalRecord]: ...
 
 
 async def _yield_to_scheduled_tasks() -> None:
@@ -21,6 +35,15 @@ async def _yield_to_scheduled_tasks() -> None:
 
 
 class TestInMemoryRingBuffer:
+    @pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
+    def test_rejects_invalid_capacity(self, capacity):
+        with pytest.raises(ValueError, match="capacity must be a positive integer"):
+            InMemoryRingBuffer(capacity=capacity)  # type: ignore[arg-type]
+
+    def test_rejects_unknown_redaction_policy(self):
+        with pytest.raises(ValueError, match="Unknown redaction policy"):
+            InMemoryRingBuffer(redaction="everything")  # type: ignore[arg-type]
+
     def test_append_and_read(self):
         j = InMemoryRingBuffer(capacity=100)
         seq = j.append(
@@ -55,10 +78,21 @@ class TestInMemoryRingBuffer:
         record = j.read()[0]
         assert record.data == {
             "api_key": REDACTED_SECRET,
-            "text": f"phone {REDACTED_PHONE}",
+            "text": "phone +1 415 555 1212",
         }
         assert record.error is not None
         assert record.error.message == f"Authorization: {REDACTED_SECRET}"
+
+    def test_append_can_apply_pii_write_filter(self):
+        j = InMemoryRingBuffer(capacity=100, redaction="pii")
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="sensitive",
+            session_id="s1",
+            data={"text": "phone +1 415 555 1212"},
+        )
+
+        assert j.read()[0].data["text"] == f"phone {REDACTED_PHONE}"
 
     def test_monotonic_sequence(self):
         j = InMemoryRingBuffer(capacity=1000)
@@ -162,8 +196,40 @@ class TestInMemoryRingBuffer:
             j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
         records = j.read()
         overflow_records = [r for r in records if r.kind == JournalRecordKind.CONTROL]
-        assert len(overflow_records) >= 1
+        assert len(overflow_records) == 1
         assert overflow_records[0].name == "buffer_overflow"
+        assert overflow_records[0].data["dropped_records"] == j.dropped_records
+        assert j.dropped_records > 0
+        assert JournalView(j).dropped_records == j.dropped_records
+
+    def test_long_overflow_keeps_loss_visible(self):
+        j = InMemoryRingBuffer(capacity=1_000)
+        for i in range(3_000):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        records = j.read()
+        overflow_records = [record for record in records if record.name == "buffer_overflow"]
+
+        assert len(records) == 1_000
+        assert records[0].sequence > 1
+        assert len(overflow_records) == 1
+        assert j.dropped_records >= 2_000
+        assert overflow_records[0].data["dropped_records"] == j.dropped_records
+
+        snapshot = j.snapshot()
+        assert snapshot.dropped_records == j.dropped_records
+
+    def test_overflow_append_does_not_scan_the_ring(self):
+        class _NoIterationDeque(collections.deque):
+            def __iter__(self):
+                raise AssertionError("the append hot path must not scan the ring")
+
+        j = InMemoryRingBuffer(capacity=10)
+        for i in range(11):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        j._buf = _NoIterationDeque(j._buf, maxlen=10)
+        j.append(kind=JournalRecordKind.EVENT, name="after-overflow", session_id="s1")
 
     def test_close_is_noop(self):
         j = InMemoryRingBuffer(capacity=10)
@@ -566,7 +632,7 @@ class TestSliceFiltersAcrossBackends:
     must forward the new kwargs to its inner SQLite journal without an
     arg-mismatch)."""
 
-    def _seed(self, j) -> None:
+    def _seed(self, j: ExecutionJournal) -> None:
         j.append(
             kind=JournalRecordKind.EVENT,
             name="stt_final",
@@ -581,6 +647,28 @@ class TestSliceFiltersAcrossBackends:
             turn_id="t2",
             tags=frozenset({"stt"}),
         )
+
+    @staticmethod
+    def _assert_in_memory_queries(j: _JournalQuery) -> None:
+        assert [r.name for r in j.read(start=2, limit=1)] == ["tts_frame"]
+        assert [r.name for r in j.slice(turn_id="t1")] == ["stt_final"]
+        assert [r.name for r in j.slice(name="tts_frame")] == ["tts_frame"]
+        assert {r.name for r in j.slice(tags=frozenset({"stt"}))} == {
+            "stt_final",
+            "tts_frame",
+        }
+        assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        with pytest.raises(ValueError, match="limit"):
+            j.read(limit=-1)
+
+    def test_live_and_frozen_in_memory_queries_match(self) -> None:
+        live = InMemoryRingBuffer(capacity=10)
+        self._seed(live)
+        frozen = live.snapshot()
+
+        self._assert_in_memory_queries(live)
+        self._assert_in_memory_queries(frozen)
+        assert live.read() == frozen.read()
 
     def test_sqlite_slice_filters(self, tmp_path):
         from easycat.runtime import SqliteJournal

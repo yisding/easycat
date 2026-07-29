@@ -40,7 +40,7 @@ class CartesiaTTSConfig:
     # rather than the conventional ``model``.
     MODEL_FIELD: ClassVar[str] = "model_id"
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     # Sonic-3 is the default — best quality/latency balance (~90ms TTFA).
     # Use ``sonic-3.5`` for Cartesia's latest, highest-naturalness profile,
     # ``sonic-turbo`` (~40ms TTFA) for latency-critical templates, or
@@ -218,7 +218,9 @@ class CartesiaTTS(_WSTTSBase):
             if data_b64:
                 audio_bytes = base64.b64decode(data_b64)
                 if audio_bytes:
-                    events.append(self._make_audio_event(audio_bytes, self._source_format))
+                    event = self._make_audio_event(audio_bytes, self._source_format)
+                    if event is not None:
+                        events.append(event)
             return events, bool(msg.get("done"))
         if msg_type == "timestamps":
             word_ts = msg.get("word_timestamps")
@@ -293,6 +295,10 @@ class CartesiaTTS(_WSTTSBase):
                 yield event
             return
 
+        async for event in self._synthesize_oneshot(text):
+            yield event
+
+    async def _synthesize_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
         self._start_synthesis()
 
         self._ws = self._create_ws()
@@ -325,6 +331,9 @@ class CartesiaTTS(_WSTTSBase):
                     yield event
                 if terminal:
                     break
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except Exception as exc:
             if not self._cancelled:
@@ -336,6 +345,14 @@ class CartesiaTTS(_WSTTSBase):
             self._context_id = None
             self._pending_request = None
             self._end_synthesis()
+
+    @staticmethod
+    def _context_frame(msg: Any, context_id: str) -> dict[str, Any] | None:
+        if not isinstance(msg, dict):
+            return None
+        if msg.get("context_id") not in (None, context_id):
+            return None
+        return msg
 
     async def _synthesize_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
         """Synthesize over the shared persistent multi-context socket.
@@ -361,17 +378,19 @@ class CartesiaTTS(_WSTTSBase):
             async for msg in ctx.frames():
                 if self._cancelled:
                     break
-                if not isinstance(msg, dict):
-                    continue
                 # Mandatory recv-side guard: drop any frame whose context_id
                 # does not match the active utterance.
-                if msg.get("context_id") not in (None, ctx.context_id):
+                msg = self._context_frame(msg, ctx.context_id)
+                if msg is None:
                     continue
                 events, terminal = self._decode_message(msg)
                 for event in events:
                     yield event
                 if terminal:
                     break
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except Exception as exc:
             if not self._cancelled:

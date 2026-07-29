@@ -19,7 +19,9 @@ import os
 import sqlite3
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -154,17 +156,28 @@ class RunBundle:
         spec: ReplaySpec,
         *,
         installed_versions: dict[str, str] | None = None,
+        stage_replayers: dict[str, Callable[[ReplaySpec, ReplayCassette], Any]] | None = None,
+        tool_executor: Callable[[dict[str, Any]], Any] | None = None,
     ) -> ReplayResult:
         """Orchestrate a replay of this bundle under *spec*.
 
         Thin wrapper around :class:`easycat.runtime.replay.ReplayRunner`.
         Pass ``installed_versions`` (``{"stt": "openai-1.2.3", ...}``) to
         enable provider-version match checks; omit it for
-        offline replay where version skew is acceptable.
+        offline replay where version skew is acceptable. Applications
+        that own live provider or tool clients may supply synchronous
+        ``stage_replayers`` and ``tool_executor`` callbacks; the CLI
+        intentionally uses only the provider-free built-in replay path.
         """
         from easycat.runtime.replay import ReplayRunner
 
-        runner = ReplayRunner(self, spec, installed_versions=installed_versions)
+        runner = ReplayRunner(
+            self,
+            spec,
+            installed_versions=installed_versions,
+            stage_replayers=stage_replayers,
+            tool_executor=tool_executor,
+        )
         return runner.run()
 
     def replay_audio(
@@ -223,6 +236,7 @@ class RunBundle:
             "provider_versions": dict(self.manifest.provider_versions),
             "config_snapshot": dict(self.manifest.config_snapshot),
             "env_metadata": dict(self.manifest.env_metadata),
+            "journal_dropped_records": self.manifest.journal_dropped_records,
             "sharing_banner": self.manifest.sharing_banner or self.sharing_banner,
             "replay_entry_points": [
                 {"sequence": cp.sequence, "stage": cp.stage, "unit_id": cp.unit_id}
@@ -307,11 +321,14 @@ class RunBundle:
         # avoid OOM on a corrupted artifact tree.
         artifacts = _ArtifactAccumulator()
         if artifact_root and Path(artifact_root).exists():
-            for f in Path(artifact_root).iterdir():
-                if not f.is_file():
+            root = Path(artifact_root)
+            for f in chain(root.glob("*/*.bin"), root.glob("*.bin")):
+                if f.is_symlink() or not f.is_file():
                     continue
                 ref = f.stem
-                if not _SHA256_REF.fullmatch(ref):
+                if f.parent != root and f.parent.name != ref[:2]:
+                    continue
+                if not _SHA256_REF.fullmatch(ref) or ref in artifacts.index:
                     continue
                 size = f.stat().st_size
                 artifacts.ensure_capacity(size)

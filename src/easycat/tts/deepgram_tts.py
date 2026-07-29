@@ -32,7 +32,7 @@ _FLUSH_RATE_LIMITED = "__flush_rate_limited__"
 class DeepgramTTSConfig:
     """Configuration for the Deepgram TTS provider."""
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "aura-asteria-en"
     encoding: str = "linear16"
     sample_rate: int = 24000
@@ -270,6 +270,18 @@ class DeepgramTTS(_WSTTSBase):
                 async for event in stream:
                     yield event
 
+    def _cancelled_cycle_finished(self, message: bytes | str) -> bool:
+        return isinstance(message, str) and self._handle_control(message) in {
+            "Cleared",
+            "Error",
+        }
+
+    def _decode_cycle_message(self, message: bytes | str) -> tuple[TTSEvent | None, bool | None]:
+        if isinstance(message, bytes):
+            event = self._make_audio_event(message, self._source_format) if message else None
+            return event, None
+        return None, self._terminal_cycle_state(self._handle_control(message))
+
     async def _synthesize_locked(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Run one serialized Speak/Flush cycle."""
         self._start_synthesis()
@@ -307,21 +319,20 @@ class DeepgramTTS(_WSTTSBase):
                     # Clear is acknowledged with Cleared. Drain and discard all
                     # old audio/control frames until that boundary so no tail
                     # from the cancelled utterance can leak into the next turn.
-                    if isinstance(message, str) and self._handle_control(message) in {
-                        "Cleared",
-                        "Error",
-                    }:
+                    if self._cancelled_cycle_finished(message):
                         cycle_completed = True
                         break
                     continue
 
-                if isinstance(message, bytes) and message:
-                    yield self._make_audio_event(message, self._source_format)
-                elif isinstance(message, str):
-                    terminal = self._terminal_cycle_state(self._handle_control(message))
-                    if terminal is not None:
-                        cycle_completed = terminal
-                        break
+                event, terminal = self._decode_cycle_message(message)
+                if event is not None:
+                    yield event
+                if terminal is not None:
+                    cycle_completed = terminal
+                    break
+            tail = self._finish_audio_event(emit=cycle_completed)
+            if tail is not None:
+                yield tail
 
         except Exception as exc:
             if not self._cancelled:

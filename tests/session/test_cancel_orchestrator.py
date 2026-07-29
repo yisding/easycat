@@ -68,7 +68,7 @@ def _make_orchestrator(
     current_turn: TurnContext | None = None,
     session_actions: SessionActions | None = None,
     telephony_present: bool = False,
-    cancel_turn_impl: Any = None,
+    begin_barge_in: Any = None,
 ) -> tuple[CancelOrchestrator, dict[str, _RecordingStage], InMemoryRingBuffer]:
     names = ("transport", "tts", "agent", "turn", "stt", "vad", "audio")
     stages = stages or {n: _RecordingStage(n) for n in names}
@@ -83,7 +83,7 @@ def _make_orchestrator(
             current_turn=lambda: current_turn,
             session_actions=lambda: session_actions,
             telephony_helpers_present=lambda: telephony_present,
-            cancel_turn=cancel_turn_impl or _default_cancel,
+            begin_barge_in=begin_barge_in or _default_cancel,
         ),
         transport_stage=stages["transport"],
         tts_stage=stages["tts"],
@@ -174,27 +174,27 @@ async def test_for_barge_in_suppressed_when_no_interrupt_action_queued() -> None
     actions.end_call(reason="caller_request")  # no_interrupt=True by default
     assert actions.no_interrupt is True
 
-    calls: list[bool] = []
+    calls: list[str] = []
 
-    async def _cancel(*, barge_in: bool = False) -> None:
-        calls.append(barge_in)
+    async def _begin_barge_in() -> None:
+        calls.append("begin")
 
-    orch, _, _ = _make_orchestrator(session_actions=actions, cancel_turn_impl=_cancel)
+    orch, _, _ = _make_orchestrator(session_actions=actions, begin_barge_in=_begin_barge_in)
     result = await orch.for_barge_in()
     assert result is False
     assert calls == []
 
 
-async def test_for_barge_in_invokes_cancel_turn_impl_when_not_suppressed() -> None:
-    calls: list[bool] = []
+async def test_for_barge_in_invokes_fast_cutoff_when_not_suppressed() -> None:
+    calls: list[str] = []
 
-    async def _cancel(*, barge_in: bool = False) -> None:
-        calls.append(barge_in)
+    async def _begin_barge_in() -> None:
+        calls.append("begin")
 
-    orch, _, _ = _make_orchestrator(session_actions=None, cancel_turn_impl=_cancel)
+    orch, _, _ = _make_orchestrator(session_actions=None, begin_barge_in=_begin_barge_in)
     result = await orch.for_barge_in()
     assert result is True
-    assert calls == [True]
+    assert calls == ["begin"]
 
 
 async def test_record_interruption_writes_journal_record_with_expected_shape() -> None:

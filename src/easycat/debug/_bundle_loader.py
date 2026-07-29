@@ -28,6 +28,7 @@ from easycat.debug._bundle_models import (
     CommittableCheckpoint,
     Manifest,
 )
+from easycat.errors import EASYCAT_E402, _attach_error_code
 
 # Inline artifacts expand by 4/3 when base64 encoded into ``manifest.json``.
 # Keep the manifest bounded independently from decoded artifact bytes while
@@ -181,6 +182,16 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
             "Bundle manifest env_metadata values must be strings",
             reason_code="INVALID_MANIFEST",
         )
+    journal_dropped_records = raw.get("journal_dropped_records", 0)
+    if (
+        not isinstance(journal_dropped_records, int)
+        or isinstance(journal_dropped_records, bool)
+        or journal_dropped_records < 0
+    ):
+        raise BundleValidationError(
+            "Bundle manifest journal_dropped_records must be a non-negative integer",
+            reason_code="INVALID_MANIFEST",
+        )
     sharing_banner = raw.get("sharing_banner", "")
     if not isinstance(sharing_banner, str):
         raise BundleValidationError(
@@ -194,6 +205,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
             provider_versions=provider_versions,
             config_snapshot=config_snapshot,
             env_metadata=env_metadata,
+            journal_dropped_records=journal_dropped_records,
             sharing_banner=sharing_banner,
         ),
         raw,
@@ -330,6 +342,17 @@ def _parse_replay_entry_points(
 def load_bundle(path: str | Path) -> LoadedBundle:
     """Read and validate a bundle archive without constructing its facade."""
     bundle_path = Path(path)
+    try:
+        return _load_bundle(bundle_path)
+    except Exception as exc:
+        _attach_error_code(
+            exc,
+            EASYCAT_E402(path=str(bundle_path), detail=str(exc)),
+        )
+        raise
+
+
+def _load_bundle(bundle_path: Path) -> LoadedBundle:
     if not bundle_path.exists():
         raise FileNotFoundError(f"Bundle not found: {bundle_path}")
 

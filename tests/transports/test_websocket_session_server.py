@@ -14,6 +14,7 @@ from easycat.server.websocket import (
     serve_websocket_config_sessions,
     serve_websocket_sessions,
 )
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
@@ -29,7 +30,7 @@ class _FakeSession:
     async def start(self) -> None:
         self.started.set()
 
-    async def stop(self) -> None:
+    async def stop(self, *, force: bool = False) -> None:
         self.stopped.set()
 
 
@@ -51,7 +52,7 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
     calls: list[dict[str, object]] = []
 
     class FakeServer:
-        def close(self) -> None:
+        def close(self, close_connections: bool = True) -> None:
             pass
 
         async def wait_closed(self) -> None:
@@ -76,6 +77,7 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
     assert len(calls) == 1
     assert callable(calls[0]["process_request"])
     assert calls[0]["compression"] is None
+    assert calls[0]["max_size"] == MAX_WEBSOCKET_MESSAGE_BYTES
 
 
 @pytest.mark.asyncio
@@ -400,7 +402,7 @@ async def test_serve_websocket_sessions_non_loopback_unsafe_escape_hatch(
     """``unsafe_allow_no_auth=True`` allows a non-loopback unauthenticated bind."""
 
     class FakeServer:
-        def close(self) -> None:
+        def close(self, close_connections: bool = True) -> None:
             pass
 
         async def wait_closed(self) -> None:
@@ -436,7 +438,7 @@ async def test_serve_websocket_sessions_loopback_no_token_is_allowed(
     """A loopback bind without a token stays allowed (unchanged behavior)."""
 
     class FakeServer:
-        def close(self) -> None:
+        def close(self, close_connections: bool = True) -> None:
             pass
 
         async def wait_closed(self) -> None:
@@ -498,6 +500,8 @@ def test_run_websocket_config_server_delegates_with_env_settings(
     monkeypatch.setenv("EASYCAT_WS_PORT", "9876")
     monkeypatch.setenv("EASYCAT_WS_TOKEN", "env-token")
     monkeypatch.setenv("EASYCAT_WS_MAX_SESSIONS", "4")
+    monkeypatch.setenv("EASYCAT_WS_DRAIN_TIMEOUT_S", "12.5")
+    monkeypatch.setenv("EASYCAT_WS_FORCE_SHUTDOWN_TIMEOUT_S", "3.5")
     monkeypatch.setattr(
         websocket_module,
         "serve_websocket_config_sessions",
@@ -519,6 +523,8 @@ def test_run_websocket_config_server_delegates_with_env_settings(
                 port=9876,
                 auth_token="env-token",
                 max_sessions=4,
+                drain_timeout_s=12.5,
+                force_shutdown_timeout_s=3.5,
             ),
             "transport_config": transport_config,
             "runtime_feedback": False,

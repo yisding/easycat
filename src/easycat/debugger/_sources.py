@@ -10,7 +10,7 @@ validators and the replay-kwargs normaliser the routes lean on.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -70,6 +70,8 @@ class DebuggerSource:
     _artifact_analysis_fn: Any | None = field(default=None, repr=False)
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
+    _export_fn: Callable[[], Path | None] | None = field(default=None, repr=False)
+    _export_turn_fn: Callable[[str], Path | None] | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
     # Bounded tail fetch used by the live WS loop: returns up to ``cap`` records
     # with ``sequence > after_seq`` *without* materializing the whole journal.
@@ -156,6 +158,28 @@ class DebuggerSource:
             raise RuntimeError("This source does not support replay.")
         return self._replay_fn(**kwargs)
 
+    @property
+    def can_export(self) -> bool:
+        """Whether a whole-source export callback is bound."""
+        return self._export_fn is not None
+
+    @property
+    def can_export_turn(self) -> bool:
+        """Whether a single-turn export callback is bound."""
+        return self._export_turn_fn is not None
+
+    def export(self) -> Path | None:
+        """Export the whole source through its explicitly bound callback."""
+        if self._export_fn is None:
+            raise RuntimeError("No export function is bound.")
+        return self._export_fn()
+
+    def export_turn(self, turn_id: str) -> Path | None:
+        """Export one turn through its explicitly bound callback."""
+        if self._export_turn_fn is None:
+            raise RuntimeError("No turn-export function is bound.")
+        return self._export_turn_fn(turn_id)
+
 
 def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Type-check and normalise the optional windowing/filter keys.
@@ -236,10 +260,12 @@ def _run_bundle_source(
             "total_frames": total_frames,
             "frames_truncated": truncated,
             "frames": [_serialize_frame(f) for f in kept],
+            "stage_replays": len(result.stage_replays),
             "side_effecting": result.side_effecting,
             "blocked_tool_calls": result.blocked_tool_calls,
             "stubbed_tool_calls": result.stubbed_tool_calls,
             "allowed_tool_calls": result.allowed_tool_calls,
+            "executed_tool_calls": result.executed_tool_calls,
         }
 
     return DebuggerSource(
@@ -256,6 +282,7 @@ def _run_bundle_source(
             "format_version": bundle.format_version,
             "provider_versions": bundle.manifest.provider_versions,
             "config_snapshot": bundle.manifest.config_snapshot,
+            "journal_dropped_records": bundle.manifest.journal_dropped_records,
             "sharing_banner": bundle.sharing_banner,
             "record_count": len(cached_records),
             "artifact_count": len(bundle.artifact_blobs),
@@ -354,10 +381,15 @@ def _session_artifact_for_analysis(session: Any, ref: str) -> bytes | None:
 
 
 def _session_manifest(session: Any) -> dict[str, Any]:
+    journal = getattr(session, "_journal", None)
+    dropped_records = getattr(journal, "dropped_records", 0)
+    if not isinstance(dropped_records, int) or isinstance(dropped_records, bool):
+        dropped_records = 0
     return {
         "source": "session",
         "session_id": getattr(session, "session_id", ""),
         "config_snapshot": safe_config_snapshot_from_session(session),
+        "journal_dropped_records": max(0, dropped_records),
         "is_running": bool(getattr(session, "is_running", False)),
         "turn_state": str(getattr(session, "turn_state", "")),
         "supports_replay": False,
@@ -370,7 +402,12 @@ def _session_manifest(session: Any) -> dict[str, Any]:
     }
 
 
-def _session_source(session: Any) -> DebuggerSource:
+def _session_source(
+    session: Any,
+    *,
+    export_fn: Callable[[], Path | None] | None = None,
+    export_turn_fn: Callable[[str], Path | None] | None = None,
+) -> DebuggerSource:
     """Adapt a live ``Session`` so the UI can poll while it's running.
 
     Reads from ``session.journal`` (a JournalView) and pulls artifact
@@ -387,5 +424,7 @@ def _session_source(session: Any) -> DebuggerSource:
         _artifact_analysis_fn=lambda ref: _session_artifact_for_analysis(session, ref),
         _bundle_fn=None,
         _replay_fn=None,
+        _export_fn=export_fn,
+        _export_turn_fn=export_turn_fn,
         is_live=True,
     )

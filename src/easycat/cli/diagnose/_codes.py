@@ -183,7 +183,7 @@ entry points include:
   `bundles`, `scanned` - `easycat bundles list --json`
   `path`, `session_id`, `turn_count`, `turns`, `issues`, `errors`,
   `error_type`, `failing_turn_id`, `tool_calls`, `records`, `duration_ms`,
-  `annotations`, `provider_versions`, `artifact_count`,
+  `annotations`, `provider_versions`, `journal_dropped_records`, `artifact_count`,
   `replay_entry_points`, `format_version` -
                          `easycat bundles show PATH --json` and
                          `easycat inspect PATH --json`; `turns` is the
@@ -202,9 +202,9 @@ entry points include:
   `format_version`, `summary`, `redaction` -
                          `easycat bundles export PATH --output DIR --json`
   `path`, `fidelity_requested`, `fidelity_effective`, `frames`, `stages`,
-  `side_effecting`, `tool_policy`, `allowed_tool_calls`,
-  `blocked_tool_calls`, `stubbed_tool_calls`, `from_sequence`,
-  `to_sequence`, `stage_filter`, `force`, `timing` -
+  `stage_replays`, `side_effecting`, `tool_policy`, `allowed_tool_calls`,
+  `executed_tool_calls`, `blocked_tool_calls`, `stubbed_tool_calls`,
+  `from_sequence`, `to_sequence`, `stage_filter`, `force`, `timing` -
                          `easycat replay PATH --json`
 
 When an error is about a file or directory, commands include the
@@ -289,9 +289,9 @@ read-only postmortem view. Export a replayable bundle with
 PATH`, `easycat inspect PATH`, `easycat replay PATH`, or the debugger
 UI.
 
-Docs route: docs/reference/session-lifecycle.md (`easycat docs
---audience app-builders`, label "Session lifecycle"); operator tooling:
-docs/observability.md.
+Record catalog: docs/reference/journal-records.md; lifecycle and postmortem
+access: docs/reference/session-lifecycle.md (`easycat docs --audience
+app-builders`); operator tooling: docs/observability.md.
 """
 
 _TROUBLESHOOTING_BODY = """\
