@@ -318,6 +318,14 @@ class WebTransportTransportConfig:
     unsafe_allow_no_auth: bool = False
     max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.outbound_max_pending, bool)
+            or not isinstance(self.outbound_max_pending, int)
+            or self.outbound_max_pending < 1
+        ):
+            raise ValueError("outbound_max_pending must be an integer >= 1")
+
 
 def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
     if not certfile or not keyfile:
@@ -494,11 +502,16 @@ class _WebTransportSession:
 
     async def stop(self) -> None:
         if self._writer_task is not None and not self._writer_task.done():
+            current = asyncio.current_task()
+            cancellation_count = current.cancelling() if current is not None else 0
             self._writer_task.cancel()
             try:
                 await self._writer_task
             except asyncio.CancelledError:
-                pass
+                if current is not None and current.cancelling() > cancellation_count:
+                    raise
+            if current is not None and current.cancelling() > cancellation_count:
+                raise asyncio.CancelledError
         self._writer_task = None
         self._inbound_resampler.reset()
 
@@ -1272,6 +1285,15 @@ class WebTransportConnectionTransport(AudioQueueMixin):
             maxsize=self._config.outbound_max_pending,
         )
         self._on_close = asyncio.Event()
+        # Cleanup ownership survives the public connected-state flip. A failed
+        # provider/session stop must remain retryable instead of making the next
+        # disconnect silently return.
+        self._session_stop_pending = False
+        self._connection_close_pending = False
+        self._disconnect_cleanup_error: Exception | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_owner: asyncio.Task[Any] | None = None
+        self._lifecycle_action: str | None = None
         # ``_event_bus`` / ``_emit_tasks`` / ``_emit_degraded`` come from
         # ``AudioQueueMixin`` (initialised by ``_init_audio_queue`` above).
         # Session attaches the bus post-construction via
@@ -1301,8 +1323,31 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         return self._audio_format
 
     async def connect(self) -> None:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "connect":
+                return
+            raise RuntimeError(
+                "WebTransportConnectionTransport.connect() cannot run during disconnect()"
+            )
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "connect"
+            try:
+                await self._connect_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _connect_unlocked(self) -> None:
+        """Connect while the caller owns ``_lifecycle_lock``."""
         if self._connected:
             return
+        if self._disconnect_cleanup_error is not None:
+            raise RuntimeError(
+                "WebTransport connection cleanup is incomplete; call disconnect() "
+                "again before reconnecting"
+            ) from self._disconnect_cleanup_error
         if self._session is None:
             raise RuntimeError(
                 "WebTransportConnectionTransport has no underlying session. "
@@ -1320,25 +1365,110 @@ class WebTransportConnectionTransport(AudioQueueMixin):
                 self._out_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._session_stop_pending = True
+        self._connection_close_pending = True
+        try:
+            await self._session.start()
+        except BaseException as startup_error:
+            cleanup_task = asyncio.create_task(
+                self._disconnect_unlocked(),
+                name="webtransport-connect-rollback",
+            )
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                cleanup_task.result()
+            except BaseException as cleanup_error:
+                if self._disconnect_cleanup_error is None:
+                    self._disconnect_cleanup_error = RuntimeError(
+                        "WebTransport connect rollback was interrupted"
+                    )
+                raise startup_error from cleanup_error
+            raise
         self._connected = True
         self._client_connected.set()
-        await self._session.start()
 
     async def disconnect(self) -> None:
-        if not self._connected:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "disconnect":
+                return
+            raise RuntimeError(
+                "WebTransportConnectionTransport.disconnect() cannot run during connect()"
+            )
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "disconnect"
+            try:
+                try:
+                    await self._disconnect_unlocked()
+                except asyncio.CancelledError:
+                    self._publish_interrupted_disconnect()
+                    raise
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _disconnect_unlocked(self) -> None:
+        """Disconnect while the caller owns ``_lifecycle_lock``."""
+        if (
+            not self._connected
+            and not self._session_stop_pending
+            and not self._connection_close_pending
+            and not self._emit_tasks
+            and self._disconnect_cleanup_error is None
+        ):
             return
+        cleanup_errors: list[Exception] = []
         self._connected = False
         self._client_connected.clear()
-        if self._session is not None:
-            await self._session.stop()
-            # Actively tear the QUIC connection down so a server-initiated
-            # end-of-session reaches the client immediately rather than
-            # lingering until the idle timeout.
-            self._session.close_connection(reason="session ended")
+        session = self._session
+        if session is not None and self._session_stop_pending:
+            try:
+                await session.stop()
+            except Exception as exc:
+                logger.exception("WebTransport session cleanup failed", exc_info=exc)
+                cleanup_errors.append(exc)
+            else:
+                self._session_stop_pending = False
+        if session is not None and self._connection_close_pending:
+            try:
+                # Actively tear the QUIC connection down so a server-initiated
+                # end-of-session reaches the client immediately rather than
+                # lingering until the idle timeout.
+                session.close_connection(reason="session ended")
+            except Exception as exc:
+                logger.exception("WebTransport connection close failed", exc_info=exc)
+                cleanup_errors.append(exc)
+            else:
+                self._connection_close_pending = False
         self._enqueue_sentinel()
         self._enqueue_out_sentinel()
         self._on_close.set()
-        await self._drain_emit_tasks()
+        try:
+            await self._drain_emit_tasks()
+        except Exception as exc:
+            logger.exception("WebTransport diagnostic cleanup failed", exc_info=exc)
+            cleanup_errors.append(exc)
+        self._disconnect_cleanup_error = cleanup_errors[0] if cleanup_errors else None
+        if cleanup_errors:
+            raise cleanup_errors[0]
+
+    def _publish_interrupted_disconnect(self) -> None:
+        """Retain retry ownership before preserving caller cancellation."""
+        self._connected = False
+        self._client_connected.clear()
+        self._enqueue_sentinel()
+        self._enqueue_out_sentinel()
+        self._on_close.set()
+        self._disconnect_cleanup_error = RuntimeError(
+            "WebTransport disconnect was interrupted by cancellation"
+        )
 
     def force_close(self, *, reason: str = "") -> None:
         """Actively terminate the QUIC connection, even before ``connect()``.
@@ -1434,6 +1564,9 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         # transport state wedged until a later explicit ``disconnect()``.
         self._connected = False
         self._client_connected.clear()
+        # The peer is already gone, but the local writer/session task still
+        # needs its normal async stop when the handler reaches disconnect().
+        self._connection_close_pending = False
         self._on_close.set()
         # Unblock receive_audio() and the outbound writer.
         self._enqueue_sentinel()
@@ -1483,6 +1616,14 @@ class WebTransportServer:
         self._server: QuicServer | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
         self._started = False
+        # Protocol admission is distinct from the bound-server handle: stop()
+        # closes it synchronously before snapshotting handlers, so a queued
+        # post-accept callback cannot create work after that ownership cut.
+        self._accepting_sessions = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_owner: asyncio.Task[Any] | None = None
+        self._lifecycle_action: str | None = None
+        self._cleanup_error: Exception | None = None
         token = normalize_auth_token(config.auth_token)
         if token is None:
             self._auth_policy: AuthPolicy | None = None
@@ -1503,7 +1644,11 @@ class WebTransportServer:
         check and the subsequent ``_dispatch_session`` task creation are
         atomic relative to each other (no TOCTOU).
         """
-        return len(self._handler_tasks) < self._config.max_concurrent_sessions
+        return (
+            self._started
+            and self._accepting_sessions
+            and len(self._handler_tasks) < self._config.max_concurrent_sessions
+        )
 
     def _dispatch_session(self, transport: WebTransportConnectionTransport) -> None:
         """Accept a new session or reject it when the concurrency cap is hit.
@@ -1515,6 +1660,10 @@ class WebTransportServer:
         (and for the direct unit test) in case this is ever driven without
         the pre-200 check.
         """
+        if not self._started or not self._accepting_sessions:
+            logger.warning("Rejecting WebTransport session — server is not accepting sessions")
+            transport.force_close(reason="server not accepting sessions")
+            return
         if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
             logger.warning(
                 "Rejecting WebTransport session — %d concurrent cap reached",
@@ -1531,8 +1680,35 @@ class WebTransportServer:
         task.add_done_callback(self._handler_tasks.discard)
 
     async def start(self) -> None:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "start":
+                return
+            raise RuntimeError("WebTransportServer.start() cannot run reentrantly during stop()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "start"
+            try:
+                await self._start_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _start_unlocked(self) -> None:
+        """Start while the caller owns ``_lifecycle_lock``."""
+        if self._cleanup_error is not None:
+            raise RuntimeError(
+                "WebTransportServer cannot start because previous cleanup is "
+                "incomplete; call stop() again to retry cleanup"
+            ) from self._cleanup_error
         if self._started:
             return
+        if self._server is not None or self._handler_tasks:
+            raise RuntimeError(
+                "WebTransportServer cannot start while previous resources "
+                "remain; call stop() again to retry cleanup"
+            )
+        self._accepting_sessions = False
         from easycat.server.auth import enforce_bind_guard
 
         enforce_bind_guard(
@@ -1562,6 +1738,7 @@ class WebTransportServer:
             create_protocol=factory,
         )
         self._started = True
+        self._accepting_sessions = True
         logger.info(
             "WebTransport server listening on https://%s:%d%s",
             self._config.host,
@@ -1582,7 +1759,39 @@ class WebTransportServer:
                 logger.debug("Error while disconnecting WebTransport session", exc_info=True)
 
     async def stop(self) -> None:
-        if not self._started:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "stop":
+                return
+            raise RuntimeError("WebTransportServer.stop() cannot run reentrantly during start()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "stop"
+            try:
+                try:
+                    await self._stop_unlocked()
+                except asyncio.CancelledError:
+                    self._started = False
+                    self._cleanup_error = RuntimeError(
+                        "WebTransportServer stop was interrupted by cancellation"
+                    )
+                    raise
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _stop_unlocked(self) -> None:
+        """Stop while the caller owns ``_lifecycle_lock``."""
+        # Close admission before inspecting/snapshotting handlers. Protocol
+        # callbacks are synchronous on this event loop, so every dispatch after
+        # this line observes rejection and force-closes its accepted transport.
+        self._accepting_sessions = False
+        if (
+            not self._started
+            and self._server is None
+            and not self._handler_tasks
+            and self._cleanup_error is None
+        ):
             return
         self._started = False
         # Tear down in-flight handlers, but never await the current task
@@ -1598,13 +1807,26 @@ class WebTransportServer:
         # bookkeeping.
         self._handler_tasks.difference_update(others)
 
-        if self._server is not None:
-            self._server.close()
+        cleanup_errors: list[Exception] = []
+        server = self._server
+        if server is not None:
             try:
-                await self._server.wait_closed()
+                server.close()
+            except Exception as exc:
+                logger.exception("WebTransport server close failed", exc_info=exc)
+                cleanup_errors.append(exc)
+            try:
+                await server.wait_closed()
             except AttributeError:
                 pass
-            self._server = None
+            except Exception as exc:
+                logger.exception("WebTransport server wait_closed failed", exc_info=exc)
+                cleanup_errors.append(exc)
+            if not cleanup_errors and self._server is server:
+                self._server = None
+        self._cleanup_error = cleanup_errors[0] if cleanup_errors else None
+        if cleanup_errors:
+            raise cleanup_errors[0]
 
     async def serve_forever(self) -> None:
         """Convenience: start the server and block until cancelled."""
@@ -1650,6 +1872,9 @@ class WebTransportTransport(AudioQueueMixin):
         )
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_owner: asyncio.Task[Any] | None = None
+        self._lifecycle_action: str | None = None
         # ``_event_bus`` comes from ``AudioQueueMixin`` (``_init_audio_queue``
         # above).  Session attaches it post-construction
         # (``_maybe_attach_event_bus``); ``connect``'s ``handle`` closure
@@ -1661,8 +1886,35 @@ class WebTransportTransport(AudioQueueMixin):
         return self._audio_format
 
     async def connect(self) -> None:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "connect":
+                return
+            raise RuntimeError("WebTransportTransport.connect() cannot run during disconnect()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "connect"
+            try:
+                await self._connect_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _connect_unlocked(self) -> None:
+        """Connect while the wrapper lifecycle lock is held."""
         if self._connected:
             return
+        if self._server is not None:
+            if (
+                self._server._cleanup_error is not None
+                or self._server._server is not None
+                or self._server._started
+            ):
+                raise RuntimeError(
+                    "WebTransport server cleanup is incomplete; call disconnect() "
+                    "again before reconnecting"
+                )
+            self._server = None
         self._reset_audio_queue()
         # If a previous run set the event, clear it so receive_audio waits
         # for *this* run's client.
@@ -1698,20 +1950,51 @@ class WebTransportTransport(AudioQueueMixin):
         # rejected at accept time (the server force-closes it) instead of
         # lingering behind the one-session ``handle`` closure above.
         single_client_config = replace(self._config, max_concurrent_sessions=1)
-        self._server = WebTransportServer(single_client_config, handle)
-        await self._server.start()
+        server = WebTransportServer(single_client_config, handle)
+        self._server = server
+        try:
+            await server.start()
+        except BaseException:
+            if (
+                not server._started
+                and server._server is None
+                and server._cleanup_error is None
+                and self._server is server
+            ):
+                self._server = None
+            raise
+        if self._server is not server:
+            raise RuntimeError("WebTransport server ownership changed during connect")
         self._connected = True
 
     async def disconnect(self) -> None:
-        if not self._connected:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "disconnect":
+                return
+            raise RuntimeError("WebTransportTransport.disconnect() cannot run during connect()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "disconnect"
+            try:
+                await self._disconnect_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _disconnect_unlocked(self) -> None:
+        """Disconnect while the wrapper lifecycle lock is held."""
+        if not self._connected and self._server is None:
             return
         self._connected = False
         # Unblock any ``receive_audio`` caller that is waiting for the first
         # client — they'll see ``_connected`` is False and exit cleanly.
         self._client_connected.set()
-        if self._server is not None:
-            await self._server.stop()
-            self._server = None
+        server = self._server
+        if server is not None:
+            await server.stop()
+            if self._server is server:
+                self._server = None
         self._active = None
 
     async def send_audio(self, chunk: AudioChunk) -> bool:

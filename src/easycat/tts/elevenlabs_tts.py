@@ -18,7 +18,12 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.tts._multi_context_ws import MultiContextAdapter, MultiContextWSManager, _Context
+from easycat.tts._multi_context_ws import (
+    MultiContextAdapter,
+    MultiContextWSManager,
+    _Context,
+    validate_context_queue_maxsize,
+)
 from easycat.tts._ws_base import _WSTTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
@@ -30,6 +35,17 @@ class ElevenLabsStreamMode(enum.StrEnum):
 
     HTTP = "http"
     WEBSOCKET = "websocket"
+
+
+def _normalize_stream_mode(value: object) -> ElevenLabsStreamMode:
+    if isinstance(value, ElevenLabsStreamMode):
+        return value
+    if isinstance(value, str):
+        try:
+            return ElevenLabsStreamMode(value.strip().lower())
+        except ValueError:
+            pass
+    raise ValueError(f"ElevenLabs stream_mode must be 'http' or 'websocket', got {value!r}")
 
 
 # Map ElevenLabs output_format strings to AudioFormat.
@@ -112,6 +128,8 @@ class ElevenLabsTTSConfig:
     context_queue_maxsize: int = 256
 
     def __post_init__(self) -> None:
+        self.stream_mode = _normalize_stream_mode(self.stream_mode)
+        validate_context_queue_maxsize(self.context_queue_maxsize, provider="ElevenLabs")
         if self.persistent_ws is None:
             self.persistent_ws = self.stream_mode == ElevenLabsStreamMode.WEBSOCKET
         if (
@@ -310,7 +328,11 @@ class ElevenLabsTTS(_WSTTSBase):
 
     async def _synthesize_ws_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
         """Explicit one-shot WebSocket path: fresh socket per synthesize call."""
+        # Reject before publishing active synthesis state when a prior
+        # fail-once close still owns the exact one-shot wrapper.
+        await self._close_ws()
         self._start_synthesis()
+        terminal_received = False
 
         try:
             ws = await self._start_ws_stream(text)
@@ -326,7 +348,9 @@ class ElevenLabsTTS(_WSTTSBase):
                 for event in events:
                     yield event
                 if terminal:
+                    terminal_received = True
                     break
+            self._require_terminal_response(terminal_received)
             tail = self._finish_audio_event()
             if tail is not None:
                 yield tail
@@ -344,9 +368,17 @@ class ElevenLabsTTS(_WSTTSBase):
         finally:
             # Single idempotent teardown covers every exit path, including
             # CancelledError (BaseException) which skips the except above.
-            await self._close_ws()
-            self._pending_messages = None
-            self._end_synthesis()
+            try:
+                await self._close_ws()
+            finally:
+                self._pending_messages = None
+                self._end_synthesis()
+
+    def _require_terminal_response(self, terminal_received: bool) -> None:
+        if not self._cancelled and not terminal_received:
+            raise ConnectionError(
+                "ElevenLabs TTS stream ended before a terminal isFinal/error response"
+            )
 
     async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
         """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""
@@ -426,9 +458,9 @@ class ElevenLabsTTS(_WSTTSBase):
             f"&apply_text_normalization={self._config.apply_text_normalization}"
             f"&auto_mode={str(self._config.auto_mode).lower()}"
         )
-        self._ws = self._make_ws(ws_url, self._replay_request)
-        await self._ws.connect()
-        return self._ws
+        ws = await self._replace_oneshot_ws(lambda: self._make_ws(ws_url, self._replay_request))
+        await ws.connect()
+        return ws
 
     # ── persistent multi-context path ─────────────────────────────
 

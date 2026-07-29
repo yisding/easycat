@@ -16,7 +16,12 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
-from easycat.tts._multi_context_ws import MultiContextAdapter, MultiContextWSManager, _Context
+from easycat.tts._multi_context_ws import (
+    MultiContextAdapter,
+    MultiContextWSManager,
+    _Context,
+    validate_context_queue_maxsize,
+)
 from easycat.tts._ws_base import _WSTTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
@@ -91,6 +96,7 @@ class CartesiaTTSConfig:
     context_queue_maxsize: int = 256
 
     def __post_init__(self) -> None:
+        validate_context_queue_maxsize(self.context_queue_maxsize, provider="Cartesia")
         if self.encoding not in _ENCODING_SAMPLE_WIDTH:
             supported = ", ".join(sorted(_ENCODING_SAMPLE_WIDTH))
             raise ValueError(
@@ -232,6 +238,12 @@ class CartesiaTTS(_WSTTSBase):
             return [], True
         return [], False
 
+    def _require_terminal_response(self, terminal_received: bool) -> None:
+        if not self._cancelled and not terminal_received:
+            raise ConnectionError(
+                "Cartesia TTS stream ended before a terminal done/error response"
+            )
+
     async def _replay_request(self) -> None:
         """Re-send the in-flight synthesis request after a reconnect.
 
@@ -299,9 +311,9 @@ class CartesiaTTS(_WSTTSBase):
             yield event
 
     async def _synthesize_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
+        ws = await self._replace_oneshot_ws(self._create_ws)
         self._start_synthesis()
 
-        self._ws = self._create_ws()
         context_id = str(uuid4())
         self._context_id = context_id
 
@@ -311,16 +323,17 @@ class CartesiaTTS(_WSTTSBase):
         # *initial* connect too, and arming earlier would replay the request
         # before the send below, duplicating the utterance.
         self._pending_request = None
+        terminal_received = False
 
         try:
-            await self._ws.connect()
-            await self._ws.send(request)
+            await ws.connect()
+            await ws.send(request)
             # Request is now live: arm replay so a *mid-stream* reconnect
             # re-sends it and restarts the utterance from the top (see
             # ``_replay_request`` for the duplicate-audio tradeoff).
             self._pending_request = request
 
-            async for message in self._ws.recv_iter():
+            async for message in ws.recv_iter():
                 if self._cancelled:
                     break
                 msg = self._parse_frame(message)
@@ -330,7 +343,9 @@ class CartesiaTTS(_WSTTSBase):
                 for event in events:
                     yield event
                 if terminal:
+                    terminal_received = True
                     break
+            self._require_terminal_response(terminal_received)
             tail = self._finish_audio_event()
             if tail is not None:
                 yield tail
@@ -341,10 +356,12 @@ class CartesiaTTS(_WSTTSBase):
                 self._emit_provider_error(exc)
                 raise
         finally:
-            await self._close_ws()
-            self._context_id = None
-            self._pending_request = None
-            self._end_synthesis()
+            try:
+                await self._close_ws()
+            finally:
+                self._context_id = None
+                self._pending_request = None
+                self._end_synthesis()
 
     @staticmethod
     def _context_frame(msg: Any, context_id: str) -> dict[str, Any] | None:

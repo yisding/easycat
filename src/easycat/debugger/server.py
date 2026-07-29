@@ -40,7 +40,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from easycat._audio_utils import to_mono_chunk
 from easycat._net import is_loopback_host
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
@@ -72,6 +74,7 @@ from easycat.debugger._sources import (
     _validated_replay_kwargs,
 )
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
+from easycat.runtime.capabilities import close_if_supported
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
 logger = logging.getLogger(__name__)
@@ -199,6 +202,43 @@ def _collect_concat_pcm(
 # ── AEC diagnostics ──────────────────────────────────────────────
 
 
+async def _close_vad_provider_owned(provider: Any) -> None:
+    """Close one debugger-only VAD provider despite repeated caller cancellation."""
+    cancellation: asyncio.CancelledError | None = None
+    close_task = asyncio.create_task(
+        close_if_supported(provider),
+        name="debugger_vad_provider_cleanup",
+    )
+    while not close_task.done():
+        caller = asyncio.current_task()
+        cancellation_requests = caller.cancelling() if caller is not None else 0
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError as exc:
+            new_cancellation = caller is not None and caller.cancelling() > cancellation_requests
+            if not new_cancellation:
+                break
+            # The HTTP request may be cancelled again while provider cleanup is
+            # already running. Keep the independently owned close task alive and
+            # preserve cancellation only after the provider has settled.
+            if cancellation is None:
+                cancellation = exc
+            continue
+    close_error: BaseException | None = None
+    try:
+        close_task.result()
+    except BaseException as exc:
+        close_error = exc
+    if cancellation is not None:
+        if close_error is not None:
+            raise cancellation from close_error
+        raise cancellation
+    if isinstance(close_error, asyncio.CancelledError):
+        raise RuntimeError("Debugger VAD provider cleanup was interrupted") from close_error
+    if close_error is not None:
+        raise close_error
+
+
 async def _vad_whatif_for_turn(
     source: DebuggerSource, turn_id: str, *, threshold: float
 ) -> dict[str, Any]:
@@ -209,7 +249,6 @@ async def _vad_whatif_for_turn(
     "false_trigger_delta"}``.  Raises :class:`RuntimeError` when the VAD
     provider cannot be imported (the handler maps it to a 422 degrade).
     """
-    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
     from easycat.events import VADStartSpeaking
     from easycat.vad.factory import VADConfig, create_vad
 
@@ -223,11 +262,34 @@ async def _vad_whatif_for_turn(
         raise RuntimeError(f"VAD provider unavailable: {exc}") from exc
 
     whatif_starts = 0
-    for blob in blobs:
-        chunk = AudioChunk(data=blob, format=PCM16_MONO_16K)
-        async for event in provider.process(chunk):
-            if isinstance(event, VADStartSpeaking):
-                whatif_starts += 1
+    try:
+        for blob, metadata in blobs:
+            fmt = _safe_audio_format_from_metadata(metadata)
+            encoding = metadata.get("encoding", "pcm")
+            if encoding != "pcm" or fmt["sample_width"] != 2:
+                raise RuntimeError(
+                    "VAD what-if requires captured PCM16 audio "
+                    f"(got encoding={encoding!r}, sample_width={fmt['sample_width']!r})"
+                )
+            chunk = AudioChunk(
+                data=blob,
+                format=AudioFormat(
+                    sample_rate=fmt["sample_rate"],
+                    channels=fmt["channels"],
+                    sample_width=fmt["sample_width"],
+                    encoding=encoding,
+                ),
+            )
+            if chunk.format.channels > 1:
+                chunk = to_mono_chunk(chunk)
+            async for event in provider.process(chunk):
+                if isinstance(event, VADStartSpeaking):
+                    whatif_starts += 1
+    finally:
+        try:
+            await _close_vad_provider_owned(provider)
+        except Exception:
+            logger.debug("Failed to close debugger VAD what-if provider", exc_info=True)
     return {
         "threshold": threshold,
         "baseline_starts": baseline,

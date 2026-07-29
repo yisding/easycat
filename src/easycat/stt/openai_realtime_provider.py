@@ -373,10 +373,6 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             # loop until the close timeout fires.  Close-before-drain wakes
             # the receive loop, keeping turn-to-agent latency low.
             await self._close_active_websocket(close_before_drain=True)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("OpenAI Realtime close failed during end", exc_info=True)
         finally:
             self._reset_logical_turn_state()
 

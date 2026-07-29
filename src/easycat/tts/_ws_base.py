@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from easycat._provider_helpers import ProviderErrorEmitter
@@ -81,13 +82,35 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
 
     async def _close_ws(self) -> None:
         """Close the current WebSocket connection (idempotent)."""
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing %s WebSocket", self._provider_log_label, exc_info=True)
-            finally:
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.close()
+        except Exception:
+            # Keep the exact wrapper reachable so stop()/close() can retry a
+            # fail-once provider close instead of reporting false success.
+            logger.debug("Error closing %s WebSocket", self._provider_log_label, exc_info=True)
+            raise
+        else:
+            if self._ws is ws:
                 self._ws = None
+
+    async def _replace_oneshot_ws(
+        self,
+        factory: Callable[[], ReconnectingWebSocket],
+    ) -> ReconnectingWebSocket:
+        """Close retained ownership before publishing a fresh one-shot socket.
+
+        A failed provider close deliberately leaves the exact wrapper in
+        ``self._ws`` so teardown can retry it. One-shot synthesis must honor
+        that retry ledger: creating first and assigning over the retained
+        wrapper would leak the old connection permanently.
+        """
+        await self._close_ws()
+        ws = factory()
+        self._ws = ws
+        return ws
 
     async def close(self) -> None:
         """Close the WebSocket and drain in-flight Error-emit tasks.

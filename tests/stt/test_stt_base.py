@@ -122,6 +122,351 @@ async def test_base_start_stop_lifecycle():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_start_rolls_back_running_state_and_allows_retry() -> None:
+    class BlockingStartupSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_calls = 0
+            self.start_entered = asyncio.Event()
+
+        async def _on_start(self) -> None:
+            self.start_calls += 1
+            if self.start_calls == 1:
+                self.start_entered.set()
+                await asyncio.Event().wait()
+
+    stt = BlockingStartupSTT()
+    first_start = asyncio.create_task(stt.start_stream())
+    await stt.start_entered.wait()
+    first_start.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await first_start
+
+    assert stt._running is False
+    await stt.start_stream()
+    assert stt._running is True
+    assert stt.start_calls == 2
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_partial_start_closes_resources_before_retry() -> None:
+    class ResourceStartupSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.resources: list[dict[str, bool]] = []
+            self.start_entered = asyncio.Event()
+
+        async def _on_start(self) -> None:
+            resource = {"closed": False}
+            self.resources.append(resource)
+            if len(self.resources) == 1:
+                self.start_entered.set()
+                await asyncio.Event().wait()
+
+        async def _on_end(self) -> None:
+            if self.resources:
+                self.resources[-1]["closed"] = True
+
+    stt = ResourceStartupSTT()
+    first_start = asyncio.create_task(stt.start_stream())
+    await stt.start_entered.wait()
+    first_start.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await first_start
+
+    assert stt.resources == [{"closed": True}]
+    await stt.start_stream()
+    await stt.end_stream()
+    assert stt.resources == [{"closed": True}, {"closed": True}]
+
+
+@pytest.mark.asyncio
+async def test_failed_start_cleanup_preserves_primary_error_under_repeated_cancellation() -> None:
+    primary = RuntimeError("startup failed")
+
+    class SlowCleanupSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleanup_entered = asyncio.Event()
+            self.release_cleanup = asyncio.Event()
+            self.cleanup_finished = False
+
+        async def _on_start(self) -> None:
+            raise primary
+
+        async def _on_start_failed(self) -> None:
+            self.cleanup_entered.set()
+            await self.release_cleanup.wait()
+            self.cleanup_finished = True
+
+    stt = SlowCleanupSTT()
+    start = asyncio.create_task(stt.start_stream())
+    await stt.cleanup_entered.wait()
+    start.cancel()
+    await asyncio.sleep(0)
+    start.cancel()
+    stt.release_cleanup.set()
+
+    with pytest.raises(RuntimeError, match="startup failed") as exc_info:
+        await start
+
+    assert exc_info.value is primary
+    assert stt.cleanup_finished is True
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
+async def test_failed_start_cleanup_is_retained_and_retried_before_reuse() -> None:
+    startup_error = RuntimeError("startup failed")
+    cleanup_errors = [RuntimeError("cleanup one"), RuntimeError("cleanup two")]
+
+    class RetryCleanupSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_calls = 0
+            self.cleanup_calls = 0
+
+        async def _on_start(self) -> None:
+            self.start_calls += 1
+            if self.start_calls == 1:
+                raise startup_error
+
+        async def _on_start_failed(self) -> None:
+            self.cleanup_calls += 1
+            if cleanup_errors:
+                raise cleanup_errors.pop(0)
+
+    stt = RetryCleanupSTT()
+
+    with pytest.raises(RuntimeError, match="startup failed") as first:
+        await stt.start_stream()
+
+    assert first.value is startup_error
+    assert isinstance(first.value.__cause__, RuntimeError)
+    assert str(first.value.__cause__) == "cleanup one"
+    assert stt._failed_start_cleanup_pending is True
+
+    with pytest.raises(RuntimeError, match="cleanup is incomplete") as second:
+        await stt.start_stream()
+
+    assert str(second.value.__cause__) == "cleanup two"
+    assert stt.start_calls == 1
+    assert stt._failed_start_cleanup_pending is True
+
+    await stt.start_stream()
+    assert stt.start_calls == 2
+    assert stt.cleanup_calls == 3
+    assert stt._failed_start_cleanup_pending is False
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_failed_end_cleanup_finishes_under_repeated_cancellation() -> None:
+    class SlowEndCleanupSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleanup_entered = asyncio.Event()
+            self.release_cleanup = asyncio.Event()
+            self.cleanup_finished = False
+
+        async def _on_end(self) -> None:
+            raise RuntimeError("provider end failed")
+
+        async def _on_end_cleanup(self) -> None:
+            self.cleanup_entered.set()
+            await self.release_cleanup.wait()
+            self.cleanup_finished = True
+
+    stt = SlowEndCleanupSTT()
+    await stt.start_stream()
+    with pytest.raises(RuntimeError, match="provider end failed"):
+        await stt.end_stream()
+
+    closing = asyncio.create_task(stt.close())
+    await stt.cleanup_entered.wait()
+    closing.cancel()
+    await asyncio.sleep(0)
+    closing.cancel()
+    stt.release_cleanup.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+
+    assert stt.cleanup_finished is True
+    assert stt._failed_end_cleanup_pending is False
+    assert stt._failed_end_cleanup_error is None
+
+
+@pytest.mark.asyncio
+async def test_end_stream_ignores_preexisting_cancel_count_for_owned_send_cancel() -> None:
+    class BlockingSendSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_entered = asyncio.Event()
+            self.end_calls = 0
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_entered.set()
+            await asyncio.Future()
+
+        async def _on_end(self) -> None:
+            self.end_calls += 1
+
+    stt = BlockingSendSTT()
+    await stt.start_stream()
+    sending = asyncio.create_task(
+        stt.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+    )
+    await stt.send_entered.wait()
+
+    async def end_after_caught_cancel() -> int:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert caller.cancelling() == 1
+        await stt.end_stream()
+        return caller.cancelling()
+
+    cancellation_requests = await asyncio.create_task(end_after_caught_cancel())
+    await sending
+
+    assert cancellation_requests == 1
+    assert stt.end_calls == 1
+    assert stt._active_audio_send_task is None
+    assert stt._failed_end_cleanup_pending is False
+    assert stt._failed_end_cleanup_error is None
+
+
+@pytest.mark.asyncio
+async def test_failed_end_close_waits_for_retained_cancellation_resistant_send() -> None:
+    class RetainedSendSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_entered = asyncio.Event()
+            self.first_cancel = asyncio.Event()
+            self.second_cancel = asyncio.Event()
+            self.release_send = asyncio.Event()
+            self.cancel_count = 0
+            self.cleanup_calls = 0
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            self.send_entered.set()
+            while not self.release_send.is_set():
+                try:
+                    await self.release_send.wait()
+                except asyncio.CancelledError:
+                    self.cancel_count += 1
+                    self.first_cancel.set()
+                    if self.cancel_count >= 2:
+                        self.second_cancel.set()
+
+        async def _on_end_cleanup(self) -> None:
+            self.cleanup_calls += 1
+
+    stt = RetainedSendSTT()
+    await stt.start_stream()
+    sending = asyncio.create_task(
+        stt.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+    )
+    await stt.send_entered.wait()
+
+    async def end_after_caught_cancel() -> None:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert caller.cancelling() == 1
+        await stt.end_stream()
+
+    ending = asyncio.create_task(end_after_caught_cancel())
+    await stt.first_cancel.wait()
+    ending.cancel()
+    ending.cancel()
+    assert ending.cancelling() == 3
+    with pytest.raises(asyncio.CancelledError):
+        await ending
+
+    retained_send = stt._active_audio_send_task
+    assert retained_send is not None
+    assert not retained_send.done()
+    assert stt._failed_end_cleanup_pending is True
+
+    closing = asyncio.create_task(stt.close())
+    await stt.second_cancel.wait()
+    await asyncio.sleep(0)
+    assert not closing.done()
+
+    stt.release_send.set()
+    await asyncio.gather(closing, sending)
+
+    assert retained_send.done()
+    assert stt._active_audio_send_task is None
+    assert stt.cleanup_calls == 1
+    assert stt._failed_end_cleanup_pending is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_caller_cancellation", [False, True])
+async def test_reap_retained_send_distinguishes_new_cancel_from_preexisting_count(
+    new_caller_cancellation: bool,
+) -> None:
+    stt = STTBase(allow_end_during_audio_send=True)
+    send_entered = asyncio.Event()
+    send_cancelled = asyncio.Event()
+    release_send = asyncio.Event()
+
+    async def retained_send() -> None:
+        send_entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            if not new_caller_cancellation:
+                raise
+            send_cancelled.set()
+            await release_send.wait()
+
+    owned_send = asyncio.create_task(retained_send())
+    stt._active_audio_send_task = owned_send
+    await send_entered.wait()
+
+    async def reap_after_caught_cancel() -> int:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert caller.cancelling() == 1
+        await stt.end_stream()
+        return caller.cancelling()
+
+    reaping = asyncio.create_task(reap_after_caught_cancel())
+    if not new_caller_cancellation:
+        assert await reaping == 1
+        await asyncio.gather(owned_send, return_exceptions=True)
+        assert stt._active_audio_send_task is None
+        return
+
+    await send_cancelled.wait()
+    reaping.cancel()
+    assert reaping.cancelling() == 2
+    with pytest.raises(asyncio.CancelledError):
+        await reaping
+
+    assert stt._active_audio_send_task is owned_send
+    release_send.set()
+    await owned_send
+    await stt.end_stream()
+    assert stt._active_audio_send_task is None
+
+
+@pytest.mark.asyncio
 async def test_base_send_audio_before_start_raises():
     stt = EchoSTT()
     chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
@@ -171,6 +516,88 @@ async def test_base_close_ends_an_active_stream():
 
     assert stt._running is False
     assert [event.text async for event in stt.events()] == ["test transcript"]
+
+
+@pytest.mark.asyncio
+async def test_send_audio_accepts_lifecycle_cutoff_with_preexisting_cancel_count() -> None:
+    class BlockingSendSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_started = asyncio.Event()
+            self.end_calls = 0
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            await asyncio.Future()
+
+        async def _on_end(self) -> None:
+            self.end_calls += 1
+
+    stt = BlockingSendSTT()
+    await stt.start_stream()
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+
+    async def send_after_caught_cancel() -> int:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert caller.cancelling() == 1
+        await stt.send_audio(chunk)
+        return caller.cancelling()
+
+    sending = asyncio.create_task(send_after_caught_cancel())
+    await stt.send_started.wait()
+    await stt.end_stream()
+
+    assert await sending == 1
+    assert stt.end_calls == 1
+    assert stt._active_audio_send_task is None
+
+
+@pytest.mark.asyncio
+async def test_send_audio_propagates_new_caller_cancel_and_reaps_owned_send() -> None:
+    class BlockingSendSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_started = asyncio.Event()
+            self.send_cancelled = asyncio.Event()
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                self.send_cancelled.set()
+
+    stt = BlockingSendSTT()
+    await stt.start_stream()
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+
+    async def send_after_caught_cancel() -> None:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert caller.cancelling() == 1
+        await stt.send_audio(chunk)
+
+    sending = asyncio.create_task(send_after_caught_cancel())
+    await stt.send_started.wait()
+    sending.cancel()
+    sending.cancel()
+    assert sending.cancelling() == 3
+
+    with pytest.raises(asyncio.CancelledError):
+        await sending
+
+    assert stt.send_cancelled.is_set()
+    assert stt._active_audio_send_task is None
+    await stt.end_stream()
 
 
 @pytest.mark.asyncio

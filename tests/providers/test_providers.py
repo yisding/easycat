@@ -204,6 +204,11 @@ class _CatalogProvider:
         self.config = config
 
 
+class _OtherCatalogProvider:
+    def __init__(self, config: "_CatalogConfig") -> None:
+        self.config = config
+
+
 @dataclass
 class _CatalogConfig:
     api_key: str = ""
@@ -252,8 +257,28 @@ def test_provider_catalog_rejects_missing_key_and_invalid_params():
 
     with pytest.raises(ValueError, match="API key is required"):
         catalog.create_provider("known")
+    with pytest.raises(ValueError, match="API key is required"):
+        catalog.create_provider("known", api_key=" \t ")
     with pytest.raises(ValueError, match="Invalid params"):
         catalog.create_provider("known", params={"unknown": True})
+
+
+def test_provider_catalog_parse_rejects_blank_override_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    with pytest.raises(EasyCatError) as override_error:
+        catalog.parse_string(
+            "known/model",
+            api_key_overrides={"KNOWN_API_KEY": "   "},
+        )
+    assert override_error.value.code == "EASYCAT_E203"
+
+    monkeypatch.setenv("KNOWN_API_KEY", "\t ")
+    with pytest.raises(EasyCatError) as env_error:
+        catalog.parse_string("known/model")
+    assert env_error.value.code == "EASYCAT_E203"
 
 
 def test_provider_catalog_injects_or_preserves_event_bus():
@@ -268,3 +293,99 @@ def test_provider_catalog_injects_or_preserves_event_bus():
 
     assert created.config.event_bus is injected
     assert preserved.config.event_bus is existing
+
+
+@pytest.mark.parametrize("api_key", ["", " \t "])
+def test_provider_catalog_rejects_unusable_key_from_concrete_config(api_key: str) -> None:
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    with pytest.raises(ValueError, match="API key is required"):
+        catalog.create_from_config(_CatalogConfig(api_key=api_key), object())
+
+
+def test_provider_catalog_rejects_config_class_mapped_to_different_provider():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    with pytest.raises(ValueError, match="config class '_CatalogConfig'.*different"):
+        catalog.register("other", _OtherCatalogProvider, _CatalogConfig)
+
+    assert "other" not in catalog.providers
+    assert catalog.provider_for_config(_CatalogConfig) is _CatalogProvider
+
+
+def test_provider_catalog_rejects_ambiguous_initial_specs():
+    specs = {
+        "first": ProviderSpec(
+            _CatalogProvider,
+            _CatalogConfig,
+            None,
+            "",
+            (),
+        ),
+        "second": ProviderSpec(
+            _OtherCatalogProvider,
+            _CatalogConfig,
+            None,
+            "",
+            (),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="config class '_CatalogConfig'.*different"):
+        ProviderCatalog(specs=specs, kind="Test")
+
+
+def test_provider_catalog_rejects_initial_alias_with_different_metadata():
+    specs = {
+        "plain": ProviderSpec(
+            _CatalogProvider,
+            _CatalogConfig,
+            None,
+            "",
+            (),
+        ),
+        "native": ProviderSpec(
+            _CatalogProvider,
+            _CatalogConfig,
+            None,
+            "",
+            (),
+            capabilities=frozenset({"native_endpointing"}),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="alias 'native'.*identical metadata"):
+        ProviderCatalog(specs=specs, kind="Test")
+
+
+def test_provider_catalog_allows_alias_for_same_provider_and_config():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    catalog.register(
+        "known-alias",
+        _CatalogProvider,
+        _CatalogConfig,
+        env_var="KNOWN_API_KEY",
+        extra="known",
+        api_domains=("known.example",),
+    )
+
+    assert catalog.providers["known-alias"] == (_CatalogProvider, _CatalogConfig)
+    assert catalog.provider_for_config(_CatalogConfig) is _CatalogProvider
+
+
+def test_provider_catalog_rejects_dynamic_alias_with_different_metadata():
+    catalog = ProviderCatalog(**_catalog_kwargs())
+
+    with pytest.raises(ValueError, match="alias 'known-native'.*identical metadata"):
+        catalog.register(
+            "known-native",
+            _CatalogProvider,
+            _CatalogConfig,
+            env_var="KNOWN_API_KEY",
+            extra="known",
+            api_domains=("known.example",),
+            capabilities=frozenset({"native_endpointing"}),
+        )
+
+    assert "known-native" not in catalog.providers

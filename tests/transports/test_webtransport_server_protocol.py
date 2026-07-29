@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -207,6 +208,251 @@ class TestWebTransportServerWiring:
         )
         await server.stop()
 
+    @staticmethod
+    def _patch_server_start_dependencies(
+        monkeypatch: pytest.MonkeyPatch,
+        serve: Any,
+    ) -> None:
+        monkeypatch.setattr(
+            webtransport_module,
+            "_build_quic_configuration",
+            lambda _cert, _key: object(),
+        )
+        monkeypatch.setattr(
+            webtransport_module,
+            "_preflight_aioquic_backpressure_api",
+            lambda: None,
+        )
+        monkeypatch.setattr(
+            webtransport_module,
+            "_protocol_factory",
+            lambda **_kwargs: object(),
+        )
+        monkeypatch.setattr(
+            webtransport_module,
+            "require_module",
+            lambda *_args, **_kwargs: SimpleNamespace(serve=serve),
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_starts_bind_one_server(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        serve_started = asyncio.Event()
+        release_serve = asyncio.Event()
+        bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
+        serve_calls = 0
+
+        async def serve(*_args: object, **_kwargs: object) -> object:
+            nonlocal serve_calls
+            serve_calls += 1
+            serve_started.set()
+            await release_serve.wait()
+            return bound
+
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        first = asyncio.create_task(server.start())
+        await serve_started.wait()
+        second = asyncio.create_task(server.start())
+        await asyncio.sleep(0)
+
+        assert serve_calls == 1
+        assert not second.done()
+        release_serve.set()
+        await asyncio.gather(first, second)
+        assert server._accepting_sessions is True  # noqa: SLF001
+        await server.stop()
+
+        assert serve_calls == 1
+        bound.close.assert_called_once()
+        bound.wait_closed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_restart_reopens_session_admission(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        first_bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
+        second_bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
+        bounds = iter([first_bound, second_bound])
+
+        async def serve(*_args: object, **_kwargs: object) -> object:
+            return next(bounds)
+
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+
+        await server.start()
+        assert server._can_accept_session() is True  # noqa: SLF001
+        await server.stop()
+        assert server._can_accept_session() is False  # noqa: SLF001
+
+        await server.start()
+        assert server._can_accept_session() is True  # noqa: SLF001
+        await server.stop()
+
+        first_bound.close.assert_called_once()
+        first_bound.wait_closed.assert_awaited_once()
+        second_bound.close.assert_called_once()
+        second_bound.wait_closed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_during_start_waits_then_closes_published_server(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        serve_started = asyncio.Event()
+        release_serve = asyncio.Event()
+        bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
+
+        async def serve(*_args: object, **_kwargs: object) -> object:
+            serve_started.set()
+            await release_serve.wait()
+            return bound
+
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        starting = asyncio.create_task(server.start())
+        await serve_started.wait()
+        stopping = asyncio.create_task(server.stop())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+
+        release_serve.set()
+        await asyncio.gather(starting, stopping)
+
+        assert server._started is False  # noqa: SLF001
+        assert server._accepting_sessions is False  # noqa: SLF001
+        assert server._server is None  # noqa: SLF001
+        bound.close.assert_called_once()
+        bound.wait_closed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_rejects_late_session_during_wait_closed(self) -> None:
+        wait_closed_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+        handler_called = asyncio.Event()
+
+        async def wait_closed() -> None:
+            wait_closed_entered.set()
+            await release_wait_closed.wait()
+
+        async def handler(_transport: WebTransportConnectionTransport) -> None:
+            handler_called.set()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            handler,
+        )
+        bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock(side_effect=wait_closed))
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+        server._accepting_sessions = True  # noqa: SLF001
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_closed_entered.wait()
+
+        late_protocol = _FakeQuicProtocol()
+        late_transport = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=late_protocol,  # type: ignore[arg-type]
+            _session_id=0,
+        )
+        assert server._can_accept_session() is False  # noqa: SLF001
+        server._dispatch_session(late_transport)  # noqa: SLF001
+
+        assert late_protocol.close_calls == [(0, "server not accepting sessions")]
+        assert server._handler_tasks == set()  # noqa: SLF001
+        assert handler_called.is_set() is False
+
+        release_wait_closed.set()
+        await stopping
+
+        assert server._started is False  # noqa: SLF001
+        assert server._accepting_sessions is False  # noqa: SLF001
+        assert server._server is None  # noqa: SLF001
+        assert server._handler_tasks == set()  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_server_cleanup_failures_are_best_effort_and_retryable(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            _noop,
+        )
+        bound = SimpleNamespace(
+            close=Mock(side_effect=[RuntimeError("server close failed"), None]),
+            wait_closed=AsyncMock(side_effect=[RuntimeError("server wait failed"), None]),
+        )
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+
+        with pytest.raises(RuntimeError, match="server close failed"):
+            await server.stop()
+
+        bound.close.assert_called_once()
+        bound.wait_closed.assert_awaited_once()
+        assert server._started is False  # noqa: SLF001
+        assert server._server is bound  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
+            await server.start()
+
+        await server.stop()
+
+        assert bound.close.call_count == 2
+        assert bound.wait_closed.await_count == 2
+        assert server._server is None  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_cancelled_stop_blocks_restart_until_server_cleanup_retry(self) -> None:
+        wait_entered = asyncio.Event()
+
+        async def block_wait_closed() -> None:
+            wait_entered.set()
+            await asyncio.Event().wait()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        bound = SimpleNamespace(
+            close=Mock(),
+            wait_closed=AsyncMock(side_effect=block_wait_closed),
+        )
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
+        assert server._started is False  # noqa: SLF001
+        assert server._server is bound  # noqa: SLF001
+        assert isinstance(server._cleanup_error, RuntimeError)  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
+            await server.start()
+
+        bound.wait_closed = AsyncMock()
+        await server.stop()
+        assert server._server is None  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
     @pytest.mark.asyncio
     async def test_stop_safe_when_called_from_within_handler(self) -> None:
         """A handler that triggers ``server.stop()`` mustn't deadlock by
@@ -254,6 +500,8 @@ class TestWebTransportServerWiring:
             await release_handlers.wait()
 
         server = WebTransportServer(cfg, _handler)
+        server._started = True  # noqa: SLF001
+        server._accepting_sessions = True  # noqa: SLF001
 
         def _make_transport() -> tuple[WebTransportConnectionTransport, _FakeQuicProtocol]:
             proto = _FakeQuicProtocol()
@@ -293,6 +541,9 @@ class TestWebTransportServerWiring:
             await transport.wait_closed()
 
         server = WebTransportServer(cfg, _noop)
+        assert server._can_accept_session() is False  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+        server._accepting_sessions = True  # noqa: SLF001
         assert server._can_accept_session() is True  # noqa: SLF001
 
         release_slots = asyncio.Event()

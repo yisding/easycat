@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from easycat.events import WordTimestamp
 
@@ -12,6 +12,11 @@ if TYPE_CHECKING:
     from easycat.events import ErrorStage
 
 logger = logging.getLogger(__name__)
+
+
+def has_usable_credential(value: object) -> TypeGuard[str]:
+    """Return whether ``value`` is a non-blank string credential."""
+    return isinstance(value, str) and bool(value.strip())
 
 
 class ProviderErrorEmitter:

@@ -95,6 +95,69 @@ def test_resample_chunk_same_rate_returns_same():
     assert result is chunk
 
 
+def test_resample_chunk_resamples_stereo_channels_independently(monkeypatch):
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    stereo = AudioFormat(sample_rate=8000, channels=2, sample_width=2)
+    data = struct.pack("<8h", *([10_000, -10_000] * 4))
+
+    result = resample_chunk(AudioChunk(data=data, format=stereo), 16_000)
+
+    samples = struct.unpack(f"<{len(result.data) // 2}h", result.data)
+    assert samples[::2] == (10_000,) * 8
+    assert samples[1::2] == (-10_000,) * 8
+    assert result.format == AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+
+
+def test_resample_chunk_drops_incomplete_multichannel_frame(monkeypatch):
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    stereo = AudioFormat(sample_rate=8000, channels=2, sample_width=2)
+    # One complete stereo frame followed by an orphaned left-channel sample.
+    data = struct.pack("<3h", 100, -100, 999)
+
+    result = resample_chunk(AudioChunk(data=data, format=stereo), 16_000)
+
+    assert struct.unpack("<4h", result.data) == (100, -100, 100, -100)
+    assert len(result.data) % result.format.frame_size == 0
+
+
+def test_resample_chunk_preserves_timestamp_and_routing_metadata(monkeypatch):
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    turn_ref = object()
+    chunk = AudioChunk(data=struct.pack("<2h", 100, 200), format=PCM16_MONO_8K, timestamp=1.5)
+    chunk._easycat_replay_chunk = True
+    chunk._easycat_session_id = "session"
+    chunk._easycat_turn_id = "turn"
+    chunk._easycat_turn_ref = turn_ref
+    chunk._easycat_capture_allowed = False
+
+    result = resample_chunk(chunk, 16_000)
+
+    assert result.timestamp == 1.5
+    assert result._easycat_replay_chunk is True
+    assert result._easycat_session_id == "session"
+    assert result._easycat_turn_id == "turn"
+    assert result._easycat_turn_ref is turn_ref
+    assert result._easycat_capture_allowed is False
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="pcm"),
+        AudioFormat(sample_rate=8000, channels=1, sample_width=2, encoding="mulaw"),
+    ],
+)
+def test_resample_chunk_rejects_non_pcm16_formats(fmt):
+    with pytest.raises(ValueError, match="PCM16"):
+        resample_chunk(AudioChunk(data=b"\x00\x00", format=fmt), 16_000)
+
+
 @pytest.mark.parametrize(
     ("from_rate", "to_rate"),
     [

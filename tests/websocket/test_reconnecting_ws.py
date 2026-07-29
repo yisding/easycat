@@ -75,6 +75,18 @@ class TestReconnectConfig:
             ("jitter_factor", -0.01, "jitter_factor"),
             ("jitter_factor", 1.01, "jitter_factor"),
             ("jitter_factor", True, "jitter_factor"),
+            ("base_delay", float("nan"), "base_delay"),
+            ("base_delay", float("inf"), "base_delay"),
+            ("max_delay", float("nan"), "max_delay"),
+            ("max_delay", float("inf"), "max_delay"),
+            ("backoff_factor", float("nan"), "backoff_factor"),
+            ("backoff_factor", float("inf"), "backoff_factor"),
+            ("jitter_factor", float("nan"), "jitter_factor"),
+            ("jitter_factor", float("inf"), "jitter_factor"),
+            ("base_delay", 10**1000, "base_delay"),
+            ("max_delay", 10**1000, "max_delay"),
+            ("backoff_factor", 10**1000, "backoff_factor"),
+            ("jitter_factor", 10**1000, "jitter_factor"),
         ],
     )
     def test_invalid_retry_policy_rejected(self, field: str, value: object, message: str):
@@ -431,6 +443,43 @@ class TestReconnectingWebSocket:
             await asyncio.sleep(0)
         late_connection.close.assert_awaited_once()
 
+    async def test_late_connection_close_failure_is_retained_for_close_retry(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        late_connection = FakeWSConnection()
+        late_connection.close.side_effect = [RuntimeError("late close failed"), None]
+
+        async def connect_fn(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await release.wait()
+                return late_connection
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=-1),
+            connect_fn=connect_fn,
+        )
+        connect_task = asyncio.create_task(ws.connect())
+        await started.wait()
+        await ws.close()
+        with pytest.raises(ConnectionError, match="closed during reconnect"):
+            await connect_task
+
+        release.set()
+        for _ in range(20):
+            if late_connection.close.await_count:
+                break
+            await asyncio.sleep(0)
+
+        assert late_connection.close.await_count == 1
+        assert ws._pending_connection_closes == [late_connection]
+        await ws.close()
+        assert late_connection.close.await_count == 2
+        assert ws._pending_connection_closes == []
+
     async def test_successful_manual_connect_clears_terminal_reconnect_state(self):
         ws = self._make_ws(max_retries=0)
         ws._mark_reconnect_exhausted(0, "successful reconnect cycle budget")
@@ -784,6 +833,162 @@ class TestReconnectingWebSocket:
         assert events_received[0].provider == "test_provider"
         assert events_received[0].attempt == 1
         assert isinstance(events_received[1], ReconnectSuccess)
+
+    async def test_strict_success_observer_rolls_back_candidate_without_retry(self):
+        event_bus = EventBus(handler_error_policy="raise")
+
+        async def reject_success(event):
+            raise RuntimeError("success observer failed")
+
+        event_bus.subscribe(ReconnectSuccess, reject_success)
+        candidate = FakeWSConnection()
+        connect_fn = AsyncMock(return_value=candidate)
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=3, base_delay=0.001, jitter_factor=0.0),
+            event_bus=event_bus,
+            connect_fn=connect_fn,
+        )
+
+        with pytest.raises(RuntimeError, match="success observer failed"):
+            await ws.connect()
+
+        connect_fn.assert_awaited_once()
+        candidate.close.assert_awaited_once()
+        assert ws._ws is None
+        assert ws._connected.is_set() is False
+        assert ws._ever_connected is False
+
+    async def test_committed_connection_close_failure_is_retained_for_retry(self):
+        candidate = FakeWSConnection()
+        candidate.close.side_effect = [RuntimeError("active close failed"), None]
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            connect_fn=AsyncMock(return_value=candidate),
+        )
+        await ws.connect()
+
+        with pytest.raises(RuntimeError, match="connection cleanup is incomplete"):
+            await ws.close()
+
+        assert ws._pending_connection_closes == [candidate]
+        await ws.close()
+        assert candidate.close.await_count == 2
+        assert ws._pending_connection_closes == []
+
+    async def test_internal_connection_close_cancel_is_retryable_without_cancelling_caller(self):
+        candidate = FakeWSConnection()
+        candidate.close.side_effect = [asyncio.CancelledError(), None]
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            connect_fn=AsyncMock(return_value=candidate),
+        )
+        await ws.connect()
+
+        with pytest.raises(RuntimeError, match="connection cleanup is incomplete"):
+            await ws.close()
+
+        caller = asyncio.current_task()
+        assert caller is not None
+        assert caller.cancelling() == 0
+        assert ws._pending_connection_closes == [candidate]
+
+        await ws.close()
+
+        assert candidate.close.await_count == 2
+        assert ws._pending_connection_closes == []
+
+    async def test_connection_close_caller_cancel_wins_and_retains_retry_ownership(self):
+        candidate = FakeWSConnection()
+        close_started = asyncio.Event()
+        close_calls = 0
+
+        async def close_connection() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                close_started.set()
+                await asyncio.Future()
+
+        candidate.close.side_effect = close_connection
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            connect_fn=AsyncMock(return_value=candidate),
+        )
+        await ws.connect()
+
+        closing = asyncio.create_task(ws.close())
+        await close_started.wait()
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+
+        assert ws._pending_connection_closes == [candidate]
+
+        await ws.close()
+
+        assert candidate.close.await_count == 2
+        assert ws._pending_connection_closes == []
+
+    async def test_failed_candidate_rollback_close_is_retried_by_close(self):
+        event_bus = EventBus(handler_error_policy="raise")
+
+        async def reject_success(event):
+            raise RuntimeError("success observer failed")
+
+        event_bus.subscribe(ReconnectSuccess, reject_success)
+        candidate = FakeWSConnection()
+        candidate.close.side_effect = [RuntimeError("candidate close failed"), None]
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=3),
+            event_bus=event_bus,
+            connect_fn=AsyncMock(return_value=candidate),
+        )
+
+        with pytest.raises(RuntimeError, match="success observer failed"):
+            await ws.connect()
+
+        assert ws._pending_connection_closes == [candidate]
+        await ws.close()
+        assert candidate.close.await_count == 2
+        assert ws._pending_connection_closes == []
+
+    async def test_failed_candidate_rollback_close_is_retried_before_reconnect(self):
+        event_bus = EventBus(handler_error_policy="raise")
+        success_calls = 0
+
+        async def reject_first_success(event):
+            nonlocal success_calls
+            success_calls += 1
+            if success_calls == 1:
+                raise RuntimeError("success observer failed")
+
+        event_bus.subscribe(ReconnectSuccess, reject_first_success)
+        first = FakeWSConnection()
+        first.close.side_effect = [RuntimeError("candidate close failed"), None]
+        second = FakeWSConnection()
+        connect_fn = AsyncMock(side_effect=[first, second])
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=3),
+            event_bus=event_bus,
+            connect_fn=connect_fn,
+        )
+
+        with pytest.raises(RuntimeError, match="success observer failed"):
+            await ws.connect()
+
+        await ws.connect()
+
+        assert first.close.await_count == 2
+        assert ws._pending_connection_closes == []
+        assert ws._ws is second
+        assert connect_fn.await_count == 2
+        await ws.close()
 
     async def test_event_bus_receives_failure_event(self):
         event_bus = EventBus()

@@ -12,6 +12,7 @@ from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
+    AgentFinal,
     Interruption,
     TTSAudio,
     VADStartSpeaking,
@@ -70,6 +71,57 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
     assert warmed == ["stt", "tts", "audio_resampling", "agent", "transport"]
+
+
+@pytest.mark.asyncio
+async def test_start_preserves_warmup_error_and_blocks_restart_after_failed_rollback() -> None:
+    class FailingRollbackTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+            self.disconnect_calls = 0
+            self.warmup_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            self.connected = True
+
+        async def warmup(self) -> None:
+            self.warmup_calls += 1
+            if self.warmup_calls == 1:
+                raise OSError("transport warmup failed")
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            if self.disconnect_calls == 1:
+                raise RuntimeError("rollback disconnect failed")
+            self.connected = False
+            self.disconnected = True
+
+    transport = FailingRollbackTransport()
+    session = Session(_full_config(transport=transport))
+
+    with pytest.raises(OSError, match="transport warmup failed") as exc_info:
+        await session.start()
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "rollback disconnect failed"
+    assert transport.connected is True
+    assert transport.connect_calls == 1
+    assert session._stopping is True
+    assert isinstance(session._lifecycle_cleanup_error, RuntimeError)
+
+    with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+        await session.start()
+    assert transport.connect_calls == 1
+
+    await session.stop(force=True)
+
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._lifecycle_cleanup_error is None
+    assert transport.disconnect_calls == 2
+    assert transport.connected is False
 
 
 @pytest.mark.asyncio
@@ -154,6 +206,56 @@ async def test_force_stop_preempts_hung_graceful_stop() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("owner_kind", ["voice", "text", "preemptive"])
+async def test_force_stop_from_runtime_owned_turn_task_closes_and_cancels_siblings(
+    owner_kind: str,
+) -> None:
+    session = Session(_full_config())
+    sibling_started = asyncio.Event()
+    sibling_cancelled = asyncio.Event()
+    stop_returned = asyncio.Event()
+
+    async def sibling_work() -> None:
+        sibling_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            sibling_cancelled.set()
+            raise
+
+    sibling_task = session._runtime_scope.create_task("sibling_work", sibling_work())
+    await sibling_started.wait()
+
+    async def stop_from_agent_final(_event: AgentFinal) -> None:
+        await session.stop(force=True)
+        stop_returned.set()
+
+    session.event_bus.subscribe(AgentFinal, stop_from_agent_final)
+
+    async def active_turn_work() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        if owner_kind == "voice":
+            session._tts_scheduler.active_turn_task = current
+        elif owner_kind == "text":
+            session._turn_runner._active_text_turn = current
+        else:
+            session._turn_runner._preemptive_task = current
+        await session.event_bus.emit(AgentFinal(text="done"))
+
+    owner_task = session._runtime_scope.create_task("on_turn_ended", active_turn_work())
+    await asyncio.wait_for(owner_task, timeout=1)
+
+    assert stop_returned.is_set()
+    assert session._closed
+    assert not session._stopping
+    assert not owner_task.cancelled()
+    assert sibling_task.cancelled()
+    assert sibling_cancelled.is_set()
+    assert session._runtime_scope.empty
+
+
+@pytest.mark.asyncio
 async def test_session_default_construction():
     session = Session(_full_config())
     assert session.turn_state == TurnState.IDLE
@@ -177,6 +279,99 @@ async def test_session_start_and_stop():
     assert not session.is_running
     assert transport.disconnected
     assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_failed_stop_blocks_restart_until_cleanup_retry() -> None:
+    class FailingOnceDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+            self.disconnect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            self.connected = True
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            if self.disconnect_calls == 1:
+                raise RuntimeError("disconnect failed")
+            self.connected = False
+            self.disconnected = True
+
+    transport = FailingOnceDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await session.stop(force=True)
+
+    assert session._closed is False
+    assert session._stopping is True
+    assert isinstance(session._lifecycle_cleanup_error, RuntimeError)
+    assert transport.connected is True
+
+    with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+        await session.start()
+    assert transport.connect_calls == 1
+
+    await session.stop(force=True)
+
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._lifecycle_cleanup_error is None
+    assert transport.disconnect_calls == 2
+    assert transport.connected is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stop_blocks_restart_until_cleanup_retry() -> None:
+    class BlockingOnceDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+            self.disconnect_calls = 0
+            self.disconnect_started = asyncio.Event()
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            self.connected = True
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            if self.disconnect_calls == 1:
+                self.disconnect_started.set()
+                await asyncio.Event().wait()
+            self.connected = False
+            self.disconnected = True
+
+    transport = BlockingOnceDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+
+    stopping = asyncio.create_task(session.stop(force=True))
+    await transport.disconnect_started.wait()
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    assert session._closed is False
+    assert session._stopping is True
+    assert isinstance(session._lifecycle_cleanup_error, RuntimeError)
+    assert transport.connected is True
+
+    with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+        await session.start()
+    assert transport.connect_calls == 1
+
+    await session.stop(force=True)
+
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._lifecycle_cleanup_error is None
+    assert transport.disconnect_calls == 2
+    assert transport.connected is False
 
 
 @pytest.mark.asyncio
@@ -388,6 +583,46 @@ async def test_session_concurrent_start_calls_share_single_startup():
 
     transport.allow_receive_exit.set()
     await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_in_progress_start_then_closes_started_transport():
+    class BlockingConnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_entered = asyncio.Event()
+            self.allow_connect = asyncio.Event()
+            self.allow_receive_exit = asyncio.Event()
+
+        async def connect(self) -> None:
+            self.connect_entered.set()
+            await self.allow_connect.wait()
+            await super().connect()
+
+        async def disconnect(self) -> None:
+            self.connected = False
+            await super().disconnect()
+
+        async def receive_audio(self):
+            await self.allow_receive_exit.wait()
+            if False:
+                yield _make_chunk()
+
+    transport = BlockingConnectTransport()
+    session = Session(_full_config(transport=transport))
+    starting = asyncio.create_task(session.start())
+    await transport.connect_entered.wait()
+    stopping = asyncio.create_task(session.stop(force=True))
+    await asyncio.sleep(0)
+
+    assert not stopping.done()
+    transport.allow_connect.set()
+    await asyncio.gather(starting, stopping)
+
+    assert session._closed
+    assert not session.is_running
+    assert transport.disconnected
+    assert not transport.connected
 
 
 @pytest.mark.asyncio

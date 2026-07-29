@@ -12,6 +12,7 @@ import binascii
 import hashlib
 import json
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -287,21 +288,91 @@ def _read_inline_artifacts(
         artifacts.add(ref, data)
 
 
-def _validate_journal_metadata(journal_ndjson: bytes) -> None:
-    for line in journal_ndjson.decode("utf-8", errors="replace").splitlines():
+def _iter_journal_records(journal_ndjson: bytes) -> Iterator[dict[str, Any]]:
+    """Yield validated object records from a journal NDJSON payload.
+
+    Bundle journals are replay inputs, so dropping an undecodable or malformed
+    line would silently change the recorded execution.  Fail closed with the
+    line/byte location instead.
+    """
+    try:
+        journal_text = journal_ndjson.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BundleValidationError(
+            f"Bundle journal is not valid UTF-8 at byte {exc.start}",
+            reason_code="INVALID_JOURNAL",
+        ) from exc
+
+    previous_sequence: int | None = None
+    for line_number, line in enumerate(journal_text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+        except Exception as exc:
+            detail = exc.msg if isinstance(exc, json.JSONDecodeError) else str(exc)
+            raise BundleValidationError(
+                f"Bundle journal line {line_number} is not valid JSON: {detail}",
+                reason_code="INVALID_JOURNAL",
+            ) from exc
         if not isinstance(record, dict):
-            continue
+            raise BundleValidationError(
+                f"Bundle journal line {line_number} must be a JSON object",
+                reason_code="INVALID_JOURNAL",
+            )
+        sequence = record.get("sequence")
+        is_degraded_sentinel = (
+            sequence == -1
+            and record.get("kind") == "degraded"
+            and record.get("name") == "journal_degraded"
+        )
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or (sequence < 0 and not is_degraded_sentinel)
+        ):
+            raise BundleValidationError(
+                f"Bundle journal line {line_number} sequence must be a non-negative integer "
+                "or the journal_degraded sentinel",
+                reason_code="INVALID_JOURNAL",
+            )
+        if previous_sequence is not None and sequence <= previous_sequence:
+            raise BundleValidationError(
+                f"Bundle journal line {line_number} sequence {sequence} must be "
+                f"strictly greater than previous sequence {previous_sequence}",
+                reason_code="INVALID_JOURNAL",
+            )
+        previous_sequence = sequence
+        yield record
+
+
+def _validate_journal_metadata(
+    journal_ndjson: bytes,
+    *,
+    artifact_refs: set[str] | None = None,
+) -> None:
+    for record in _iter_journal_records(journal_ndjson):
         for key in ("metadata", "framework_metadata"):
             if key in record and len(json.dumps(record[key])) > 1_000_000:
                 raise BundleValidationError(
                     f"Record metadata exceeds 1MB: {key}",
                     reason_code="METADATA_TOO_LARGE",
+                )
+        for key in ("input_ref", "output_ref"):
+            ref = record.get(key)
+            if ref is None:
+                continue
+            if not isinstance(ref, str) or not _SHA256_REF.fullmatch(ref):
+                raise BundleValidationError(
+                    f"Bundle journal sequence {record['sequence']} {key} must be "
+                    "a SHA-256 artifact ref or null",
+                    reason_code="INVALID_REF",
+                )
+            if artifact_refs is not None and ref not in artifact_refs:
+                raise BundleValidationError(
+                    f"Bundle journal sequence {record['sequence']} {key} references "
+                    f"missing artifact {ref}",
+                    reason_code="MISSING_ARTIFACT",
                 )
 
 
@@ -376,7 +447,10 @@ def _load_bundle(bundle_path: Path) -> LoadedBundle:
         artifacts = _ArtifactAccumulator()
         _read_file_artifacts(archive, artifacts)
         _read_inline_artifacts(raw_manifest, artifacts)
-        _validate_journal_metadata(journal_ndjson)
+        _validate_journal_metadata(
+            journal_ndjson,
+            artifact_refs=set(artifacts.index),
+        )
         replay_entry_points = _parse_replay_entry_points(raw_manifest)
 
     return LoadedBundle(

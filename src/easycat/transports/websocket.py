@@ -308,7 +308,15 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
 
     async def disconnect(self) -> None:
         self._close_browser_event_forwarder()
-        await super().disconnect()
+        try:
+            await super().disconnect()
+        finally:
+            # A concurrent connect may finish and install its forwarder after
+            # the pre-lock close above but before the serialized server
+            # teardown acquires the lifecycle lock. Close again after teardown
+            # so the losing connect cannot leave an event-bus subscription
+            # attached to a disconnected transport.
+            self._close_browser_event_forwarder()
 
     # ── Server helpers ────────────────────────────────────────────
 
@@ -365,6 +373,14 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
         self._receive_task: asyncio.Task[None] | None = None
+        self._connect_task: asyncio.Task[None] | None = None
+        self._disconnect_task: asyncio.Task[None] | None = None
+        self._connection_generation = 0
+        # The constructor-supplied accepted socket supports one lifecycle.
+        # Once connect starts, remote EOF or local teardown is terminal; a
+        # later connect must not report success with no socket.
+        self._socket_consumed = False
+        self._disconnect_cleanup_error: Exception | None = None
         self._init_audio_queue(
             self._config.max_pending_chunks,
             self._config.max_pending_bytes,
@@ -376,11 +392,45 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         return getattr(self._ws, "request", None)
 
     async def connect(self) -> None:
+        current = asyncio.current_task()
+        if current is not None and self._connect_task is current:
+            return
+        connect_task = self._connect_task
+        leader = connect_task is None or connect_task.done()
+        if leader:
+            connect_task = asyncio.create_task(
+                self._connect_transaction(),
+                name="websocket-connection-connect",
+            )
+            self._connect_task = connect_task
+        assert connect_task is not None
+        if leader:
+            await connect_task
+        else:
+            await asyncio.shield(connect_task)
+
+    async def _connect_transaction(self) -> None:
+        """Run one shared ready-handshake attempt for all concurrent callers."""
         if self._connected:
             return
+        if self._disconnect_cleanup_error is not None:
+            raise RuntimeError(
+                "WebSocket connection cleanup is incomplete; call disconnect() "
+                "again before reconnecting"
+            ) from self._disconnect_cleanup_error
         ws = self._ws
+        if self._socket_consumed:
+            if ws is not None:
+                raise RuntimeError(
+                    "WebSocket accepted connection has ended; call disconnect() "
+                    "to finish socket cleanup"
+                )
+            raise RuntimeError("WebSocket accepted connection is already closed")
         if ws is None:
-            return
+            raise RuntimeError("WebSocket accepted connection is already closed")
+        self._socket_consumed = True
+        self._connection_generation += 1
+        generation = self._connection_generation
         self._reset_audio_queue()
         self._connected = True
         self._client_connected.set()
@@ -403,39 +453,137 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             self._enqueue_sentinel()
             self._after_websocket_finished()
             raise
+        if generation != self._connection_generation or not self._connected or self._ws is not ws:
+            raise ConnectionError("WebSocket transport disconnected during connect")
         self._receive_task = asyncio.create_task(self._run_receive_loop(ws))
 
     async def disconnect(self) -> None:
+        current = asyncio.current_task()
+        disconnect_task = self._disconnect_task
+        if current is not None and disconnect_task is current:
+            return
+        if (
+            current is not None
+            and current in self._emit_tasks
+            and disconnect_task is not None
+            and not disconnect_task.done()
+        ):
+            # The shared transaction is draining this tracked emit task. An
+            # Error subscriber that re-enters disconnect must not join the
+            # transaction which is itself waiting for that subscriber.
+            return
+        leader = disconnect_task is None or disconnect_task.done()
+        if leader:
+            emit_initiator = current if current in self._emit_tasks else None
+            disconnect_task = asyncio.create_task(
+                self._disconnect_transaction(emit_initiator=emit_initiator),
+                name="websocket-connection-disconnect",
+            )
+            self._disconnect_task = disconnect_task
+        assert disconnect_task is not None
+        if leader:
+            # Preserve the existing contract: cancelling the initiating caller
+            # cancels cleanup and publishes retry ownership.
+            await disconnect_task
+        else:
+            # A follower may abandon its wait without cancelling the cleanup
+            # transaction owned by the initiating caller.
+            await asyncio.shield(disconnect_task)
+
+    async def _disconnect_transaction(
+        self,
+        *,
+        emit_initiator: asyncio.Task[Any] | None,
+    ) -> None:
+        """Run one shared teardown attempt for all concurrent callers."""
         receive_task = self._receive_task
         if (
-            not self._connected
+            self._disconnect_cleanup_error is None
+            and not self._connected
             and self._ws is None
             and (receive_task is None or receive_task.done())
             and self._browser_event_forwarder is None
             and not self._emit_tasks
         ):
             return
+        self._connection_generation += 1
         self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
         ws = self._ws
         self._receive_task = None
-        if receive_task is not None and receive_task is not asyncio.current_task():
-            if not receive_task.done():
-                receive_task.cancel()
-            try:
-                await receive_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.debug("WebSocket receive loop failed during disconnect", exc_info=True)
+        cleanup_error: Exception | None = None
+        try:
+            await self._reap_receive_task_for_disconnect(receive_task)
+            if ws is not None:
+                try:
+                    await ws.close()
+                except Exception as exc:
+                    logger.exception("Error closing WebSocket connection")
+                    cleanup_error = exc
+                    self._disconnect_cleanup_error = exc
+                    # The cancelled receive loop's ``finally`` may already have
+                    # cleared this reference. Restore cleanup ownership while
+                    # keeping the transport publicly disconnected so a later
+                    # ``disconnect`` can retry the failed socket close.
+                    self._ws = ws
+                    self._audio_format = self._config.audio_format
+                    self._outbound_rate = None
+                    self._enqueue_sentinel()
+                    self._after_websocket_finished()
+                else:
+                    self._finish_websocket(ws)
+            if emit_initiator is None:
+                await self._drain_emit_tasks()
+            else:
+                # The initiating Error subscriber is awaiting this child
+                # transaction. Exclude that exact task from the drain snapshot
+                # so the transaction cannot wait on its own caller.
+                emit_tasks = [task for task in self._emit_tasks if task is not emit_initiator]
+                if emit_tasks:
+                    await asyncio.gather(*emit_tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            self._publish_interrupted_disconnect(ws)
+            raise
+        self._disconnect_cleanup_error = cleanup_error
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    async def _reap_receive_task_for_disconnect(
+        self,
+        receive_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Cancel the receive loop without consuming caller cancellation."""
+        if receive_task is None or receive_task is asyncio.current_task():
+            return
+        current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
+        if not receive_task.done():
+            receive_task.cancel()
+        try:
+            await receive_task
+        except asyncio.CancelledError:
+            if current is not None and current.cancelling() > cancellation_count:
+                raise
+        except Exception:
+            logger.debug(
+                "WebSocket receive loop failed during disconnect",
+                exc_info=True,
+            )
+        if current is not None and current.cancelling() > cancellation_count:
+            raise asyncio.CancelledError
+
+    def _publish_interrupted_disconnect(self, ws: ServerConnection | None) -> None:
+        """Retain the accepted socket so a later disconnect can retry cleanup."""
         if ws is not None:
-            try:
-                await ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket connection", exc_info=True)
-            self._finish_websocket(ws)
-        await self._drain_emit_tasks()
+            self._ws = ws
+        self._audio_format = self._config.audio_format
+        self._outbound_rate = None
+        self._enqueue_sentinel()
+        self._after_websocket_finished()
+        self._disconnect_cleanup_error = RuntimeError(
+            "WebSocket connection disconnect was interrupted by cancellation"
+        )
 
     def _after_websocket_finished(self) -> None:
         self._connected = False

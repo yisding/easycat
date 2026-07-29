@@ -78,6 +78,21 @@ def test_doctor_passes_with_one_key(
     assert "openai reachable" in result.stderr
 
 
+def test_doctor_treats_whitespace_credentials_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    empty_env: None,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", " \t ")
+
+    scoped = doctor_module.check_env_vars("openai")
+    assert [(check.name, check.status) for check in scoped] == [("env_openai", "fail")]
+
+    unscoped = {check.name: check for check in doctor_module.check_env_vars()}
+    assert unscoped["env_openai"].status == "skip"
+    assert unscoped["env_any"].status == "fail"
+    assert doctor_module.check_provider_reachability("openai") == []
+
+
 def test_doctor_passes_with_cartesia_only(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,

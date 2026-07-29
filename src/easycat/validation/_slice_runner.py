@@ -30,6 +30,11 @@ from easycat.validation._runner_support import (
     validation_exit_code_from_pytest,
     validation_test_paths,
 )
+from easycat.validation.redaction import (
+    ArtifactRedactionError,
+    TextArtifactFormat,
+    redact_runtime_secrets_in_file,
+)
 from easycat.validation.report import (
     ArtifactRef,
     ValidationCheck,
@@ -114,27 +119,64 @@ class _SlicePaths:
         if spec.captures_webrtc_stats:
             self.webrtc_stats.parent.mkdir(parents=True, exist_ok=True)
 
-    def write_redacted(self, result: CommandResult, secrets: Sequence[str]) -> None:
-        """Persist captured streams and scrub a produced JUnit artifact."""
+    def write_redacted(
+        self,
+        result: CommandResult,
+        secrets: Sequence[str],
+    ) -> dict[str, ValidationFailure]:
+        """Persist streams and scrub every validation-owned text artifact."""
         self.stdout.write_text(redact_runtime_secrets(result.stdout, secrets))
         self.stderr.write_text(redact_runtime_secrets(result.stderr, secrets))
-        if self.junit.exists():
-            self.junit.write_text(redact_runtime_secrets(self.junit.read_text(), secrets))
+        failures: dict[str, ValidationFailure] = {}
+        artifact_specs: tuple[tuple[str, Path, TextArtifactFormat], ...] = (
+            ("junit", self.junit, "text"),
+            ("reliability", self.reliability_samples, "json"),
+            ("webrtc_stats", self.webrtc_stats, "jsonl"),
+        )
+        for name, path, artifact_format in artifact_specs:
+            try:
+                redact_runtime_secrets_in_file(
+                    path,
+                    secrets,
+                    artifact_format=artifact_format,
+                    raise_on_error=True,
+                )
+            except (ArtifactRedactionError, OSError) as exc:
+                safe_path = redact_runtime_secrets(str(path), secrets)
+                failures[name] = ValidationFailure(
+                    name=f"artifact_redaction.{name}",
+                    message=redact_runtime_secrets(
+                        f"could not safely redact validation artifact {path}: {exc}",
+                        secrets,
+                    ),
+                    failure_class="artifact_redaction_error",
+                    details={"path": safe_path},
+                )
+        return failures
 
-    def check_artifacts(self, spec: _SliceSpec) -> dict[str, ArtifactRef]:
+    def check_artifacts(
+        self,
+        spec: _SliceSpec,
+        *,
+        excluded: frozenset[str] = frozenset(),
+    ) -> dict[str, ArtifactRef]:
         """Project artifacts that were actually produced by the slice."""
         artifacts = {
             "stdout": ArtifactRef(kind="stdout", path=str(self.stdout)),
             "stderr": ArtifactRef(kind="stderr", path=str(self.stderr)),
         }
-        if self.junit.exists():
+        if "junit" not in excluded and self.junit.exists():
             artifacts["junit"] = ArtifactRef(kind="junit", path=str(self.junit))
-        if self.reliability_samples.exists():
+        if "reliability" not in excluded and self.reliability_samples.exists():
             artifacts["reliability"] = ArtifactRef(
                 kind="reliability",
                 path=str(self.reliability_samples),
             )
-        if spec.captures_webrtc_stats and self.webrtc_stats.exists():
+        if (
+            "webrtc_stats" not in excluded
+            and spec.captures_webrtc_stats
+            and self.webrtc_stats.exists()
+        ):
             artifacts["webrtc_stats"] = ArtifactRef(
                 kind="webrtc_stats",
                 path=str(self.webrtc_stats),
@@ -152,6 +194,7 @@ class _SliceOutcome:
     reliability: Mapping[str, object] | None
     reliability_failure: ValidationFailure | None
     reliability_budget_failure: ValidationFailure | None
+    artifact_redaction_failures: tuple[ValidationFailure, ...]
 
 
 def run_validation_slice(
@@ -184,9 +227,19 @@ def run_validation_slice(
         command,
         env=command_env,
     )
-    paths.write_redacted(result, secrets)
-    outcome = _evaluate_result(spec.name, result, paths.reliability_samples, finished_at, secrets)
-    check_artifacts = paths.check_artifacts(spec)
+    artifact_redaction_failures = paths.write_redacted(result, secrets)
+    outcome = _evaluate_result(
+        spec.name,
+        result,
+        (None if "reliability" in artifact_redaction_failures else paths.reliability_samples),
+        finished_at,
+        secrets,
+        tuple(artifact_redaction_failures.values()),
+    )
+    check_artifacts = paths.check_artifacts(
+        spec,
+        excluded=frozenset(artifact_redaction_failures),
+    )
     artifacts = ctx.artifacts_with(check_artifacts)
     return _finish_slice(
         slice_name=spec.name,
@@ -245,17 +298,25 @@ def _slice_environment(spec: _SliceSpec, paths: _SlicePaths) -> dict[str, str]:
 def _evaluate_result(
     slice_name: str,
     result: CommandResult,
-    reliability_path: Path,
+    reliability_path: Path | None,
     finished_at: datetime,
     secrets: Sequence[str],
+    artifact_redaction_failures: tuple[ValidationFailure, ...],
 ) -> _SliceOutcome:
-    samples, reliability_failure = load_reliability(reliability_path)
+    if reliability_path is None:
+        samples, reliability_failure = None, None
+    else:
+        samples, reliability_failure = load_reliability(reliability_path)
     reliability, budget_failure = _load_reliability(
         samples,
         finished_at,
     )
     exit_code = validation_exit_code_from_pytest(result.exit_code)
-    if reliability_failure is not None or budget_failure is not None:
+    if (
+        reliability_failure is not None
+        or budget_failure is not None
+        or artifact_redaction_failures
+    ):
         exit_code = 1
     return _SliceOutcome(
         exit_code=exit_code,
@@ -267,11 +328,13 @@ def _evaluate_result(
                 reliability_failure,
                 budget_failure,
                 secrets,
+                artifact_redaction_failures,
             )
         ),
         reliability=reliability,
         reliability_failure=reliability_failure,
         reliability_budget_failure=budget_failure,
+        artifact_redaction_failures=artifact_redaction_failures,
     )
 
 
@@ -293,6 +356,7 @@ def _slice_failures(
     reliability_failure: ValidationFailure | None,
     budget_failure: ValidationFailure | None,
     secrets: Sequence[str],
+    artifact_redaction_failures: Sequence[ValidationFailure],
 ) -> list[ValidationFailure]:
     failures: list[ValidationFailure] = []
     if result.exit_code != 0:
@@ -309,6 +373,7 @@ def _slice_failures(
         failures.append(reliability_failure)
     if budget_failure is not None:
         failures.append(budget_failure)
+    failures.extend(artifact_redaction_failures)
     return failures
 
 
@@ -341,6 +406,7 @@ def _finish_slice(
             **(
                 {"reliability_budget": 1} if outcome.reliability_budget_failure is not None else {}
             ),
+            **({"artifact_redaction": 1} if outcome.artifact_redaction_failures else {}),
         },
         checks=[
             ValidationCheck(
@@ -349,7 +415,28 @@ def _finish_slice(
                 duration_s=duration_s,
                 command=command,
                 artifacts=check_artifacts,
-            )
+            ),
+            *(
+                [
+                    ValidationCheck(
+                        name="validation.artifact_redaction",
+                        status="fail",
+                        duration_s=0.0,
+                        details={
+                            "failures": [
+                                {
+                                    "name": failure.name,
+                                    "message": failure.message,
+                                    "path": failure.details.get("path", ""),
+                                }
+                                for failure in outcome.artifact_redaction_failures
+                            ]
+                        },
+                    )
+                ]
+                if outcome.artifact_redaction_failures
+                else []
+            ),
         ],
         failures=outcome.failures,
         reliability=outcome.reliability,

@@ -616,7 +616,9 @@ class TestBotToBotDetection:
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
         manager._owned_call_sids = {"CA1"}
+        manager._pending_cleanup_call_sids = set()
         manager._started = False
+        manager._lifecycle_epoch = 0
         call_resource = MagicMock()
         manager._client.calls.return_value = call_resource
         sm = OutboundCallStateMachine(

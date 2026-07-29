@@ -8,7 +8,6 @@ import pytest
 from typer.testing import CliRunner
 
 import easycat.cli.serve as serve_mod
-import easycat.config as config_mod
 import easycat.integrations.agents.responses_api as responses_mod
 from easycat.cli.serve import _playground_url, _websocket_endpoint
 
@@ -311,8 +310,6 @@ def test_serve_cli_fails_fast_without_openai_key(
 def test_playground_factory_wires_browser_transport_and_playground_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-
     class StubRemoteResponsesAPIBridge:
         def __init__(
             self,
@@ -338,15 +335,8 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
                 body["reasoning"] = {"effort": self.reasoning_effort}
             return body
 
-    def fake_browser(**kwargs: Any) -> Any:
-        captured.setdefault("browser_calls", []).append(kwargs)
-        from types import SimpleNamespace
-
-        return SimpleNamespace(kind="browser-config", kwargs=kwargs)
-
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(responses_mod, "RemoteResponsesAPIBridge", StubRemoteResponsesAPIBridge)
-    monkeypatch.setattr(config_mod.EasyConfig, "browser", staticmethod(fake_browser))
 
     factory = serve_mod._playground_config_factory(
         agent_model="gpt-test", instructions="Speak plainly."
@@ -359,11 +349,10 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
 
     # The factory is invoked once per connection and yields a fresh config.
     assert config_a is not config_b
-    assert config_a.kind == "browser-config"
-    assert captured["browser_calls"][0]["transport"] is transport_a
-    assert captured["browser_calls"][1]["transport"] is transport_b
+    assert config_a.transport is transport_a
+    assert config_b.transport is transport_b
 
-    agent = captured["browser_calls"][0]["agent"]
+    agent = config_a.agent
     assert isinstance(agent, StubRemoteResponsesAPIBridge)
     assert agent.base_url == "https://api.openai.com"
     assert agent.model == "gpt-test"
@@ -386,11 +375,48 @@ def test_playground_factory_wires_browser_transport_and_playground_agent(
         instructions="Speak plainly.",
     )
     default_config = default_factory(object())
-    default_agent = default_config.kwargs["agent"]
+    default_agent = default_config.agent
     assert default_agent.reasoning_effort == "none"
     assert default_agent._build_request_body(SimpleNamespace(text="hello"))["reasoning"] == {
         "effort": "none"
     }
+
+
+@pytest.mark.parametrize("transport_aec_default", [False, True])
+def test_playground_factory_preserves_transport_echo_cancellation_default(
+    monkeypatch: pytest.MonkeyPatch,
+    transport_aec_default: bool,
+) -> None:
+    class StubRemoteResponsesAPIBridge:
+        def __init__(
+            self,
+            base_url: str,
+            model: str,
+            *,
+            api_key: str | None = None,
+            reasoning_effort: str | None = None,
+        ) -> None:
+            self.base_url = base_url
+            self.model = model
+            self.api_key = api_key
+            self.reasoning_effort = reasoning_effort
+
+        def _build_request_body(self, turn_input: Any) -> dict[str, Any]:
+            return {"input": turn_input.text}
+
+    class StubTransport:
+        default_echo_cancellation_enabled = transport_aec_default
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(responses_mod, "RemoteResponsesAPIBridge", StubRemoteResponsesAPIBridge)
+
+    config = serve_mod._playground_config_factory(
+        agent_model="gpt-test",
+        instructions="Speak plainly.",
+    )(StubTransport())
+
+    assert config.enable_echo_cancellation is None
+    assert config.echo_cancellation.enabled is transport_aec_default
 
 
 def test_playground_url_shapes() -> None:

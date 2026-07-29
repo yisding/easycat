@@ -253,10 +253,23 @@ class RuntimeScope:
         return not self.tasks()
 
     def cancel(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
-        """Cancel pending tasks and return the tasks that were targeted."""
+        """Cancel pending tasks and return the tasks that were targeted.
+
+        When the caller itself belongs to this scope, detach it without
+        cancelling it.  Runtime-owned event callbacks may legitimately tear
+        down their owner; self-cancellation would otherwise interrupt that
+        teardown at its next suspension point.  Sibling tasks are still
+        cancelled normally.
+        """
         tasks = self.tasks(name)
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
         for task in tasks:
-            if not task.done():
+            if task is current:
+                self._discard_task(task)
+            elif not task.done():
                 task.cancel()
         return tasks
 

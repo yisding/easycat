@@ -17,6 +17,7 @@ import pytest
 
 from easycat.debug.bundle import (
     FORMAT_VERSION,
+    BundleValidationError,
     CommittableCheckpoint,
     RunBundle,
 )
@@ -481,17 +482,17 @@ class TestReplayRunner:
         # committable validation, so the walk simply slices [3, 5].
         assert [f.sequence for f in result.frames] == [3, 4, 5]
 
-    def test_skips_records_with_malformed_sequences(self, tmp_path):
+    def test_rejects_records_with_malformed_sequences_before_replay(self, tmp_path):
         records = [
             {"sequence": "2", "kind": "event", "name": "bad-string"},
             {"sequence": True, "kind": "event", "name": "bad-bool"},
             {"sequence": 3, "kind": "event", "name": "ok"},
         ]
-        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
 
-        result = bundle.replay(_spec(from_sequence=1, to_sequence=4))
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(_write_bundle(tmp_path, records=records))
 
-        assert [f.sequence for f in result.frames] == [3]
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
 
     def test_normalizes_unhashable_turn_id_before_stage_grouping(self, tmp_path):
         records = [
@@ -664,7 +665,7 @@ class TestToolPolicyEnforcement:
         assert "get_weather" in str(exc_info.value)
         assert "c1" in str(exc_info.value)
 
-    def test_deny_blocks_tool_record_with_malformed_sequence(self, tmp_path):
+    def test_malformed_tool_record_is_rejected_before_policy_evaluation(self, tmp_path):
         records = [
             {
                 "sequence": "2",
@@ -677,12 +678,10 @@ class TestToolPolicyEnforcement:
                 },
             },
         ]
-        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(_write_bundle(tmp_path, records=records))
 
-        with pytest.raises(ReplaySideEffectBlocked) as exc_info:
-            bundle.replay(_spec(tool_policy=ToolReplayPolicy.DENY))
-        assert "get_weather" in str(exc_info.value)
-        assert "2" in str(exc_info.value)
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
 
     def test_stub_records_substitution(self, tmp_path):
         bundle = self._bundle_with_tool(tmp_path)
@@ -721,7 +720,11 @@ class TestToolPolicyEnforcement:
         assert any("result is side-effecting" in rec.message for rec in caplog.records)
 
     @pytest.mark.parametrize("sequence", [None, "2", True])
-    def test_allow_does_not_execute_tool_with_malformed_sequence(self, tmp_path, sequence):
+    def test_allow_rejects_tool_with_malformed_sequence_before_execution(
+        self,
+        tmp_path,
+        sequence,
+    ):
         records = [
             {
                 "sequence": sequence,
@@ -754,20 +757,13 @@ class TestToolPolicyEnforcement:
                 },
             },
         ]
-        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
         executed_records = []
 
-        result = bundle.replay(
-            _spec(
-                from_sequence=2,
-                to_sequence=4,
-                tool_policy=ToolReplayPolicy.ALLOW,
-            ),
-            tool_executor=executed_records.append,
-        )
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(_write_bundle(tmp_path, records=records))
 
-        assert [record["data"]["tool_name"] for record in executed_records] == ["in_range"]
-        assert result.executed_tool_calls == ["in_range(c2)"]
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+        assert executed_records == []
 
 
 # ── Cassette behaviour (stand-alone, not via runner) ─────────────

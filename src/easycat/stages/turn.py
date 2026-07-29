@@ -92,7 +92,6 @@ class TurnStage:
                 time.perf_counter() - started,
                 {"easycat.stage": self.name, "easycat.result": result_attr},
             )
-        state_after = self.snapshot_state()
         complete_extra: dict[str, Any] = {}
         if isinstance(result, dict):
             source: dict[str, Any] = dict(result)
@@ -105,6 +104,7 @@ class TurnStage:
                 complete_extra[key] = source[key]
         if "prediction" in source:
             self._last_decision = source["prediction"]
+        state_after = self.snapshot_state()
         complete_extra["elapsed_ms"] = (time.perf_counter() - started) * 1000
         journal_append_event(
             ctx,

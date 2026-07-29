@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import struct
 from collections.abc import AsyncIterator
 
 import pytest
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -775,6 +776,34 @@ class TestStageExecuteRecording:
         assert "stage_start" in names
         assert "stage_complete" in names
 
+    @pytest.mark.parametrize("journal_detail", ["off", "full"])
+    async def test_tts_stage_early_close_closes_provider_stream(self, journal_detail):
+        class _ClosableStreamingTTS:
+            def __init__(self):
+                self.closed = False
+
+            async def synthesize(self, payload):
+                _ = payload
+                try:
+                    yield type("_Event", (), {"audio": None})()
+                    yield type("_Event", (), {"audio": None})()
+                finally:
+                    self.closed = True
+
+        provider = _ClosableStreamingTTS()
+        journal = InMemoryRingBuffer(capacity=100) if journal_detail == "full" else None
+        stage = TTSStage(provider, journal=journal)
+        stream = await stage.execute(
+            "hello",
+            _make_ctx(journal=journal, journal_detail=journal_detail),
+            _make_turn(),
+        )
+
+        await anext(stream)
+        await stream.aclose()
+
+        assert provider.closed is True
+
     async def test_stage_error_recording(self):
         class _FailingAgent:
             async def run(self, text):
@@ -1075,6 +1104,82 @@ class TestStageExecuteRecording:
 
 
 class TestReplayDecision:
+    @pytest.mark.parametrize(
+        "audio_format",
+        [
+            AudioFormat(sample_rate=8_000, channels=2, sample_width=1),
+            AudioFormat(
+                sample_rate=8_000,
+                channels=2,
+                sample_width=2,
+                encoding="mulaw",
+            ),
+        ],
+    )
+    async def test_vad_stage_rejects_non_pcm16_before_capture_or_downmix(
+        self,
+        audio_format: AudioFormat,
+    ):
+        class _RecordingVAD:
+            def __init__(self):
+                self.called = False
+
+            async def process(self, chunk):
+                self.called = True
+                if False:
+                    yield None
+
+        provider = _RecordingVAD()
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        stage = VADStage(provider, journal=journal)
+        chunk = AudioChunk(data=b"\x10\xf0\x20\xe0", format=audio_format)
+
+        with pytest.raises(ValueError, match="VAD requires PCM16 audio"):
+            await stage.execute(
+                chunk,
+                _make_ctx(journal=journal, artifact_store=artifacts),
+                _make_turn(),
+            )
+
+        assert provider.called is False
+        assert journal.read() == []
+        assert artifacts._store == {}
+
+    async def test_vad_stage_artifact_metadata_matches_pre_downmix_geometry(self):
+        class _GeometryVAD:
+            def __init__(self):
+                self.inputs = []
+
+            async def process(self, chunk):
+                self.inputs.append(chunk)
+                return
+                yield  # pragma: no cover
+
+        provider = _GeometryVAD()
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
+        stage = VADStage(provider, journal=journal)
+        stereo = AudioChunk(
+            data=struct.pack("<hhhh", 1200, -1200, -900, 900),
+            format=AudioFormat(sample_rate=48_000, channels=2, sample_width=2),
+        )
+
+        await stage.execute(
+            stereo,
+            _make_ctx(journal=journal, artifact_store=artifacts),
+            _make_turn(),
+        )
+
+        start = next(record for record in journal.read() if record.name == "stage_start")
+        assert start.input_ref is not None
+        assert artifacts.get(start.input_ref) == stereo.data
+        assert start.data["sample_rate"] == 48_000
+        assert start.data["channels"] == 2
+        assert start.data["sample_width"] == 2
+        assert provider.inputs[0].format.channels == 1
+        assert provider.inputs[0].data == struct.pack("<hh", 0, 0)
+
     async def test_vad_stage_serializes_event_fields(self):
         """``stage_complete`` records reconstructable event descriptors
         (type + dataclass fields), not bare class-name strings."""
@@ -1136,6 +1241,19 @@ class TestReplayDecision:
         stage = TurnStage(_StubSmartTurn())
         await stage.execute([b"\x00\x00"], ctx, turn)
         assert stage.replay_decision(stage.snapshot_state()) == 1
+
+    async def test_turn_stage_journals_current_prediction_in_state_after(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = TurnStage(_StubSmartTurn(), journal=journal)
+
+        await stage.execute([b"\x00\x00"], ctx, turn)
+
+        complete = next(r for r in journal.read() if r.name == "stage_complete")
+        state_after = complete.data.get("state_after")
+        assert isinstance(state_after, str)
+        assert "'decision': 1" in state_after
 
     async def test_turn_stage_records_dataclass_result(self):
         """``detect`` may return a dataclass; ``stage_complete`` still records

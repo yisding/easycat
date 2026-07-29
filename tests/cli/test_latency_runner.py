@@ -157,16 +157,111 @@ def test_latency_runner_redacts_exact_runtime_secret_values(
     serialized_report = result.report_path.read_text()
     serialized_latency = (result.run_dir / "latency" / "smoke.json").read_text()
     serialized_latest_latency = (tmp_path / "latency" / "smoke-latest.json").read_text()
+    serialized_source_samples = (result.run_dir / "latency" / "samples.json").read_text()
 
     assert result.exit_code == 1
     assert secret not in serialized_report
     assert secret not in serialized_latency
     assert secret not in serialized_latest_latency
+    assert secret not in serialized_source_samples
+    json.loads(serialized_source_samples)
     assert secret not in (result.run_dir / "stdout.log").read_text()
     assert secret not in (result.run_dir / "stderr.log").read_text()
     assert secret not in (result.run_dir / "junit.xml").read_text()
     assert "[REDACTED_SECRET]" in serialized_report
     assert "[REDACTED_SECRET]" in serialized_latency
+
+
+def test_latency_runner_does_not_ingest_samples_when_redaction_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "plain-runtime-token-value"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    original_write_text = Path.write_text
+    samples_path: Path | None = None
+
+    def guarded_write_text(path: Path, *args, **kwargs):
+        if path == samples_path:
+            raise PermissionError("simulated sample redaction write failure")
+        return original_write_text(path, *args, **kwargs)
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        nonlocal samples_path
+        samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
+        sample = LatencySample(
+            sample_id="unsafe-sample",
+            condition_id="baseline",
+            warmup=False,
+            timestamp_source="event_monotonic",
+            stages=LatencyStageDurations(total_ms=750.0),
+            debug={"credential_echo": secret},
+        )
+        original_write_text(samples_path, json.dumps([sample.to_dict()]))
+        monkeypatch.setattr(Path, "write_text", guarded_write_text)
+        return CommandResult(exit_code=0)
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["artifact_redaction"] == 1
+    assert report["latency"]["samples"] == []
+    assert any(failure["name"] == "artifact_redaction.samples" for failure in report["failures"])
+    assert secret not in result.report_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            '[{"credential_echo":"plain-runtime-token-value","too_large":' + "1" * 5000 + "}]",
+            id="oversized-json-integer",
+        ),
+        pytest.param(
+            '[{"credential_echo":"plain-runtime-token-value","nested":'
+            + "[" * 2000
+            + "0"
+            + "]" * 2000
+            + "}]",
+            id="recursive-json",
+        ),
+    ],
+)
+def test_latency_runner_fails_closed_when_structured_redaction_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+) -> None:
+    secret = "plain-runtime-token-value"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(payload)
+        return CommandResult(exit_code=0)
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["artifact_redaction"] == 1
+    assert report["latency"]["samples"] == []
+    assert any(
+        failure["name"] == "artifact_redaction.samples"
+        and failure["failure_class"] == "artifact_redaction_error"
+        for failure in report["failures"]
+    )
+    assert secret not in result.report_path.read_text()
 
 
 def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Path) -> None:

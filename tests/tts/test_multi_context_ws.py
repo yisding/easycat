@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -91,6 +92,17 @@ def _make_adapter(ws, **overrides) -> MultiContextAdapter:
     )
     defaults.update(overrides)
     return MultiContextAdapter(**defaults)
+
+
+@pytest.mark.parametrize("maxsize", [0, -1, True, 1.5])
+def test_adapter_rejects_unbounded_or_invalid_context_queue(maxsize: object) -> None:
+    with pytest.raises(ValueError, match="context_queue_maxsize"):
+        _make_adapter(FakeMultiContextWS(), context_queue_maxsize=maxsize)
+
+
+def test_adapter_accepts_minimum_bounded_context_queue() -> None:
+    adapter = _make_adapter(FakeMultiContextWS(), context_queue_maxsize=1)
+    assert adapter.context_queue_maxsize == 1
 
 
 class TestMultiContextWSManager:
@@ -423,6 +435,298 @@ class TestMultiContextWSManager:
         assert ws.closed
         assert reader.done()
         # Idempotent.
+        await mgr.aclose()
+
+    async def test_aclose_retains_fail_once_socket_and_retries_exact_owner(self):
+        ws = FakeMultiContextWS()
+        close_error = RuntimeError("socket close failed")
+        ws.close = AsyncMock(side_effect=[close_error, None])  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        reader = mgr._reader_task
+
+        with pytest.raises(RuntimeError, match="socket close failed"):
+            await mgr.aclose()
+
+        assert mgr._closed is True
+        assert mgr._ws is None
+        assert mgr._pending_socket_close is ws
+        assert mgr._socket_close_error is close_error
+        assert reader is not None and reader.done()
+        assert ctx.done.is_set()
+        assert mgr._contexts == {}
+
+        await mgr.aclose()
+        assert mgr._pending_socket_close is None
+        assert mgr._socket_close_error is None
+        assert ws.close.await_count == 2
+
+        # Successful close remains idempotent.
+        await mgr.aclose()
+        assert ws.close.await_count == 2
+
+    async def test_concurrent_aclose_callers_share_one_close_failure_then_retry(self):
+        ws = FakeMultiContextWS()
+        close_entered = asyncio.Event()
+        release_close = asyncio.Event()
+        close_error = RuntimeError("socket close failed")
+
+        async def fail_blocked_close() -> None:
+            close_entered.set()
+            await release_close.wait()
+            raise close_error
+
+        ws.close = AsyncMock(side_effect=fail_blocked_close)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        await mgr.connect()
+
+        leader = asyncio.create_task(mgr.aclose())
+        await close_entered.wait()
+        follower = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+
+        assert not leader.done()
+        assert not follower.done()
+        assert ws.close.await_count == 1
+
+        release_close.set()
+        outcomes = await asyncio.gather(leader, follower, return_exceptions=True)
+
+        assert outcomes == [close_error, close_error]
+        assert mgr._pending_socket_close is ws
+        assert mgr._socket_close_error is close_error
+        assert ws.close.await_count == 1
+
+        # A later call starts a new transaction and retries this exact owner.
+        ws.close.side_effect = None
+        await mgr.aclose()
+        assert mgr._pending_socket_close is None
+        assert mgr._socket_close_error is None
+        assert ws.close.await_count == 2
+
+    async def test_aclose_converts_internal_child_cancellation_and_retries_owner(self):
+        ws = FakeMultiContextWS()
+        close_error = asyncio.CancelledError("socket close cancelled internally")
+        ws.close = AsyncMock(side_effect=[close_error, None])  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        await mgr.connect()
+        caller = asyncio.current_task()
+
+        assert caller is not None
+        assert caller.cancelling() == 0
+        with pytest.raises(RuntimeError, match="cleanup was cancelled internally") as raised:
+            await mgr.aclose()
+
+        assert caller.cancelling() == 0
+        assert raised.value.__cause__ is close_error
+        assert mgr._pending_socket_close is ws
+        assert mgr._socket_close_error is close_error
+        assert ws.close.await_count == 1
+
+        await mgr.aclose()
+        assert mgr._pending_socket_close is None
+        assert mgr._socket_close_error is None
+        assert ws.close.await_count == 2
+
+    async def test_cancelled_aclose_waiter_does_not_cancel_shared_close(self):
+        ws = FakeMultiContextWS()
+        close_entered = asyncio.Event()
+        release_close = asyncio.Event()
+
+        async def blocked_close() -> None:
+            close_entered.set()
+            await release_close.wait()
+            ws.closed = True
+
+        ws.close = AsyncMock(side_effect=blocked_close)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        await mgr.connect()
+
+        leader = asyncio.create_task(mgr.aclose())
+        await close_entered.wait()
+        follower = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+        follower.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await follower
+        assert follower.cancelling() == 1
+        assert not leader.done()
+        assert mgr._close_task is not None
+        assert not mgr._close_task.done()
+
+        release_close.set()
+        await leader
+        assert ws.closed
+        assert ws.close.await_count == 1
+
+    async def test_cancel_fallback_and_aclose_do_not_double_close_socket(self):
+        ws = FakeMultiContextWS(fail_send_at={1})
+        close_entered = asyncio.Event()
+        release_close = asyncio.Event()
+
+        async def blocked_close() -> None:
+            close_entered.set()
+            await release_close.wait()
+            ws.closed = True
+
+        ws.close = AsyncMock(side_effect=blocked_close)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+
+        cancelling = asyncio.create_task(mgr.cancel_context(ctx))
+        await close_entered.wait()
+        closing = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+
+        assert mgr._closed is True
+        assert not cancelling.done()
+        assert not closing.done()
+
+        release_close.set()
+        await asyncio.gather(cancelling, closing)
+
+        assert ws.closed
+        assert ws.close.await_count == 1
+        assert mgr._closing is True
+        assert mgr._ws is None
+
+    async def test_aclose_is_reentrant_from_owned_socket_close(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        await mgr.connect()
+
+        async def reentrant_close() -> None:
+            await mgr.aclose()
+            ws.closed = True
+
+        ws.close = AsyncMock(side_effect=reentrant_close)  # type: ignore[method-assign]
+
+        await asyncio.wait_for(mgr.aclose(), timeout=1)
+
+        assert ws.closed
+        assert ws.close.await_count == 1
+
+    async def test_aclose_waits_for_blocked_connect_and_prevents_late_reader(self):
+        ws = FakeMultiContextWS()
+        connect_entered = asyncio.Event()
+        release_connect = asyncio.Event()
+
+        async def blocked_connect() -> None:
+            connect_entered.set()
+            await release_connect.wait()
+
+        async def record_close() -> None:
+            ws.closed = True
+
+        ws.connect = AsyncMock(side_effect=blocked_connect)  # type: ignore[method-assign]
+        ws.close = AsyncMock(side_effect=record_close)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+
+        connecting = asyncio.create_task(mgr.connect())
+        await connect_entered.wait()
+        closing = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+
+        assert mgr._closed is True
+        assert not connecting.done()
+        assert not closing.done()
+
+        release_connect.set()
+        with pytest.raises(RuntimeError, match="closed during connect"):
+            await connecting
+        await closing
+        await asyncio.sleep(0)
+
+        assert ws.closed
+        assert ws.connect.await_count == 1
+        assert ws.close.await_count == 1
+        assert mgr._ws is None
+        assert mgr._reader_task is None
+        with pytest.raises(RuntimeError, match="is closed"):
+            await mgr.open_context()
+
+    async def test_aclose_always_failing_socket_remains_retry_owned(self):
+        ws = FakeMultiContextWS()
+        ws.close = AsyncMock(side_effect=RuntimeError("socket close always fails"))  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        await mgr.connect()
+
+        for expected_count in (1, 2):
+            with pytest.raises(RuntimeError, match="socket close always fails"):
+                await mgr.aclose()
+            assert mgr._pending_socket_close is ws
+            assert ws.close.await_count == expected_count
+
+    async def test_cancel_fallback_blocks_replacement_until_failed_close_retries(self):
+        ws = FakeMultiContextWS(fail_send_at={1})
+        close_error = RuntimeError("cancel fallback close failed")
+        ws.close = AsyncMock(side_effect=[close_error, None])  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+
+        with pytest.raises(RuntimeError, match="cancel fallback close failed"):
+            await mgr.cancel_context(ctx)
+
+        assert ctx.done.is_set()
+        assert mgr._pending_socket_close is ws
+
+        replacement = FakeMultiContextWS()
+        replacement_factory_calls = 0
+
+        def replacement_factory(_hook):
+            nonlocal replacement_factory_calls
+            replacement_factory_calls += 1
+            return replacement
+
+        mgr._adapter = _make_adapter(
+            replacement,
+            connect_factory=replacement_factory,
+        )
+        new_ctx = await mgr.open_context()
+
+        assert ws.close.await_count == 2
+        assert replacement_factory_calls == 1
+        assert mgr._ws is replacement
+        assert new_ctx.context_id != ctx.context_id
+        await mgr.aclose()
+
+    async def test_failed_connect_keeps_primary_and_blocks_replacement_until_cleanup(self):
+        connect_error = RuntimeError("initial connect failed")
+        cleanup_one = RuntimeError("rollback close one")
+        cleanup_two = RuntimeError("rollback close two")
+        failed = FakeMultiContextWS()
+        failed.connect = AsyncMock(side_effect=connect_error)  # type: ignore[method-assign]
+        failed.close = AsyncMock(side_effect=[cleanup_one, cleanup_two, None])  # type: ignore[method-assign]
+        replacement = FakeMultiContextWS()
+        candidates = [failed, replacement]
+        factory_calls = 0
+
+        def factory(_hook):
+            nonlocal factory_calls
+            candidate = candidates[factory_calls]
+            factory_calls += 1
+            return candidate
+
+        mgr = MultiContextWSManager(_make_adapter(failed, connect_factory=factory))
+
+        with pytest.raises(RuntimeError, match="initial connect failed") as first:
+            await mgr.connect()
+        assert first.value.__cause__ is cleanup_one
+        assert mgr._pending_socket_close is failed
+        assert factory_calls == 1
+
+        with pytest.raises(RuntimeError, match="cleanup is incomplete") as second:
+            await mgr.connect()
+        assert second.value.__cause__ is cleanup_two
+        assert mgr._pending_socket_close is failed
+        assert factory_calls == 1
+
+        await mgr.connect()
+        assert failed.close.await_count == 3
+        assert mgr._pending_socket_close is None
+        assert mgr._ws is replacement
+        assert factory_calls == 2
         await mgr.aclose()
 
     async def test_reconnect_budget_exhaustion_surfaces_error(self):

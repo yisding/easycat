@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import TypeVar
 
 import httpx
@@ -80,10 +81,21 @@ class STTBase:
         # a rapid end/start cycle. Without a generation check, an audio send
         # waiting on ``_audio_send_lock`` can leak into the successor stream.
         self._stream_generation = 0
+        # A partial provider startup can allocate external resources before it
+        # raises. If rollback itself fails, retain that ownership obligation
+        # and retry it before allowing another lifecycle operation to proceed.
+        self._failed_start_cleanup_pending = False
+        self._failed_start_cleanup_error: BaseException | None = None
+        # End-of-stream work may finish protocol finalization and then fail
+        # while releasing an external resource. Retain that exact cleanup
+        # obligation separately so restart can retry cleanup without replaying
+        # provider finalization (and potentially duplicating a transcript).
+        self._failed_end_cleanup_pending = False
+        self._failed_end_cleanup_error: BaseException | None = None
 
     async def start_stream(self) -> None:
         """Begin a new STT stream session."""
-        async with self._lifecycle_lock:
+        async with self._public_lifecycle_operation():
             if self._running:
                 raise RuntimeError(
                     "Stream already started; call end_stream() before start_stream()"
@@ -95,12 +107,30 @@ class STTBase:
                         "Previous STT audio send is still shutting down; cannot start a new stream"
                     )
                 self._active_audio_send_task = None
+            await self._retry_failed_end_cleanup()
+            await self._retry_failed_start_cleanup()
             self._event_queue = asyncio.Queue()
             self._running = True
             try:
                 await self._on_start()
-            except Exception:
+            except BaseException as startup_error:
+                # Cancellation is a normal startup failure mode (session stop,
+                # warmup timeout, task-group shutdown). It must roll back the
+                # public lifecycle state and any partially-created provider
+                # resources just like an ordinary provider error so the same
+                # instance can be retried.
                 self._running = False
+                self._failed_start_cleanup_pending = True
+                try:
+                    await self._finish_failed_start()
+                except BaseException as cleanup_error:
+                    self._failed_start_cleanup_error = cleanup_error
+                    logger.warning("STT failed-start cleanup failed", exc_info=True)
+                    # Keep startup as the primary exception while making the
+                    # retained cleanup obligation visible to diagnostics.
+                    raise startup_error from cleanup_error
+                else:
+                    self._clear_failed_start_cleanup()
                 raise
             self._stream_generation += 1
 
@@ -113,6 +143,7 @@ class STTBase:
                     if not self._running or stream_generation != self._stream_generation:
                         raise RuntimeError("Stream not started; call start_stream() first")
                     self._validate_audio(chunk)
+                    chunk = self._prepare_audio(chunk)
                 # Run the provider write in an owned task. end_stream() can
                 # cancel that task without cancelling the long-lived audio
                 # ingress task that called send_audio().
@@ -121,11 +152,12 @@ class STTBase:
                     name="stt_audio_send",
                 )
                 self._active_audio_send_task = send_task
+                current = asyncio.current_task()
+                cancellation_requests = current.cancelling() if current is not None else 0
                 try:
                     await asyncio.shield(send_task)
                 except asyncio.CancelledError:
-                    current = asyncio.current_task()
-                    if current is not None and current.cancelling():
+                    if current is not None and current.cancelling() > cancellation_requests:
                         send_task.cancel()
                         await asyncio.gather(send_task, return_exceptions=True)
                         raise
@@ -137,7 +169,7 @@ class STTBase:
                     # that as an accepted lifecycle cutoff, not cancellation
                     # of the caller's ingress loop.
                 finally:
-                    if self._active_audio_send_task is send_task:
+                    if send_task.done() and self._active_audio_send_task is send_task:
                         self._active_audio_send_task = None
             return
 
@@ -145,6 +177,7 @@ class STTBase:
             if not self._running:
                 raise RuntimeError("Stream not started; call start_stream() first")
             self._validate_audio(chunk)
+            chunk = self._prepare_audio(chunk)
             await self._on_audio(chunk)
 
     async def commit_segment(self) -> bool:
@@ -171,8 +204,11 @@ class STTBase:
 
     async def end_stream(self) -> None:
         """Signal that no more audio will be sent for the current stream."""
-        async with self._lifecycle_lock:
+        async with self._public_lifecycle_operation():
             if not self._running:
+                await self._reap_retained_audio_send()
+                await self._retry_failed_end_cleanup()
+                await self._retry_failed_start_cleanup()
                 return
             self._running = False
             active_send = self._active_audio_send_task
@@ -185,10 +221,11 @@ class STTBase:
                         # write has actually stopped. Shielding lets an outer
                         # STT timeout still cancel end_stream() promptly if a
                         # broken provider ignores cancellation.
+                        current = asyncio.current_task()
+                        cancellation_requests = current.cancelling() if current is not None else 0
                         await asyncio.shield(active_send)
                     except asyncio.CancelledError:
-                        current = asyncio.current_task()
-                        if current is not None and current.cancelling():
+                        if current is not None and current.cancelling() > cancellation_requests:
                             raise
                         # Expected: end_stream() cancelled the owned send.
                     except Exception:
@@ -200,8 +237,42 @@ class STTBase:
                         if active_send.done() and self._active_audio_send_task is active_send:
                             self._active_audio_send_task = None
                 await self._on_end()
+            except BaseException as end_error:
+                # A later close()/start_stream() retries only the cleanup hook,
+                # never _on_end(), because provider finalization may already
+                # have committed audio or emitted a final transcript.
+                self._failed_end_cleanup_pending = True
+                self._failed_end_cleanup_error = end_error
+                raise
             finally:
                 await self._event_queue.put(None)
+
+    async def _reap_retained_audio_send(self) -> None:
+        """Finish an audio write retained by an interrupted ``end_stream``."""
+        active_send = self._active_audio_send_task
+        if active_send is None:
+            return
+        if active_send is asyncio.current_task():
+            raise RuntimeError("STT audio send cannot reap itself during cleanup")
+        if not active_send.done():
+            active_send.cancel()
+        current = asyncio.current_task()
+        cancellation_requests = current.cancelling() if current is not None else 0
+        try:
+            await asyncio.shield(active_send)
+        except asyncio.CancelledError:
+            if current is not None and current.cancelling() > cancellation_requests:
+                # Keep the task handle and failed-end ledger intact. A later
+                # close() retry resumes ownership instead of false-succeeding.
+                raise
+            # The owned provider write accepted cancellation.
+        except Exception:
+            logger.debug(
+                "STT retained audio send failed while retrying cleanup",
+                exc_info=True,
+            )
+        if active_send.done() and self._active_audio_send_task is active_send:
+            self._active_audio_send_task = None
 
     async def events(self) -> AsyncIterator[STTEvent]:
         """Return an async iterator of provider-scoped STT events."""
@@ -216,14 +287,30 @@ class STTBase:
         try:
             await self.end_stream()
         finally:
-            # Error publication is deliberately drained after end_stream()
-            # releases the lifecycle lock: an async Error subscriber may
-            # initiate session teardown and re-enter this close hook.
-            drain = getattr(self, "_drain_emit_tasks", None)
-            if callable(drain):
-                await drain()
+            await self._drain_provider_error_tasks()
 
     # -- Protected helpers for subclasses ----------------------------------
+
+    @asynccontextmanager
+    async def _public_lifecycle_operation(self) -> AsyncIterator[None]:
+        """Serialize lifecycle work, then join provider Error publication.
+
+        Provider resource rollback and retained-cleanup ledgers must settle
+        while the lifecycle lock is held. Error subscribers cannot be joined
+        there, though: a subscriber may initiate session teardown and re-enter
+        :meth:`close`. Always release the lock before draining those tasks.
+        """
+        try:
+            async with self._lifecycle_lock:
+                yield
+        finally:
+            await self._drain_provider_error_tasks()
+
+    async def _drain_provider_error_tasks(self) -> None:
+        """Join provider-scoped Error publication when the mixin supplies it."""
+        drain = getattr(self, "_drain_emit_tasks", None)
+        if callable(drain):
+            await drain()
 
     def _emit_event(self, event: STTEvent) -> None:
         """Enqueue an STTEvent for consumers of ``events()``."""
@@ -452,10 +539,92 @@ class STTBase:
                 f"got {chunk.format.sample_rate}"
             )
 
+    def _prepare_audio(self, chunk: AudioChunk) -> AudioChunk:
+        """Normalize a validated chunk before passing it to the provider hook."""
+        return chunk
+
     # -- Hooks for subclasses to override ----------------------------------
 
     async def _on_start(self) -> None:
         """Called when a new stream starts. Override in subclass."""
+
+    async def _finish_failed_start(self) -> None:
+        """Run failed-start cleanup to completion despite repeated cancellation."""
+        cleanup_task = asyncio.create_task(
+            self._on_start_failed(),
+            name="stt_failed_start_cleanup",
+        )
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                # The outer startup task may be cancelled more than once while
+                # cleanup is in progress. Keep ownership of the cleanup task;
+                # the original startup exception is re-raised by start_stream.
+                continue
+        cleanup_task.result()
+
+    async def _retry_failed_start_cleanup(self) -> None:
+        """Finish a retained partial-start rollback before reusing the provider."""
+        if not self._failed_start_cleanup_pending:
+            return
+        try:
+            await self._finish_failed_start()
+        except BaseException as cleanup_error:
+            self._failed_start_cleanup_error = cleanup_error
+            raise RuntimeError(
+                "Previous STT failed-start cleanup is incomplete; "
+                "retry close() or start_stream() after cleanup recovers"
+            ) from cleanup_error
+        self._clear_failed_start_cleanup()
+
+    def _clear_failed_start_cleanup(self) -> None:
+        self._failed_start_cleanup_pending = False
+        self._failed_start_cleanup_error = None
+
+    async def _finish_failed_end_cleanup(self) -> asyncio.CancelledError | None:
+        """Run retained end cleanup to completion despite repeated cancellation."""
+        cancellation: asyncio.CancelledError | None = None
+        cleanup_task = asyncio.create_task(
+            self._on_end_cleanup(),
+            name="stt_failed_end_cleanup",
+        )
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError as exc:
+                # Cleanup owns external provider resources. Keep it attached to
+                # this provider until it settles even if the caller is
+                # cancelled repeatedly.
+                if cancellation is None:
+                    cancellation = exc
+                continue
+        cleanup_task.result()
+        return cancellation
+
+    async def _retry_failed_end_cleanup(self) -> None:
+        """Release retained end resources before replacing provider state."""
+        if not self._failed_end_cleanup_pending:
+            return
+        try:
+            cancellation = await self._finish_failed_end_cleanup()
+        except BaseException as cleanup_error:
+            self._failed_end_cleanup_error = cleanup_error
+            raise RuntimeError(
+                "Previous STT end cleanup is incomplete; "
+                "retry close() or start_stream() after cleanup recovers"
+            ) from cleanup_error
+        self._failed_end_cleanup_pending = False
+        self._failed_end_cleanup_error = None
+        if cancellation is not None:
+            raise cancellation
+
+    async def _on_start_failed(self) -> None:
+        """Roll back resources allocated by a partial ``_on_start``."""
+        await self._on_end()
+
+    async def _on_end_cleanup(self) -> None:
+        """Release resources after a failed ``_on_end`` without finalizing again."""
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
         """Called for each audio chunk. Override in subclass."""

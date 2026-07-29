@@ -18,6 +18,7 @@ Covers:
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import json
 import os
@@ -26,6 +27,8 @@ from typing import Any
 import httpx
 import pytest
 
+from easycat.cancel import CancelToken
+from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents._responses_api_events import (
     parse_sse_line,
@@ -76,6 +79,46 @@ def _make_bridge(
     )
     # Replace the internal client with one using the ASGI transport.
     bridge._client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    return bridge
+
+
+class _StaticSSEResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        pass
+
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _StaticSSEClient:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def stream(self, *args, **kwargs):
+        return _StaticSSEResponse(self._lines)
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _make_static_sse_bridge(lines: list[str]) -> RemoteResponsesAPIBridge:
+    bridge = RemoteResponsesAPIBridge(
+        base_url="http://testserver",
+        model="test-model",
+        api_key="test-key",
+    )
+    await bridge._client.aclose()
+    bridge._client = _StaticSSEClient(lines)
     return bridge
 
 
@@ -215,7 +258,7 @@ class TestN1ChainInterruption:
         assert second_req.get("previous_response_id") == first_id
 
     @pytest.mark.asyncio
-    async def test_interruption_does_not_update_response_id(self):
+    async def test_completed_turn_interruption_rolls_chain_back_to_predecessor(self):
         server = MockResponsesServer()
         server.response_text = "Complete response"
         bridge = _make_bridge(server)
@@ -234,11 +277,125 @@ class TestN1ChainInterruption:
             pass
 
         second_id = bridge._last_completed_response_id
+        assert second_id is not None
+        assert second_id != first_id
 
-        # Apply interruption -- should NOT change response_id.
+        # Generation completed, but playback was interrupted. Rewind the
+        # remote chain to turn 1 and replay the delivered prefix of turn 2.
         bridge.apply_interruption("Second resp", CancellationMode.IMMEDIATE_STOP)
 
-        assert bridge._last_completed_response_id == second_id
+        assert bridge._last_completed_response_id == first_id
+        assert bridge._completed_response_ids == [first_id]
+        assert bridge._interrupted_response_id == second_id
+
+        server.response_text = "Third response"
+        async for _ in bridge.invoke(AgentTurnInput.from_text("turn 3"), rec):
+            pass
+
+        third_request = server.received_requests[-1]
+        assert third_request["previous_response_id"] == first_id
+        assert {"role": "user", "content": "turn 2"} in third_request["input"]
+        assert {"role": "assistant", "content": "Second resp..."} in third_request["input"]
+        assert {"role": "user", "content": "turn 3"} in third_request["input"]
+
+    @pytest.mark.asyncio
+    async def test_hard_close_clears_prior_turn_response_and_tool_snapshots(self):
+        bridge = await _make_static_sse_bridge(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_1"}}',
+                (
+                    'data: {"type":"response.output_item.added","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                ),
+                (
+                    'data: {"type":"response.output_item.done","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup",'
+                    '"arguments":"{}"}}'
+                ),
+                (
+                    'data: {"type":"response.output_item.done","item":'
+                    '{"type":"function_call_output","call_id":"call_1","output":"ok"}}'
+                ),
+                'data: {"type":"response.completed","response":{"id":"resp_1"}}',
+            ]
+        )
+        async for _ in bridge.invoke(AgentTurnInput.from_text("turn 1"), _recorder()):
+            pass
+        assert bridge._last_accumulated_items
+
+        bridge._client = _StaticSSEClient(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_2"}}',
+                'data: {"type":"response.output_text.delta","delta":"partial"}',
+            ]
+        )
+        stream = bridge.invoke(AgentTurnInput.from_text("turn 2"), _recorder())
+
+        assert (await stream.__anext__()).kind == "text_delta"
+        assert bridge._last_turn_response_id == "resp_2"
+        assert bridge._last_accumulated_items == []
+        await stream.aclose()
+
+        bridge.apply_interruption("partial", CancellationMode.IMMEDIATE_STOP)
+
+        assert bridge._last_completed_response_id == "resp_1"
+        assert bridge._completed_response_ids == ["resp_1"]
+        assert bridge._replay_items == [
+            {"role": "user", "content": "turn 2"},
+            {"role": "assistant", "content": "partial..."},
+        ]
+        await bridge.aclose()
+
+    @pytest.mark.parametrize("third_response_completes", [False, True])
+    @pytest.mark.asyncio
+    async def test_consecutive_interruptions_retain_consumed_replay_prefix(
+        self,
+        third_response_completes: bool,
+    ) -> None:
+        bridge = await _make_static_sse_bridge(
+            [
+                'data: {"type":"response.completed","response":{"id":"resp_1"}}',
+            ]
+        )
+        async for _ in bridge.invoke(AgentTurnInput.from_text("turn 1"), _recorder()):
+            pass
+
+        bridge._client = _StaticSSEClient(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_2"}}',
+                'data: {"type":"response.output_text.delta","delta":"answer 2"}',
+                'data: {"type":"response.completed","response":{"id":"resp_2"}}',
+            ]
+        )
+        async for _ in bridge.invoke(AgentTurnInput.from_text("turn 2"), _recorder()):
+            pass
+        bridge.apply_interruption("heard 2", CancellationMode.IMMEDIATE_STOP)
+
+        third_lines = [
+            'data: {"type":"response.created","response":{"id":"resp_3"}}',
+            'data: {"type":"response.output_text.delta","delta":"answer 3"}',
+        ]
+        if third_response_completes:
+            third_lines.append('data: {"type":"response.completed","response":{"id":"resp_3"}}')
+        bridge._client = _StaticSSEClient(third_lines)
+        token = CancelToken()
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("turn 3"),
+            _recorder(),
+            cancel_token=token,
+        ):
+            if not third_response_completes and event.kind == "text_delta":
+                token.cancel()
+        bridge.apply_interruption("heard 3", CancellationMode.IMMEDIATE_STOP)
+
+        body = bridge._build_request_body(AgentTurnInput.from_text("turn 4"))
+
+        assert {"role": "user", "content": "turn 2"} in body["input"]
+        assert {"role": "assistant", "content": "heard 2..."} in body["input"]
+        assert {"role": "user", "content": "turn 3"} in body["input"]
+        assert {"role": "assistant", "content": "heard 3..."} in body["input"]
+        assert body["input"][-1] == {"role": "user", "content": "turn 4"}
+        await bridge.aclose()
 
     @pytest.mark.asyncio
     async def test_interruption_stashes_replay_items(self):
@@ -373,8 +530,6 @@ class TestDrainCurrentUnit:
         bridge = _make_bridge(server)
         rec = _recorder()
 
-        from easycat.cancel import CancelToken
-
         token = CancelToken()
 
         events = []
@@ -388,6 +543,129 @@ class TestDrainCurrentUnit:
         kinds = [e.kind for e in events]
         assert "text_delta" in kinds
         assert "done" in kinds
+
+    @pytest.mark.asyncio
+    async def test_idle_stream_wakes_on_cancel_and_closes_line_reader(self):
+        class IdleResponse:
+            def __init__(self) -> None:
+                self.release = asyncio.Event()
+                self.lines_closed = False
+                self.context_closed = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                self.context_closed = True
+
+            def raise_for_status(self) -> None:
+                pass
+
+            async def aiter_lines(self):
+                try:
+                    yield ('data: {"type":"response.output_text.delta","delta":"partial"}')
+                    await self.release.wait()
+                finally:
+                    self.lines_closed = True
+
+        class IdleClient:
+            def __init__(self, response: IdleResponse) -> None:
+                self.response = response
+                self.closed = False
+
+            def stream(self, *args, **kwargs):
+                return self.response
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        bridge = RemoteResponsesAPIBridge(
+            base_url="http://testserver",
+            model="test-model",
+            api_key="test-key",
+        )
+        response = IdleResponse()
+        client = IdleClient(response)
+        await bridge._client.aclose()
+        bridge._client = client
+        token = CancelToken()
+        stream = bridge.invoke(
+            AgentTurnInput.from_text("hello"),
+            _recorder(),
+            cancel_token=token,
+        )
+
+        first = await stream.__anext__()
+        assert first.kind == "text_delta"
+        pending = asyncio.create_task(stream.__anext__())
+        await asyncio.sleep(0)
+
+        token.cancel()
+        terminal = await asyncio.wait_for(pending, timeout=0.2)
+
+        assert terminal.kind == "done"
+        with pytest.raises(StopAsyncIteration):
+            await stream.__anext__()
+        assert response.lines_closed
+        assert response.context_closed
+        await bridge.aclose()
+        assert client.closed
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_tool_call_drains_through_tool_result(self):
+        server = MockResponsesServer()
+        server.tool_calls = [("lookup", '{"id":"1"}', '{"ok":true}')]
+        server.response_text = "finished"
+        bridge = _make_bridge(server)
+        token = CancelToken()
+        events = []
+
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("run tool"),
+            _recorder(),
+            cancel_token=token,
+        ):
+            events.append(event)
+            if event.kind == "tool_started":
+                token.cancel()
+
+        assert "tool_result" in [event.kind for event in events]
+        assert events[-1].kind == "done"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_tool_drain_rejects_eof_with_pending_call(self):
+        bridge = await _make_static_sse_bridge(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_pending"}}',
+                (
+                    'data: {"type":"response.output_item.added","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                ),
+                (
+                    'data: {"type":"response.output_item.done","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup",'
+                    '"arguments":"{}"}}'
+                ),
+            ]
+        )
+        journal = InMemoryRingBuffer(capacity=1000)
+        token = CancelToken()
+        events = []
+
+        with pytest.raises(RuntimeError, match="ended with pending tool calls"):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("run tool"),
+                _recorder(journal),
+                cancel_token=token,
+            ):
+                events.append(event)
+                if event.kind == "tool_started":
+                    token.cancel()
+
+        assert [event.kind for event in events] == ["tool_started"]
+        assert bridge._last_completed_response_id is None
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
 
 
 # ── AC2C.6: Capability discovery via metadata ───────────────────
@@ -431,6 +709,194 @@ class TestCapabilityDiscovery:
 class TestGracefulDegradation:
     """AC2C.7 -- bridge handles server errors gracefully."""
 
+    @pytest.mark.parametrize("response_id", [None, "", "  ", 123, ["bad"]])
+    @pytest.mark.asyncio
+    async def test_completed_response_requires_nonblank_string_id(
+        self,
+        response_id: object,
+    ) -> None:
+        lines = [
+            'data: {"type":"response.created","response":{"id":"earlier_id"}}',
+            'data: {"type":"response.output_text.delta","delta":"partial"}',
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {"id": response_id},
+                    }
+                )
+            ),
+        ]
+        bridge = await _make_static_sse_bridge(lines)
+        journal = InMemoryRingBuffer(capacity=1000)
+        events = []
+
+        with pytest.raises(RuntimeError, match="nonblank string response id"):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("hi"),
+                _recorder(journal),
+            ):
+                events.append(event)
+
+        assert [event.kind for event in events] == ["text_delta"]
+        assert bridge._last_completed_response_id is None
+        assert bridge._completed_response_ids == []
+        assert bridge._response_count == 0
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
+
+    @pytest.mark.parametrize(
+        ("lines", "message", "expected_event_kinds"),
+        [
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.done","item":'
+                        '{"type":"function_call_output","call_id":"orphan","output":"ok"}}'
+                    ),
+                ],
+                "orphan tool_result",
+                [],
+            ),
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","call_id":"","name":"lookup"}}'
+                    ),
+                ],
+                "without a nonblank call_id",
+                [],
+            ),
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                    ),
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                    ),
+                ],
+                "duplicate tool_started",
+                ["tool_started"],
+            ),
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                    ),
+                    (
+                        'data: {"type":"response.output_item.done","item":'
+                        '{"type":"function_call_output","call_id":"","output":"ok"}}'
+                    ),
+                ],
+                "without a nonblank call_id",
+                ["tool_started"],
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_malformed_tool_lifecycle_is_rejected(
+        self,
+        lines: list[str],
+        message: str,
+        expected_event_kinds: list[str],
+    ) -> None:
+        bridge = await _make_static_sse_bridge(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_tools"}}',
+                *lines,
+                'data: {"type":"response.completed","response":{"id":"resp_tools"}}',
+            ]
+        )
+        journal = InMemoryRingBuffer(capacity=1000)
+        events = []
+
+        with pytest.raises(RuntimeError, match=message):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("run tool"),
+                _recorder(journal),
+            ):
+                events.append(event)
+
+        assert [event.kind for event in events] == expected_event_kinds
+        assert bridge._last_completed_response_id is None
+        assert bridge._response_count == 0
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
+
+    @pytest.mark.parametrize(
+        ("lines", "expected_event_kinds"),
+        [
+            (
+                ['data: {"type":"response.created","response":{"id":"resp_incomplete"}}'],
+                [],
+            ),
+            (
+                [
+                    'data: {"type":"response.created","response":{"id":"resp_incomplete"}}',
+                    'data: {"type":"response.output_text.delta","delta":"partial"}',
+                ],
+                ["text_delta"],
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_premature_stream_eof_raises_without_committing_response(
+        self,
+        lines: list[str],
+        expected_event_kinds: list[str],
+    ) -> None:
+        class TruncatedResponse:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                pass
+
+            def raise_for_status(self) -> None:
+                pass
+
+            async def aiter_lines(self):
+                for line in lines:
+                    yield line
+
+        class TruncatedClient:
+            def stream(self, *args, **kwargs):
+                return TruncatedResponse()
+
+            async def aclose(self) -> None:
+                pass
+
+        bridge = RemoteResponsesAPIBridge(
+            base_url="http://testserver",
+            model="test-model",
+            api_key="test-key",
+        )
+        await bridge._client.aclose()
+        bridge._client = TruncatedClient()
+        journal = InMemoryRingBuffer(capacity=1000)
+        events = []
+
+        with pytest.raises(RuntimeError, match="before response.completed"):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("hi"),
+                _recorder(journal),
+            ):
+                events.append(event)
+
+        assert [event.kind for event in events] == expected_event_kinds
+        assert all(event.kind != "done" for event in events)
+        assert bridge._last_completed_response_id is None
+        assert bridge._completed_response_ids == []
+        assert bridge._response_count == 0
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
+
     @pytest.mark.asyncio
     async def test_server_failure_event_raises(self):
         server = MockResponsesServer()
@@ -447,6 +913,69 @@ class TestGracefulDegradation:
         records = journal.read()
         error_records = [r for r in records if r.name == "framework_error"]
         assert len(error_records) >= 1
+
+    @pytest.mark.asyncio
+    async def test_cancelled_tool_drain_still_raises_terminal_failure(self):
+        lines = [
+            'data: {"type":"response.created","response":{"id":"resp_failed"}}',
+            (
+                'data: {"type":"response.output_item.added","item":'
+                '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+            ),
+            (
+                'data: {"type":"response.failed","response":{"id":"resp_failed",'
+                '"error":{"message":"tool crashed"}}}'
+            ),
+        ]
+        bridge = await _make_static_sse_bridge(lines)
+        journal = InMemoryRingBuffer(capacity=1000)
+        token = CancelToken()
+        events = []
+
+        with pytest.raises(RuntimeError, match="Responses API failed: tool crashed"):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("run tool"),
+                _recorder(journal),
+                cancel_token=token,
+            ):
+                events.append(event)
+                if event.kind == "tool_started":
+                    token.cancel()
+
+        assert [event.kind for event in events] == ["tool_started"]
+        assert bridge._last_completed_response_id is None
+        assert bridge._completed_response_ids == []
+        assert bridge._response_count == 0
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
+
+    @pytest.mark.asyncio
+    async def test_completed_response_with_pending_tool_call_is_rejected(self):
+        lines = [
+            'data: {"type":"response.created","response":{"id":"resp_incomplete"}}',
+            (
+                'data: {"type":"response.output_item.added","item":'
+                '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+            ),
+            'data: {"type":"response.completed","response":{"id":"resp_incomplete"}}',
+        ]
+        bridge = await _make_static_sse_bridge(lines)
+        journal = InMemoryRingBuffer(capacity=1000)
+        events = []
+
+        with pytest.raises(RuntimeError, match="completed arrived with pending tool calls"):
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("run tool"),
+                _recorder(journal),
+            ):
+                events.append(event)
+
+        assert [event.kind for event in events] == ["tool_started"]
+        assert bridge._last_completed_response_id is None
+        assert bridge._completed_response_ids == []
+        assert bridge._response_count == 0
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
 
     @pytest.mark.asyncio
     async def test_http_error_raises_and_records(self):
@@ -1110,6 +1639,46 @@ class TestRequestBody:
         user_msgs = [item for item in req["input"] if item.get("role") == "user"]
         assert len(user_msgs) == 1
         assert user_msgs[0]["content"] == "Tell me a joke"
+
+    @pytest.mark.asyncio
+    async def test_agent_runner_does_not_resend_shadow_history_with_response_chain(self):
+        server = MockResponsesServer()
+        bridge = _make_bridge(server)
+        runner = AgentRunner(bridge)
+        rec = _recorder()
+
+        async for _ in runner.invoke(AgentTurnInput.from_text("first question"), rec):
+            pass
+        first_id = bridge._last_completed_response_id
+
+        async for _ in runner.invoke(AgentTurnInput.from_text("second question"), rec):
+            pass
+
+        second_request = server.received_requests[-1]
+        assert second_request["previous_response_id"] == first_id
+        assert second_request["input"] == [{"role": "user", "content": "second question"}]
+
+    def test_chained_request_keeps_only_transient_caller_context(self):
+        server = MockResponsesServer()
+        bridge = _make_bridge(server)
+        bridge._last_completed_response_id = "resp-prior"
+        bridge._completed_response_ids = ["resp-prior"]
+
+        body = bridge._build_request_body(
+            AgentTurnInput.from_text(
+                "next",
+                context=[
+                    {"role": "system", "content": "caller identity"},
+                    {"role": "user", "content": "old question"},
+                    {"role": "assistant", "content": "old answer"},
+                ],
+            )
+        )
+
+        assert body["input"] == [
+            {"role": "system", "content": "caller identity"},
+            {"role": "user", "content": "next"},
+        ]
 
     @pytest.mark.asyncio
     async def test_replaced_assistant_text_is_not_promoted_to_developer(self):

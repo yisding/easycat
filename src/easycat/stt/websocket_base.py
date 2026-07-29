@@ -9,7 +9,9 @@ from typing import Any
 
 import websockets
 
+from easycat._audio_utils import to_mono_chunk
 from easycat._provider_helpers import ProviderErrorEmitter
+from easycat.audio_format import AudioChunk
 from easycat.errors import EASYCAT_E304
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
@@ -62,6 +64,24 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         # behind it in a queue the consumer has already stopped reading.
         self._suppress_terminal_sentinel = False
         self._init_emit_tasks()
+
+    def _validate_audio(self, chunk: AudioChunk) -> None:
+        super()._validate_audio(chunk)
+        if self._uses_streaming_audio_path() and chunk.format.sample_width != 2:
+            raise ValueError(
+                "Streaming STT expects PCM16 audio "
+                f"(sample_width=2), got sample_width={chunk.format.sample_width}"
+            )
+
+    def _prepare_audio(self, chunk: AudioChunk) -> AudioChunk:
+        """Downmix once before provider-specific streaming resampling."""
+        if not self._uses_streaming_audio_path():
+            return chunk
+        return to_mono_chunk(chunk)
+
+    def _uses_streaming_audio_path(self) -> bool:
+        """Whether this stream sends raw PCM through the WebSocket path."""
+        return True
 
     def _resolve_event_bus(self) -> Any | None:
         # Providers still source the bus from their own static config object
@@ -146,15 +166,23 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         receive_task = self._receive_task
         if ws is None:
             return
-        try:
-            await self._drain_and_close(ws, receive_task, close_before_drain=close_before_drain)
-        finally:
-            if self._ws is ws:
-                self._ws = None
-            if self._receive_task is receive_task:
-                self._receive_task = None
-            self._provider_event_bus = None
-            await self._drain_emit_tasks()
+        await self._drain_and_close(ws, receive_task, close_before_drain=close_before_drain)
+        # Do not forget a socket whose close failed: failed-start cleanup keeps
+        # a retry ledger, and it needs these exact references to finish the
+        # ownership obligation on the next start_stream()/close().
+        if self._ws is ws:
+            self._ws = None
+        if self._receive_task is receive_task:
+            self._receive_task = None
+        self._provider_event_bus = None
+
+    async def _on_start_failed(self) -> None:
+        """Close a socket published before its initial connect completed."""
+        await self._close_active_websocket(close_before_drain=True)
+
+    async def _on_end_cleanup(self) -> None:
+        """Retry only socket cleanup after provider end/finalization failed."""
+        await self._close_active_websocket(close_before_drain=True)
 
     async def _drain_and_close(
         self,

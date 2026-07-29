@@ -46,6 +46,11 @@ from easycat.validation._runner_support import (
     run_timed_command,
     validation_exit_code_from_pytest,
 )
+from easycat.validation.redaction import (
+    ArtifactRedactionError,
+    TextArtifactFormat,
+    redact_runtime_secrets_in_file,
+)
 from easycat.validation.report import (
     ArtifactRef,
     ValidationCheck,
@@ -93,19 +98,51 @@ class _LatencyPaths:
             "EASYCAT_RELIABILITY_SAMPLES_PATH": str(self.reliability_samples),
         }
 
-    def write_redacted(self, result: CommandResult, secrets: Sequence[str]) -> None:
+    def write_redacted(
+        self,
+        result: CommandResult,
+        secrets: Sequence[str],
+    ) -> dict[str, ValidationFailure]:
         self.stdout.write_text(redact_runtime_secrets(result.stdout, secrets))
         self.stderr.write_text(redact_runtime_secrets(result.stderr, secrets))
-        if self.junit.exists():
-            self.junit.write_text(redact_runtime_secrets(self.junit.read_text(), secrets))
+        failures: dict[str, ValidationFailure] = {}
+        artifact_specs: tuple[tuple[str, Path, TextArtifactFormat], ...] = (
+            ("junit", self.junit, "text"),
+            ("samples", self.samples, "json"),
+            ("reliability", self.reliability_samples, "json"),
+        )
+        for name, path, artifact_format in artifact_specs:
+            try:
+                redact_runtime_secrets_in_file(
+                    path,
+                    secrets,
+                    artifact_format=artifact_format,
+                    raise_on_error=True,
+                )
+            except (ArtifactRedactionError, OSError) as exc:
+                safe_path = redact_runtime_secrets(str(path), secrets)
+                failures[name] = ValidationFailure(
+                    name=f"artifact_redaction.{name}",
+                    message=redact_runtime_secrets(
+                        f"could not safely redact validation artifact {path}: {exc}",
+                        secrets,
+                    ),
+                    failure_class="artifact_redaction_error",
+                    details={"path": safe_path},
+                )
+        return failures
 
-    def check_artifacts(self) -> dict[str, ArtifactRef]:
+    def check_artifacts(
+        self,
+        *,
+        excluded: frozenset[str] = frozenset(),
+    ) -> dict[str, ArtifactRef]:
         artifacts = {
             "stdout": ArtifactRef(kind="stdout", path=str(self.stdout)),
             "stderr": ArtifactRef(kind="stderr", path=str(self.stderr)),
             "latency": ArtifactRef(kind="latency", path=str(self.latency)),
         }
-        if self.junit.exists():
+        if "junit" not in excluded and self.junit.exists():
             artifacts["junit"] = ArtifactRef(kind="junit", path=str(self.junit))
         return artifacts
 
@@ -147,6 +184,7 @@ class _LatencyExecution:
     finished_at: datetime
     duration_s: float
     result: CommandResult
+    artifact_redaction_failures: Mapping[str, ValidationFailure]
 
 
 def run_latency_validation(
@@ -176,6 +214,7 @@ def run_latency_validation(
         execution.paths,
         require_samples=require_samples,
         secrets=execution.secrets,
+        excluded=frozenset(execution.artifact_redaction_failures),
     )
     failure_message = _pytest_failure_message(execution.result, execution.secrets)
     samples = _samples_with_pytest_failure(
@@ -194,12 +233,17 @@ def run_latency_validation(
         artifacts_root=execution.artifacts_root,
         secrets=execution.secrets,
     )
-    policy_failures = _policy_failures(evidence, projection)
+    policy_failures = (
+        *execution.artifact_redaction_failures.values(),
+        *_policy_failures(evidence, projection),
+    )
     exit_code = validation_exit_code_from_pytest(execution.result.exit_code)
     if policy_failures:
         exit_code = 1
     status: ValidationStatus = "pass" if exit_code == 0 else "fail"
-    check_artifacts = execution.paths.check_artifacts()
+    check_artifacts = execution.paths.check_artifacts(
+        excluded=frozenset(execution.artifact_redaction_failures),
+    )
     artifacts = execution.ctx.artifacts_with(check_artifacts)
     failures = _all_failures(
         mode=mode,
@@ -216,7 +260,12 @@ def run_latency_validation(
         duration_s=execution.duration_s,
         status=status,
         exit_code=exit_code,
-        tool_exit_codes=_tool_exit_codes(execution.result, evidence, projection),
+        tool_exit_codes=_tool_exit_codes(
+            execution.result,
+            evidence,
+            projection,
+            tuple(execution.artifact_redaction_failures.values()),
+        ),
         checks=_latency_checks(
             mode=mode,
             pytest_exit_code=execution.result.exit_code,
@@ -225,6 +274,7 @@ def run_latency_validation(
             check_artifacts=check_artifacts,
             evidence=evidence,
             projection=projection,
+            artifact_redaction_failures=tuple(execution.artifact_redaction_failures.values()),
         ),
         failures=failures,
         latency=projection.payload,
@@ -256,7 +306,7 @@ def _execute_latency_lane(
         command,
         env=paths.command_environment(),
     )
-    paths.write_redacted(result, secrets)
+    artifact_redaction_failures = paths.write_redacted(result, secrets)
     return _LatencyExecution(
         ctx=ctx,
         artifacts_root=artifacts_root,
@@ -267,6 +317,7 @@ def _execute_latency_lane(
         finished_at=finished_at,
         duration_s=duration_s,
         result=result,
+        artifact_redaction_failures=artifact_redaction_failures,
     )
 
 
@@ -284,10 +335,15 @@ def _load_evidence(
     *,
     require_samples: bool,
     secrets: Sequence[str],
+    excluded: frozenset[str],
 ) -> _LatencyEvidence:
     sample_load_failure: ValidationFailure | None = None
     try:
-        samples = load_latency_samples(paths.samples.read_text()) if paths.samples.exists() else []
+        samples = (
+            load_latency_samples(paths.samples.read_text())
+            if "samples" not in excluded and paths.samples.exists()
+            else []
+        )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         samples = []
         sample_load_failure = ValidationFailure(
@@ -295,14 +351,19 @@ def _load_evidence(
             message=redact_runtime_secrets(f"could not load latency samples: {exc}", secrets),
             failure_class="latency_artifact_error",
         )
-    loaded_reliability_samples, reliability_failure = load_reliability(paths.reliability_samples)
+    if "reliability" in excluded:
+        loaded_reliability_samples, reliability_failure = None, None
+    else:
+        loaded_reliability_samples, reliability_failure = load_reliability(
+            paths.reliability_samples
+        )
     reliability_failure = _redact_validation_failure(reliability_failure, secrets)
     reliability_samples: list[ReliabilitySample] = loaded_reliability_samples or []
     reliability_budget: ValidationFailure | None = None
     if loaded_reliability_samples is not None:
         reliability_budget = reliability_budget_failure(reliability_samples)
     required_failure = None
-    if require_samples and not samples:
+    if require_samples and not samples and "samples" not in excluded:
         required_failure = ValidationFailure(
             name="latency.samples",
             message="required latency validation produced no samples",
@@ -446,6 +507,7 @@ def _tool_exit_codes(
     result: CommandResult,
     evidence: _LatencyEvidence,
     projection: _LatencyProjection,
+    artifact_redaction_failures: Sequence[ValidationFailure],
 ) -> dict[str, int]:
     return {
         "pytest": result.exit_code,
@@ -464,6 +526,7 @@ def _tool_exit_codes(
             if projection.baseline_regression_failure is not None
             else {}
         ),
+        **({"artifact_redaction": 1} if artifact_redaction_failures else {}),
     }
 
 
@@ -504,6 +567,7 @@ def _latency_checks(
     check_artifacts: dict[str, ArtifactRef],
     evidence: _LatencyEvidence,
     projection: _LatencyProjection,
+    artifact_redaction_failures: Sequence[ValidationFailure],
 ) -> list[ValidationCheck]:
     checks = [
         ValidationCheck(
@@ -521,6 +585,14 @@ def _latency_checks(
     )
     if sample_failures:
         checks.append(_latency_failure_check("latency.samples", sample_failures, check_artifacts))
+    if artifact_redaction_failures:
+        checks.append(
+            _latency_failure_check(
+                "validation.artifact_redaction",
+                artifact_redaction_failures,
+                check_artifacts,
+            )
+        )
     checks.extend(_reliability_checks(evidence, check_artifacts))
     budget_check = _latency_budget_check(mode, projection, check_artifacts)
     if budget_check is not None:

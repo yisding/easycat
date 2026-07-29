@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from easycat.validation._environment import runtime_secret_values
 from easycat.validation.latency import (
     LatencySample,
     LatencyStageDurations,
@@ -177,12 +178,35 @@ def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> 
     assert (tmp_path / "latest.json").exists()
 
 
+@pytest.mark.parametrize(
+    "runtime_secret_env_var",
+    [
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+        "EASYCAT_LIBSQL_AUTH_TOKEN",
+        "EASYCAT_REMOTE_AGENT_API_KEY",
+        "EASYCAT_SERVE_TOKEN",
+        "EASYCAT_SUPERVISOR_TOKEN",
+        "EASYCAT_WS_TOKEN",
+        "LITESTREAM_SECRET_ACCESS_KEY",
+        "SIGNALING_AUTH_TOKEN",
+        "TURN_CREDENTIAL",
+        "TURN_PASSWORD",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_CALL_API_TOKEN",
+        "TWILIO_STREAM_TOKEN_SECRET",
+        "WEBRTC_SIGNALING_TOKEN",
+    ],
+)
 def test_validation_runner_redacts_exact_runtime_secret_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    runtime_secret_env_var: str,
 ) -> None:
     secret = "plain-runtime-token-value"
-    monkeypatch.setenv("DEEPGRAM_API_KEY", secret)
+    monkeypatch.setenv(runtime_secret_env_var, secret)
 
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         junit_arg = next(arg for arg in command if arg.startswith("--junitxml="))
@@ -210,6 +234,53 @@ def test_validation_runner_redacts_exact_runtime_secret_values(
     payload = json.loads(report_text)
     assert payload["failures"]
     assert all(secret not in failure["message"] for failure in payload["failures"])
+
+
+@pytest.mark.parametrize(
+    "identifier_env_var",
+    [
+        "TWILIO_ACCOUNT_SID",
+        "TURN_USERNAME",
+        "AWS_ACCESS_KEY_ID",
+        "WEBRTC_EXPOSE_ICE_CREDENTIALS",
+    ],
+)
+def test_runtime_secret_collection_excludes_harmless_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+    identifier_env_var: str,
+) -> None:
+    identifier = f"visible-{identifier_env_var.lower()}"
+    monkeypatch.setenv(identifier_env_var, identifier)
+
+    assert identifier not in runtime_secret_values()
+
+
+def test_validation_runner_ignores_whitespace_only_runtime_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYCAT_WS_TOKEN", " ")
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        junit_arg = next(arg for arg in command if arg.startswith("--junitxml="))
+        Path(junit_arg.removeprefix("--junitxml=")).write_text('<testsuite name="plain output" />')
+        return CommandResult(
+            exit_code=0,
+            stdout="plain output remains readable",
+            stderr="plain stderr remains readable",
+        )
+
+    result = run_validation_slice(
+        "quick",
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert " " not in runtime_secret_values()
+    assert (result.run_dir / "stdout.log").read_text() == "plain output remains readable"
+    assert (result.run_dir / "stderr.log").read_text() == "plain stderr remains readable"
+    assert (result.run_dir / "junit.xml").read_text() == '<testsuite name="plain output" />'
 
 
 def test_validation_runner_creates_isolated_run_directories(tmp_path: Path) -> None:

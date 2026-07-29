@@ -342,10 +342,12 @@ class Session:
         # ── Lifecycle / turn-pointer state ───────────────────────
         self._is_running = False
         self._start_lock = asyncio.Lock()
+        self._start_task: asyncio.Task[Any] | None = None
         self._closed = False
         self._stopping = False
         self._stop_task: asyncio.Task[Any] | None = None
         self._stop_force = False
+        self._lifecycle_cleanup_error: Exception | None = None
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -1173,8 +1175,21 @@ class Session:
 
     async def start(self) -> None:
         """Initialize providers and begin the audio receive loop."""
+        current_task = asyncio.current_task()
         async with self._start_lock:
-            await self._start_locked()
+            self._start_task = current_task
+            try:
+                if self._stopping:
+                    error = RuntimeError(
+                        "Session cleanup is incomplete; call stop() again before starting"
+                    )
+                    if self._lifecycle_cleanup_error is not None:
+                        raise error from self._lifecycle_cleanup_error
+                    raise error
+                await self._start_locked()
+            finally:
+                if self._start_task is current_task:
+                    self._start_task = None
 
     async def _start_locked(self) -> None:
         """Start the session while the startup lock is held."""
@@ -1263,21 +1278,31 @@ class Session:
                 "pipeline_heartbeat",
                 self._emit_heartbeats(),
             )
-        except BaseException:
+        except BaseException as startup_error:
             # Startup cancellation must roll back the same resources as an
             # ordinary failure. Callers such as SessionManager may release
             # their last registry reference as soon as start() raises.
             self._is_running = False
             self._mark_observability_inactive()
             try:
-                await self._finish_interrupted_start(transport_connected=transport_connected)
+                cleanup_error = await self._finish_interrupted_start(
+                    transport_connected=transport_connected
+                )
             finally:
                 # The binding token belongs to this task's Context, so it
                 # cannot be reset from the protected cleanup task below.
                 self._reset_session_log_context()
+            if cleanup_error is not None:
+                self._lifecycle_cleanup_error = cleanup_error
+                self._stopping = True
+                raise startup_error from cleanup_error
             raise
 
-    async def _finish_interrupted_start(self, *, transport_connected: bool) -> None:
+    async def _finish_interrupted_start(
+        self,
+        *,
+        transport_connected: bool,
+    ) -> Exception | None:
         """Complete partial-start cleanup despite repeated caller cancellation."""
         cleanup_task = asyncio.create_task(
             self._rollback_interrupted_start(transport_connected=transport_connected),
@@ -1291,7 +1316,17 @@ class Session:
                 # start(). Preserve it by re-raising the original cancellation
                 # only after the independent cleanup task has completed.
                 continue
-        cleanup_task.result()
+            except Exception:
+                # The owned task has settled with an error. Read it below so
+                # the startup exception remains the primary caller outcome.
+                break
+        try:
+            cleanup_task.result()
+        except Exception as exc:
+            return exc
+        except BaseException:
+            return RuntimeError("Session startup rollback was interrupted")
+        return None
 
     async def _rollback_interrupted_start(self, *, transport_connected: bool) -> None:
         """Release resources opened by a failed or cancelled start attempt."""
@@ -1324,6 +1359,14 @@ class Session:
         current_task = asyncio.current_task()
         if current_task is None:  # pragma: no cover - asyncio always supplies one
             raise RuntimeError("Session.stop() requires a running asyncio task")
+        if self._start_task is current_task:
+            raise RuntimeError("Session.stop() cannot run reentrantly during start()")
+
+        # Serialize the startup transaction against teardown, but release the
+        # lock before the potentially long stop body so a force caller can
+        # still supersede a graceful owner through the existing stop protocol.
+        async with self._start_lock:
+            self._stopping = True
 
         # Idempotent callers join the active teardown. A force request may take
         # ownership from a graceful stop: cancel the old caller task, wait a
@@ -1358,6 +1401,7 @@ class Session:
 
         self._is_running = False
 
+        stop_error: Exception | None = None
         try:
             if superseded_task is not None:
                 done, _ = await asyncio.wait({superseded_task}, timeout=0.5)
@@ -1399,7 +1443,7 @@ class Session:
             if text_token:
                 text_token.cancel()
             text_task = self._turn_runner.active_text_turn
-            if text_task is not None and not text_task.done():
+            if text_task is not None and text_task is not current_task and not text_task.done():
                 text_task.cancel()
                 try:
                     await text_task
@@ -1419,7 +1463,11 @@ class Session:
                 # force-cancel ordering is preserved.
                 tasks: list[asyncio.Task[Any]] = []
                 pipeline_task = self._audio_router.pipeline_task
-                if pipeline_task and not pipeline_task.done():
+                if (
+                    pipeline_task
+                    and pipeline_task is not current_task
+                    and not pipeline_task.done()
+                ):
                     pipeline_task.cancel()
                     tasks.append(pipeline_task)
                 # STT teardown is delegated to STTCommitter.cancel() below
@@ -1427,11 +1475,19 @@ class Session:
                 # scoped commit/pause tasks) — matching 92f8ebf's move away
                 # from an ad-hoc stt_task cancel here.
                 current_tts_task = self._tts_scheduler.active_turn_task
-                if current_tts_task and not current_tts_task.done():
+                if (
+                    current_tts_task
+                    and current_tts_task is not current_task
+                    and not current_tts_task.done()
+                ):
                     current_tts_task.cancel()
                     tasks.append(current_tts_task)
                 outbound_task = self._audio_router.outbound_task
-                if outbound_task and not outbound_task.done():
+                if (
+                    outbound_task
+                    and outbound_task is not current_task
+                    and not outbound_task.done()
+                ):
                     outbound_task.cancel()
                     tasks.append(outbound_task)
 
@@ -1517,14 +1573,28 @@ class Session:
             unregister = getattr(self, "_emergency_export_unregister", None)
             if unregister is not None:
                 unregister()
+        except BaseException as exc:
+            stop_error = (
+                exc
+                if isinstance(exc, Exception)
+                else RuntimeError("Session stop was interrupted by cancellation")
+            )
+            raise
         finally:
             owns_stop = self._stop_task is current_task
             if owns_stop:
-                # Clear the stopping state FIRST so it is always reset even if
-                # a later teardown step (observability / recording) raises.
                 self._stop_task = None
                 self._stop_force = False
-                self._stopping = False
+                if self._closed:
+                    self._lifecycle_cleanup_error = None
+                    self._stopping = False
+                else:
+                    self._lifecycle_cleanup_error = stop_error or RuntimeError(
+                        "Session stop did not complete"
+                    )
+                    # Keep startup admission closed until a later stop() owner
+                    # retries the partially completed teardown.
+                    self._stopping = True
                 self._mark_observability_inactive()
                 self._reset_session_log_context()
                 self._record_debug_bundle()

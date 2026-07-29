@@ -272,14 +272,18 @@ async def test_openai_stt_finalizes_utterance_when_duration_cap_hit():
 
 @pytest.mark.asyncio
 async def test_openai_stt_rejects_nonpositive_byte_rate_for_duration_cap():
-    """A non-positive byte rate must raise a clear error, not divide by zero."""
+    """A corrupted format must raise a clear error, not divide by zero."""
     config = OpenAISTTConfig(
         api_key="test-key",
         max_audio_duration_ms=1000,
         http_client=_make_mock_client(),
     )
     stt = OpenAISTT(config)
-    bad_format = AudioFormat(sample_rate=0, channels=1, sample_width=2)
+    bad_format = object.__new__(AudioFormat)
+    object.__setattr__(bad_format, "sample_rate", 0)
+    object.__setattr__(bad_format, "channels", 1)
+    object.__setattr__(bad_format, "sample_width", 2)
+    object.__setattr__(bad_format, "encoding", "pcm")
 
     await stt.start_stream()
     with pytest.raises(ValueError, match="non-positive byte rate"):

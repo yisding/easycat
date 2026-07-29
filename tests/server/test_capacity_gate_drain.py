@@ -13,6 +13,7 @@ import asyncio
 
 import pytest
 
+from easycat.server.config import VoiceServerConfig
 from easycat.server.transports import CapacityGate
 from easycat.server.webrtc_routes import WebRTCRoutes
 from easycat.session_manager import SessionManager
@@ -157,6 +158,80 @@ def _make_gate(sessions: dict[int, object]) -> CapacityGate[int]:
 
 def _pairs(sessions: dict[int, object]):
     return lambda: list(sessions.items())
+
+
+@pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])
+def test_capacity_gate_rejects_invalid_session_caps(max_sessions: object) -> None:
+    with pytest.raises(ValueError, match="max_sessions"):
+        CapacityGate(max_sessions)  # type: ignore[arg-type]
+
+
+def test_capacity_gate_one_is_an_exact_bound() -> None:
+    gate: CapacityGate[int] = CapacityGate(1)
+    assert gate.try_acquire() is True
+    assert gate.try_acquire() is False
+
+
+@pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])
+def test_voice_server_config_rejects_invalid_session_caps(max_sessions: object) -> None:
+    with pytest.raises(ValueError, match="max_sessions"):
+        VoiceServerConfig(max_sessions=max_sessions)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("drain_timeout_s", True),
+        ("drain_timeout_s", -0.1),
+        ("drain_timeout_s", float("nan")),
+        ("drain_timeout_s", float("inf")),
+        ("drain_timeout_s", 10**1000),
+        ("force_shutdown_timeout_s", True),
+        ("force_shutdown_timeout_s", -0.1),
+        ("force_shutdown_timeout_s", float("nan")),
+        ("force_shutdown_timeout_s", float("inf")),
+        ("force_shutdown_timeout_s", 10**1000),
+    ],
+)
+def test_voice_server_config_rejects_invalid_timeouts(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        VoiceServerConfig(**{field: value})
+
+
+def test_voice_server_config_preserves_zero_timeout_semantics() -> None:
+    config = VoiceServerConfig(drain_timeout_s=0, force_shutdown_timeout_s=0)
+    assert config.drain_timeout_s == 0
+    assert config.force_shutdown_timeout_s == 0
+
+
+@pytest.mark.parametrize("timeout", [True, -0.1, float("nan"), float("inf"), 10**1000])
+async def test_wait_drained_rejects_invalid_timeout(timeout: object) -> None:
+    gate: CapacityGate[int] = CapacityGate(1)
+    with pytest.raises(ValueError, match="timeout_s"):
+        await gate.wait_drained(timeout_s=timeout)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("poll_interval", [True, 0, -0.1, float("nan"), float("inf"), 10**1000])
+async def test_wait_drained_rejects_invalid_poll_interval(poll_interval: object) -> None:
+    gate: CapacityGate[int] = CapacityGate(1)
+    with pytest.raises(ValueError, match="poll_interval_s"):
+        await gate.wait_drained(
+            timeout_s=0,
+            poll_interval_s=poll_interval,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("timeout", [True, -0.1, float("nan"), float("inf"), 10**1000])
+async def test_drain_rejects_invalid_timeouts(timeout: object) -> None:
+    gate: CapacityGate[int] = CapacityGate(1)
+    with pytest.raises(ValueError, match="drain_timeout_s"):
+        await gate.drain(lambda: (), drain_timeout_s=timeout)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="force_timeout_s"):
+        await gate.drain(
+            lambda: (),
+            drain_timeout_s=0,
+            force_timeout_s=timeout,  # type: ignore[arg-type]
+        )
 
 
 async def test_drain_stays_graceful_when_stops_finish_in_window() -> None:
@@ -347,6 +422,53 @@ async def test_cancelled_drain_keeps_teardown_owned_and_force_escalates() -> Non
     await asyncio.wait_for(session.force_started.wait(), timeout=1)
     await asyncio.gather(*list(gate._drain_tasks))
     assert gate.active_keys() == ()
+
+
+@pytest.mark.parametrize("disconnect_error", [None, RuntimeError("peer close failed")])
+async def test_cancelled_webrtc_offer_disconnects_and_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    disconnect_error: RuntimeError | None,
+) -> None:
+    import easycat.transports.webrtc as webrtc_module
+
+    class _CancelledOfferTransport:
+        instance: _CancelledOfferTransport | None = None
+
+        def __init__(self, _config: object) -> None:
+            self.disconnected = False
+            type(self).instance = self
+
+        def _prepare_external_signaling(self, _web: object) -> None:
+            pass
+
+        async def _handle_offer(self, _request: object) -> object:
+            raise asyncio.CancelledError
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+            if disconnect_error is not None:
+                raise disconnect_error
+
+    monkeypatch.setattr(webrtc_module, "WebRTCTransport", _CancelledOfferTransport)
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: object(),  # type: ignore[arg-type]
+        gate=gate,
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+    routes._web = object()
+
+    with pytest.raises(asyncio.CancelledError):
+        await routes.handle_offer(object())
+
+    transport = _CancelledOfferTransport.instance
+    assert transport is not None
+    assert transport.disconnected is True
+    assert gate.reserved_count == 0
+    assert gate.try_acquire() is True
 
 
 async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> None:

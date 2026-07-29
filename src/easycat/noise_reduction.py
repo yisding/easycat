@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from easycat._audio_utils import PCM16StreamResampler
+from easycat._audio_utils import PCM16StreamResampler, to_mono
 from easycat._extras import require_module
 from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk, AudioFormat
@@ -115,6 +115,12 @@ class RNNoiseReducer:
         # remainder to the next call.
         self._buffer_48k: bytes = b""
         self._stream_rate: int | None = None
+        # A transport may split one interleaved PCM frame across chunks.
+        # Preserve that source-format frame remainder until all channels are
+        # present, then downmix; carrying after downmix would have already lost
+        # or mispaired channel samples.
+        self._source_frame_carry: bytes = b""
+        self._source_format: AudioFormat | None = None
         self._input_resampler = PCM16StreamResampler(48_000)
         self._output_resampler: PCM16StreamResampler | None = None
         self._load_rnnoise()
@@ -139,7 +145,8 @@ class RNNoiseReducer:
     async def process(self, chunk: AudioChunk) -> AudioChunk:
         """Process an audio chunk through RNNoise for noise reduction.
 
-        Handles resampling to/from 48 kHz and float32 conversion internally.
+        Handles PCM16 multichannel downmixing, resampling to/from 48 kHz,
+        and float32 conversion internally.
 
         Only whole 480-sample (10 ms) 48 kHz frames are submitted to the
         recurrent filter; the sub-frame remainder is buffered for the next
@@ -148,19 +155,54 @@ class RNNoiseReducer:
         length from the input by less than one 10 ms frame.  Call ``flush()``
         to drain a trailing partial frame at end-of-stream.
         """
-        original_rate = chunk.format.sample_rate
-        if self._stream_rate != original_rate:
-            # One reducer stream has one output format. If an upstream device
-            # changes rates, start a clean RNNoise/resampler segment instead
-            # of concatenating old-rate frame remainders with the new format.
-            self._input_resampler.reset()
-            self._buffer_48k = b""
-            self._output_resampler = PCM16StreamResampler(original_rate)
-            self._stream_rate = original_rate
+        fmt = chunk.format
+        if fmt.encoding != "pcm" or fmt.sample_width != 2:
+            raise ValueError(
+                "RNNoiseReducer supports only PCM16 audio "
+                f"(got encoding={fmt.encoding!r}, sample_width={fmt.sample_width!r})"
+            )
+        if (
+            isinstance(fmt.channels, bool)
+            or not isinstance(fmt.channels, int)
+            or fmt.channels <= 0
+        ):
+            raise ValueError(
+                f"RNNoiseReducer requires a positive integer channel count (got {fmt.channels!r})"
+            )
+
+        original_rate = fmt.sample_rate
+        if self._source_format != fmt:
+            # An incomplete interleaved frame belongs to its exact source
+            # format, so it cannot survive any format transition. Once whole
+            # frames have been downmixed, however, a channel-only transition at
+            # the same rate remains one compatible mono stream: preserve its
+            # resampler and buffered RNNoise audio instead of dropping it.
+            self._source_frame_carry = b""
+            if self._stream_rate != original_rate:
+                # A rate change also changes the reducer's output format. Start
+                # a clean segment rather than combining incompatible output
+                # rates in one AudioChunk.
+                self._input_resampler.reset()
+                self._buffer_48k = b""
+                if self._output_resampler is not None:
+                    self._output_resampler.reset()
+                self._output_resampler = PCM16StreamResampler(original_rate)
+                self._stream_rate = original_rate
+            self._source_format = fmt
+
+        source_data = self._source_frame_carry + chunk.data
+        remainder = len(source_data) % fmt.frame_size
+        if remainder:
+            self._source_frame_carry = source_data[-remainder:]
+            source_data = source_data[:-remainder]
+        else:
+            self._source_frame_carry = b""
+        if fmt.channels > 1:
+            source_data = to_mono(source_data, fmt.channels)
 
         # Step 1: Resample to 48 kHz if needed, then accumulate.
         self._buffer_48k += self._input_resampler.process(
-            chunk.data,
+            source_data,
             original_rate,
         )
 
@@ -212,6 +254,10 @@ class RNNoiseReducer:
         partial RNNoise frame nor delayed resampler output is silently dropped.
         """
         output_rate = self._stream_rate or 48_000
+        # A partial interleaved source frame has no well-defined mono value:
+        # zero-padding missing channels would fabricate signal, so discard it
+        # at the explicit end-of-stream boundary.
+        self._source_frame_carry = b""
         self._buffer_48k += self._input_resampler.finish()
         cleaned_48k = self._process_buffered_frames(flush=True)
         if self._output_resampler is not None:
@@ -220,6 +266,7 @@ class RNNoiseReducer:
         else:
             cleaned = cleaned_48k
         self._stream_rate = None
+        self._source_format = None
         return AudioChunk(
             data=cleaned,
             format=AudioFormat(sample_rate=output_rate, channels=1, sample_width=2),
@@ -231,6 +278,8 @@ class RNNoiseReducer:
         if self._output_resampler is not None:
             self._output_resampler.reset()
         self._stream_rate = None
+        self._source_format = None
+        self._source_frame_carry = b""
         self._buffer_48k = b""
         if self._state and self._rnnoise:
             try:

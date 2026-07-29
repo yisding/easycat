@@ -577,6 +577,31 @@ async def test_deepgram_persistent_socket_sends_idle_keepalive():
 
 
 @pytest.mark.asyncio
+async def test_deepgram_keepalive_cleanup_preserves_caller_cancellation() -> None:
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k"))
+    child_cancelled = asyncio.Event()
+    release_child = asyncio.Event()
+
+    async def cancellation_resistant_keepalive() -> None:
+        while not release_child.is_set():
+            try:
+                await release_child.wait()
+            except asyncio.CancelledError:
+                child_cancelled.set()
+
+    stt._keepalive_task = asyncio.create_task(cancellation_resistant_keepalive())
+    cancelling = asyncio.create_task(stt._cancel_keepalive())
+    await child_cancelled.wait()
+    cancelling.cancel()
+    release_child.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cancelling
+
+    assert stt._keepalive_task is None
+
+
+@pytest.mark.asyncio
 async def test_deepgram_persistent_end_waits_for_finalize_marker():
     ws = PersistentMockWebSocket(respond_to_finalize=False)
 

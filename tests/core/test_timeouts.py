@@ -7,7 +7,8 @@ import contextlib
 
 import pytest
 
-from easycat.events import Error, ErrorStage, EventBus
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.events import Error, ErrorStage, EventBus, TTSEvent, TTSEventType
 from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
@@ -57,18 +58,27 @@ class TestTimeoutConfig:
         assert cfg.stt_timeout == 5.0
 
     @pytest.mark.parametrize(
-        "field, value",
+        "value",
         [
-            ("stt_timeout", 0.0),
-            ("stt_timeout", -1.0),
-            ("agent_timeout", 0.0),
-            ("agent_timeout", -1.0),
-            ("tts_first_byte_timeout", 0.0),
-            ("tts_first_byte_timeout", -1.0),
+            pytest.param(True, id="true"),
+            pytest.param(False, id="false"),
+            pytest.param("1", id="string"),
+            pytest.param(None, id="none"),
+            pytest.param(object(), id="object"),
+            pytest.param(float("nan"), id="nan"),
+            pytest.param(float("inf"), id="positive-infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+            pytest.param(10**1000, id="integer-too-large-for-float"),
+            pytest.param(0.0, id="zero"),
+            pytest.param(-1.0, id="negative"),
         ],
     )
-    def test_non_positive_timeout_rejected(self, field, value):
-        with pytest.raises(ValueError, match=field):
+    @pytest.mark.parametrize(
+        "field",
+        ["stt_timeout", "agent_timeout", "tts_first_byte_timeout"],
+    )
+    def test_invalid_timeout_rejected(self, field, value):
+        with pytest.raises(ValueError, match=rf"{field} must be a finite positive number"):
             TimeoutConfig(**{field: value})
 
 
@@ -76,6 +86,14 @@ class TestTimeoutConfig:
 
 
 class TestAgentTimeout:
+    @pytest.mark.parametrize(
+        "timeout",
+        [True, "1", None, float("nan"), float("inf"), 10**1000, 0.0, -1.0],
+    )
+    async def test_invalid_timeout_rejected_at_public_boundary(self, timeout):
+        with pytest.raises(ValueError, match="timeout must be a finite positive number"):
+            await with_agent_timeout(object(), timeout=timeout)
+
     async def test_no_timeout_when_agent_responds(self):
         async def fast_agent():
             return "response"
@@ -130,6 +148,14 @@ class TestAgentTimeout:
 
 
 class TestTTSTimeout:
+    @pytest.mark.parametrize(
+        "timeout",
+        [True, "1", None, float("nan"), float("inf"), 0.0, -1.0],
+    )
+    async def test_invalid_timeout_rejected_at_public_boundary(self, timeout):
+        with pytest.raises(ValueError, match="timeout must be a finite positive number"):
+            await _collect(with_tts_timeout(_slow_iter([]), timeout=timeout))
+
     async def test_no_timeout_when_audio_arrives(self):
         events = _slow_iter([b"chunk1", b"chunk2"], delay=0.0)
         result = await _collect(with_tts_timeout(events, timeout=1.0))
@@ -156,6 +182,28 @@ class TestTTSTimeout:
         result = await _collect(with_tts_timeout(source(), timeout=0.005))
 
         assert result == [b"chunk1", b"chunk2"]
+
+    async def test_marker_does_not_satisfy_first_audio_timeout(self):
+        async def marker_then_stall():
+            yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": "hello"}])
+            await _wait_forever()
+
+        with pytest.raises(TTSTimeoutError):
+            await _collect(with_tts_timeout(marker_then_stall(), timeout=0.01))
+
+    async def test_pre_audio_events_do_not_reset_first_audio_deadline(self):
+        async def pre_audio_events_forever():
+            while True:
+                await asyncio.sleep(0.005)
+                yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": "pending"}])
+                yield TTSEvent(
+                    type=TTSEventType.AUDIO,
+                    audio=AudioChunk(data=b"", format=PCM16_MONO_16K),
+                )
+
+        async with asyncio.timeout(0.1):
+            with pytest.raises(TTSTimeoutError):
+                await _collect(with_tts_timeout(pre_audio_events_forever(), timeout=0.02))
 
     async def test_first_byte_iteration_runs_in_caller_task(self):
         caller_task = asyncio.current_task()

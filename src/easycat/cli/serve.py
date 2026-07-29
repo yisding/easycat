@@ -100,9 +100,11 @@ def _playground_config_factory(
     """Build the per-transport config factory for the playground.
 
     Per-connection modes (``browser``/``websocket``) reject a static ``config``
-    and require a ``config_factory``; this builds a fresh ``EasyConfig.browser``
-    bound to the concrete per-connection transport, with a playground agent that
-    injects ``instructions`` on every Responses-API request.
+    and require a ``config_factory``; this builds a fresh ``EasyConfig`` bound
+    to the concrete per-connection transport, with a playground agent that
+    injects ``instructions`` on every Responses-API request. The transport's
+    declared echo-cancellation default is preserved: WebRTC/local transports
+    opt in, while raw WebSocket transports stay off.
     """
     from easycat.config import EasyConfig
     from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
@@ -122,7 +124,7 @@ def _playground_config_factory(
             api_key=os.environ.get("OPENAI_API_KEY"),
             reasoning_effort="none" if agent_model == _DEFAULT_AGENT_MODEL else None,
         )
-        return EasyConfig.browser(transport=transport, agent=agent)
+        return EasyConfig(transport=transport, agent=agent)
 
     return factory
 

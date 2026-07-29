@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 from typing import Any
 
 import pytest
 import websockets
 
+from easycat.audio_format import AudioChunk, AudioFormat
+from easycat.events import Error, EventBus
 from easycat.reconnecting_ws import ReconnectConfig
 from easycat.stt.websocket_base import WebSocketSTTBase, _noop_reconnect
 
@@ -79,6 +82,343 @@ class _CleanConnection:
 
     async def close(self) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_failed_partial_connect_closes_published_socket_before_retry(monkeypatch):
+    class _FakeWrapper:
+        died_abnormally = False
+        reconnect_attempts_exhausted = None
+        reconnect_exhaustion_reason = None
+
+        def __init__(self, *, block_connect: bool) -> None:
+            self.block_connect = block_connect
+            self.connect_entered = asyncio.Event()
+            self.closed = asyncio.Event()
+            self.close_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_entered.set()
+            if self.block_connect:
+                await asyncio.Event().wait()
+
+        async def recv_iter(self):
+            await self.closed.wait()
+            return
+            yield  # pragma: no cover
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            self.closed.set()
+
+    first = _FakeWrapper(block_connect=True)
+    second = _FakeWrapper(block_connect=False)
+    wrappers = iter([first, second])
+    monkeypatch.setattr(
+        "easycat.stt.websocket_base.ReconnectingWebSocket",
+        lambda *args, **kwargs: next(wrappers),
+    )
+
+    class _ConnectingProbe(_Probe):
+        async def _on_start(self) -> None:
+            await self._connect_websocket(url="wss://probe.invalid", headers={})
+
+        async def _on_end(self) -> None:
+            await self._close_active_websocket(close_before_drain=True)
+
+    probe = _ConnectingProbe()
+    start = asyncio.create_task(probe.start_stream())
+    await first.connect_entered.wait()
+    start.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start
+
+    assert first.close_calls >= 1
+    assert probe._ws is None
+    assert probe._receive_task is None
+
+    await probe.start_stream()
+    assert probe._ws is second
+    await probe.end_stream()
+    assert second.close_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_failed_start_retains_socket_when_close_fails_then_retries(monkeypatch):
+    class _FakeWrapper:
+        died_abnormally = False
+        reconnect_attempts_exhausted = None
+        reconnect_exhaustion_reason = None
+
+        def __init__(self, *, fail_first_close: bool = False) -> None:
+            self.fail_first_close = fail_first_close
+            self.closed = asyncio.Event()
+            self.close_calls = 0
+
+        async def connect(self) -> None:
+            return None
+
+        async def recv_iter(self):
+            await self.closed.wait()
+            return
+            yield  # pragma: no cover
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.fail_first_close and self.close_calls == 1:
+                raise RuntimeError("socket close failed")
+            self.closed.set()
+
+    first = _FakeWrapper(fail_first_close=True)
+    second = _FakeWrapper()
+    wrappers = iter([first, second])
+    monkeypatch.setattr(
+        "easycat.stt.websocket_base.ReconnectingWebSocket",
+        lambda *args, **kwargs: next(wrappers),
+    )
+
+    class _FailOnceAfterConnect(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_calls = 0
+
+        async def _on_start(self) -> None:
+            self.start_calls += 1
+            await self._connect_websocket(url="wss://probe.invalid", headers={})
+            if self.start_calls == 1:
+                raise RuntimeError("provider startup failed")
+
+        async def _on_end(self) -> None:
+            await self._close_active_websocket(close_before_drain=True)
+
+    probe = _FailOnceAfterConnect()
+
+    with pytest.raises(RuntimeError, match="provider startup failed") as exc_info:
+        await probe.start_stream()
+
+    assert str(exc_info.value.__cause__) == "socket close failed"
+    assert probe._ws is first
+    assert probe._receive_task is not None
+    assert probe._failed_start_cleanup_pending is True
+
+    await probe.start_stream()
+
+    assert first.close_calls >= 2
+    assert probe._ws is second
+    assert probe._failed_start_cleanup_pending is False
+    await probe.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_failed_end_retains_exact_socket_and_retries_without_refinalizing(
+    monkeypatch,
+):
+    class _FakeWrapper:
+        died_abnormally = False
+        reconnect_attempts_exhausted = None
+        reconnect_exhaustion_reason = None
+
+        def __init__(self, *, fail_first_close: bool = False) -> None:
+            self.fail_first_close = fail_first_close
+            self.closed = asyncio.Event()
+            self.close_calls = 0
+
+        async def connect(self) -> None:
+            return None
+
+        async def recv_iter(self):
+            await self.closed.wait()
+            return
+            yield  # pragma: no cover
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.fail_first_close and self.close_calls == 1:
+                raise RuntimeError("socket close failed")
+            self.closed.set()
+
+    first = _FakeWrapper(fail_first_close=True)
+    second = _FakeWrapper()
+    wrappers = iter([first, second])
+    monkeypatch.setattr(
+        "easycat.stt.websocket_base.ReconnectingWebSocket",
+        lambda *args, **kwargs: next(wrappers),
+    )
+
+    class _EndCleanupProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finalize_calls = 0
+
+        async def _on_start(self) -> None:
+            await self._connect_websocket(url="wss://probe.invalid", headers={})
+
+        async def _on_end(self) -> None:
+            self.finalize_calls += 1
+            await self._close_active_websocket(close_before_drain=True)
+
+    probe = _EndCleanupProbe()
+    await probe.start_stream()
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await probe.end_stream()
+
+    assert probe._ws is first
+    assert probe._failed_end_cleanup_pending is True
+    assert probe.finalize_calls == 1
+
+    await probe.start_stream()
+
+    # Retry closes once up front to wake the receiver and once again in the
+    # drain helper's finally block.
+    assert first.close_calls == 3
+    assert probe._ws is second
+    assert probe._failed_end_cleanup_pending is False
+    assert probe.finalize_calls == 1
+    await probe.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_failed_start_error_observer_can_close_after_resource_cleanup() -> None:
+    startup_error = RuntimeError("provider startup failed")
+    observer_completed = asyncio.Event()
+    emitted: list[Error] = []
+
+    class _FakeWrapper:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    socket = _FakeWrapper()
+    bus = EventBus()
+
+    async def close_provider(event: Error) -> None:
+        emitted.append(event)
+        await probe.close()
+        observer_completed.set()
+
+    bus.subscribe(Error, close_provider)
+
+    class _FailedStartProbe(_Probe):
+        async def _on_start(self) -> None:
+            self._provider_event_bus = bus
+            self._ws = socket  # type: ignore[assignment]
+            self._emit_provider_error(startup_error)
+            raise startup_error
+
+    probe = _FailedStartProbe()
+
+    with pytest.raises(RuntimeError, match="provider startup failed") as exc_info:
+        await asyncio.wait_for(probe.start_stream(), timeout=1)
+
+    assert exc_info.value is startup_error
+    assert observer_completed.is_set()
+    assert len(emitted) == 1
+    assert emitted[0].exception is startup_error
+    assert socket.close_calls == 2
+    assert probe._ws is None
+    assert probe._failed_start_cleanup_pending is False
+    assert probe._emit_tasks == set()
+    assert probe._lifecycle_lock.locked() is False
+
+
+@pytest.mark.asyncio
+async def test_failed_end_error_observer_can_close_and_retry_exact_cleanup() -> None:
+    end_error = RuntimeError("socket close failed")
+    observer_completed = asyncio.Event()
+
+    class _FakeWrapper:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise end_error
+
+    socket = _FakeWrapper()
+    bus = EventBus()
+
+    async def close_provider(_event: Error) -> None:
+        await probe.close()
+        observer_completed.set()
+
+    bus.subscribe(Error, close_provider)
+
+    class _FailedEndProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finalize_calls = 0
+
+        async def _on_start(self) -> None:
+            self._provider_event_bus = bus
+            self._ws = socket  # type: ignore[assignment]
+
+        async def _on_end(self) -> None:
+            self.finalize_calls += 1
+            self._emit_provider_error(end_error)
+            await self._close_active_websocket(close_before_drain=True)
+
+    probe = _FailedEndProbe()
+    await probe.start_stream()
+
+    with pytest.raises(RuntimeError, match="socket close failed") as exc_info:
+        await asyncio.wait_for(probe.end_stream(), timeout=1)
+
+    assert exc_info.value is end_error
+    assert observer_completed.is_set()
+    assert socket.close_calls == 3
+    assert probe.finalize_calls == 1
+    assert probe._ws is None
+    assert probe._failed_end_cleanup_pending is False
+    assert probe._failed_end_cleanup_error is None
+    assert probe._emit_tasks == set()
+    assert probe._lifecycle_lock.locked() is False
+
+
+@pytest.mark.asyncio
+async def test_streaming_audio_downmixes_stereo_pcm16_once() -> None:
+    class _AudioProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[AudioChunk] = []
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            self.audio.append(chunk)
+
+    probe = _AudioProbe()
+    await probe.start_stream()
+    stereo = AudioChunk(
+        data=struct.pack("<hhhh", 1200, -1200, -900, 900),
+        format=AudioFormat(sample_rate=16000, channels=2, sample_width=2),
+        timestamp=1.25,
+    )
+
+    await probe.send_audio(stereo)
+
+    assert len(probe.audio) == 1
+    normalized = probe.audio[0]
+    assert normalized.data == struct.pack("<hh", 0, 0)
+    assert normalized.format == AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+    assert normalized.timestamp == 1.25
+    await probe.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_streaming_audio_rejects_non_pcm16_sample_width() -> None:
+    probe = _Probe()
+    await probe.start_stream()
+    chunk = AudioChunk(
+        data=b"\x80",
+        format=AudioFormat(sample_rate=16000, channels=1, sample_width=1),
+    )
+
+    with pytest.raises(ValueError, match="PCM16"):
+        await probe.send_audio(chunk)
+
+    await probe.end_stream()
 
 
 @pytest.mark.asyncio
@@ -268,24 +608,34 @@ async def test_emit_provider_error_noop_without_bus():
 
 
 @pytest.mark.asyncio
-async def test_close_active_websocket_drains_pending_emit_tasks():
-    """Teardown awaits in-flight emit tasks so none dangle past close."""
+async def test_close_drains_pending_emit_tasks_after_websocket_cleanup():
+    """Public teardown awaits in-flight emits after releasing lifecycle ownership."""
 
     class _FakeWS:
-        async def close(self) -> None:
-            return None
+        def __init__(self) -> None:
+            self.close_calls = 0
 
-    probe = _Probe()
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    class _ClosingProbe(_Probe):
+        async def _on_end(self) -> None:
+            await self._close_active_websocket()
+
+    probe = _ClosingProbe()
     bus = _RecordingBus()
+    socket = _FakeWS()
+    await probe.start_stream()
     probe._provider_event_bus = bus
-    probe._ws = _FakeWS()  # type: ignore[assignment]
+    probe._ws = socket  # type: ignore[assignment]
     probe._receive_task = None
 
     probe._emit_provider_error(RuntimeError("boom"), code=7)
     assert len(probe._emit_tasks) == 1  # scheduled, not yet awaited
 
-    await probe._close_active_websocket()
+    await probe.close()
 
     # The emit task was awaited during teardown — nothing left pending.
     assert probe._emit_tasks == set()
     assert len(bus.events) == 1
+    assert socket.close_calls == 1

@@ -133,6 +133,7 @@ class TTSStage:
             )
             raise
         finally:
+            await self._close_stream(stream)
             if observability.metrics_available():
                 observability.record_histogram(
                     "easycat.stage.latency",
@@ -212,6 +213,7 @@ class TTSStage:
             )
             raise
         finally:
+            await self._close_stream(stream)
             if observability.metrics_available():
                 observability.record_histogram(
                     "easycat.stage.latency",
@@ -233,6 +235,14 @@ class TTSStage:
                 "elapsed_ms": elapsed_ms,
             },
         )
+
+    @staticmethod
+    async def _close_stream(stream: Any) -> None:
+        """Forward early wrapper close/cancellation to the provider iterator."""
+        aclose = getattr(stream, "aclose", None)
+        if callable(aclose):
+            with contextlib.suppress(Exception):
+                await aclose()
 
     def snapshot_state(self) -> StageStateSnapshot:
         return StageStateSnapshot(

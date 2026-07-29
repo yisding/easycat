@@ -70,11 +70,24 @@ class VADStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = journal_ctx(ctx, self._journal)
+        if isinstance(input, AudioChunk) and (
+            input.format.encoding != "pcm" or input.format.sample_width != 2
+        ):
+            raise ValueError(
+                "VAD requires PCM16 audio "
+                f"(got encoding={input.format.encoding!r}, "
+                f"sample_width={input.format.sample_width!r})"
+            )
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
         capture_detail = captures_verbose_stage_io(ctx)
         data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
+        # ``input_ref`` stores the bytes exactly as they arrived. Keep the
+        # matching geometry before the provider-facing mono normalization so
+        # debugger what-if runs decode the artifact with its true channel
+        # layout instead of treating interleaved stereo as mono.
+        captured_audio_format = audio_format_fields(input)
         capture_allowed = audio_capture_allowed(ctx, input)
         input_ref = (
             await put_artifact_async(
@@ -100,7 +113,7 @@ class VADStage:
                 if isinstance(data_bytes, (bytes, bytearray))
                 else 0,
             }
-            start_extra.update(audio_format_fields(input))
+            start_extra.update(captured_audio_format)
             start_sequence = await journal_append_event_async(
                 ctx,
                 stage=self.name,
