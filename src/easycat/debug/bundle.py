@@ -21,6 +21,7 @@ import tempfile
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -320,11 +321,14 @@ class RunBundle:
         # avoid OOM on a corrupted artifact tree.
         artifacts = _ArtifactAccumulator()
         if artifact_root and Path(artifact_root).exists():
-            for f in Path(artifact_root).iterdir():
-                if not f.is_file():
+            root = Path(artifact_root)
+            for f in chain(root.glob("*/*.bin"), root.glob("*.bin")):
+                if f.is_symlink() or not f.is_file():
                     continue
                 ref = f.stem
-                if not _SHA256_REF.fullmatch(ref):
+                if f.parent != root and f.parent.name != ref[:2]:
+                    continue
+                if not _SHA256_REF.fullmatch(ref) or ref in artifacts.index:
                     continue
                 size = f.stat().st_size
                 artifacts.ensure_capacity(size)
