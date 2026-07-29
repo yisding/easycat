@@ -37,6 +37,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -63,6 +64,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -88,6 +90,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -111,6 +114,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -174,6 +178,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -212,6 +217,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -256,6 +262,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"

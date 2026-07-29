@@ -337,7 +337,8 @@ duration-drift, AEC reference, VAD/pre-roll, and transport accounting tests.
 
 ### Toolchain, dependency majors, and extras
 
-- CI and lockfile regeneration use one exact version from `.uv-version`.
+- CI uses an exact version in every `setup-uv` step; contributors may use any
+  compatible `0.11.x` release accepted by `pyproject.toml`.
   `[tool.uv].required-version` accepts the compatible contributor range that
   can faithfully consume the committed lockfile. The `uv_build` requirement is
   an independent bounded build-backend range.
