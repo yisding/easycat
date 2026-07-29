@@ -284,6 +284,9 @@ class TestTelephonyConfigExtension:
             def stop(self) -> None:
                 pass
 
+            async def hangup_owned_call(self, _call_sid: str) -> None:
+                pass
+
         monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
 
         dnc = DNCList()
