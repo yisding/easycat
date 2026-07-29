@@ -174,22 +174,27 @@ def _remote_responses_bridge() -> RemoteResponsesAPIBridge:
     return bridge
 
 
+@pytest.mark.integration_external
 class TestRealOpenAIAgentsBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_openai_agents_bridge)
 
 
+@pytest.mark.integration_external
 class TestRealPydanticAIBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_pydantic_ai_bridge)
 
 
+@pytest.mark.integration_external
 class TestRealLangChainBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_langchain_bridge)
 
 
+@pytest.mark.integration_external
 class TestRealLangGraphBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_langgraph_bridge)
 
 
+@pytest.mark.integration_external
 class TestRealLlamaAgentsBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_llama_agents_bridge)
 
