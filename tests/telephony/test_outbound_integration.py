@@ -615,6 +615,7 @@ class TestBotToBotDetection:
         manager._client = MagicMock()
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
+        manager._owned_call_sids = {"CA1"}
         manager._started = False
         call_resource = MagicMock()
         manager._client.calls.return_value = call_resource
@@ -625,6 +626,7 @@ class TestBotToBotDetection:
         )
         sm.start()
         manager.start()
+        sm.set_max_duration_hangup(manager.hangup_owned_call)
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(VoicemailDetected(result="human"))

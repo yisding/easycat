@@ -347,6 +347,7 @@ class TestOutboundCallManager:
         manager = OutboundCallManager.__new__(OutboundCallManager)
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
+        manager._owned_call_sids = set()
         manager._started = False
         assert manager.state == OutboundCallManagerState.IDLE
         assert manager.active_call_sid is None
@@ -357,6 +358,7 @@ class TestOutboundCallManager:
         manager._event_bus = EventBus()
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
+        manager._owned_call_sids = set()
         manager._started = False
         manager.start()
         manager.start()
@@ -371,6 +373,7 @@ class TestOutboundCallManager:
         manager._event_bus = EventBus()
         manager._state = OutboundCallManagerState.ACTIVE
         manager._active_call_sid = "CA1"
+        manager._owned_call_sids = {"CA1"}
         manager._started = True
         manager.stop()
         assert manager.state == OutboundCallManagerState.IDLE
@@ -402,6 +405,7 @@ class TestOutboundCallManagerPlaceCall:
         manager._client = MagicMock()
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
+        manager._owned_call_sids = set()
         manager._started = True
         manager.dnc_list = None
         manager.compliance_check = None
@@ -531,6 +535,7 @@ class TestOutboundCallManagerStatusTracking:
         manager._client = MagicMock()
         manager._state = OutboundCallManagerState.IDLE
         manager._active_call_sid = None
+        manager._owned_call_sids = set()
         manager._started = False
         return manager
 
@@ -539,6 +544,7 @@ class TestOutboundCallManagerStatusTracking:
         bus = EventBus()
         manager = self._make_manager(bus)
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallRinging(call_sid="CA1"))
         assert manager.state == OutboundCallManagerState.ACTIVE
         assert manager.active_call_sid == "CA1"
@@ -551,12 +557,26 @@ class TestOutboundCallManagerStatusTracking:
         manager._client.calls.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_inbound_status_events_are_not_owned_or_hung_up(self) -> None:
+        bus = EventBus()
+        manager = self._make_manager(bus)
+        manager.start()
+
+        await bus.emit(CallAnswered(call_sid="CA-INBOUND"))
+        await bus.emit(CallEnded(call_sid="CA-INBOUND", disposition="max_duration"))
+
+        manager._client.calls.assert_not_called()
+        assert manager.state == OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
+
+    @pytest.mark.asyncio
     async def test_max_duration_event_hangs_up_matching_twilio_call(self) -> None:
         bus = EventBus()
         manager = self._make_manager(bus)
         call_resource = MagicMock()
         manager._client.calls.return_value = call_resource
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallAnswered(call_sid="CA1"))
 
         await bus.emit(CallEnded(call_sid="CA1", disposition="max_duration"))
@@ -571,6 +591,7 @@ class TestOutboundCallManagerStatusTracking:
         bus = EventBus()
         manager = self._make_manager(bus)
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallAnswered(call_sid="CA1"))
 
         await bus.emit(CallEnded(call_sid="CA2", disposition="max_duration"))
@@ -585,6 +606,7 @@ class TestOutboundCallManagerStatusTracking:
         manager = self._make_manager(bus)
         manager._client.calls.return_value.update.side_effect = RuntimeError("Twilio unavailable")
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallAnswered(call_sid="CA1"))
 
         with pytest.raises(RuntimeError, match="Twilio unavailable"):
@@ -598,6 +620,7 @@ class TestOutboundCallManagerStatusTracking:
         bus = EventBus()
         manager = self._make_manager(bus)
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallRinging(call_sid="CA1"))
         await bus.emit(CallFailed(call_sid="CA1", reason="busy"))
         assert manager.state == OutboundCallManagerState.IDLE
@@ -608,6 +631,7 @@ class TestOutboundCallManagerStatusTracking:
         bus = EventBus()
         manager = self._make_manager(bus)
         manager.start()
+        manager._owned_call_sids.add("CA1")
         await bus.emit(CallRinging(call_sid="CA1"))
         await bus.emit(CallEnded(call_sid="CA2"))
         assert manager.state == OutboundCallManagerState.ACTIVE
