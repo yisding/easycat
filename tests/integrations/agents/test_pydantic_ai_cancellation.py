@@ -176,10 +176,11 @@ async def test_aclose_commits_current_turn_before_interruption(
 ) -> None:
     turn, previous, current = _turn_messages(messages)
     bridge = PydanticAIBridge(agent=agent_type(turn))
-    bridge._message_history = [
+    prior_messages = [
         messages.ModelRequest([messages.UserPromptPart("previous question")]),
         previous,
     ]
+    bridge._set_history_for_key("session", prior_messages)
 
     stream = bridge.invoke(AgentTurnInput.from_text("current question"), _recorder())
     event = await anext(stream)
@@ -187,7 +188,7 @@ async def test_aclose_commits_current_turn_before_interruption(
     assert event.text == "partial reply"
     await stream.aclose()
 
-    assert bridge._history_for_key("session") == turn
+    assert bridge._history_for_key("session") == [*prior_messages, *turn]
     bridge.apply_interruption(
         "partial reply",
         CancellationMode.IMMEDIATE_STOP,

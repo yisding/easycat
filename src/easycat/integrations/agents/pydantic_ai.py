@@ -592,7 +592,11 @@ class PydanticAIBridge:
     async def _preserve_run_history_on_teardown(self, run: Any, history_key: str) -> None:
         """Best-effort snapshot of the current turn before cancellation escapes."""
         try:
-            self._set_history_for_key(history_key, await _run_new_messages(run))
+            prior_messages = list(self._history_for_key(history_key))
+            self._set_history_for_key(
+                history_key,
+                [*prior_messages, *await _run_new_messages(run)],
+            )
         except BaseException:
             # Cleanup must not replace the original GeneratorExit /
             # CancelledError (or a framework exception) with a secondary
