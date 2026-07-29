@@ -29,6 +29,7 @@ stage their writes for an async flush before the next turn or bridge close.
 from __future__ import annotations
 
 import asyncio
+import copy
 import functools
 import inspect
 import json
@@ -130,6 +131,16 @@ class _PendingStateMutation:
     kind: str
     payload: Any
     config: dict[str, Any]
+    interruption: _PendingInterruptionJournal | None = None
+
+
+@dataclass(frozen=True)
+class _PendingInterruptionJournal:
+    plan: InterruptionPlan
+    mode: CancellationMode
+    recorder: AgentRecorder
+    actual_pre_ref: str
+    caused_by_signal_id: str | None
 
 
 class LangGraphBridge:
@@ -780,7 +791,64 @@ class LangGraphBridge:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
+        if not self._async_state_surface:
+            apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
+            return
+
+        plan = self._plan_interruption(delivered_text, mode)
+        if recorder is None:
+            self._apply_planned_mutation(plan)
+            return
+
+        actual_pre_ref = recorder.record_state_snapshot(
+            plan.pre_state_ref,
+            payload=self._serialize_framework_state(),
+        )
+        try:
+            recorder.record_state_committed(
+                mutation_kind=plan.mutation_kind,
+                pre_state_ref=actual_pre_ref,
+                post_state_ref=plan.post_state_ref,
+            )
+        except Exception:
+            # Match the standard protocol: a degraded journal prevents the
+            # framework mutation from being scheduled.
+            return
+
+        pending_before = len(self._pending_state_mutations)
+        try:
+            self._apply_planned_mutation(plan)
+        except Exception as exc:
+            recorder.record_interruption_apply_failed(
+                mutation_kind=plan.mutation_kind,
+                pre_state_ref=actual_pre_ref,
+                post_state_ref=plan.post_state_ref,
+                failure_error=ErrorInfo.from_exception(exc),
+            )
+            raise
+
+        journal = _PendingInterruptionJournal(
+            plan=plan,
+            mode=mode,
+            recorder=recorder,
+            actual_pre_ref=actual_pre_ref,
+            caused_by_signal_id=caused_by_signal_id,
+        )
+        if len(self._pending_state_mutations) == pending_before:
+            # The rewrite was a legitimate no-op (for example, this turn has
+            # no assistant message). No async persistence remains outstanding.
+            self._record_interruption_success(
+                journal,
+                payload=self._serialize_framework_state(),
+            )
+            return
+        mutation = self._pending_state_mutations[-1]
+        self._pending_state_mutations[-1] = _PendingStateMutation(
+            mutation.kind,
+            mutation.payload,
+            mutation.config,
+            interruption=journal,
+        )
 
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())
@@ -936,34 +1004,101 @@ class LangGraphBridge:
                         self._last_state_snapshot = state
                     update = self._rewrite_update_for_state(state, str(mutation.payload))
                     if update is None:
+                        if mutation.interruption is not None:
+                            self._record_interruption_success(
+                                mutation.interruption,
+                                payload=_serialize_state_values(state),
+                            )
                         continue
                 elif mutation.kind == "append_note":
                     update = self._interruption_note_update(str(mutation.payload))
                     if update is None:
+                        if mutation.interruption is not None:
+                            self._record_interruption_success(
+                                mutation.interruption,
+                                payload=self._serialize_framework_state(),
+                            )
                         continue
                 else:
                     update = mutation.payload
 
                 updated = await self._update_state(mutation.config, update)
-                try:
-                    if _config_thread_id(mutation.config) == self._thread_id:
-                        await self._advance_checkpoint_baseline_async(updated)
-                except Exception as exc:
-                    # The state write already succeeded. Do not retry it (an
-                    # append would duplicate); only the trail baseline is
-                    # degraded, and the next final-state read can recover it.
-                    recorder.record_framework_error(ErrorInfo.from_exception(exc))
-                    logger.warning(
-                        "Failed to advance LangGraph checkpoint baseline after state write",
-                        exc_info=True,
-                    )
             except Exception as exc:
-                # Preserve this operation and every later one for a retry
-                # instead of silently discarding state mutations.
-                self._pending_state_mutations = pending[index:] + self._pending_state_mutations
+                if mutation.interruption is not None:
+                    # This commit intent is now terminally paired with a
+                    # failure record. Do not later attach a success boundary
+                    # to the same intent via a blind retry; a caller may submit
+                    # a fresh interruption plan explicitly.
+                    mutation.interruption.recorder.record_interruption_apply_failed(
+                        mutation_kind=mutation.interruption.plan.mutation_kind,
+                        pre_state_ref=mutation.interruption.actual_pre_ref,
+                        post_state_ref=mutation.interruption.plan.post_state_ref,
+                        failure_error=ErrorInfo.from_exception(exc),
+                    )
+                    self._pending_state_mutations = (
+                        pending[index + 1 :] + self._pending_state_mutations
+                    )
+                else:
+                    # Preserve ordinary history rewrites and every later
+                    # operation for retry instead of silently discarding them.
+                    self._pending_state_mutations = pending[index:] + self._pending_state_mutations
                 recorder.record_framework_error(ErrorInfo.from_exception(exc))
                 logger.error("Failed to flush pending LangGraph state mutation", exc_info=True)
                 raise
+
+            try:
+                if _config_thread_id(mutation.config) == self._thread_id:
+                    await self._advance_checkpoint_baseline_async(updated)
+            except Exception as exc:
+                # The state write already succeeded. Do not retry it (an
+                # append would duplicate); only the trail baseline is
+                # degraded, and the next final-state read can recover it.
+                recorder.record_framework_error(ErrorInfo.from_exception(exc))
+                logger.warning(
+                    "Failed to advance LangGraph checkpoint baseline after state write",
+                    exc_info=True,
+                )
+
+            if mutation.interruption is not None:
+                post_payload = b"{}"
+                try:
+                    state = await self._get_state(mutation.config)
+                    if _config_thread_id(mutation.config) == self._thread_id:
+                        self._last_state_snapshot = state
+                    post_payload = _serialize_state_values(state)
+                except Exception as exc:
+                    recorder.record_framework_error(ErrorInfo.from_exception(exc))
+                    logger.warning(
+                        "Failed to read LangGraph state after interruption write",
+                        exc_info=True,
+                    )
+                self._record_interruption_success(
+                    mutation.interruption,
+                    payload=post_payload,
+                )
+
+    @staticmethod
+    def _record_interruption_success(
+        journal: _PendingInterruptionJournal,
+        *,
+        payload: bytes,
+    ) -> None:
+        try:
+            journal.recorder.record_state_snapshot(
+                journal.plan.post_state_ref,
+                payload=payload,
+            )
+            journal.recorder.record_cancellation_boundary(
+                mode=journal.mode,
+                reason=journal.plan.mutation_kind,
+                caused_by_signal_id=journal.caused_by_signal_id,
+            )
+        except Exception:
+            logger.debug(
+                "interruption post-snapshot/boundary journal write failed; "
+                "mutation already applied",
+                exc_info=True,
+            )
 
     def _interruption_note_update(self, note: str) -> dict[str, Any] | None:
         if not self._messages_key_uses_add_messages():
@@ -1371,13 +1506,7 @@ class LangGraphBridge:
                 return b"{}"
         if state is None:
             return b"{}"
-        values = getattr(state, "values", None)
-        if values is None:
-            return b"{}"
-        try:
-            return json.dumps(_safe_values_for_serialization(values), default=str).encode()
-        except (TypeError, ValueError):
-            return b"{}"
+        return _serialize_state_values(state)
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""
@@ -1446,7 +1575,7 @@ class LangGraphBridge:
         self._advance_checkpoint_baseline(updated)
 
     def _rewrite_update_for_state(self, state: Any, replacement: str) -> dict[str, Any] | None:
-        """Mutate the cached last AI message and return its state update."""
+        """Return a state update without mutating the cached snapshot."""
         if self._turn_produced_no_assistant:
             logger.debug(
                 "rewrite_last_ai: last turn produced no assistant output; "
@@ -1478,6 +1607,7 @@ class LangGraphBridge:
                 )
                 return None
             if _message_is_ai(msg):
+                msg = copy.deepcopy(msg)
                 content = _content_of(msg)
                 if isinstance(content, list):
                     text_parts = [
@@ -1540,6 +1670,16 @@ class LangGraphBridge:
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _serialize_state_values(state: Any) -> bytes:
+    values = getattr(state, "values", None)
+    if values is None:
+        return b"{}"
+    try:
+        return json.dumps(_safe_values_for_serialization(values), default=str).encode()
+    except (TypeError, ValueError):
+        return b"{}"
 
 
 def _sync_checkpoint_ids_since(
