@@ -76,6 +76,10 @@ class STTBase:
         # cannot emit into a replaced queue.
         self._audio_send_lock = asyncio.Lock()
         self._active_audio_send_task: asyncio.Task[None] | None = None
+        # Distinguish work queued for an old stream from work admitted after
+        # a rapid end/start cycle. Without a generation check, an audio send
+        # waiting on ``_audio_send_lock`` can leak into the successor stream.
+        self._stream_generation = 0
 
     async def start_stream(self) -> None:
         """Begin a new STT stream session."""
@@ -84,6 +88,13 @@ class STTBase:
                 raise RuntimeError(
                     "Stream already started; call end_stream() before start_stream()"
                 )
+            active_send = self._active_audio_send_task
+            if active_send is not None:
+                if not active_send.done():
+                    raise RuntimeError(
+                        "Previous STT audio send is still shutting down; cannot start a new stream"
+                    )
+                self._active_audio_send_task = None
             self._event_queue = asyncio.Queue()
             self._running = True
             try:
@@ -91,13 +102,15 @@ class STTBase:
             except Exception:
                 self._running = False
                 raise
+            self._stream_generation += 1
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the active STT stream."""
         if self._allow_end_during_audio_send:
+            stream_generation = self._stream_generation
             async with self._audio_send_lock:
                 async with self._lifecycle_lock:
-                    if not self._running:
+                    if not self._running or stream_generation != self._stream_generation:
                         raise RuntimeError("Stream not started; call start_stream() first")
                     self._validate_audio(chunk)
                 # Run the provider write in an owned task. end_stream() can
@@ -116,7 +129,7 @@ class STTBase:
                         send_task.cancel()
                         await asyncio.gather(send_task, return_exceptions=True)
                         raise
-                    if self._running:
+                    if self._running and stream_generation == self._stream_generation:
                         # Provider-side cancellation unrelated to lifecycle
                         # teardown remains observable to the caller.
                         raise
@@ -142,12 +155,13 @@ class STTBase:
         support whole-stream finalization.
         """
         if self._allow_end_during_audio_send:
+            stream_generation = self._stream_generation
             # Segment-control writes share the provider socket with audio.
             # Preserve wire order so a finalize message cannot overtake an
             # append that is still suspended under transport backpressure.
             async with self._audio_send_lock:
                 async with self._lifecycle_lock:
-                    if not self._running:
+                    if not self._running or stream_generation != self._stream_generation:
                         return False
                     return await self._on_commit_segment()
         async with self._lifecycle_lock:
@@ -165,12 +179,28 @@ class STTBase:
             if active_send is not None and not active_send.done():
                 active_send.cancel()
             try:
+                if active_send is not None:
+                    try:
+                        # Do not finalize or close provider state until the
+                        # write has actually stopped. Shielding lets an outer
+                        # STT timeout still cancel end_stream() promptly if a
+                        # broken provider ignores cancellation.
+                        await asyncio.shield(active_send)
+                    except asyncio.CancelledError:
+                        current = asyncio.current_task()
+                        if current is not None and current.cancelling():
+                            raise
+                        # Expected: end_stream() cancelled the owned send.
+                    except Exception:
+                        logger.debug(
+                            "STT audio send failed while ending stream",
+                            exc_info=True,
+                        )
+                    finally:
+                        if active_send.done() and self._active_audio_send_task is active_send:
+                            self._active_audio_send_task = None
                 await self._on_end()
             finally:
-                if active_send is not None and not active_send.done():
-                    done, _ = await asyncio.wait({active_send}, timeout=0.1)
-                    if not done:
-                        logger.warning("STT audio send ignored cancellation during end_stream")
                 await self._event_queue.put(None)
 
     async def events(self) -> AsyncIterator[STTEvent]:

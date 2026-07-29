@@ -168,6 +168,7 @@ async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
             super().__init__(provider_name="test", provider_error_name="test")
             self.send_started = asyncio.Event()
             self.send_cancelled = asyncio.Event()
+            self.release_cancel_cleanup = asyncio.Event()
             self.end_called = asyncio.Event()
 
         async def _on_start(self) -> None:
@@ -180,6 +181,7 @@ async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 self.send_cancelled.set()
+                await self.release_cancel_cleanup.wait()
                 raise
 
         async def _on_end(self) -> None:
@@ -196,14 +198,65 @@ async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
     await asyncio.wait_for(stt.send_started.wait(), timeout=1)
     second_send = asyncio.create_task(stt.send_audio(chunk))
 
-    await asyncio.wait_for(stt.end_stream(), timeout=0.1)
+    end = asyncio.create_task(stt.end_stream())
+    await asyncio.wait_for(stt.send_cancelled.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not stt.end_called.is_set()
+    stt.release_cancel_cleanup.set()
+    await asyncio.wait_for(end, timeout=1)
 
     assert stt.end_called.is_set()
     assert stt.send_cancelled.is_set()
 
+    # A rapid successor stream must not make the lifecycle cancellation look
+    # provider-originated, nor admit audio queued for the old stream.
+    await stt.start_stream()
     await asyncio.wait_for(first_send, timeout=1)
     with pytest.raises(RuntimeError, match="Stream not started"):
         await asyncio.wait_for(second_send, timeout=1)
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_end_does_not_finalize_or_restart_over_live_send() -> None:
+    class CancellationResistantSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_started = asyncio.Event()
+            self.send_cancelled = asyncio.Event()
+            self.release_send = asyncio.Event()
+            self.end_called = asyncio.Event()
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.send_cancelled.set()
+                await self.release_send.wait()
+
+        async def _on_end(self) -> None:
+            self.end_called.set()
+
+    stt = CancellationResistantSTT()
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    await stt.start_stream()
+    send = asyncio.create_task(stt.send_audio(chunk))
+    await stt.send_started.wait()
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(stt.end_stream(), timeout=0.02)
+
+    assert stt.send_cancelled.is_set()
+    assert not stt.end_called.is_set()
+    with pytest.raises(RuntimeError, match="still shutting down"):
+        await stt.start_stream()
+
+    stt.release_send.set()
+    await asyncio.wait_for(send, timeout=1)
+    await stt.start_stream()
+    await stt.end_stream()
 
 
 @pytest.mark.asyncio
