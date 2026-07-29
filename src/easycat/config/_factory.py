@@ -650,7 +650,10 @@ def _build_audio_session(
     debug: _DebugResources,
     rollback: ExitStack,
 ) -> _BuiltAudioSession:
-    event_bus = EventBus()
+    event_bus = EventBus(
+        slow_handler_threshold_s=config.slow_handler_threshold_s,
+        handler_error_policy=config.handler_error_policy,
+    )
     audio = _resolve_audio_pipeline(config, event_bus)
     if audio.vad is not None:
         _register_close(rollback, audio.vad)
@@ -952,6 +955,8 @@ def create_text_session(
     agent: Any = None,
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "light",
+    slow_handler_threshold_s: float | None = 0.005,
+    handler_error_policy: Literal["continue", "raise"] = "continue",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_capacity: int = 10_000,
     journal_redaction: Literal["secrets", "pii"] = "secrets",
@@ -992,6 +997,8 @@ def create_text_session(
         agent=agent,
         session_id=session_id,
         debug=debug,
+        slow_handler_threshold_s=slow_handler_threshold_s,
+        handler_error_policy=handler_error_policy,
         journal_backend=journal_backend,
         journal_capacity=journal_capacity,
         journal_redaction=journal_redaction,
@@ -1014,7 +1021,10 @@ def create_text_session(
         close_journal = getattr(debug_resources.journal, "close", None)
         if callable(close_journal):
             rollback.callback(close_journal)
-        event_bus = EventBus()
+        event_bus = EventBus(
+            slow_handler_threshold_s=config.slow_handler_threshold_s,
+            handler_error_policy=config.handler_error_policy,
+        )
         resolved_mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
         adapted = _resolve_agent(
             config,

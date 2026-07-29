@@ -3082,7 +3082,8 @@ function renderReplayResult(result) {
     el("span", { class: "summary-counts" },
       `${result.frame_count} frame${result.frame_count === 1 ? "" : "s"}` +
       (result.total_frames && result.total_frames !== result.frame_count
-        ? ` of ${result.total_frames}` : "")),
+        ? ` of ${result.total_frames}` : "") +
+      ` · ${result.stage_replays || 0} stage replay${result.stage_replays === 1 ? "" : "s"}`),
   ]);
   summary.appendChild(row);
 
@@ -3099,6 +3100,7 @@ function renderReplayResult(result) {
     ["blocked_tool_calls", "blocked", "blocked"],
     ["stubbed_tool_calls", "stubbed", "stubbed"],
     ["allowed_tool_calls", "allowed", "allowed"],
+    ["executed_tool_calls", "allowed", "executed"],
   ]) {
     const items = result[key] || [];
     if (!items.length) continue;

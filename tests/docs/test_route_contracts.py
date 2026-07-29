@@ -129,6 +129,9 @@ def test_events_reference_tracks_public_event_types() -> None:
     assert "`STTEvent`" in text
     assert "`TTSEvent`" in text
     assert "easycat.events" in text
+    normalized_text = " ".join(text.split())
+    assert "confirmation/take timestamp" in normalized_text
+    assert "not always the start of model work" in normalized_text
 
 
 def test_easyconfig_reference_tracks_config_fields() -> None:

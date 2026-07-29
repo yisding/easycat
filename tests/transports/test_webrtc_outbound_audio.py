@@ -170,11 +170,12 @@ class TestOutboundAudioAecReference:
         delivered_bytes = b"".join(e.chunk.data for e in delivered)
         ref_frames = source.drain_aec_reference_frames()
         assert isinstance(ref_frames, list)
-        assert all(isinstance(f, bytes) for f in ref_frames)
+        assert all(isinstance(frame, AudioChunk) for frame in ref_frames)
+        assert all(frame.format == PCM16_MONO_16K for frame in ref_frames)
         # Same order and content as the delivered session-rate audio, plus the
         # final frame's half-frame padding recorded as session-rate silence
         # (960 transport bytes -> 160 samples at 16 kHz).
-        assert b"".join(ref_frames) == delivered_bytes + bytes(160 * 2)
+        assert b"".join(frame.data for frame in ref_frames) == delivered_bytes + bytes(160 * 2)
         assert delivered_bytes == chunk_a + chunk_b
 
         # Draining clears the queue.
@@ -389,7 +390,8 @@ class TestOutboundAudioAecReference:
 
         # Capture the already-played reference before barge-in.
         captured = list(source._aec_ref_queue)
-        assert captured == [played]
+        assert [frame.data for frame in captured] == [played]
+        assert [frame.format for frame in captured] == [PCM16_MONO_16K]
 
         # Barge-in: clear() drops pending outbound audio but keeps the
         # already-played reference whose echo is still arriving at the mic.
@@ -421,9 +423,11 @@ class TestOutboundAudioAecReference:
 
         frames = source.drain_aec_reference_frames()
         assert len(frames) == 2
-        assert frames[0] == session_data
+        assert frames[0].data == session_data
+        assert frames[0].format == PCM16_MONO_16K
         # 20 ms of 16 kHz mono silence = 320 samples * 2 bytes.
-        assert frames[-1] == bytes(320 * 2)
+        assert frames[-1].data == bytes(320 * 2)
+        assert frames[-1].format == PCM16_MONO_16K
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
@@ -448,7 +452,8 @@ class TestOutboundAudioAecReference:
 
         frames = source.drain_aec_reference_frames()
         # Reference = 30 ms of audio + 10 ms of silence = 40 ms at 16 kHz.
-        assert b"".join(frames) == session_data + bytes(160 * 2)
+        assert b"".join(frame.data for frame in frames) == session_data + bytes(160 * 2)
+        assert all(frame.format == PCM16_MONO_16K for frame in frames)
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
@@ -464,7 +469,7 @@ class TestOutboundAudioAecReference:
 
     def test_transport_drain_is_declared_capability(self):
         """The router detects drain via ``getattr`` — it must be a callable
-        returning ``list[bytes]`` even with no peer connected."""
+        returning ``list[AudioChunk]`` even with no peer connected."""
         transport = WebRTCTransport()
         drain = getattr(transport, "drain_aec_reference_frames", None)
         assert callable(drain)
@@ -487,8 +492,9 @@ class TestOutboundAudioAecReference:
 
         frames = transport.drain_aec_reference_frames()
         assert isinstance(frames, list)
-        assert all(isinstance(f, bytes) for f in frames)
-        assert b"".join(frames) == played
+        assert all(isinstance(frame, AudioChunk) for frame in frames)
+        assert b"".join(frame.data for frame in frames) == played
+        assert all(frame.format == PCM16_MONO_16K for frame in frames)
         # Drained.
         assert transport.drain_aec_reference_frames() == []
 
@@ -514,4 +520,6 @@ class TestOutboundAudioAecReference:
         assert source._queue.empty()
         assert not source._pending
         # The already-played reference survives barge-in.
-        assert transport.drain_aec_reference_frames() == [played]
+        frames = transport.drain_aec_reference_frames()
+        assert [frame.data for frame in frames] == [played]
+        assert [frame.format for frame in frames] == [PCM16_MONO_16K]

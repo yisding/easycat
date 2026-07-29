@@ -138,11 +138,12 @@ class TestRemoteFirstDisconnect:
         await transport.connect()
         receive_task = transport._receive_task
         assert receive_task is not None
-        await receive_task
-        assert not transport.is_connected
-
         forwarder = transport._browser_event_forwarder
         assert forwarder is not None
+        await receive_task
+        assert not transport.is_connected
+        assert transport._browser_event_forwarder is None
+        assert not forwarder._subscriptions
         transport._emit_degraded("audit_remote_eof")
         assert transport._emit_tasks
 
@@ -150,13 +151,14 @@ class TestRemoteFirstDisconnect:
 
         assert transport._receive_task is None
         assert transport._browser_event_forwarder is None
-        assert not forwarder._subscriptions
-        assert ws.close_calls == 1
+        # Remote EOF already completed the socket lifecycle, so disconnect()
+        # only drains local bookkeeping and does not close the socket again.
+        assert ws.close_calls == 0
         assert transport._emit_tasks == set()
         assert len(degraded) == 1
 
         await transport.disconnect()
-        assert ws.close_calls == 1
+        assert ws.close_calls == 0
 
     @pytest.mark.asyncio
     async def test_twilio_disconnect_releases_resources_after_remote_eof(self):

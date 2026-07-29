@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from easycat._provider_catalog import ProviderCatalog, ProviderSpec
@@ -88,8 +88,18 @@ class TTSProviderConfig:
     """Named TTS provider, credential, and provider-specific parameters."""
 
     provider: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     params: dict[str, Any] | None = None
+
+    def __repr__(self) -> str:
+        # Import lazily: safe_defaults discovers provider catalogs while it is
+        # initializing its redaction policy.
+        from easycat.runtime.safe_defaults import _safe_repr
+
+        return (
+            f"TTSProviderConfig(provider={_safe_repr(self.provider)}, "
+            f"params={_safe_repr(self.params)})"
+        )
 
 
 def create_tts_provider(
