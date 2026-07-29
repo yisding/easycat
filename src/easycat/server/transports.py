@@ -102,7 +102,10 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         *,
         manager: Any,
         max_sessions: int,
-        session_factory: Callable[[ConnectionT], SessionT | Awaitable[SessionT | None]],
+        session_factory: Callable[
+            [ConnectionT],
+            SessionT | None | Awaitable[SessionT | None],
+        ],
         runtime_feedback: bool = False,
         capacity_reason: str = "Server is at the configured session limit",
         on_session: Callable[[SessionT], Callable[[], None] | None] | None = None,

@@ -406,6 +406,31 @@ def test_shipped_agent_bridges_satisfy_static_consumer_contract() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_websocket_runtime_static_consumers_are_compatible(tmp_path: Path) -> None:
+    from easycat.cli.scaffold._schema import InitConfig
+    from easycat.cli.scaffold.init import _render_text, _substitutions
+
+    template_dir = Path("src/easycat/cli/scaffold/templates/twilio-phone")
+    mapping = _substitutions(InitConfig(template="twilio-phone"), project_name="demo")
+    for name in ("agent.py", "server.py"):
+        source = (template_dir / name).read_text(encoding="utf-8")
+        (tmp_path / name).write_text(_render_text(source, mapping), encoding="utf-8")
+
+    consumers = (
+        Path("tests/typecheck/websocket_runtime_consumer.py"),
+        Path("examples/twilio_app.py"),
+        tmp_path / "server.py",
+    )
+    for consumer in consumers:
+        result = subprocess.run(
+            [sys.executable, "-m", "mypy", "--no-incremental", str(consumer)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{consumer}:\n{result.stdout}{result.stderr}"
+
+
 def test_server_package_owns_standalone_transport_orchestration() -> None:
     """Process lifecycle helpers belong to ``easycat.server``, not providers."""
     import easycat.server as server
