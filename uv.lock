@@ -16,9 +16,6 @@ conflicts = [[
     { package = "easycat", extra = "pydantic-ai-v2" },
 ]]
 
-[options]
-exclude-newer = "2026-07-28T23:59:59Z"
-
 [[package]]
 name = "ag-ui-protocol"
 version = "0.1.19"
