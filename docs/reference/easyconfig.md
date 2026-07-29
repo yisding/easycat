@@ -61,6 +61,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   transcripts and other customer content while scrubbing credentials;
   `"pii"` also redacts phone numbers, URLs, request IDs, home paths, prompts,
   transcripts, and provider text before the journal is written.
+- `slow_handler_threshold_s` — elapsed time before an inline event handler
+  produces a warning. Defaults to `0.005` seconds; set `None` to disable.
+- `handler_error_policy` — `"continue"` (default) logs and counts event-handler
+  exceptions before dispatching later handlers; `"raise"` propagates the first
+  exception to the emitter.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
 - `data_dir` — optional storage root. With `debug="full"` it contains the
