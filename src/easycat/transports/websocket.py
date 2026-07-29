@@ -74,7 +74,7 @@ class WebSocketSessionServerConfig:
 
     host: str = "127.0.0.1"
     port: int = 8765
-    auth_token: str | None = None
+    auth_token: str | None = field(default=None, repr=False)
     max_sessions: int = 10
     drain_timeout_s: float = 30.0
     force_shutdown_timeout_s: float = 10.0

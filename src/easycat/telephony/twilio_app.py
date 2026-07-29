@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hmac import compare_digest
 from typing import TYPE_CHECKING, Any
 
@@ -59,13 +59,13 @@ class TwilioAppSettings:
 
     stream_url: str
     account_sid: str = ""
-    auth_token: str = ""
+    auth_token: str = field(default="", repr=False)
     voice_from: str = ""
     twiml_url: str = ""
     status_callback_url: str = ""
-    call_api_token: str = ""
+    call_api_token: str = field(default="", repr=False)
     sms_from: str = ""
-    stream_token_secret: str = ""
+    stream_token_secret: str = field(default="", repr=False)
     max_sessions: int = 64
     start_timeout_s: float = 10.0
     public_twiml_url: str = ""
