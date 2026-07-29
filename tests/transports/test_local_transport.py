@@ -226,7 +226,9 @@ class TestLocalTransport:
         thread drains ``_out_queue`` mid-test; ``qsize()`` is then deterministic
         on any host (no hardware required).
         """
-        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=1))
+        transport = LocalTransport(
+            LocalTransportConfig(max_pending_out_chunks=1, output_preroll_frames=0)
+        )
         transport._connected = True
         sr = transport._audio_format.sample_rate
         frame_bytes = transport._frame_samples * transport._audio_format.frame_size
@@ -251,7 +253,9 @@ class TestLocalTransport:
         No sounddevice stream is started, so nothing drains the queue during the
         assertions (deterministic on any host).
         """
-        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=2))
+        transport = LocalTransport(
+            LocalTransportConfig(max_pending_out_chunks=2, output_preroll_frames=0)
+        )
         transport._connected = True
         sr = transport._audio_format.sample_rate
         frame_bytes = transport._frame_samples * transport._audio_format.frame_size
@@ -269,7 +273,9 @@ class TestLocalTransport:
         when only a single slot is free on an empty maxsize=1 queue.  The
         truncated send reports ``False`` because the tail was dropped.
         """
-        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=1))
+        transport = LocalTransport(
+            LocalTransportConfig(max_pending_out_chunks=1, output_preroll_frames=0)
+        )
         transport._connected = True
         frame_bytes = transport._frame_samples * transport._audio_format.frame_size
         # Three distinct frames so head vs tail are distinguishable.
@@ -379,6 +385,17 @@ class TestLocalTransport:
         with pytest.raises(ValueError, match="output_preroll_frames"):
             LocalTransportConfig(output_preroll_frames=value)  # type: ignore[arg-type]
 
+    def test_config_rejects_preroll_larger_than_bounded_output_queue(self):
+        with pytest.raises(ValueError, match="cannot exceed max_pending_out_chunks"):
+            LocalTransportConfig(max_pending_out_chunks=2, output_preroll_frames=3)
+
+    def test_config_allows_any_preroll_depth_with_unbounded_output_queue(self):
+        config = LocalTransportConfig(
+            max_pending_out_chunks=0,
+            output_preroll_frames=1_000,
+        )
+        assert config.output_preroll_frames == 1_000
+
     @pytest.mark.asyncio
     async def test_receive_audio_returns_on_disconnect(self):
         """receive_audio iterator ends when transport disconnects."""
@@ -430,6 +447,7 @@ class TestLocalTransport:
                 audio_format=PCM16_MONO_24K,
                 frame_duration_ms=20,
                 max_pending_out_chunks=1,
+                output_preroll_frames=0,
             )
         )
         transport._connected = True
@@ -498,6 +516,34 @@ class TestLocalTransport:
         assert transport._primed
         assert not (outdata == 0).all()  # real audio after prime
         assert transport._out_queue.qsize() == preroll_frames - 1
+
+    @pytest.mark.asyncio
+    async def test_output_callback_does_not_reprime_after_ordinary_underrun(self):
+        """A transient empty queue within one stream must not add a new pre-roll."""
+        np = pytest.importorskip("numpy")
+        from easycat.transports.local import _QueuedOutputChunk
+
+        transport = LocalTransport()
+        transport._primed = True
+        frame_samples = transport._frame_samples
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+
+        transport._output_callback(np, outdata, frame_samples, None, None)
+
+        assert transport._primed is True
+        assert (outdata == 0).all()
+
+        loud = AudioChunk(
+            data=(1000).to_bytes(2, "little", signed=True) * frame_samples,
+            format=transport._audio_format,
+        )
+        transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=loud))
+        outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+
+        transport._output_callback(np, outdata, frame_samples, None, None)
+
+        assert np.any(outdata)
+        assert transport._out_queue.empty()
 
     @pytest.mark.asyncio
     async def test_clear_audio_re_primes_jitter_buffer(self):

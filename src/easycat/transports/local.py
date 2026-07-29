@@ -66,6 +66,14 @@ class LocalTransportConfig:
             or self.output_preroll_frames < 0
         ):
             raise ValueError("output_preroll_frames must be a non-negative integer")
+        if (
+            self.max_pending_out_chunks > 0
+            and self.output_preroll_frames > self.max_pending_out_chunks
+        ):
+            raise ValueError(
+                "output_preroll_frames cannot exceed max_pending_out_chunks "
+                "when the output queue is bounded"
+            )
 
 
 class LocalTransport(AudioQueueMixin):
@@ -125,8 +133,9 @@ class LocalTransport(AudioQueueMixin):
 
         # Output jitter buffer: the callback emits silence until ``_out_queue``
         # has built up the configured number of pre-roll frames, then drains
-        # one frame per callback. Reset to ``False`` on every connect / barge-in
-        # so each utterance re-primes.
+        # one frame per callback. Reset to ``False`` on connect and barge-in;
+        # ordinary transient underruns stay primed so a streaming utterance
+        # does not repeatedly pay the pre-roll delay.
         self._primed: bool = False
 
         self._input_stream: Any = None
@@ -263,8 +272,8 @@ class LocalTransport(AudioQueueMixin):
         frame_bytes = self._frame_samples * self._audio_format.frame_size
 
         # Jitter-buffer pre-roll: emit silence until enough frames have queued,
-        # then drain one frame per callback. Re-primes after every
-        # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
+        # then drain one frame per callback. Re-primes after ``clear_audio()``
+        # and ``connect()``, but not after an ordinary queue underrun.
         if not self._primed:
             if self._out_queue.qsize() < self._config.output_preroll_frames:
                 outdata[:] = 0
