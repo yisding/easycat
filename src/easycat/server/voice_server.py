@@ -345,8 +345,8 @@ class VoiceServer:
            graceful ``session.stop()`` per session and waits ``drain_timeout_s``.
         5. The drain escalates any session whose graceful stop did NOT finish in
            the grace window by cancelling and reaping the still-pending graceful
-           task, then calling ``session.stop(force=True)`` after the real
-           :class:`Session` ``_stopping`` guard has cleared.
+           task, then calling ``session.stop(force=True)`` with one clear
+           teardown owner.
         6. Cancel any handler task still hung in ``ws.wait_closed()`` (e.g. a
            client that never completed the close handshake) so the raw-ws
            ``Server._close`` waiter — which ``asyncio.wait``s on its handlers
@@ -1004,10 +1004,7 @@ class VoiceServer:
         session in the active set and registry untouched so the shared
         :meth:`CapacityGate.drain` owns the single stop. The drain starts the
         sole graceful ``session.stop()`` itself and cancels / force-escalates it
-        on timeout — keeping the teardown effective against the real
-        :class:`Session` ``_stopping`` idempotency guard (a graceful stop already
-        in progress turns a later ``force=True`` into a no-op, so a handler that
-        started its OWN graceful stop could never be force-preempted). During a
+        on timeout, keeping one lifecycle authority during drain. During a
         natural-end drain the handler may begin graceful removal after caller
         hangup; ``SessionManager.remove`` retains that entry until stop succeeds.
         If the drain deadline cancels the handler, the final force sweep can

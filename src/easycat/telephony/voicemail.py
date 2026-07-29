@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from easycat._privacy import redacted_phone_number_label
 from easycat.events import (
     CallAnswered,
     CallInitiated,
@@ -476,7 +477,10 @@ class VoicemailPolicyHandler:
             "transfer_number": self._config.transfer_number,
             "twiml": twiml,
         }
-        logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
+        logger.info(
+            "Voicemail policy: transferring to %s",
+            redacted_phone_number_label(),
+        )
 
 
 # ── STT-based greeting classification ──────────────────────────────

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import struct
 import time
@@ -448,22 +449,26 @@ class TestVoicemailPolicyHandler:
         finally:
             handler.stop()
 
-    async def test_transfer_policy(self) -> None:
+    async def test_transfer_policy(self, caplog: pytest.LogCaptureFixture) -> None:
+        phone = "+15551234567"
         bus = EventBus()
         config = VoicemailPolicyConfig(
             policy=VoicemailPolicy.TRANSFER,
-            transfer_number="+15551234567",
+            transfer_number=phone,
         )
         handler = VoicemailPolicyHandler(bus, config)
         handler.start()
 
         try:
-            await bus.emit(VoicemailDetected(result="machine"))
+            with caplog.at_level(logging.INFO, logger="easycat.telephony.voicemail"):
+                await bus.emit(VoicemailDetected(result="machine"))
 
             assert handler.last_action is not None
             assert handler.last_action["type"] == "transfer"
-            assert handler.last_action["transfer_number"] == "+15551234567"
+            assert handler.last_action["transfer_number"] == phone
             assert "<Dial>" in handler.last_action["twiml"]
+            assert phone not in caplog.text
+            assert "redacted phone number" in caplog.text.lower()
         finally:
             handler.stop()
 

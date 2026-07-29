@@ -1,6 +1,7 @@
 """Tests for TTSSynthesizer — shared TTS synthesis logic."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 
 import pytest
@@ -347,3 +348,18 @@ async def test_cancel_delegates_to_tts():
 
     await synth.cancel()
     assert tts.cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_logs_provider_failure(caplog: pytest.LogCaptureFixture):
+    class RaisingCancelTTS(FakeTTS):
+        async def cancel(self) -> None:
+            raise RuntimeError("provider cancel failed")
+
+    synth, _, _ = _make_synth(tts=RaisingCancelTTS())
+
+    with caplog.at_level(logging.DEBUG, logger="easycat._tts_synthesizer"):
+        await synth.cancel()
+
+    assert "TTS provider cancel raised" in caplog.text
+    assert "provider cancel failed" in caplog.text

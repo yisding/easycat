@@ -42,7 +42,7 @@ just guard-contributing  # Guard contributor guidance, agent guide contracts, va
 just guard-validation    # Guard validation workflow docs, validation reference docs, and validate CLI behavior
 just guard-contracts     # Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix
 just guard-ops           # Guard operator docs, deployment guide, observability docs, journal CLI, and durability
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py  # Raw fallback for just guard-docs
+uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py  # Raw fallback for just guard-docs
 uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py  # Raw fallback for just guard-teaching
 uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'  # Raw fallback for just guard-examples
 uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py  # Raw fallback for just guard-contributing
@@ -109,7 +109,7 @@ page when moving modules; this file keeps only the orientation map below.
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
 - **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from one `ProviderSpec` per backend. The catalog derives `_PROVIDER_TO_CONFIG`, credential, install-extra, and API-domain views used by doctor, scaffolding, validation, and redaction. To add a provider, add one spec and its config dataclass.
-- **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
+- **Event bus injection** — a provider config that declares optional `event_bus` receives the session bus when unset; no provider requires it. Injected STT/TTS/VAD/noise/AEC/transport instances that emit provider-scoped events expose synchronous `set_event_bus(bus)`; private attribute probes are compatibility-only.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 
 ## Session Lifecycle

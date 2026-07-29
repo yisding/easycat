@@ -1,4 +1,4 @@
-"""Shared STT/TTS provider registration, lookup, and metadata."""
+"""Shared provider registration, lookup, discovery, and metadata."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from difflib import get_close_matches
 from typing import Any
 
 logger = logging.getLogger("easycat")
+
+ProviderCapabilityResolver = Callable[[Any, str | None], frozenset[str]]
 
 
 def inject_event_bus(config: Any, event_bus: Any) -> Any:
@@ -33,26 +35,32 @@ def inject_event_bus(config: Any, event_bus: Any) -> Any:
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    """Classes and discovery metadata for one built-in provider."""
+    """Classes and discovery metadata for one provider."""
 
     provider_cls: Callable[..., Any]
     config_cls: type
-    env_var: str
+    env_var: str | None
     extra: str
     api_domains: tuple[str, ...]
+    probe_module: str | None = None
+    capabilities: frozenset[str] = field(default_factory=frozenset)
+    capability_resolver: ProviderCapabilityResolver | None = None
 
 
 @dataclass(frozen=True)
 class ProviderCatalog:
-    """Open provider registry shared by the STT and TTS factories."""
+    """Open provider registry shared by audio-stage factories."""
 
     specs: Mapping[str, ProviderSpec]
     kind: str
     entry_point_group: str | None = None
     providers: dict[str, tuple[Callable[..., Any], type]] = field(init=False)
-    env_vars: dict[str, str] = field(init=False)
+    env_vars: dict[str, str | None] = field(init=False)
     extras: dict[str, str] = field(init=False)
     api_domains: dict[str, tuple[str, ...]] = field(init=False)
+    probe_modules: dict[str, str | None] = field(init=False)
+    capabilities: dict[str, frozenset[str]] = field(init=False)
+    capability_resolvers: dict[str, ProviderCapabilityResolver | None] = field(init=False)
     config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
 
@@ -72,6 +80,21 @@ class ProviderCatalog:
         )
         object.__setattr__(
             self,
+            "probe_modules",
+            {name: spec.probe_module for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
+            "capabilities",
+            {name: frozenset(spec.capabilities) for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
+            "capability_resolvers",
+            {name: spec.capability_resolver for name, spec in self.specs.items()},
+        )
+        object.__setattr__(
+            self,
             "config_to_provider",
             {config_cls: provider_cls for provider_cls, config_cls in providers.values()},
         )
@@ -82,17 +105,20 @@ class ProviderCatalog:
         provider_cls: type,
         config_cls: type,
         *,
-        env_var: str,
+        env_var: str | None = None,
         extra: str | None = None,
         api_domains: tuple[str, ...] = (),
+        probe_module: str | None = None,
+        capabilities: frozenset[str] = frozenset(),
+        capability_resolver: ProviderCapabilityResolver | None = None,
     ) -> None:
         """Register a provider; identical registration is idempotent."""
         normalized = name.strip().lower() if isinstance(name, str) else ""
         if not normalized:
             raise ValueError(f"{self.kind} provider name must be a non-empty string.")
-        if not env_var:
+        if env_var is not None and not env_var.strip():
             raise ValueError(
-                f"{self.kind} provider {normalized!r} requires an env_var naming its API key."
+                f"{self.kind} provider {normalized!r} env_var must be non-empty or None."
             )
         existing = self.providers.get(normalized)
         if existing is not None:
@@ -100,6 +126,9 @@ class ProviderCatalog:
                 self.env_vars[normalized] == env_var
                 and self.extras.get(normalized, "") == (extra or "")
                 and self.api_domains.get(normalized, ()) == tuple(api_domains)
+                and self.probe_modules.get(normalized) == probe_module
+                and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
+                and self.capability_resolvers.get(normalized) is capability_resolver
             )
             if existing == (provider_cls, config_cls) and same_metadata:
                 return
@@ -111,6 +140,9 @@ class ProviderCatalog:
         self.env_vars[normalized] = env_var
         self.extras[normalized] = extra or ""
         self.api_domains[normalized] = tuple(api_domains)
+        self.probe_modules[normalized] = probe_module
+        self.capabilities[normalized] = frozenset(capabilities)
+        self.capability_resolvers[normalized] = capability_resolver
         self.config_to_provider[config_cls] = provider_cls
 
     def discover(self) -> None:
@@ -149,6 +181,38 @@ class ProviderCatalog:
             raise ValueError(f"Unsupported {self.kind} configuration type.")
         return provider_cls
 
+    def capabilities_for(
+        self,
+        provider: str,
+        *,
+        config: Any = None,
+        model: str | None = None,
+    ) -> frozenset[str]:
+        """Resolve static and config/model-dependent capabilities."""
+        self.discover()
+        resolved = set(self.capabilities.get(provider, ()))
+        resolver = self.capability_resolvers.get(provider)
+        if resolver is not None:
+            resolved.update(resolver(config, model))
+        return frozenset(resolved)
+
+    def capabilities_for_config(self, config: Any) -> frozenset[str]:
+        """Resolve capabilities for a registered concrete config instance."""
+        self.discover()
+        config_type = type(config)
+        provider = next(
+            (
+                name
+                for name, (_provider, candidate) in self.providers.items()
+                if candidate is config_type
+            ),
+            None,
+        )
+        if provider is None:
+            return frozenset()
+        model = getattr(config, getattr(config_type, "MODEL_FIELD", "model"), None)
+        return self.capabilities_for(provider, config=config, model=model)
+
     def create_provider(
         self,
         provider: object,
@@ -169,7 +233,7 @@ class ProviderCatalog:
             raise ValueError(
                 f"Invalid params for {provider!r} {self.kind} provider: {exc}"
             ) from exc
-        if not getattr(config, "api_key", None):
+        if self.env_vars[name] is not None and not getattr(config, "api_key", None):
             raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
         return provider_cls(inject_event_bus(config, event_bus))
 
@@ -206,75 +270,20 @@ class ProviderCatalog:
         provider = self.validate_name(provider)
 
         env_var = self.env_vars[provider]
-        if api_key_overrides is not None and env_var in api_key_overrides:
-            api_key = api_key_overrides[env_var]
-        else:
-            api_key = os.getenv(env_var, "")
-        if not api_key:
-            raise EASYCAT_E203(var=env_var)
+        api_key: str | None = None
+        if env_var is not None:
+            if api_key_overrides is not None and env_var in api_key_overrides:
+                api_key = api_key_overrides[env_var]
+            else:
+                api_key = os.getenv(env_var, "")
+            if not api_key:
+                raise EASYCAT_E203(var=env_var)
 
         _, config_cls = self.providers[provider]
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {}
+        if api_key is not None:
+            kwargs["api_key"] = api_key
         if model:
             model_field = getattr(config_cls, "MODEL_FIELD", "model")
             kwargs[model_field] = model
         return config_cls(**kwargs)
-
-
-def stt_tts_catalogs() -> tuple[ProviderCatalog, ProviderCatalog]:
-    """Return the lazily imported and discovered STT/TTS catalogs."""
-    from easycat.stt.factory import _CATALOG as stt_catalog
-    from easycat.tts.factory import _CATALOG as tts_catalog
-
-    stt_catalog.discover()
-    tts_catalog.discover()
-    return (stt_catalog, tts_catalog)
-
-
-def provider_names() -> frozenset[str]:
-    """Every registered STT/TTS provider name, merged across catalogs."""
-    return frozenset(name for catalog in stt_tts_catalogs() for name in catalog.providers)
-
-
-def provider_env_vars() -> dict[str, str]:
-    """Provider → API-key env var, merged across the STT and TTS catalogs."""
-    return {
-        name: env_var
-        for catalog in stt_tts_catalogs()
-        for name, env_var in catalog.env_vars.items()
-    }
-
-
-def provider_extras() -> dict[str, str]:
-    """Provider → optional install extra, merged across the STT and TTS catalogs."""
-    return {
-        name: extra for catalog in stt_tts_catalogs() for name, extra in catalog.extras.items()
-    }
-
-
-def credential_env_vars() -> dict[str, str]:
-    """Provider → env var, deduplicated by credential."""
-    merged = provider_env_vars()
-    deduped: dict[str, str] = {}
-    claimed_vars: set[str] = set()
-    for provider in sorted(merged):
-        env_var = merged[provider]
-        if env_var in claimed_vars:
-            continue
-        deduped[provider] = env_var
-        claimed_vars.add(env_var)
-    return deduped
-
-
-def sensitive_api_domains() -> tuple[str, ...]:
-    """Sorted union of every provider API domain, for URL redaction."""
-    return tuple(
-        sorted(
-            {
-                domain
-                for catalog in stt_tts_catalogs()
-                for domains in catalog.api_domains.values()
-                for domain in domains
-            }
-        )
-    )

@@ -57,7 +57,7 @@ from easycat.tts.input import TTSInput
 from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch09c-estimate-{int(time.time())}"
@@ -150,7 +150,12 @@ async def mic_producer(detector, transport, queue: asyncio.Queue) -> None:
 
 
 async def run_agent(client, history, sentence_queue, cancel: CancelToken):
-    stream = await client.chat.completions.create(model=MODEL, messages=history, stream=True)
+    stream = await client.chat.completions.create(
+        model=MODEL,
+        reasoning_effort="none",
+        messages=history,
+        stream=True,
+    )
     buffer = ""
     async for chunk in stream:
         if cancel.is_cancelled:

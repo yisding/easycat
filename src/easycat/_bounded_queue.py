@@ -157,19 +157,25 @@ class BoundedAudioQueue:
         return False
 
     async def _put_after_wait(self, chunk: AudioChunk) -> bool:
-        try:
-            await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
-        except TimeoutError:
-            return self._reject("block_timeout", "block timed out, dropping")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._block_timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return self._reject("block_timeout", "block timed out, dropping")
+            try:
+                await asyncio.wait_for(self._not_full.wait(), timeout=remaining)
+            except TimeoutError:
+                return self._reject("block_timeout", "block timed out, dropping")
 
-        # A get wakes every producer. Serialize the re-check so only one may
-        # claim each newly available slot.
-        async with self._put_lock:
-            if self._closed:
-                return False
-            if self.full():
-                return self._reject("block_lost_race", "lost race after BLOCK wait, dropping")
-            return self._append(chunk)
+            # A get wakes every producer. Serialize the re-check so only one
+            # claims each newly available slot; a producer that loses this
+            # race waits again for the remainder of its original budget.
+            async with self._put_lock:
+                if self._closed:
+                    return False
+                if not self.full():
+                    return self._append(chunk)
 
     async def get(self) -> AudioChunk:
         """Remove and return a chunk from the queue. Blocks until available."""

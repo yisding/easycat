@@ -5,11 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "12-evals-and-latency"
@@ -26,7 +27,7 @@ def load_evals():
 
 
 def test_p95_sensitivity_probe_names_the_controlling_fixture() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "p95_sensitivity_probe.py")],
         cwd=ROOT,
         check=True,

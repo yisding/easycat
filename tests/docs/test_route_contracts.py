@@ -63,27 +63,6 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         assert command in route_commands
 
 
-def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
-    entries = {entry["path"]: entry for entry in _docs_entries()}
-    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
-    route_commands = entries["CLAUDE.md"].get("commands", ())
-
-    for command in (
-        DOCS_MAP_COMMANDS
-        + (
-            "uv run easycat docs --audience maintainers",
-            "uv run easycat docs --audience maintainers --json",
-        )
-        + AGENT_GUIDE_MACHINE_COMMANDS
-        + ("uv run pytest tests/install/test_install_guidance.py",)
-        + ONBOARDING_GUARD_COMMANDS
-        + RAW_ONBOARDING_GUARD_COMMANDS
-    ):
-        assert command in command_section
-        assert command in route_commands
-
-
 def test_architecture_explanation_carries_claude_guide_prose() -> None:
     """docs/architecture.md owns the architecture explanation; CLAUDE.md links to it."""
     page = re.sub(

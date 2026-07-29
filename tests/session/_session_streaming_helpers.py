@@ -137,8 +137,14 @@ class StreamingToolCallingAgent(_TestBridgeBase):
 class SlowStreamingAgent(_TestBridgeBase):
     """Agent that streams slowly — useful for barge-in testing."""
 
+    _WORDS = ("slow ", "streaming ", "response ", "that ", "keeps ", "going.")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_observed = asyncio.Event()
+
     async def run(self, text: str) -> str:
-        return "slow response"
+        return "".join(self._WORDS)
 
     async def invoke(
         self,
@@ -148,12 +154,13 @@ class SlowStreamingAgent(_TestBridgeBase):
     ) -> AsyncIterator[AgentBridgeEvent]:
         text = turn_input.text
         _ = recorder, text
-        for word in ["slow ", "response"]:
+        for word in self._WORDS:
             if cancel_token and cancel_token.is_cancelled:
+                self.cancel_observed.set()
                 break
             yield AgentBridgeEvent(kind="text_delta", text=word)
             await asyncio.sleep(0.05)
-        yield AgentBridgeEvent(kind="done", text="slow response")
+        yield AgentBridgeEvent(kind="done", text="".join(self._WORDS))
 
 
 class FailingStreamingAgent(_TestBridgeBase):
