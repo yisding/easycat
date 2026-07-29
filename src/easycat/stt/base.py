@@ -211,6 +211,18 @@ class STTBase:
                 break
             yield event
 
+    async def close(self) -> None:
+        """End an active stream, then drain provider-scoped error emissions."""
+        try:
+            await self.end_stream()
+        finally:
+            # Error publication is deliberately drained after end_stream()
+            # releases the lifecycle lock: an async Error subscriber may
+            # initiate session teardown and re-enter this close hook.
+            drain = getattr(self, "_drain_emit_tasks", None)
+            if callable(drain):
+                await drain()
+
     # -- Protected helpers for subclasses ----------------------------------
 
     def _emit_event(self, event: STTEvent) -> None:

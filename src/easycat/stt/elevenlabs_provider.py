@@ -200,6 +200,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._dropping_pending_final: bool = False
         self._audio_resampler = PCM16StreamResampler(config.realtime_sample_rate)
 
+    def _resolve_event_bus(self) -> Any | None:
+        if self._config.mode == "batch":
+            return self._config.event_bus
+        return super()._resolve_event_bus()
+
     def _resolved_model(self) -> str:
         return self._config.resolved_model
 
@@ -617,11 +622,18 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return response.json()
 
         try:
-            return await self._run_with_bounded_retry(
-                _attempt,
-                max_retries=self._config.max_retries,
-                provider_label="ElevenLabs batch STT",
-            )
+            try:
+                return await self._run_with_bounded_retry(
+                    _attempt,
+                    max_retries=self._config.max_retries,
+                    provider_label="ElevenLabs batch STT",
+                )
+            except Exception as exc:
+                context: dict[str, Any] = {}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    context["http_status"] = exc.response.status_code
+                self._emit_provider_error(exc, **context)
+                raise
         finally:
             if owns_client:
                 await client.aclose()
