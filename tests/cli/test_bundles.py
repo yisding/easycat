@@ -75,6 +75,7 @@ def _make_bundle(
     *,
     provider_versions: dict[str, str] | None = None,
     artifacts: dict[str, bytes] | None = None,
+    journal_dropped_records: int = 0,
 ) -> None:
     """Roll a minimal valid bundle zip at *path*.
 
@@ -89,6 +90,7 @@ def _make_bundle(
                 {
                     "format_version": FORMAT_VERSION,
                     "provider_versions": provider_versions or {"stt": "openai-realtime-1.0"},
+                    "journal_dropped_records": journal_dropped_records,
                     "replay_entry_points": [{"sequence": 7, "stage": "stt", "unit_id": "u1"}],
                 }
             ),
@@ -96,6 +98,23 @@ def _make_bundle(
         zf.writestr("journal.ndjson", "\n".join(json.dumps(r) for r in records))
         for ref, blob in (artifacts or {}).items():
             zf.writestr(f"artifacts/{ref}.bin", blob)
+
+
+def test_bundles_show_surfaces_dropped_journal_records(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "dropped.zip"
+    _make_bundle(bundle, [], journal_dropped_records=17)
+
+    json_result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert json_result.exit_code == 0, json_result.stderr
+    assert json.loads(json_result.stdout)["journal_dropped_records"] == 17
+
+    human_result = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human_result.exit_code == 0, human_result.stderr
+    assert "journal_dropped" in human_result.stdout
+    assert "17" in human_result.stdout
 
 
 def _make_crash_dump(path: Path, records: list[dict]) -> None:

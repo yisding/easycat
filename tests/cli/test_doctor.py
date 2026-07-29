@@ -374,6 +374,29 @@ def test_doctor_check_functions_are_pure() -> None:
     assert "Python" in py_check.detail
 
 
+@pytest.mark.parametrize(
+    ("backend", "status", "detail"),
+    [
+        ("soxr", "ok", "soxr high-quality backend"),
+        ("scipy", "ok", "scipy high-quality backend"),
+        ("linear", "skip", "filtered linear fallback"),
+    ],
+)
+def test_doctor_reports_resampling_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    status: str,
+    detail: str,
+) -> None:
+    monkeypatch.setattr(doctor_module, "resample_backend", lambda: backend)
+
+    result = doctor_module.check_resampling_backend()
+
+    assert result.name == "audio_resampling"
+    assert result.status == status
+    assert detail in result.detail
+
+
 def test_doctor_version_detail_is_plain_text(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(doctor_module.importlib.metadata, "version", lambda package: "0.1.0")
 

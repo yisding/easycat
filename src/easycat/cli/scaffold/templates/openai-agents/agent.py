@@ -9,7 +9,7 @@ from easycat import EasyConfig, run
 @function_tool
 def current_time() -> str:
     """Return the current local time as HH:MM."""
-    return datetime.now().strftime("%H:%M")
+    return datetime.now().astimezone().strftime("%H:%M")
 
 
 agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS", tools=[current_time])

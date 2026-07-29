@@ -52,7 +52,7 @@ uv sync --extra debugger --group dev
 Commands:
 
 ```bash
-uv sync --extra quickstart --group dev
+uv sync --extra quickstart --extra webrtc --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env
@@ -596,6 +596,20 @@ Commands:
 
 ```bash
 uv run easycat explain events
+uv run easycat docs --audience app-builders
+```
+
+## Journal records reference
+
+- Path: docs/reference/journal-records.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/journal-records.md
+- Audience: app builders
+- Look up stable built-in journal record names, kinds, and data-key contracts.
+
+Commands:
+
+```bash
+uv run easycat explain journal
 uv run easycat docs --audience app-builders
 ```
 

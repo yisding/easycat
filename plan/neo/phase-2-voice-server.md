@@ -147,6 +147,7 @@ the signature used in `architecture-boundaries.md` and `phase-1-voice-app.md`.
 # transport-typed factory; there is NO single unified context object.
 SessionFactory = Callable[[TransportT], EasyConfig | Session]
 
+
 class VoiceServer:
     def __init__(
         self,
@@ -320,16 +321,19 @@ WebRTC transports.
 class AuthPolicy(Protocol):
     async def authorize(self, request: RequestLike) -> AuthResult: ...
 
+
 @dataclass(frozen=True)
 class AuthResult:
     allowed: bool
     reason: Literal["allowed", "missing", "invalid"]
+
 
 @dataclass
 class NoAuth:
     # The ONLY escape hatch for a non-loopback bind with no token.
     # Must be set explicitly; default keeps the guard armed.
     unsafe_allow_no_auth: bool = False
+
 
 @dataclass
 class BearerTokenAuth:
@@ -609,6 +613,7 @@ class ProviderSelection:
     extra: str | None
     required_env: str | None
     capabilities: frozenset[str]
+
 
 @dataclass(frozen=True)
 class ProviderPlan:

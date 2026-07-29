@@ -223,6 +223,7 @@ class RunBundle:
             "provider_versions": dict(self.manifest.provider_versions),
             "config_snapshot": dict(self.manifest.config_snapshot),
             "env_metadata": dict(self.manifest.env_metadata),
+            "journal_dropped_records": self.manifest.journal_dropped_records,
             "sharing_banner": self.manifest.sharing_banner or self.sharing_banner,
             "replay_entry_points": [
                 {"sequence": cp.sequence, "stage": cp.stage, "unit_id": cp.unit_id}
