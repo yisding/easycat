@@ -159,6 +159,9 @@ class _FakeHandler:
     async def cancel_run(self) -> None:
         self.cancelled = True
 
+    def is_done(self) -> bool:
+        return self.cancelled
+
 
 class _LocalWorkflow(_FakeWorkflowBase):
     def __init__(self, *, events: list[Any] | None = None, result: Any = "Hello") -> None:
@@ -212,6 +215,9 @@ class _BlockingHandler:
     async def cancel_run(self) -> None:
         self.cancelled = True
         self._never.set()
+
+    def is_done(self) -> bool:
+        return self.cancelled
 
 
 class _BlockingWorkflow(_FakeWorkflowBase):

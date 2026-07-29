@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from easycat._provider_catalog import provider_names
+from easycat._provider_registry import provider_names
 from easycat.validation._environment import runtime_secret_values
 from easycat.validation._failure_classification import (
     FailureCategory,
@@ -165,16 +165,12 @@ class _LiveAccumulator:
 
     @classmethod
     def create(cls, ctx: LaneRunContext, paths: _LivePaths) -> _LiveAccumulator:
-        artifacts = {
-            **ctx.artifacts,
-            "stdout": ArtifactRef(kind="stdout", path=str(paths.stdout)),
-            "stderr": ArtifactRef(kind="stderr", path=str(paths.stderr)),
-        }
-        if ctx.requested_report_path is not None:
-            artifacts["requested_report"] = ArtifactRef(
-                kind="validation_report",
-                path=str(ctx.requested_report_path),
-            )
+        artifacts = ctx.artifacts_with(
+            {
+                "stdout": ArtifactRef(kind="stdout", path=str(paths.stdout)),
+                "stderr": ArtifactRef(kind="stderr", path=str(paths.stderr)),
+            }
+        )
         return cls(artifacts=artifacts)
 
     def add_selector_failure(self, failure: ValidationFailure) -> None:
@@ -514,7 +510,7 @@ def _provider_check_name(spec: ProviderSurfaceSpec) -> str:
 
 
 def _live_pytest_command(spec: ProviderSurfaceSpec) -> list[str]:
-    command = [*pytest_command_prefix(), "-q"]
+    command = [*pytest_command_prefix(test_override_mode="root"), "-q"]
     if spec.live_pytest_target:
         command.append(resolve_validation_test_arg(spec.live_pytest_target))
     command.extend(["-m", _live_marker_expression(spec)])

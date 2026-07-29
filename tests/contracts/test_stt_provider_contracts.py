@@ -42,12 +42,12 @@ class _ContractSTT:
 
     async def commit_segment(self) -> bool:
         self.committed += 1
+        await self._events.put(STTEvent(type=STTEventType.PARTIAL, text="hel"))
+        await self._events.put(STTEvent(type=STTEventType.FINAL, text="hello"))
         return True
 
     async def end_stream(self) -> None:
         self.ended += 1
-        await self._events.put(STTEvent(type=STTEventType.PARTIAL, text="hel"))
-        await self._events.put(STTEvent(type=STTEventType.FINAL, text="hello"))
         await self._events.put(None)
 
     async def events(self) -> AsyncIterator[STTEvent]:

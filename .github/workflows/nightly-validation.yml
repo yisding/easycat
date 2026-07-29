@@ -32,11 +32,12 @@ jobs:
       # tests/_hypothesis_profiles.py is never selected by any workflow.
       HYPOTHESIS_PROFILE: ci
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -58,11 +59,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -83,11 +85,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -106,11 +109,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -153,7 +157,7 @@ jobs:
     outputs:
       extras: ${{ steps.plan.outputs.extras }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - id: plan
@@ -169,11 +173,12 @@ jobs:
       matrix:
         extra: ${{ fromJSON(needs.extras-plan.outputs.extras) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -187,11 +192,12 @@ jobs:
         # attacker-controllable input.
         run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
       # The unused requires_extra pytest marker was dropped (it marked zero
-      # tests). The import smoke above owns optional-SDK coverage; the offline
-      # contracts below exercise EasyCat's real built-in provider
-      # implementations against scripted network backends.
-      - name: Offline real-provider contract tests
-        run: uv run --no-sync --python 3.12 pytest tests/contracts -q -m "not integration_live"
+      # tests). Extras coverage relies on the import smoke above, the offline
+      # contract tests, and the SDK-gated bridge tests. The latter live under
+      # tests/integrations/agents and execute for real in the matching extras
+      # cell while self-skipping in unrelated cells.
+      - name: Offline contracts and SDK-gated bridge tests
+        run: uv run --no-sync --python 3.12 pytest tests/contracts tests/integrations/agents -q -m "not integration_live"
 
   live-canaries:
     name: Live Provider Canaries
@@ -206,11 +212,12 @@ jobs:
       ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
       CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -250,11 +257,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"

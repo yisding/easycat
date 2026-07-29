@@ -20,9 +20,10 @@ sync:
 sync-extra *EXTRAS:
     uv sync --group dev {{ prepend('--extra ', EXTRAS) }}
 
-# Run the full test suite (serial, deterministic). Source of truth.
+# Run the full local test suite. `loadscope` keeps each module on one worker;
+# live and external integrations stay in their explicit serial lanes.
 test:
-    uv run pytest
+    uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"
 
 # Run the safe slice in parallel. `loadscope` keeps each module's tests
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
@@ -72,7 +73,7 @@ cov:
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
+    uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
@@ -130,7 +131,7 @@ validate-release:
 validate-report REPORT=".easycat/validation/latest.json":
     uv run easycat validate report {{ quote(REPORT) }}
 
-# The pre-PR gauntlet: format check + lint + full serial test suite.
+# The pre-PR gauntlet: format check + lint + full local test suite.
 check: fmt-check lint test
 
 # Run all pre-commit hooks against the whole tree.

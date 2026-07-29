@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "15-operate-in-production"
@@ -13,7 +14,7 @@ PROBE = CHAPTER / "manager_probe.py"
 
 
 def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(PROBE)],
         cwd=ROOT,
         check=True,
@@ -39,8 +40,9 @@ def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
         "start_calls": {"alpha": 1, "beta": 1, "failed": 1},
         "stop_calls": {"alpha": 1, "beta": 1, "failed": 0},
         "stop_all": {
-            "all_slots_released": True,
             "expected_error": "Failed to stop session sweep-failing: sweep-failing stop failed",
+            "failed_slot_retained": True,
+            "healthy_slot_released": True,
             "start_calls": {"sweep-failing": 1, "sweep-healthy": 1},
             "stop_calls": {"sweep-failing": 1, "sweep-healthy": 1},
         },

@@ -5,10 +5,19 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+
+_SOURCE_CHECKOUT_ERROR = (
+    "validation lanes require the EasyCat source checkout; run from the EasyCat "
+    "repository root, or set EASYCAT_VALIDATION_PYTEST_COMMAND together with "
+    "{test_override_hint}"
+)
+_TestOverrideMode = Literal["paths", "root", "both"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +39,41 @@ class CommandRunner(Protocol):
         env: Mapping[str, str] | None = None,
         cwd: str | Path | None = None,
     ) -> CommandResult: ...
+
+
+class ValidationSourceCheckoutError(RuntimeError):
+    """Raised when a repository validation lane has no repository tests."""
+
+
+def _is_source_checkout_root(path: Path) -> bool:
+    return (
+        (path / "pyproject.toml").is_file()
+        and (path / "src" / "easycat").is_dir()
+        and (path / "tests").is_dir()
+    )
+
+
+def ensure_validation_source_checkout(*, test_override_mode: _TestOverrideMode = "both") -> None:
+    """Require repository tests or explicit installed-wheel test overrides."""
+    if _is_source_checkout_root(Path.cwd()):
+        return
+
+    pytest_override = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
+    required_test_overrides = {
+        "paths": ("EASYCAT_VALIDATION_TEST_PATHS",),
+        "root": ("EASYCAT_VALIDATION_TEST_ROOT",),
+        "both": (
+            "EASYCAT_VALIDATION_TEST_PATHS",
+            "EASYCAT_VALIDATION_TEST_ROOT",
+        ),
+    }[test_override_mode]
+    if pytest_override and all(os.environ.get(name) for name in required_test_overrides):
+        return
+
+    override_hint = " and ".join(required_test_overrides)
+    raise ValidationSourceCheckoutError(
+        _SOURCE_CHECKOUT_ERROR.format(test_override_hint=override_hint)
+    )
 
 
 def run_subprocess(
@@ -54,8 +98,21 @@ def run_subprocess(
     )
 
 
-def pytest_command_prefix() -> list[str]:
+def run_timed_command(
+    command_runner: CommandRunner,
+    command: list[str],
+    *,
+    env: Mapping[str, str],
+) -> tuple[CommandResult, float, datetime]:
+    """Run one injected command and capture monotonic duration plus finish time."""
+    started_monotonic = time.perf_counter()
+    result = command_runner(command, env=env)
+    return result, time.perf_counter() - started_monotonic, datetime.now(UTC)
+
+
+def pytest_command_prefix(*, test_override_mode: _TestOverrideMode = "both") -> list[str]:
     """Resolve the pytest executable used by validation lanes."""
+    ensure_validation_source_checkout(test_override_mode=test_override_mode)
     raw = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
     return shlex.split(raw) if raw else ["uv", "run", "pytest"]
 

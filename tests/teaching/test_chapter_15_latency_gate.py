@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +13,7 @@ from typer.testing import CliRunner
 from easycat.cli._app import _register_commands, app
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import JournalRecord, TimingInfo
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "15-operate-in-production"
@@ -46,8 +46,10 @@ def _production_bundle(path: Path) -> None:
     export_debug_bundle(SimpleNamespace(journal=SimpleNamespace(read=lambda: records)), path)
 
 
-def _run_gate(report: str, *, max_ms: int, min_samples: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def _run_gate(
+    report: str, *, max_ms: int, min_samples: int
+) -> script_runner.CompletedProcess[str]:
+    return script_runner.run(
         [
             sys.executable,
             str(GATE),

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
@@ -26,7 +27,7 @@ def load_probe():
 
 
 def test_workflow_state_probe_uses_metadata_allowlist() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "workflow_state_probe.py")],
         cwd=ROOT,
         check=True,

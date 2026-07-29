@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "04-vad-preroll"
@@ -157,7 +158,7 @@ def test_copied_turn_detectors_keep_audio_out_of_start_events() -> None:
 
 
 def test_provider_free_probe_exposes_exact_preroll_frame_contract() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER / "preroll_probe.py")],
         cwd=ROOT,
         check=True,

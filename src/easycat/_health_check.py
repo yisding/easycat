@@ -118,6 +118,10 @@ class PeriodicHealthChecker:
                 await self.check_once()
         except asyncio.CancelledError:
             pass  # Graceful shutdown via stop()
+        except Exception:
+            logger.exception("Periodic health check loop failed for %s", self._provider_name)
+        finally:
+            self._running = False
 
     async def _record_success(self) -> None:
         """Reset the failure streak and fire recovery hooks on transition."""

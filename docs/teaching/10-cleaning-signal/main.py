@@ -22,8 +22,8 @@ we sent to the speaker). We feed the reference every time the
 transport accepts a complete TTS chunk.
 
 Dependencies:
-    uv sync --extra quickstart --extra deepgram --group dev
-    RNNoise is included in quickstart; Krisp requires its own SDK.
+    uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
+    RNNoise uses its opt-in extra; Krisp requires its own SDK.
     For real AEC:  uv sync --extra aec --group dev
     Missing selected backends fall back to passthrough — the
     journal tells you which backend is live.
@@ -75,7 +75,7 @@ from easycat.tts.input import TTSInput
 from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
 
@@ -144,6 +144,7 @@ async def mic_producer(detector, cleaned_audio, queue: asyncio.Queue) -> None:
 async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
     stream = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
             {"role": "user", "content": user_text},

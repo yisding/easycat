@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -18,7 +20,10 @@ from easycat._turn_context import TurnContext
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import JournalRecordKind
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Annotation-only imports.  ``ReplaySpec`` and ``ReplayCassette`` appear
@@ -166,11 +171,49 @@ class Stage(Protocol):
 # ── Shared capture helpers ───────────────────────────────────────
 
 
+def captures_verbose_stage_io(ctx: RunContext) -> bool:
+    """Whether per-frame stage spans and replay artifacts should be retained."""
+    return ctx.journal is not None and ctx.journal_detail == "full"
+
+
+def audio_capture_allowed(ctx: RunContext, audio: Any = None) -> bool:
+    """Return and, where possible, stamp the capture decision for audio."""
+    stamped = getattr(audio, "_easycat_capture_allowed", None)
+    if isinstance(stamped, bool):
+        return stamped
+    allowed = ctx.audio_capture_enabled is None or ctx.audio_capture_enabled()
+    set_audio_capture_allowed(audio, allowed)
+    return allowed
+
+
+def audio_input_capture_allowed(ctx: RunContext, input_: Any) -> bool:
+    """Require every chunk in a buffered input to have been capture-eligible."""
+    if input_ is None or isinstance(input_, (bytes, bytearray)):
+        return audio_capture_allowed(ctx, input_)
+    if isinstance(getattr(input_, "data", None), (bytes, bytearray)):
+        return audio_capture_allowed(ctx, input_)
+    try:
+        decisions = [audio_capture_allowed(ctx, item) for item in input_]
+    except TypeError:
+        return audio_capture_allowed(ctx, input_)
+    return bool(decisions) and all(decisions)
+
+
+def set_audio_capture_allowed(audio: Any, allowed: bool) -> None:
+    if audio is None or isinstance(audio, (bytes, bytearray)):
+        return
+    try:
+        audio._easycat_capture_allowed = allowed
+    except Exception:
+        logger.debug("Could not stamp audio capture decision", exc_info=True)
+
+
 def put_artifact(
     ctx: RunContext,
     payload: bytes | None,
     *,
     artifact_class: Literal["replay_critical", "debug_verbose"] = "replay_critical",
+    capture_allowed: bool | None = None,
 ) -> str | None:
     """Store ``payload`` in ``ctx.artifact_store`` and return its ref.
 
@@ -178,9 +221,22 @@ def put_artifact(
     the store silently rejects the write (over size cap).  Callers
     should treat the ref as optional and fall back to inline ``data``.
     """
-    if ctx.artifact_store is None or not payload:
+    if (
+        ctx.artifact_store is None
+        or not payload
+        or not _capture_is_enabled(
+            ctx,
+            capture_allowed,
+        )
+    ):
         return None
+    capture_epoch = _capture_epoch(ctx)
+    artifact_preexisted = _artifact_preexists(ctx.artifact_store, payload)
     ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
+    if ref and not _capture_write_is_current(ctx, capture_epoch):
+        if not artifact_preexisted:
+            ctx.artifact_store.delete(ref)
+        return None
     return ref or None
 
 
@@ -189,6 +245,7 @@ async def put_artifact_async(
     payload: bytes | None,
     *,
     artifact_class: Literal["replay_critical", "debug_verbose"] = "replay_critical",
+    capture_allowed: bool | None = None,
 ) -> str | None:
     """Async :func:`put_artifact` that offloads *blocking* store writes to a thread.
 
@@ -208,13 +265,58 @@ async def put_artifact_async(
     journal record appended afterwards never references an artifact that
     was not written.
     """
-    if ctx.artifact_store is None or not payload:
+    if (
+        ctx.artifact_store is None
+        or not payload
+        or not _capture_is_enabled(
+            ctx,
+            capture_allowed,
+        )
+    ):
         return None
+    capture_epoch = _capture_epoch(ctx)
     store = ctx.artifact_store
+    artifact_preexisted = _artifact_preexists(store, payload)
     if _writes_block(store):
         ref = await asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
+        if ref and not _capture_write_is_current(ctx, capture_epoch):
+            if not artifact_preexisted:
+                await asyncio.to_thread(store.delete, ref)
+            return None
         return ref or None
-    return put_artifact(ctx, payload, artifact_class=artifact_class)
+    ref = store.put(payload, artifact_class=artifact_class)
+    if ref and not _capture_write_is_current(ctx, capture_epoch):
+        if not artifact_preexisted:
+            store.delete(ref)
+        return None
+    return ref or None
+
+
+def _capture_is_enabled(ctx: RunContext, capture_allowed: bool | None) -> bool:
+    return capture_allowed is not False and (
+        ctx.audio_capture_enabled is None or ctx.audio_capture_enabled()
+    )
+
+
+def _capture_epoch(ctx: RunContext) -> int | None:
+    return ctx.audio_capture_epoch() if ctx.audio_capture_epoch is not None else None
+
+
+def _capture_write_is_current(ctx: RunContext, started_epoch: int | None) -> bool:
+    if ctx.audio_capture_enabled is not None and not ctx.audio_capture_enabled():
+        return False
+    return (
+        started_epoch is None
+        or ctx.audio_capture_epoch is None
+        or ctx.audio_capture_epoch() == started_epoch
+    )
+
+
+def _artifact_preexists(store: Any, payload: bytes) -> bool:
+    has = getattr(store, "has", None)
+    if not callable(has):
+        return False
+    return bool(has(hashlib.sha256(payload).hexdigest()))
 
 
 def _writes_block(store: Any) -> bool:
@@ -326,6 +428,7 @@ def journal_append_event(
         payload["error"] = error
     if data_extra:
         payload.update(data_extra)
+    validate_builtin_record(name=name, kind=kind, data=payload)
     return ctx.journal.append(
         kind=kind,
         name=name,
