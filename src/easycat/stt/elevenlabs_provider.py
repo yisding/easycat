@@ -154,6 +154,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
             provider_error_name="elevenlabs",
         )
         self._config = config
+        # Batch mode can emit a cap-triggered HTTP transcription from
+        # _on_audio; keep that operation under the lifecycle lock so
+        # end_stream/start_stream cannot replace its event queue mid-emit.
+        self._allow_end_during_audio_send = config.mode == "realtime"
         # Batch mode state
         self._buffer = bytearray()
         self._audio_format: AudioFormat | None = None

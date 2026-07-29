@@ -27,7 +27,7 @@ from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
-from easycat.timeouts import TimeoutConfig
+from easycat.timeouts import STTTimeoutError, TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 from tests.session._wiring_helpers import make_wiring
 
@@ -400,6 +400,38 @@ async def test_cancel_logs_when_end_stream_raises(
     assert stt.end_stream_calls == 1
     assert committer.is_active is False
     assert "STT end_stream during cancel raised" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_applies_stt_timeout_and_emits_typed_error() -> None:
+    class _HangingEndStreamSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = asyncio.Event()
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    committer, stt, emitted, _no_turn, _tm = _make_committer(
+        stt=_HangingEndStreamSTT(),
+        timeout_config=TimeoutConfig(stt_timeout=0.02),
+    )
+    committer.mark_active()
+
+    await asyncio.wait_for(committer.cancel(_new_turn()), timeout=1)
+
+    error = next(event for event in emitted if isinstance(event, Error))
+    assert error.stage == ErrorStage.STT
+    assert error.provider == "stt"
+    assert isinstance(error.exception, STTTimeoutError)
+    assert error.exception.timeout == pytest.approx(0.02)
+    assert stt.cancelled.is_set()
+    assert committer.is_active is False
 
 
 @pytest.mark.asyncio
