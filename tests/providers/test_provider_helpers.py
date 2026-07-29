@@ -143,7 +143,8 @@ async def test_drain_does_not_await_the_current_error_handler_task():
     assert current is not None
     probe._emit_tasks.add(current)
     try:
-        await asyncio.wait_for(probe._drain_emit_tasks(), timeout=0.1)
+        async with asyncio.timeout(0.1):
+            await probe._drain_emit_tasks()
     finally:
         probe._emit_tasks.discard(current)
 
