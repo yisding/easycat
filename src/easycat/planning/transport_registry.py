@@ -258,7 +258,12 @@ NON_CATALOG_ROLES: tuple[str, ...] = (
 )
 
 
-def probe_module_for_extra(extra: str | None) -> str | None:
+def probe_module_for_extra(
+    extra: str | None,
+    *,
+    role: str | None = None,
+    provider: str | None = None,
+) -> str | None:
     """Return the importable probe module for ``extra`` (or ``None``).
 
     ``None`` means there is nothing to probe — either no extra is required, or
@@ -266,19 +271,28 @@ def probe_module_for_extra(extra: str | None) -> str | None:
     that installs no importable package. The planner treats a ``None`` probe as
     "extra is always satisfied" so it never falsely reports it missing.
 
-    Provider-catalog metadata wins over the built-in table, allowing a
-    third-party package whose install extra and import module have different
-    names to make readiness accurate. Unmapped extras retain the historical
-    best-effort name-as-module fallback.
+    ``role`` plus ``provider`` preserves the selected catalog entry's identity
+    when two roles happen to reuse an extra name. Generic callers retain the
+    built-in role mapping first, then catalog metadata, then the historical
+    name-as-module fallback.
     """
     if extra is None:
         return None
-    from easycat._provider_catalog import provider_probe_modules
+    from easycat._provider_catalog import provider_probe_modules, stt_tts_catalogs
+
+    if role in {"stt", "tts"} and provider is not None:
+        stt_catalog, tts_catalog = stt_tts_catalogs()
+        catalog = stt_catalog if role == "stt" else tts_catalog
+        if catalog.extras.get(provider) == extra:
+            return catalog.probe_modules.get(provider)
+
+    if extra in EXTRA_PROBE_MODULE:
+        return EXTRA_PROBE_MODULE[extra]
 
     declared_probe = provider_probe_modules().get(extra)
     if declared_probe is not None:
         return declared_probe
-    return EXTRA_PROBE_MODULE.get(extra, extra)
+    return extra
 
 
 __all__ = [

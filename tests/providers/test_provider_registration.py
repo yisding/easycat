@@ -312,6 +312,45 @@ def test_registered_probe_module_overrides_non_importable_extra_name(
     assert "acme-speech" not in plan.missing_extras
 
 
+def test_selected_provider_probe_keeps_identity_when_extra_name_is_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    from easycat.planning import build_provider_plan
+    from easycat.project.schema import VoiceProfile
+
+    register_stt_provider(
+        "fakestt",
+        FakeSTT,
+        FakeSTTConfig,
+        env_var="FAKESTT_API_KEY",
+        extra="webrtc",
+        probe_module="acme_speech",
+    )
+    probed: list[str] = []
+
+    def fake_find_spec(name: str, package: str | None = None):
+        _ = package
+        probed.append(name)
+        return object() if name in {"acme_speech", "websockets"} else None
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    plan = build_provider_plan(
+        VoiceProfile(
+            name="shared-extra",
+            transport="websocket",
+            stt="fakestt",
+            tts="openai",
+        ),
+        environ={"FAKESTT_API_KEY": "x", "OPENAI_API_KEY": "y"},
+    )
+
+    assert "acme_speech" in probed
+    assert "aiortc" not in probed
+    assert "webrtc" not in plan.missing_extras
+
+
 # ── Layer 2: entry-point discovery ───────────────────────────────
 
 
