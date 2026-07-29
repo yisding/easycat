@@ -584,7 +584,10 @@ def _build_audio_session(
     session_id: str,
     debug: _DebugResources,
 ) -> _BuiltAudioSession:
-    event_bus = EventBus()
+    event_bus = EventBus(
+        slow_handler_threshold_s=config.slow_handler_threshold_s,
+        handler_error_policy=config.handler_error_policy,
+    )
     audio = _resolve_audio_pipeline(config, event_bus)
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
     agent = _resolve_agent(config, mcp_servers)
@@ -882,6 +885,8 @@ def create_text_session(
     agent: Any = None,
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "light",
+    slow_handler_threshold_s: float | None = 0.005,
+    handler_error_policy: Literal["continue", "raise"] = "continue",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     warmup: bool | None = None,
@@ -917,6 +922,8 @@ def create_text_session(
         agent=agent,
         session_id=session_id,
         debug=debug,
+        slow_handler_threshold_s=slow_handler_threshold_s,
+        handler_error_policy=handler_error_policy,
         journal_backend=journal_backend,
         journal_retention=journal_retention,
         warmup=warmup,
@@ -956,7 +963,10 @@ def create_text_session(
         else None
     )
     try:
-        event_bus = EventBus()
+        event_bus = EventBus(
+            slow_handler_threshold_s=config.slow_handler_threshold_s,
+            handler_error_policy=config.handler_error_policy,
+        )
 
         adapted = auto_adapt_agent(agent, model=agent_model) if agent is not None else NoopAgent()
         _mcp = list(mcp_servers) if mcp_servers else []

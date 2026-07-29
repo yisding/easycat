@@ -54,11 +54,15 @@ learns that the user started speaking, a turn ended, the bot produced audio, etc
   callback lifecycle and call `token.unsubscribe()` during teardown.
 - Event handlers run inline in subscription order. By default, handler
   exceptions are logged, counted on the bus, and do not stop later handlers from
-  running. Use `EventBus(handler_error_policy="raise")` in tests or strict app
+  running. Set `EasyConfig(handler_error_policy="raise")` (or the equivalent
+  `TextSessionConfig` / `create_text_session` option) in tests or strict app
   code when a handler failure should abort dispatch and propagate to the
-  emitter.
-- Configure `EventBus(slow_handler_threshold_s=...)` when you need warnings for
-  callbacks that might stall audio-critical paths.
+  emitter. Direct `EventBus` construction accepts the same option.
+- Sessions created from `EasyConfig` or `TextSessionConfig` warn when a callback
+  takes at least 5 ms, because slow handlers can stall audio-critical paths.
+  Tune this with `slow_handler_threshold_s=...`, or set it to `None` to disable
+  the diagnostic. Direct `EventBus` construction leaves it disabled unless
+  configured explicitly.
 - If you want a durable mirror of what flowed across the bus, that is the
   journal's job (C), which records bus activity (via the session journal sink)
   plus per-stage internal detail the bus never carries.

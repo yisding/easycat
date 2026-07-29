@@ -672,6 +672,8 @@ class EventBus:
         slow_handler_threshold_s: float | None = None,
         handler_error_policy: EventHandlerErrorPolicy = "continue",
     ) -> None:
+        if slow_handler_threshold_s is not None and slow_handler_threshold_s < 0:
+            raise ValueError("slow_handler_threshold_s must be non-negative")
         if handler_error_policy not in {"continue", "raise"}:
             raise ValueError("handler_error_policy must be either 'continue' or 'raise'")
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
@@ -685,6 +687,11 @@ class EventBus:
     def handler_failures(self) -> int:
         """Number of handler exceptions observed by this bus."""
         return self._handler_failures
+
+    @property
+    def slow_handler_threshold_s(self) -> float | None:
+        """Elapsed time at which an inline handler produces a warning."""
+        return self._slow_handler_threshold_s
 
     @property
     def handler_error_policy(self) -> EventHandlerErrorPolicy:
