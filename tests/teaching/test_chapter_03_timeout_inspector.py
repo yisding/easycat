@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "03-parrot-naive"
@@ -73,7 +73,7 @@ def test_timeout_inspector_uses_latest_stt_event_and_reports_overshoot(tmp_path:
 
     bundle = tmp_path / "chapter-03.bundle"
     export_debug_bundle(SimpleNamespace(journal=journal), bundle)
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(INSPECTOR), str(bundle)],
         cwd=ROOT,
         check=True,
