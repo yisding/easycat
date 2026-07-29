@@ -43,7 +43,7 @@ ConsoleMode = Literal["keyless-text", "voice-demo", "live-voice", "live-text"]
 
 _DEFAULT_RECORD_DIR = ".easycat/recordings"
 _OPENAI_BASE_URL = "https://api.openai.com"
-_LIVE_AGENT_MODEL = "gpt-4o-mini"
+_LIVE_AGENT_MODEL = "gpt-5.6-luna"
 _VOICE_DEMO_TIMEOUT_S = 15.0
 
 _MODE_BANNERS: dict[ConsoleMode, str] = {
@@ -152,6 +152,7 @@ async def _run_text_mode(mode: ConsoleMode, record_dir: Path) -> None:
             base_url=_OPENAI_BASE_URL,
             model=_LIVE_AGENT_MODEL,
             api_key=os.environ["OPENAI_API_KEY"],
+            reasoning_effort="none",
         )
 
     session = create_text_session(agent=agent, debug="light", record_to=record_dir)
@@ -213,6 +214,7 @@ async def _run_live_voice(record_dir: Path) -> None:
         base_url=_OPENAI_BASE_URL,
         model=_LIVE_AGENT_MODEL,
         api_key=os.environ["OPENAI_API_KEY"],
+        reasoning_effort="none",
     )
     config = EasyConfig.mic(agent=agent, debug="light", record_to=record_dir)
     session = create_session(config)

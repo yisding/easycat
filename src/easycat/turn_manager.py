@@ -38,6 +38,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
+from easycat.runtime.scope import RuntimeScope
 from easycat.smart_turn import SmartTurnProvider
 
 logger = logging.getLogger(__name__)
@@ -171,11 +172,11 @@ class TurnManager:
         self._event_bus = event_bus
         self._config = config or TurnManagerConfig()
 
-        # Callback for barge-in: expected to call session.cancel_turn(barge_in=True).
-        # The callback is the sole emitter of the Interruption event.  Phase 4
-        # of the session decomposition installs this callback late (after the
-        # CancelOrchestrator exists), so it is also settable post-construction
-        # via :meth:`set_cancel_callback`.
+        # Callback for barge-in: expected to perform the audible cutoff and
+        # arrange old-turn cleanup. The callback is the sole emitter of the
+        # Interruption event. Phase 4 of the session decomposition installs it
+        # late (after the CancelOrchestrator exists), so it is also settable
+        # post-construction via :meth:`set_cancel_callback`.
         self._cancel_turn_callback = cancel_turn_callback
 
         # State
@@ -249,6 +250,13 @@ class TurnManager:
         The list is small (pre-roll + turn frames), so the copy is negligible.
         """
         return list(self._turn_audio)
+
+    def discard_buffered_audio(self) -> None:
+        """Drop pre-decision audio when capture changes from denied to allowed."""
+        self._turn_audio.clear()
+        self._turn_audio_duration_ms = 0.0
+        self._pre_roll_buffer.clear()
+        self._pre_roll_duration_ms = 0.0
 
     @property
     def endpoint_detector(self) -> SmartTurnProvider | None:
@@ -479,6 +487,16 @@ class TurnManager:
             TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
         )
 
+    async def _complete_user_turn(self, reason: str) -> None:
+        """Transition to processing and emit the correlated turn-end event."""
+        self._transition(
+            TurnManagerState.PROCESSING,
+            reason=reason,
+        )
+        await self._event_bus.emit(
+            TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
+
     async def _handle_speech_stop(self) -> None:
         """Handle VAD speech stop — transition to UserPaused and start timer."""
         if self._state != TurnManagerState.USER_SPEAKING:
@@ -495,6 +513,7 @@ class TurnManager:
 
         # Start the end-of-turn silence timer
         self._silence_timer_task = asyncio.create_task(self._silence_timeout())
+        self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
         """Return the trailing audio the endpoint detector should consume.
@@ -564,15 +583,7 @@ class TurnManager:
                         is_complete = result.prediction == 1
                     if is_complete:
                         if self._state == TurnManagerState.USER_PAUSED:
-                            self._transition(
-                                TurnManagerState.PROCESSING,
-                                reason="smart_turn_complete",
-                            )
-                            await self._event_bus.emit(
-                                TurnEnded(
-                                    session_id=self._session_id, turn_id=self._current_turn_id
-                                )
-                            )
+                            await self._complete_user_turn("smart_turn_complete")
                         return
                     logger.debug(
                         "Smart-turn: incomplete (p=%.3f), falling back to silence timeout",
@@ -592,14 +603,8 @@ class TurnManager:
                 punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
             if self._state == TurnManagerState.USER_PAUSED:
-                self._transition(
-                    TurnManagerState.PROCESSING,
-                    reason=(
-                        "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
-                    ),
-                )
-                await self._event_bus.emit(
-                    TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+                await self._complete_user_turn(
+                    "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
         except asyncio.CancelledError:
             pass
@@ -656,10 +661,10 @@ class TurnManager:
     async def _handle_barge_in(self) -> None:
         """Handle user speech during bot playback (barge-in).
 
-        Triggers the cancel callback to stop TTS/agent, then starts a new
-        user turn.  The callback (typically ``session.cancel_turn(barge_in=True)``)
-        is responsible for emitting the ``Interruption`` event so that it is
-        emitted exactly once per barge-in.
+        Triggers the cancel callback to cut off TTS and arrange old-turn
+        cleanup, then starts a new user turn. The callback is responsible for
+        emitting the ``Interruption`` event so it is emitted exactly once per
+        barge-in.
 
         If the callback returns ``False``, barge-in is suppressed (e.g. a
         queued session action has ``no_interrupt=True``).  In that case we
@@ -710,12 +715,19 @@ class TurnManager:
             return
 
         self._cancel_silence_timer()
+        await self._complete_user_turn("manual_end")
+
+    def begin_application_turn(self, turn_id: str, cancel_token: CancelToken) -> None:
+        """Bind an application-initiated turn directly in the processing state."""
+        if self._state != TurnManagerState.IDLE:
+            raise RuntimeError(
+                f"Cannot start an application turn while turn manager is {self._state.value}"
+            )
+        self._cancel_token = cancel_token
+        self._current_turn_id = turn_id
         self._transition(
             TurnManagerState.PROCESSING,
-            reason="manual_end",
-        )
-        await self._event_bus.emit(
-            TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
+            reason="application_prompt",
         )
 
     # ── Bot speaking lifecycle ──────────────────────────────────

@@ -25,7 +25,7 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `uv sync --group dev`: install project + dev tools.
 - `uv sync --extra <name> --group dev`: install optional provider/transport extras while keeping dev tools (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).
 - `just`: list every developer task.
-- `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
+- `just check`: run the pre-PR gauntlet (format check, lint, full local tests).
 - `just validate-quick`: run the deterministic local validation slice.
 <!-- BEGIN auto:guard-commands format=bullets -->
 - `just guard-docs`: guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors.
@@ -35,7 +35,7 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just guard-validation`: guard validation workflow docs, validation reference docs, and validate CLI behavior.
 - `just guard-contracts`: guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix.
 - `just guard-ops`: guard operator docs, deployment guide, observability docs, journal CLI, and durability.
-- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
+- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
 - Raw fallback for `just guard-teaching`: `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py`.
 - Raw fallback for `just guard-examples`: `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'`.
 - Raw fallback for `just guard-contributing`: `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py`.
@@ -43,7 +43,8 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - Raw fallback for `just guard-contracts`: `uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing`.
 - Raw fallback for `just guard-ops`: `uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py`.
 <!-- END auto:guard-commands -->
-- `uv run pytest`: run full test suite.
+- `uv run pytest`: run the full local test suite; `integration_external` tests
+  require explicit selection.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc_config.py tests/transports/test_webrtc_lifecycle_server.py tests/transports/test_webrtc_stats_artifacts.py tests/transports/test_webrtc_outbound_audio.py tests/transports/test_webrtc_auth_browser_playground.py`: run focused WebRTC transport tests.
 - `uv run easycat docs`: show the compact route-label and audience index.

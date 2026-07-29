@@ -14,7 +14,7 @@ __all__ = [
 import asyncio
 import logging
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -385,6 +385,7 @@ class OutboundCallStateMachine:
         self._state = OutboundCallState.INITIATING
         self._started = False
         self._timers = BackgroundTaskScope()
+        self._max_duration_hangup: Callable[[str], Awaitable[None]] | None = None
 
         # Classification gate.
         self._gate = ClassificationGate(
@@ -756,10 +757,22 @@ class OutboundCallStateMachine:
     async def _max_duration_coro(self) -> None:
         await asyncio.sleep(self._max_call_duration_s)
         if self._state != OutboundCallState.ENDED:
+            if self._max_duration_hangup is not None:
+                try:
+                    await self._max_duration_hangup(self._call_sid)
+                except Exception:
+                    logger.exception("Maximum-duration Twilio hangup failed")
             await self._transition(OutboundCallState.ENDED)
             await self._event_bus.emit(
                 CallEnded(call_sid=self._call_sid, disposition="max_duration")
             )
+
+    def set_max_duration_hangup(
+        self,
+        callback: Callable[[str], Awaitable[None]] | None,
+    ) -> None:
+        """Set the hard-hangup callback run before terminal lifecycle handlers."""
+        self._max_duration_hangup = callback
 
     # ── Late voicemail window ────────────────────────────────────
 

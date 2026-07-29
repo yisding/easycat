@@ -25,7 +25,7 @@ each condition below, and for each one record which of the three
 
 | Change                                         | Which span changes? | By how much? |
 |------------------------------------------------|---------------------|--------------|
-| `MODEL = "gpt-4o-mini"` → `"gpt-4o"`           | ?                   | ?            |
+| `MODEL = "gpt-5.6-luna"` → `"gpt-5.6-sol"`     | ?                   | ?            |
 | Add system prompt: *"Answer in one word."*     | ?                   | ?            |
 | Insert `await asyncio.sleep(0.5)` inside agent | ?                   | ?            |
 
@@ -38,8 +38,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 3</summary>
 
-Switching to `gpt-4o` mostly affects the `agent_ms` span — same
-   prompt, slower model. The other two stay put.
+Switching to quality-first `gpt-5.6-sol` mostly affects the
+   `agent_ms` span — same prompt, different model tier. Measure the
+   direction and size on your workload; the other two spans should
+   stay put.
 
 </details>
 

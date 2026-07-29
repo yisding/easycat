@@ -451,14 +451,18 @@ class _DevDebuggerState:
         session = self.active_session()
         if session is None:
             return _empty_dev_source()
-        source = _session_source(session)
-        # Wire the same live-export hooks ``serve_session`` installs so the
-        # export paths work for the selected session.
-        source._export_fn = lambda s=session: _bundle_zip_from_session(s)  # type: ignore[attr-defined]
-        source._export_turn_fn = (  # type: ignore[attr-defined]
-            lambda turn_id, s=session: _turn_bundle_zip_from_session(s, turn_id)
+
+        def _export_session() -> Path | None:
+            return _bundle_zip_from_session(session)
+
+        def _export_session_turn(turn_id: str) -> Path | None:
+            return _turn_bundle_zip_from_session(session, turn_id)
+
+        return _session_source(
+            session,
+            export_fn=_export_session,
+            export_turn_fn=_export_session_turn,
         )
-        return source
 
     def proxy_source(self) -> DebuggerSource:
         """Return a DebuggerSource that delegates to the active session source."""
@@ -471,6 +475,14 @@ class _DevDebuggerState:
             payload["active_session"] = state.active_id()
             return payload
 
+        def _export() -> Path | None:
+            source = state._active_source()
+            return source.export() if source.can_export else None
+
+        def _export_turn(turn_id: str) -> Path | None:
+            source = state._active_source()
+            return source.export_turn(turn_id) if source.can_export_turn else None
+
         proxy = DebuggerSource(
             label="dev-registry",
             _records_fn=lambda: state._active_source().records(),
@@ -480,17 +492,11 @@ class _DevDebuggerState:
             _manifest_fn=_manifest,
             _bundle_fn=lambda: state._active_source().bundle(),
             _replay_fn=None,
+            _export_fn=_export,
+            _export_turn_fn=_export_turn,
             _selection_epoch_fn=state.selection_epoch,
             is_live=True,
         )
-        # The export route reads these hooks off the bound source (the proxy);
-        # delegate them to the live active session via its export-aware source.
-        proxy._export_fn = lambda: getattr(  # type: ignore[attr-defined]
-            state._active_source(), "_export_fn", lambda: None
-        )()
-        proxy._export_turn_fn = lambda turn_id: getattr(  # type: ignore[attr-defined]
-            state._active_source(), "_export_turn_fn", lambda _t: None
-        )(turn_id)
         return proxy
 
 
@@ -926,11 +932,10 @@ class _DebuggerRoutes:
                 return web.json_response(
                     {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
                 )
-            export_turn_fn = getattr(source, "_export_turn_fn", None)
-            if export_turn_fn is None:
+            if not source.can_export_turn:
                 return web.Response(status=503, text="no turn-export function bound")
             try:
-                tmp_path = export_turn_fn(turn_id)
+                tmp_path = source.export_turn(turn_id)
             except ValueError:
                 return web.Response(status=404, text="no records for that turn")
             except Exception:  # noqa: BLE001 - never hide export errors
@@ -938,11 +943,10 @@ class _DebuggerRoutes:
                 return web.Response(status=500, text="export failed")
             download_name = f"turn-{turn_id}.zip"
         else:
-            export_fn = getattr(source, "_export_fn", None)
-            if export_fn is None:
+            if not source.can_export:
                 return web.Response(status=503, text="no export function bound")
             try:
-                tmp_path = export_fn()
+                tmp_path = source.export()
             except Exception:  # noqa: BLE001 - never hide export errors
                 # Detail is logged server-side; don't leak exception text to the
                 # client (CodeQL py/stack-trace-exposure).
@@ -1393,13 +1397,14 @@ def serve_session(
     :class:`threading.Thread` is returned so the caller can join later.
     """
     _check_host(host, allow_remote)
-    source = _session_source(session)
-    # Wire up the export-bytes function so /api/export can stream a zip.
-    source._export_fn = lambda: _bundle_zip_from_session(session)  # type: ignore[attr-defined]
-    # ``/api/export?turn=<id>`` slices a single replayable turn out of the
-    # live session; loopback-only, so the slice carries raw audio unredacted.
-    source._export_turn_fn = (  # type: ignore[attr-defined]
-        lambda turn_id: _turn_bundle_zip_from_session(session, turn_id)
+    source = _session_source(
+        session,
+        # Wire up the export callbacks during construction so the source's
+        # advertised live-export capability has an explicit implementation.
+        export_fn=lambda: _bundle_zip_from_session(session),
+        # ``/api/export?turn=<id>`` slices a single replayable turn out of the
+        # live session; loopback-only, so the slice carries raw audio unredacted.
+        export_turn_fn=lambda turn_id: _turn_bundle_zip_from_session(session, turn_id),
     )
     if not in_thread:
         # Synchronous serve: bind happens inside ``_serve`` → ``run_app`` and a

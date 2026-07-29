@@ -12,18 +12,24 @@ telephony stack.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
-from collections.abc import Sequence
+import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from easycat.echo_cancellation import EchoCancellationConfig
+from easycat.echo_cancellation import (
+    EchoCancellationConfig,
+    is_echo_canceller_config,
+    parse_echo_canceller_string,
+)
 from easycat.errors import EASYCAT_E203
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.noise_reduction import NoiseReducerConfig
+from easycat.noise_reduction import NoiseReducerConfig, parse_noise_reducer_string
 from easycat.providers import (
     EchoCanceller,
     NoiseReducer,
@@ -58,7 +64,7 @@ from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
-from easycat.vad import VADConfig
+from easycat.vad import VADConfig, parse_vad_string
 
 if TYPE_CHECKING:
     # Annotation-only references to telephony runtime types. Kept out of the
@@ -111,7 +117,9 @@ class EasyConfigError(ValueError):
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+_VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def _require_positive(name: str, value: float) -> None:
@@ -126,15 +134,50 @@ def _require_non_negative(name: str, value: float) -> None:
         raise ValueError(f"{name} must be non-negative")
 
 
+def _validate_on_agent_failure(
+    policy: str | Callable[[Exception], str] | None,
+) -> None:
+    if policy is not None and not (isinstance(policy, str) or callable(policy)):
+        raise ValueError("on_agent_failure must be text, a callable, or None")
+    if isinstance(policy, str) and not policy.strip():
+        raise ValueError("on_agent_failure text must not be empty")
+
+
+def _validate_capture_audio(policy: bool | Callable[[], bool]) -> None:
+    if not isinstance(policy, bool) and not callable(policy):
+        raise ValueError("capture_audio must be a bool or zero-argument callable")
+    predicate_call = type(policy).__call__ if callable(policy) else None
+    if callable(policy) and (
+        inspect.iscoroutinefunction(policy) or inspect.iscoroutinefunction(predicate_call)
+    ):
+        raise ValueError("capture_audio predicate must be synchronous")
+
+
+def _validate_journal_capacity(capacity: int) -> None:
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
+        raise ValueError("journal_capacity must be a positive integer")
+
+
+def _validate_journal_redaction(policy: str) -> None:
+    if policy not in _VALID_JOURNAL_REDACTION:
+        raise ValueError(
+            f"Invalid journal_redaction={policy!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_REDACTION)}."
+        )
+
+
 def _validate_common(
     *,
     debug: str,
     journal_backend: str,
+    journal_capacity: int,
+    journal_redaction: str,
     journal_retention: str,
     mcp_servers: list[str] | None = None,
     session_id: str | None = None,
     agent: Any | None = None,
     agent_model: str | None = None,
+    capture_audio: bool | Callable[[], bool] = True,
 ) -> None:
     """Validate the shared fields used by both session factories."""
     if debug not in _VALID_DEBUG:
@@ -144,11 +187,14 @@ def _validate_common(
             f"Invalid journal_backend={journal_backend!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
         )
+    _validate_journal_capacity(journal_capacity)
+    _validate_journal_redaction(journal_redaction)
     if journal_retention not in _VALID_JOURNAL_RETENTION:
         raise ValueError(
             f"Invalid journal_retention={journal_retention!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
         )
+    _validate_capture_audio(capture_audio)
     if mcp_servers is not None:
         for uri in mcp_servers:
             if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
@@ -156,10 +202,14 @@ def _validate_common(
                     f"Invalid MCP server URI: {uri!r}. "
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
-    if session_id is not None and ("/" in session_id or "\\" in session_id or ".." in session_id):
-        raise EasyConfigError(
-            f"session_id must not contain path separators or '..': {session_id!r}"
-        )
+    if session_id is not None:
+        if not session_id.strip():
+            raise EasyConfigError("session_id must not be empty")
+        if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
+            raise EasyConfigError(
+                "session_id must be 1-128 ASCII letters, digits, '.', '_', or '-', "
+                f"starting with a letter or digit: {session_id!r}"
+            )
     if isinstance(agent, str):
         from urllib.parse import urlparse
 
@@ -183,22 +233,13 @@ def _stt_uses_native_endpointing(stt: Any) -> bool:
     neither smart-turn nor the Silero VAD it pulls in (which would otherwise
     double-endpoint and produce duplicate FINAL transcripts).
 
-    Covers:
-      - Deepgram **Flux** (native end-of-turn signal),
-      - Cartesia **ink-2** (native semantic turn detection), and
-      - ElevenLabs realtime with the built-in **VAD** commit strategy.
+    The answer comes from the open STT provider catalog, so third-party
+    providers can declare the same ``native_endpointing`` capability as the
+    built-ins instead of falling through a closed config-type check.
     """
-    from easycat.stt.cartesia_provider import CartesiaSTTConfig
-    from easycat.stt.deepgram_provider import DeepgramSTTConfig
-    from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
+    from easycat.stt.factory import _CATALOG
 
-    if isinstance(stt, DeepgramSTTConfig):
-        return stt.is_flux
-    if isinstance(stt, CartesiaSTTConfig):
-        return stt.resolved_model == "ink-2"
-    if isinstance(stt, ElevenLabsSTTConfig):
-        return stt.mode == "realtime" and stt.realtime_commit_strategy == "vad"
-    return False
+    return "native_endpointing" in _CATALOG.capabilities_for_config(stt)
 
 
 def _normalize_smart_turn_config(
@@ -470,11 +511,15 @@ class _AgentSessionConfig:
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_capacity: int = 10_000
+    journal_redaction: Literal["secrets", "pii"] = "secrets"
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
     debugger_autolaunch: bool = False
+    capture_audio: bool | Callable[[], bool] = True
     capture_aec_reference: bool = False
     emergency_export: bool = False
+    data_dir: str | Path | None = None
 
 
 @dataclass(kw_only=True)
@@ -488,13 +533,23 @@ class EasyConfig(_AgentSessionConfig):
             implement EasyCat's provider Protocols. Leave both unset with
             ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
             OpenAI realtime STT + TTS chain.
-        vad: ``VADConfig`` or a live ``VADProvider``.
-        noise_reduction: ``NoiseReducerConfig`` or a live ``NoiseReducer``.
-        echo_cancellation: ``EchoCancellationConfig`` or a live
+        vad: A built-in/registered shortcut string, ``VADConfig``, registered
+            config, or live ``VADProvider``.
+        noise_reduction: A built-in/registered shortcut string,
+            ``NoiseReducerConfig``, registered config, or live ``NoiseReducer``.
+        echo_cancellation: A built-in/registered shortcut string,
+            ``EchoCancellationConfig``, registered config, or live
             ``EchoCanceller``.
         smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
             detection.
-        debug / journal_backend / journal_retention: Debug-journal settings.
+        session_id: Optional caller-supplied runtime session id. When unset,
+            EasyCat generates a ``session-...`` id.
+        data_dir: Optional root for this session's journals and artifacts.
+            When unset, the runtime falls back to ``EASYCAT_DATA_DIR`` or
+            ``.easycat``.
+        debug / journal_backend / journal_capacity / journal_redaction /
+        journal_retention:
+            Debug-journal settings.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -506,9 +561,9 @@ class EasyConfig(_AgentSessionConfig):
     openai_api_key: str | None = None
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
-    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
-    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
+    vad: VADConfig | VADProvider | str = field(default_factory=VADConfig)
+    noise_reduction: NoiseReducerConfig | NoiseReducer | str | None = None
+    echo_cancellation: EchoCancellationConfig | EchoCanceller | str | None = None
     enable_noise_reduction: bool = False
     enable_echo_cancellation: bool | None = None
     smart_turn: SmartTurnConfig | bool | None = None
@@ -525,6 +580,8 @@ class EasyConfig(_AgentSessionConfig):
     greeting: str | None = None
     dnc_list: DNCStore | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+    on_agent_failure: str | Callable[[Exception], str] | None = None
+    session_id: str | None = None
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
     # user who hits a real failure already has the bundle saved to disk
@@ -536,11 +593,16 @@ class EasyConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
+            journal_redaction=self.journal_redaction,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
+            session_id=self.session_id,
             agent=self.agent,
             agent_model=self.agent_model,
+            capture_audio=self.capture_audio,
         )
+        _validate_on_agent_failure(self.on_agent_failure)
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
         # ``EasyConfig(agent=...)`` works when the env var is set —
@@ -560,10 +622,7 @@ class EasyConfig(_AgentSessionConfig):
         api_key_overrides = (
             {"OPENAI_API_KEY": self.openai_api_key} if self.openai_api_key else None
         )
-        if isinstance(self.stt, str):
-            self.stt = parse_stt_string(self.stt, api_key_overrides=api_key_overrides)
-        if isinstance(self.tts, str):
-            self.tts = parse_tts_string(self.tts, api_key_overrides=api_key_overrides)
+        self._resolve_provider_shortcuts(api_key_overrides)
 
         if self.openai_api_key:
             if self.stt is None:
@@ -605,6 +664,12 @@ class EasyConfig(_AgentSessionConfig):
                 self.echo_cancellation = replace(
                     self.echo_cancellation, enabled=self.enable_echo_cancellation
                 )
+            elif is_echo_canceller_config(self.echo_cancellation):
+                logger.warning(
+                    "enable_echo_cancellation=%s ignored because a registered "
+                    "echo-canceller config was supplied via echo_cancellation=",
+                    self.enable_echo_cancellation,
+                )
             else:
                 # Pre-built ``EchoCanceller`` instance: the flag cannot be
                 # folded in, so warn on the conflict rather than ignore it.
@@ -616,6 +681,19 @@ class EasyConfig(_AgentSessionConfig):
         if self.debug in ("light", "full"):
             self._apply_debug_defaults()
         self._validate()
+
+    def _resolve_provider_shortcuts(self, api_key_overrides: dict[str, str] | None) -> None:
+        """Resolve every named audio-stage provider before validation/planning."""
+        if isinstance(self.stt, str):
+            self.stt = parse_stt_string(self.stt, api_key_overrides=api_key_overrides)
+        if isinstance(self.tts, str):
+            self.tts = parse_tts_string(self.tts, api_key_overrides=api_key_overrides)
+        if isinstance(self.vad, str):
+            self.vad = parse_vad_string(self.vad)
+        if isinstance(self.noise_reduction, str):
+            self.noise_reduction = parse_noise_reducer_string(self.noise_reduction)
+        if isinstance(self.echo_cancellation, str):
+            self.echo_cancellation = parse_echo_canceller_string(self.echo_cancellation)
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
         # ``enable_echo_cancellation`` is tri-state: None means "use the
@@ -747,6 +825,7 @@ class TextSessionConfig(_AgentSessionConfig):
     """
 
     session_id: str | None = None
+    data_dir: str | Path | None = None
     # Match EasyConfig(record_to=...): text sessions can auto-export a
     # timestamped debug bundle on stop when debug journaling is enabled.
     record_to: str | Path | None = None
@@ -755,11 +834,14 @@ class TextSessionConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
+            journal_redaction=self.journal_redaction,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
             session_id=self.session_id,
             agent=self.agent,
             agent_model=self.agent_model,
+            capture_audio=self.capture_audio,
         )
 
     @classmethod
@@ -771,6 +853,8 @@ class TextSessionConfig(_AgentSessionConfig):
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+        journal_capacity: int = 10_000,
+        journal_redaction: Literal["secrets", "pii"] = "secrets",
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
         wrap_agent: bool = True,
@@ -779,6 +863,9 @@ class TextSessionConfig(_AgentSessionConfig):
         remote_agent_api_key: str | None = None,
         mcp_servers: list[str] | None = None,
         record_to: str | Path | None = None,
+        capture_audio: bool | Callable[[], bool] = True,
+        data_dir: str | Path | None = None,
+        emergency_export: bool = False,
     ) -> TextSessionConfig:
         """Resolve the config-or-loose-kwargs calling convention to one config.
 
@@ -796,6 +883,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
                 "journal_backend": (journal_backend, "sqlite"),
+                "journal_capacity": (journal_capacity, 10_000),
+                "journal_redaction": (journal_redaction, "secrets"),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),
                 "wrap_agent": (wrap_agent, True),
@@ -804,6 +893,9 @@ class TextSessionConfig(_AgentSessionConfig):
                 "remote_agent_api_key": (remote_agent_api_key, None),
                 "mcp_servers": (mcp_servers, None),
                 "record_to": (record_to, None),
+                "capture_audio": (capture_audio, True),
+                "data_dir": (data_dir, None),
+                "emergency_export": (emergency_export, False),
             }
             supplied = [name for name, (value, default) in loose.items() if value != default]
             if supplied:
@@ -818,6 +910,8 @@ class TextSessionConfig(_AgentSessionConfig):
             session_id=session_id,
             debug=debug,
             journal_backend=journal_backend,
+            journal_capacity=journal_capacity,
+            journal_redaction=journal_redaction,
             journal_retention=journal_retention,
             warmup=True if warmup is None else warmup,
             wrap_agent=wrap_agent,
@@ -826,4 +920,7 @@ class TextSessionConfig(_AgentSessionConfig):
             remote_agent_api_key=remote_agent_api_key,
             mcp_servers=mcp_servers,
             record_to=record_to,
+            capture_audio=capture_audio,
+            data_dir=data_dir,
+            emergency_export=emergency_export,
         )

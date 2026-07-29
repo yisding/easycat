@@ -112,6 +112,8 @@ class _OutboundHelperBuilder:
         self._add_ivr(state_machine)
         self._add_policy_helpers()
         manager = self._add_manager()
+        if manager is not None:
+            state_machine.set_max_duration_hangup(manager.hangup_owned_call)
         self._add_retry_strategy(manager)
         return BuiltOutboundHelpers(
             helpers=tuple(self._helpers),

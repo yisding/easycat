@@ -183,7 +183,7 @@ entry points include:
   `bundles`, `scanned` - `easycat bundles list --json`
   `path`, `session_id`, `turn_count`, `turns`, `issues`, `errors`,
   `error_type`, `failing_turn_id`, `tool_calls`, `records`, `duration_ms`,
-  `annotations`, `provider_versions`, `artifact_count`,
+  `annotations`, `provider_versions`, `journal_dropped_records`, `artifact_count`,
   `replay_entry_points`, `format_version` -
                          `easycat bundles show PATH --json` and
                          `easycat inspect PATH --json`; `turns` is the
@@ -289,9 +289,9 @@ read-only postmortem view. Export a replayable bundle with
 PATH`, `easycat inspect PATH`, `easycat replay PATH`, or the debugger
 UI.
 
-Docs route: docs/reference/session-lifecycle.md (`easycat docs
---audience app-builders`, label "Session lifecycle"); operator tooling:
-docs/observability.md.
+Record catalog: docs/reference/journal-records.md; lifecycle and postmortem
+access: docs/reference/session-lifecycle.md (`easycat docs --audience
+app-builders`); operator tooling: docs/observability.md.
 """
 
 _TROUBLESHOOTING_BODY = """\

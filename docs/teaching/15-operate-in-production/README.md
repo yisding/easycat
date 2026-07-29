@@ -152,11 +152,11 @@
 -if TYPE_CHECKING:
 -    from openai import AsyncOpenAI
 -
--MODEL = "gpt-4o-mini"
+-MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -76,185 +51,96 @@
+@@ -76,188 +51,96 @@
      )
 
 
@@ -189,7 +189,7 @@
 -        MarkdownStripProcessor(),
 -        *default_pronunciation_processors(
 -            name_pronunciations={"easycat": "ee zee cat"},
--            phone_pause_ms=120,
+-            phone_ellipsis_count=1,
 -        ),
 -    ]
 -
@@ -245,7 +245,10 @@
 -            return
 -
 -        stream = await self._client.chat.completions.create(
--            model=MODEL, messages=self._history, stream=True
+-            model=MODEL,
+-            reasoning_effort="none",
+-            messages=self._history,
+-            stream=True,
 -        )
 -        full = ""
 -        try:
@@ -491,6 +494,7 @@ which connection, with a guaranteed stop on disconnect.
 ```python
 manager: SessionManager[str] = SessionManager()
 
+
 async def handle_connection(ws):
     # See examples/twilio_app.py for the full per-connection wiring:
     # an EasyConfig(..., transport=TwilioConnectionTransport(ws))
@@ -511,7 +515,9 @@ Key properties:
   preserved. The session's own start path owns rollback of resources it
   opened before that interrupted start.
 - `stop_all()` gathers all sessions' `stop()` calls concurrently and
-  logs exceptions per session without raising.
+  logs exceptions per session without raising. Successfully stopped
+  sessions are removed; failed or cancelled teardowns stay registered
+  for a later retry. Pass `force=True` for that final forced sweep.
 - `connection(key, session)` is the context-manager sugar for
   `add` + `remove`.
 - Do not call `remove()` / `stop_all()` on a key while application code
@@ -523,8 +529,9 @@ Run the provider-free [manager probe](manager_probe.py) to see two
 active slots, duplicate-key rejection, ordinary and cancelled-start
 rollback, key reuse, and context-managed removal without opening a
 microphone. Its final `stop_all()` sweep also proves that every captured
-session is asked to stop and one stop failure does not abort the rest of
-the sweep. The intentional failure is evidence under
+session is asked to stop, one stop failure does not abort the rest of
+the sweep, and the failed entry remains available for retry. The
+intentional failure is evidence under
 `stop_all.expected_error`, not a stray stderr log that looks like the probe
 itself failed.
 

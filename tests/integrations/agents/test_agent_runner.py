@@ -96,6 +96,34 @@ async def test_invoke_yields_text_delta_and_done():
 
 
 @pytest.mark.asyncio
+async def test_plain_agent_rejects_system_turn_input():
+    runner = AgentRunner(EchoAgent())
+
+    with pytest.raises(ValueError, match="system application prompts require"):
+        async for _ in runner.invoke(
+            AgentTurnInput.from_text("instruction", role="system"),
+            NullAgentRecorder(),
+        ):
+            pass
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_plain_agent_accepts_transient_context_for_voice_compatibility():
+    runner = AgentRunner(EchoAgent())
+    turn_input = AgentTurnInput.from_text(
+        "hello",
+        context=[{"role": "system", "content": "Caller: +15551234567"}],
+    )
+
+    events = [event async for event in runner.invoke(turn_input, NullAgentRecorder())]
+
+    assert [event.kind for event in events] == ["text_delta", "done"]
+    assert runner.history[0] == {"role": "user", "content": "hello"}
+
+
+@pytest.mark.asyncio
 async def test_null_recorder_skips_cursor_metadata(monkeypatch):
     runner = AgentRunner(EchoAgent())
     monkeypatch.setattr(
@@ -147,6 +175,16 @@ async def test_prepare_response_defers_history_until_invoke_prepared():
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Echo: hello"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_plain_agent_preparation_rejects_system_input():
+    runner = _preemptive_runner(EchoAgent())
+
+    with pytest.raises(ValueError, match="system application prompts require"):
+        await runner.prepare_response(AgentTurnInput.from_text("instruction", role="system"))
+
+    assert runner.history == []
 
 
 @pytest.mark.asyncio
@@ -477,6 +515,21 @@ async def test_bridge_delegation_stops_after_done_without_timeout():
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "ok"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_bridge_delegation_closes_inner_stream_on_early_consumer_close():
+    inner = _PostDoneHangingBridge()
+    runner = AgentRunner(inner, AgentRunnerConfig(timeout=None))
+    stream = runner.invoke(AgentTurnInput.from_text("hello"), _recorder())
+
+    first = await stream.__anext__()
+    assert first == AgentBridgeEvent(kind="text_delta", text="ok")
+
+    await stream.aclose()
+
+    assert inner.closed
+    assert runner.history == []
 
 
 class _HangingBridge:

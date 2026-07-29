@@ -228,7 +228,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
-            "uv sync --extra quickstart --group dev",
+            "uv sync --extra quickstart --extra webrtc --group dev",
             "uv run easycat doctor",
             "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
@@ -724,6 +724,19 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": ("Look up every public session event type and when it is emitted."),
         "commands": (
             "uv run easycat explain events",
+            "uv run easycat docs --audience app-builders",
+        ),
+    },
+    {
+        "label": "Journal records reference",
+        "path": "docs/reference/journal-records.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Look up stable built-in journal record names, kinds, and data-key contracts."
+        ),
+        "commands": (
+            "uv run easycat explain journal",
             "uv run easycat docs --audience app-builders",
         ),
     },

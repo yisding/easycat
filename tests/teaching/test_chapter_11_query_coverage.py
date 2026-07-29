@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "11-journal"
@@ -13,8 +14,8 @@ INVESTIGATE = CHAPTER / "investigate.py"
 BUNDLE = CHAPTER / "bundles" / "bug_03_ghost_interruption.bundle"
 
 
-def run_investigate(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def run_investigate(*args: str) -> script_runner.CompletedProcess[str]:
+    return script_runner.run(
         [sys.executable, str(INVESTIGATE), str(BUNDLE), *args],
         cwd=ROOT,
         capture_output=True,
@@ -23,7 +24,7 @@ def run_investigate(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_query_coverage_probe_distinguishes_typo_and_intersection() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "query_coverage_probe.py")],
         cwd=ROOT,
         check=True,

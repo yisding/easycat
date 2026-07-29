@@ -165,6 +165,7 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
         "`session.journal.read()`",
         "`session.export_debug_bundle(path)`",
         "`async with session:`",
+        "asyncio.to_thread(create_session, config)",
         "record_to",
     ):
         assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"

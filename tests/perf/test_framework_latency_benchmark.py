@@ -20,6 +20,17 @@ from perf.bench_framework_latency import (
 )
 from perf.framework_latency_worker import _shutdown_pipecat_runner, _timed_critical_path
 
+# The external-framework smoke tests launch `uv run --locked --project
+# perf/framework_environments/<framework>`, which resolves and installs the
+# competitor's whole dependency tree before the worker can even handshake.
+# `Worker` already bounds every message it waits on (``worker_timeout_s``,
+# 120s by default) and raises a TimeoutError carrying the worker's stderr --
+# but the global 60s ``timeout`` in pyproject fired first, force-exiting the
+# xdist worker process so that diagnostic never reached the report. Budget
+# above the worker's own ceiling (handshake + samples + shutdown) so the
+# benchmark's bounded, message-carrying error paths always win the race.
+_EXTERNAL_WORKER_TIMEOUT_S = 600
+
 
 def test_timed_critical_path_restores_gc_state_on_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -251,6 +262,7 @@ def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
 
 
 @pytest.mark.integration_external
+@pytest.mark.timeout(_EXTERNAL_WORKER_TIMEOUT_S)
 @pytest.mark.parametrize("framework", ["livekit", "pipecat"])
 def test_external_framework_worker_smoke(framework: str) -> None:
     result = run_benchmark(
