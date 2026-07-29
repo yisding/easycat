@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -435,11 +436,14 @@ class SessionJournalSink:
         output_bytes: bytes | None = None,
         input_artifact_class: ArtifactClass = "debug_verbose",
         output_artifact_class: ArtifactClass = "debug_verbose",
+        tags: frozenset[str] = frozenset(),
+        inherit_turn_id: bool = True,
     ) -> None:
         """Async event-bus write path for persistent journal/store backends."""
         journal = self.journal
         if journal is None:
             return
+        validate_builtin_record(name=name, kind=kind, data=data)
 
         async def _store(
             payload: bytes | None,
@@ -463,13 +467,15 @@ class SessionJournalSink:
 
         input_ref = await _store(input_bytes, input_artifact_class)
         output_ref = await _store(output_bytes, output_artifact_class)
+        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
         await append_journal_record_async(
             journal,
             kind=kind,
             name=name,
             session_id=self.session_id,
-            turn_id=self.current_turn_id(turn_id),
+            turn_id=resolved_turn_id,
             data=data,
+            tags=tags,
             input_ref=input_ref,
             output_ref=output_ref,
         )
@@ -477,7 +483,11 @@ class SessionJournalSink:
     def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
 
-    def _make_event_handler(self, kind: JournalRecordKind, name: str) -> EventHandler:
+    def _make_event_handler(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+    ) -> Callable[[Event], Coroutine[Any, Any, None]]:
         async def _handler(event: Event) -> None:
             journal = self.journal
             if journal is None:

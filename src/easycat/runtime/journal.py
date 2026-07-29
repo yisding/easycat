@@ -171,19 +171,22 @@ async def append_journal_record_async(
     run in the loop's worker pool; in-memory journals stay inline because a
     thread hop costs more than their lock-and-deque append.
     """
-    kwargs = {
-        "kind": kind,
-        "name": name,
-        "session_id": session_id,
-        "turn_id": turn_id,
-        "data": data,
-        "error": error,
-        "tags": tags,
-        "input_ref": input_ref,
-        "output_ref": output_ref,
-    }
+
+    def _append() -> int:
+        return journal.append(
+            kind=kind,
+            name=name,
+            session_id=session_id,
+            turn_id=turn_id,
+            data=data,
+            error=error,
+            tags=tags,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
     if bool(getattr(journal, "writes_block", False)):
-        worker = asyncio.create_task(asyncio.to_thread(journal.append, **kwargs))
+        worker = asyncio.create_task(asyncio.to_thread(_append))
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -202,7 +205,7 @@ async def append_journal_record_async(
                 # the result prevents a detached worker exception warning.
                 pass
             raise
-    return journal.append(**kwargs)
+    return _append()
 
 
 # ── JournalView (read-only surface) ──────────────────────────────
