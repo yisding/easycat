@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
+from tests.teaching import _script_runner as script_runner
 from tests.teaching._source_guards import assert_sources_match
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +20,7 @@ STREAMING_SCRIPTS = [
 
 
 def test_streamed_tts_probe_preserves_sentence_and_turn_counts() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "tts_delivery_probe.py")],
         cwd=ROOT,
         check=True,

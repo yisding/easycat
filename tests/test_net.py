@@ -9,7 +9,18 @@ whitespace-only tokens as no token at all.
 
 from __future__ import annotations
 
-from easycat._net import is_loopback_host, normalize_auth_token
+from easycat._net import constant_time_strings_equal, is_loopback_host, normalize_auth_token
+
+
+def test_constant_time_strings_equal_matches_ascii_values() -> None:
+    assert constant_time_strings_equal("s3cret", "s3cret") is True
+    assert constant_time_strings_equal("wrong", "s3cret") is False
+
+
+def test_constant_time_strings_equal_denies_non_ascii_without_raising() -> None:
+    assert constant_time_strings_equal("café", "s3cret") is False
+    assert constant_time_strings_equal("s3cret", "café") is False
+    assert constant_time_strings_equal("café", "café") is False
 
 
 def test_is_loopback_host_none_is_false() -> None:

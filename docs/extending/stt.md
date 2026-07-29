@@ -68,14 +68,33 @@ run(EasyConfig.mic(stt=FixedSTT(), agent=my_agent))
 
 See `examples/custom_stt_provider.py` for a runnable wrapper-style variant.
 
+### Receiving the session EventBus
+
+If an injected provider emits provider-scoped errors or lifecycle events,
+implement the public synchronous attachment hook:
+
+```python
+from easycat import EventBus
+
+
+def set_event_bus(self, event_bus: EventBus) -> None:
+    if self._event_bus is None:  # preserve a bus explicitly supplied by the app
+        self._event_bus = event_bus
+```
+
+Session calls `set_event_bus()` before provider work starts. This is the
+instance-injection contract; the provider may store its config as `config`,
+`_settings`, or anything else. Private `_config` / `_event_bus` probing remains
+only for compatibility with older providers.
+
 ## Verifying conformance
 
 ```python
-from easycat import STTProvider
+from easycat.testing import STTProviderContractSuite
 
 
-def test_fixed_stt_conforms_to_protocol() -> None:
-    assert isinstance(FixedSTT(), STTProvider)
+class TestFixedSTT(STTProviderContractSuite):
+    provider_factory = FixedSTT
 
 
 async def test_fixed_stt_yields_final_after_commit() -> None:
@@ -87,10 +106,15 @@ async def test_fixed_stt_yields_final_after_commit() -> None:
     assert [event.text for event in events] == ["hi"]
 ```
 
-The in-tree behavioral contract lives in
-[`tests/contracts/test_stt_provider_contracts.py`](../../tests/contracts/test_stt_provider_contracts.py);
-mirror its cases (partial-before-final ordering, end-of-stream termination,
-teardown via `aclose`) when your provider talks to a real backend.
+The suite verifies async event iteration, normalized events, repeated stream
+cycles, end-of-stream termination, and the rule that
+`commit_segment() -> True` means the provider accepted the request. Empty or
+silent segments may produce no `FINAL`; consume `events()` to observe actual
+transcript completion.
+`isinstance(provider, STTProvider)` checks member names only and is not a
+behavioral conformance test. The in-tree use of the same installable suite
+lives in
+[`tests/contracts/test_stt_provider_contracts.py`](../../tests/contracts/test_stt_provider_contracts.py).
 
 ## Register a shortcut name
 
@@ -108,15 +132,19 @@ register_stt_provider(
     YourSTTConfig,
     env_var="YOURS_API_KEY",
     extra="yours",  # optional: install extra shipping your deps
+    probe_module="easycat_yours",  # import checked by /health/ready
+    capabilities=frozenset({"native_endpointing"}),  # if the provider owns turns
     api_domains=("yours.example.com",),  # optional: for URL redaction
 )
 ```
 
 `YourSTT` must accept a `YourSTTConfig` instance as its constructor argument —
-the same contract built-in providers follow. To receive the session
-`EventBus`, declare `event_bus: EventBus | None = None` on `YourSTTConfig`; the
-factory injects the bus into that optional config field before constructing the
-provider. `YourSTTConfig` also needs an `api_key` field.
+the same contract built-in providers follow. A config that declares
+`event_bus: EventBus | None = None` receives the session bus before provider
+construction; no provider is required to consume it. Live instances use
+`set_event_bus()` as described above. Credentialed providers declare
+`env_var=...` and need an `api_key` field; local/self-hosted providers omit
+both.
 For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
@@ -129,9 +157,30 @@ What each metadata field feeds:
 
 | Field | Consumed by |
 | --- | --- |
-| `env_var` | `easycat doctor` env-var checks; auto-filled API key for `"yours/model"` shortcuts |
+| `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/model"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
+| `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
+| `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
+
+When `native_endpointing` is declared, `EasyConfig` drives turns from STT
+FINAL events and disables its own VAD/smart-turn endpointing. Omit it when the
+provider expects EasyCat to commit segments.
+
+For a credential-free local provider, omit `env_var`; shortcut parsing and the
+planner then construct the config without reading an API key:
+
+```python
+register_stt_provider(
+    "local-whisper",
+    LocalWhisperSTT,
+    LocalWhisperConfig,  # no api_key field required
+    extra="local-whisper",
+    probe_module="local_whisper",
+)
+
+config = EasyConfig(stt="local-whisper/base", tts=..., agent=...)
+```
 
 ### Auto-registering from a pip-installed package
 
@@ -159,6 +208,8 @@ def register() -> None:
         YourSTTConfig,
         env_var="YOURS_API_KEY",
         extra="yours",
+        probe_module="easycat_yours",
+        capabilities=frozenset({"native_endpointing"}),
         api_domains=("yours.example.com",),
     )
 ```

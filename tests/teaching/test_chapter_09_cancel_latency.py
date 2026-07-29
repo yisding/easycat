@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
@@ -19,7 +20,7 @@ CANCEL_SCRIPTS = [
 
 
 def test_cancel_latency_probe_measures_software_milestones() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "cancel_latency_probe.py")],
         cwd=ROOT,
         check=True,

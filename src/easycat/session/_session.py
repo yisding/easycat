@@ -112,6 +112,8 @@ from easycat.stubs import (
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+_BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
+_BARGE_IN_CUTOFF_TIMEOUT_S = 0.4
 
 
 def _recording_filename_session_id(session_id: str) -> str:
@@ -252,9 +254,15 @@ class Session:
 
         # ── Event bus + provider event-bus attach ────────────────
         self.event_bus = cfg.event_bus or EventBus()
-        self._maybe_attach_event_bus(self.stt)
-        self._maybe_attach_event_bus(self.tts)
-        self._maybe_attach_event_bus(self.transport)
+        for provider in (
+            self.stt,
+            self.tts,
+            self.vad,
+            self.noise_reducer,
+            self.echo_canceller,
+            self.transport,
+        ):
+            self._maybe_attach_event_bus(provider)
 
         # ── Noop validation (audio sessions must have real providers) ─
         self._validate_providers(cfg)
@@ -337,7 +345,7 @@ class Session:
         self._closed = False
         self._stopping = False
         self._stop_task: asyncio.Task[Any] | None = None
-        self._force_stop_requested = asyncio.Event()
+        self._stop_force = False
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -485,6 +493,35 @@ class Session:
         if self._turn and self._turn_manager.state != TurnManagerState.IDLE:
             return self._turn
         return None
+
+    @property
+    def current_turn(self) -> TurnContext | None:
+        """Return the live turn context, including post-playback bookkeeping.
+
+        Most applications should use :attr:`turn_state` for lifecycle decisions.
+        This lower-level accessor exists for diagnostics, replay, and focused
+        test harnesses that need to inspect per-turn accounting without reaching
+        into Session's collaborator graph.
+        """
+        return self._turn
+
+    def begin_turn(
+        self,
+        turn_id: str,
+        cancel_token: CancelToken | None = None,
+    ) -> TurnContext:
+        """Create and install a turn context without advancing the turn manager.
+
+        This is a low-level seam for diagnostics, replay, and focused test
+        harnesses. Applications that initiate user speech should call
+        :meth:`start_turn`, which performs the full lifecycle transition.
+        """
+        if not turn_id.strip():
+            raise ValueError("turn_id must be a non-empty string")
+        turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
+        self._turn = turn
+        self._turn_generation = turn.generation
+        return turn
 
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""
@@ -1284,24 +1321,59 @@ class Session:
         Prefer the ``async with session:`` context manager, which calls
         this for you on exit.
         """
-        if self._closed:
-            self._record_debug_bundle()
-            return
-        if self._stopping:
-            if force:
-                self._force_stop_requested.set()
-                await self._turn_runner.cancel_application_prompt()
-            stop_task = self._stop_task
-            if stop_task is not None and stop_task is not asyncio.current_task():
-                await asyncio.shield(stop_task)
-            return
-        self._stopping = True
-        self._stop_task = asyncio.current_task()
-        self._force_stop_requested.clear()
-        self._is_running = False
         current_task = asyncio.current_task()
+        if current_task is None:  # pragma: no cover - asyncio always supplies one
+            raise RuntimeError("Session.stop() requires a running asyncio task")
+
+        # Idempotent callers join the active teardown. A force request may take
+        # ownership from a graceful stop: cancel the old caller task, wait a
+        # bounded interval for cooperative cleanup, then run the force path.
+        # Ownership is transferred before cancellation so another concurrent
+        # force caller joins this task rather than racing a second teardown.
+        superseded_task: asyncio.Task[Any] | None = None
+        while True:
+            active_stop = self._stop_task
+            if active_stop is None or active_stop.done():
+                self._stop_task = current_task
+                self._stop_force = force
+                self._stopping = True
+                break
+            if active_stop is current_task:
+                return
+            if force and not self._stop_force:
+                superseded_task = active_stop
+                self._stop_task = current_task
+                self._stop_force = True
+                superseded_task.cancel()
+                break
+            try:
+                await asyncio.shield(active_stop)
+            except asyncio.CancelledError:
+                if current_task.cancelling():
+                    raise
+                # The joined stop was superseded by another force caller.
+                # Re-read ownership and join its replacement.
+                continue
+            return
+
+        self._is_running = False
 
         try:
+            if superseded_task is not None:
+                done, _ = await asyncio.wait({superseded_task}, timeout=0.5)
+                if done:
+                    try:
+                        superseded_task.result()
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                else:
+                    logger.warning(
+                        "Graceful Session.stop() ignored cancellation; continuing force teardown"
+                    )
+
+            if self._closed:
+                return
+
             prompt_task = self._turn_runner.active_application_prompt
             prompt_is_current = prompt_task is current_task
             if (
@@ -1311,17 +1383,11 @@ class Session:
                 and not prompt_task.done()
             ):
                 # Application prompts are confirmed turn work. Graceful stop
-                # lets them finish unless a concurrent forced stop escalates.
-                force_waiter = asyncio.create_task(self._force_stop_requested.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        {prompt_task, force_waiter},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    force = force_waiter in done
-                finally:
-                    force_waiter.cancel()
-                    await asyncio.gather(force_waiter, return_exceptions=True)
+                # lets them finish. asyncio.wait keeps the prompt independent:
+                # a concurrent forced stop can cancel this graceful owner
+                # without propagating that cancellation into the prompt before
+                # the force path takes over.
+                await asyncio.wait({prompt_task})
 
             turn = self._turn
             if turn and not prompt_is_current:
@@ -1409,6 +1475,12 @@ class Session:
                             " BotStoppedSpeaking is emitted if needed."
                         )
 
+                # Runtime barge-in returns after the audible cutoff and leaves
+                # provider/event cleanup in this scoped task. Finish it while
+                # the providers, transport, and journal backends are still
+                # live; otherwise a graceful stop can close resources out
+                # from underneath the detached cleanup.
+                await self._runtime_scope.drain(_BARGE_IN_CLEANUP_TASK)
                 await self._greeting.cancel()
                 await self._stt_committer.cancel(turn)
                 await self._tts_scheduler.cancel()
@@ -1446,14 +1518,16 @@ class Session:
             if unregister is not None:
                 unregister()
         finally:
-            # Clear the stopping flag FIRST so it is always reset even if a
-            # later teardown step (observability / log-context reset) raises.
-            self._stopping = False
-            self._stop_task = None
-            self._force_stop_requested.clear()
-            self._mark_observability_inactive()
-            self._reset_session_log_context()
-            self._record_debug_bundle()
+            owns_stop = self._stop_task is current_task
+            if owns_stop:
+                # Clear the stopping state FIRST so it is always reset even if
+                # a later teardown step (observability / recording) raises.
+                self._stop_task = None
+                self._stop_force = False
+                self._stopping = False
+                self._mark_observability_inactive()
+                self._reset_session_log_context()
+                self._record_debug_bundle()
 
     def _reset_session_log_context(self) -> None:
         """Restore this task's pre-session logging correlation binding."""
@@ -1481,57 +1555,138 @@ class Session:
 
     # ── Cancellation ───────────────────────────────────────────
 
-    async def cancel_turn(self, *, barge_in: bool = False) -> None:
-        """Trigger cancel token, abort STT/agent/TTS, reset turn state.
-
-        If barge_in is True, emits an Interruption event and delegates
-        upstream ``InterruptSignal`` propagation to the
-        :class:`CancelOrchestrator` so every stage records its own
-        ``ControlSignalRecord``. Signal flow runs alongside the legacy cancel
-        token so older cancellation behavior remains intact.
-        """
-        turn = self._turn
+    async def _cut_off_turn_playback(
+        self,
+        turn: TurnContext | None,
+        *,
+        barge_in: bool,
+    ) -> tuple[asyncio.Task[None] | None, asyncio.Task[bool]]:
+        """Stop audible output before any provider or application teardown."""
+        cutoff_started = time.monotonic() if barge_in else None
         if turn:
             turn.cancel_token.cancel()
         prompt_token = self._turn_runner.application_prompt_cancel_token
         if prompt_token is not None:
             prompt_token.cancel()
-        prompt_cleanup = asyncio.create_task(self._turn_runner.cancel_application_prompt())
-
-        # Stamp the barge-in initiation time so the cutoff-latency histogram
-        # can measure the elapsed wall time until playback is actually cleared
-        # on the transport below. Monotonic to stay immune to clock steps.
-        cutoff_started = time.monotonic() if barge_in else None
-
+        prompt_cleanup = asyncio.create_task(
+            self._turn_runner.cancel_application_prompt(),
+            name="application_prompt_cancel_cleanup",
+        )
+        # Let the cleanup task request cancellation and the prompt task observe
+        # it before returning from the cutoff path, without waiting for
+        # cancellation-resistant teardown. Both handoffs are event-loop turns;
+        # the cleanup task itself remains owned by detached turn cleanup.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         if barge_in:
             if turn:
                 turn.record_barge_in()
-            await self._emit(Interruption())
-            await self._cancel.propagate_signal(
-                _InterruptSignal(signal_id=f"barge-in-{uuid4().hex[:8]}"),
-                cause="barge_in",
-            )
-
-        await self._turn_runner.cancel_preemptive_generation()
-        await self._stt_committer.cancel(turn)
-        await self._tts_scheduler.cancel()
+        self._tts_scheduler.set_playback_suppressed(True)
+        tts_task = self._tts_scheduler.request_turn_cancel()
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
-        await clear_audio_if_supported(self.transport)
-        await prompt_cleanup
+        if barge_in:
+            try:
+                async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
+                    await clear_audio_if_supported(self.transport)
+            except TimeoutError:
+                logger.warning(
+                    "Transport playback clear exceeded %.0f ms during barge-in",
+                    _BARGE_IN_CUTOFF_TIMEOUT_S * 1000,
+                )
+            except Exception:
+                logger.exception("Transport playback clear failed during barge-in")
+        else:
+            await clear_audio_if_supported(self.transport)
 
-        # Playback is cleared at this point; record the barge-in -> cutoff
-        # latency so OTel consumers can track how long the caller kept hearing
-        # the bot after interrupting it.
         if cutoff_started is not None:
             observability.record_histogram(
                 "easycat.interruption.cutoff_latency",
                 time.monotonic() - cutoff_started,
                 attributes={"easycat.surface": "vad"},
             )
+        return tts_task, prompt_cleanup
+
+    async def _notify_barge_in(self, turn: TurnContext | None) -> None:
+        turn_id = turn.id if turn is not None else None
+        await self._emit(Interruption(turn_id=turn_id))
+        await self._cancel.propagate_signal(
+            _InterruptSignal(signal_id=f"barge-in-{uuid4().hex[:8]}"),
+            cause="barge_in",
+            turn_id=turn_id,
+        )
+
+    async def _finish_turn_cancel(
+        self,
+        turn: TurnContext | None,
+        tts_task: asyncio.Task[None] | None,
+        prompt_cleanup: asyncio.Task[bool],
+        *,
+        barge_in: bool,
+        successor_expected: bool,
+    ) -> None:
+        """Drain captured work after the audible cutoff has completed."""
+        tts_cleanup = asyncio.create_task(
+            self._tts_scheduler.finish_turn_cancel(tts_task),
+            name="tts_turn_cancel_cleanup",
+        )
+        try:
+            if barge_in:
+                await self._notify_barge_in(turn)
+            if not successor_expected:
+                await self._turn_runner.cancel_preemptive_generation()
+                await self._stt_committer.cancel(turn)
+        finally:
+            try:
+                await tts_cleanup
+            finally:
+                await prompt_cleanup
 
         if not barge_in:
             self._reset_turn_state()
+
+    async def _begin_barge_in(self) -> None:
+        """Cut off playback inline and detach only old-turn cleanup work.
+
+        This callback returns after the transport has been cleared so audio
+        ingress can immediately resume and the turn manager can install the
+        successor user turn. Provider cleanup, application interruption
+        handlers, and signal journaling remain runtime-owned.
+        """
+        turn = self._turn
+        tts_task, prompt_cleanup = await self._cut_off_turn_playback(turn, barge_in=True)
+        cleanup = self._runtime_scope.create_journaled_task(
+            self._finish_turn_cancel(
+                turn,
+                tts_task,
+                prompt_cleanup,
+                barge_in=True,
+                successor_expected=True,
+            ),
+            name=_BARGE_IN_CLEANUP_TASK,
+            journal_sink=self._journal_sink,
+            turn_id=turn.id if turn is not None else None,
+        )
+        cleanup.add_done_callback(self._runtime_scope.log_task_exception)
+
+    async def cancel_turn(self, *, barge_in: bool = False) -> None:
+        """Cancel the active turn and await full provider cleanup.
+
+        Runtime barge-in uses the internal fast callback above so the audio
+        ingress loop waits only for the audible playback cutoff.
+        """
+        turn = self._turn
+        tts_task, prompt_cleanup = await self._cut_off_turn_playback(
+            turn,
+            barge_in=barge_in,
+        )
+        await self._finish_turn_cancel(
+            turn,
+            tts_task,
+            prompt_cleanup,
+            barge_in=barge_in,
+            successor_expected=False,
+        )
 
     async def cancel_tts_playback(self) -> None:
         """Stop TTS provider and flush outbound audio.
@@ -1545,10 +1700,10 @@ class Session:
         would abort the agent stream.
         """
         self._tts_scheduler.set_playback_suppressed(True)
-        await self._tts_scheduler.synthesizer.cancel()
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
+        await self._tts_scheduler.synthesizer.cancel()
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
@@ -1562,12 +1717,14 @@ class Session:
             turn.cancel_token.cancel()
         await self._turn_runner.cancel_application_prompt()
 
-        await self._turn_runner.cancel_preemptive_generation()
-        await self._stt_committer.cancel(turn)
-        await self._tts_scheduler.cancel()
+        self._tts_scheduler.set_playback_suppressed(True)
+        tts_task = self._tts_scheduler.request_turn_cancel()
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
+        await self._turn_runner.cancel_preemptive_generation()
+        await self._stt_committer.cancel(turn)
+        await self._tts_scheduler.finish_turn_cancel(tts_task)
 
         self.agent.reset()
         self._agent_stage.reset_history()
@@ -1676,7 +1833,23 @@ class Session:
     # ── Internal helpers ───────────────────────────────────────
 
     def _maybe_attach_event_bus(self, provider: Any) -> None:
-        """Attach the session EventBus to provider configs that support it."""
+        """Attach the session bus through the public hook or legacy attributes."""
+        set_event_bus = getattr(provider, "set_event_bus", None)
+        if callable(set_event_bus):
+            try:
+                result = set_event_bus(self.event_bus)
+                if inspect.isawaitable(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise TypeError("set_event_bus() must be synchronous")
+                return
+            except Exception:
+                logger.warning(
+                    "Provider %r rejected set_event_bus(); trying legacy EventBus attachment",
+                    provider,
+                    exc_info=True,
+                )
+
         attached = False
         cfg = getattr(provider, "_config", None)
         if cfg is not None and hasattr(cfg, "event_bus") and cfg.event_bus is None:

@@ -1,10 +1,10 @@
-"""Unit coverage for the NET-NEW declarative metadata tables (M6b).
+"""Unit coverage for the declarative built-in backend metadata tables (M6b).
 
-The five non-catalog roles (transport/vad/noise_reducer/echo_canceller/agent)
-resolve from these tables. Every backend must map to the right config-type /
-extra / required_env / probe-module / capabilities, and ``EXTRA_PROBE_MODULE``
-must cover every extra named anywhere in the planning surface so
-``importlib.util.find_spec`` works uniformly.
+The five roles with built-in tables
+(transport/vad/noise_reducer/echo_canceller/agent) resolve their bundled
+backends here; registered audio-stage extensions supplement them through
+provider catalogs. Every backend must map to the right config-type / extra /
+required_env / probe-module / capabilities.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import pytest
 
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
+    BUILTIN_BACKEND_ROLES,
     ECHO_CANCELLER_BACKENDS,
     EXTRA_PROBE_MODULE,
     NOISE_REDUCER_BACKENDS,
@@ -91,7 +92,7 @@ def test_extra_probe_module_covers_every_named_extra() -> None:
     ):
         named_extras.update(b.extra for b in table.values() if b.extra is not None)
     # Plus the STT/TTS catalog extras.
-    from easycat._provider_catalog import provider_extras
+    from easycat._provider_registry import provider_extras
 
     named_extras.update(e for e in provider_extras().values() if e)
 
@@ -125,12 +126,26 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
     # ClassVar is False but ``EasyConfig.browser`` forces AEC on). This catches a
     # silent drift if a preset OR the mirror changes.
     from easycat.project.manifest import ProjectManifest
-    from easycat.project.schema import ProjectSection, ServerSection, VoiceProfile
+    from easycat.project.schema import (
+        ProjectSection,
+        ServerSection,
+        VoiceProfile,
+        parse_auth_reference,
+    )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-registry-test")
+    monkeypatch.setenv("TWILIO_STREAM_TOKEN_SECRET", "twilio-registry-test")
 
     for shortcut, backend in TRANSPORT_BACKENDS.items():
-        profile = VoiceProfile(name="default", transport=shortcut)
+        token = (
+            parse_auth_reference(
+                "bearer-env:TWILIO_STREAM_TOKEN_SECRET",
+                field_name="voice.default.token",
+            )
+            if shortcut == "twilio"
+            else None
+        )
+        profile = VoiceProfile(name="default", transport=shortcut, token=token)
         manifest = ProjectManifest(
             project=ProjectSection(), server=ServerSection(), profiles={"default": profile}
         )
@@ -139,11 +154,13 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
         assert resolved == backend.default_echo_cancellation_enabled, shortcut
 
 
-def test_non_catalog_roles_are_the_five() -> None:
-    assert set(NON_CATALOG_ROLES) == {
+def test_builtin_backend_roles_are_the_five() -> None:
+    expected = {
         "transport",
         "vad",
         "agent",
         "noise_reducer",
         "echo_canceller",
     }
+    assert set(BUILTIN_BACKEND_ROLES) == expected
+    assert NON_CATALOG_ROLES == BUILTIN_BACKEND_ROLES

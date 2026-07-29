@@ -108,6 +108,17 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert "tests/server/test_webrtc_routes.py" in minimum_job
 
 
+def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}
+    rnnoise_names = {Requirement(dep).name for dep in extras["rnnoise"]}
+    all_names = {Requirement(dep).name for dep in extras["all"]}
+
+    assert {"pyrnnoise", "requests"} <= rnnoise_names
+    assert {"pyrnnoise", "requests"}.isdisjoint(quickstart_names)
+    assert rnnoise_names <= all_names
+
+
 def test_every_install_ships_high_quality_resampling() -> None:
     dependencies = _pyproject()["project"]["dependencies"]
 

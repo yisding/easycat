@@ -174,3 +174,29 @@ def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, temp
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
     )
+
+
+def test_provider_scaffold_named_vad_conformance_suite_passes(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """The provider on-ramp must execute its named-registration example."""
+    project = _scaffold_project(cli, tmp_path, "provider")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "test_custom_vad.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+    )
+    assert proc.returncode == 0, (
+        f"pytest failed inside scaffolded provider project:\n{proc.stdout}\n{proc.stderr}"
+    )

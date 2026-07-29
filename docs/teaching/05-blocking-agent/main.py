@@ -45,7 +45,7 @@ from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
 PREROLL_FRAMES = 15
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch05-blocking-{int(time.time())}"
 
@@ -106,6 +106,7 @@ async def blocking_agent(client: AsyncOpenAI, user_text: str) -> str:
     """One LLM call. Wait for the full response. Return the string."""
     resp = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
             {"role": "user", "content": user_text},
