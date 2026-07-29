@@ -15,6 +15,7 @@ from easycat.events import (
     STTFinal,
     SupervisorListenerAttached,
     SupervisorListenerDetached,
+    ToolCallResult,
     TransportDegraded,
 )
 from easycat.runtime import InMemoryRingBuffer
@@ -113,15 +114,48 @@ async def test_journal_sink_preserves_reconnect_and_playback_identifiers() -> No
 
 
 @pytest.mark.asyncio
-async def test_journal_sink_records_telephony_lifecycle_events() -> None:
+async def test_journal_sink_uses_selected_redaction_for_tool_results() -> None:
     bus = EventBus()
-    journal = InMemoryRingBuffer()
+    journal = InMemoryRingBuffer(redaction="secrets")
     sink = SessionJournalSink(
         event_bus=bus,
         journal=journal,
         artifact_store=None,
         session_id="session-a",
         current_turn_id=lambda turn_id=None: turn_id,
+        redaction="secrets",
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        ToolCallResult(
+            call_id="call-1",
+            result=(
+                "url=https://acme.example/orders/123 "
+                "request_id=req_abcdef123 phone=+1 415 555 0123 "
+                "api_key=secret-value"
+            ),
+        )
+    )
+
+    assert journal.read()[0].data["result"] == (
+        "url=https://acme.example/orders/123 "
+        "request_id=req_abcdef123 phone=+1 415 555 0123 "
+        "api_key=[REDACTED_SECRET]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_records_telephony_lifecycle_events() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer(redaction="pii")
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+        redaction="pii",
     )
     sink.subscribe()
 

@@ -91,6 +91,12 @@ def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
     assert rnnoise_names <= all_names
 
 
+def test_every_install_ships_high_quality_resampling() -> None:
+    dependencies = _pyproject()["project"]["dependencies"]
+
+    assert _requirement(dependencies, "soxr") == "soxr>=1.0.0"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

@@ -181,6 +181,16 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
             "Bundle manifest env_metadata values must be strings",
             reason_code="INVALID_MANIFEST",
         )
+    journal_dropped_records = raw.get("journal_dropped_records", 0)
+    if (
+        not isinstance(journal_dropped_records, int)
+        or isinstance(journal_dropped_records, bool)
+        or journal_dropped_records < 0
+    ):
+        raise BundleValidationError(
+            "Bundle manifest journal_dropped_records must be a non-negative integer",
+            reason_code="INVALID_MANIFEST",
+        )
     sharing_banner = raw.get("sharing_banner", "")
     if not isinstance(sharing_banner, str):
         raise BundleValidationError(
@@ -194,6 +204,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
             provider_versions=provider_versions,
             config_snapshot=config_snapshot,
             env_metadata=env_metadata,
+            journal_dropped_records=journal_dropped_records,
             sharing_banner=sharing_banner,
         ),
         raw,

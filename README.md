@@ -62,14 +62,14 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
-EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart]'`
+EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
 a `[tool.uv.sources]` block; for a hand-written `pyproject.toml`, add:
 
 ```toml
 [project]
-dependencies = ["easycat[quickstart]"]
+dependencies = ["easycat[quickstart,webrtc]"]
 
 [tool.uv.sources]
 easycat = { path = "/path/to/easycat", editable = true }
@@ -79,7 +79,7 @@ For this repository, four commands go from clone to a talking bot. Keys live
 in a project `.env` — the same convention `easycat init` scaffolds:
 
 ```bash
-uv sync --extra quickstart --group dev
+uv sync --extra quickstart --extra webrtc --group dev
 echo 'OPENAI_API_KEY=your-api-key' > .env
 uv run easycat doctor --env-file .env
 uv run --env-file .env python examples/openai_agents_voice.py
@@ -132,7 +132,9 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, numpy, onnxruntime, and LiveKit AEC3 echo cancellation. RNNoise is
+SDK, NumPy, onnxruntime, and LiveKit AEC3 echo cancellation. SoXR is a core
+dependency because every transport and provider can cross a sample-rate
+boundary. RNNoise is
 opt-in because noise reduction defaults off and its Python binding pulls a
 large multimedia/plotting dependency chain; add the `rnnoise` extra only when
 you enable that backend. `quickstart` also does not include TEN VAD; install
@@ -147,7 +149,7 @@ uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + numpy (LocalTransport and local audio buffers): `uv sync --extra local --group dev`
+- sounddevice + NumPy (LocalTransport and local audio): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
@@ -159,7 +161,7 @@ frameworks, and debugging/audio-processing features:
 - LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents --group dev`
 - LiveKit AEC3 echo cancellation: `uv sync --extra aec --group dev`
 - aiohttp debugger UI: `uv sync --extra debugger --group dev`
-- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
+- NumPy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad --group dev`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad --group dev` — runs the bundled ONNX model (no torch required)
 - numpy + onnxruntime + kaldi-native-fbank (FunASR VAD): `uv sync --extra funasr-vad --group dev`
@@ -173,6 +175,10 @@ frameworks, and debugging/audio-processing features:
   or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
+
+Every EasyCat install includes SoXR for filtered, native-speed sample-rate
+conversion. `easycat doctor` reports the active backend; the dependency-free
+filtered resampler remains a runtime fallback if the native backend fails.
 
 Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
 socket per voice session by default. EasyCat calls the provider's `warmup()`

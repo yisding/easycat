@@ -110,6 +110,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         runtime_mode=cfg.runtime_mode,
         journal=journal,
         artifact_store=session._artifact_store,
+        journal_detail=cfg.journal_detail,
         audio_capture_enabled=session._is_audio_capture_enabled,
         audio_capture_epoch=session._audio_capture_epoch_value,
     )
@@ -121,6 +122,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         artifact_store=session._artifact_store,
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
+        redaction=cfg.journal_redaction,
     )
     journal_sink.subscribe()
     warmup = WarmupRunner(
