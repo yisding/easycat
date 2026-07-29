@@ -246,12 +246,16 @@ class STTProviderContractSuite(ProviderContractSuite):
 
         async def _cycle() -> tuple[AsyncIterator[Any], list[Any]]:
             await provider.start_stream()
+            stream = provider.events()
+            collector = asyncio.create_task(
+                self.collect_events(stream, source="STTProvider.events()")
+            )
+            await asyncio.sleep(0)
             for chunk in self.sample_audio_chunks():
                 await provider.send_audio(chunk)
             await provider.commit_segment()
             await provider.end_stream()
-            stream = provider.events()
-            return stream, await self.collect_events(stream, source="STTProvider.events()")
+            return stream, await collector
 
         first_stream, first_events = await _cycle()
         second_stream, second_events = await _cycle()

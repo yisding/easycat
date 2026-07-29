@@ -315,6 +315,25 @@ async def test_stt_suite_rejects_cached_events_iterator() -> None:
         await suite.test_events_iterator_is_fresh_across_turns(_CachedIteratorSTT())
 
 
+async def test_stt_suite_checks_freshness_while_each_stream_is_active() -> None:
+    class _LiveConsumerSTT(_KitSTT):
+        async def start_stream(self) -> None:
+            await super().start_stream()
+            self._consumer_started = False
+
+        async def end_stream(self) -> None:
+            assert self._consumer_started, "events() was not consumed during the active stream"
+            await super().end_stream()
+
+        async def events(self) -> AsyncIterator[STTEvent]:
+            self._consumer_started = True
+            async for event in super().events():
+                yield event
+
+    suite = _KitSTTSuite()
+    await suite.test_events_iterator_is_fresh_across_turns(_LiveConsumerSTT())
+
+
 async def test_version_info_test_rejects_leaked_secret_values() -> None:
     leaked_secret = "sk-" + "a" * 20
 
