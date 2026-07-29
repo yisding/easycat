@@ -31,7 +31,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Hashable, Iterable
 from functools import partial
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 if TYPE_CHECKING:
     from easycat.session import Session
@@ -187,11 +187,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
     ) -> None:
         """Drain sessions, then close surviving sockets and reap handlers."""
         self.start_draining(server)
-        force_deadline = await self.gate.drain(
-            self._active_session_pairs,
-            drain_timeout_s=max(drain_timeout_s, 0.0),
-            force_after=True,
-            force_timeout_s=max(force_timeout_s, 0.0),
+        force_deadline = cast(
+            float,
+            await self.gate.drain(
+                self._active_session_pairs,
+                drain_timeout_s=max(drain_timeout_s, 0.0),
+                force_after=True,
+                force_timeout_s=max(force_timeout_s, 0.0),
+            ),
         )
         await close_websocket_connections(
             self._connections.values(),
@@ -468,6 +471,14 @@ def _deadline_after(timeout_s: float | None) -> float | None:
     if timeout_s is None:
         return None
     return asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+
+
+@overload
+def _remaining_timeout(deadline: float) -> float: ...
+
+
+@overload
+def _remaining_timeout(deadline: None) -> None: ...
 
 
 def _remaining_timeout(deadline: float | None) -> float | None:
