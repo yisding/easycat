@@ -857,7 +857,9 @@ class _DebuggerRoutes:
         )
 
         try:
-            result = source.replay(**payload)
+            # Replay is synchronous and wall-timed mode intentionally sleeps.
+            # Keep all pacing and stage work off aiohttp's event-loop thread.
+            result = await asyncio.to_thread(source.replay, **payload)
         except ProviderVersionMismatchError as exc:
             return web.json_response(
                 {
