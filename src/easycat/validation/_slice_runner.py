@@ -219,7 +219,7 @@ def _slice_command(
     junit_prefix: str | None,
 ) -> list[str]:
     command = [
-        *pytest_command_prefix(),
+        *pytest_command_prefix(test_override_mode="paths"),
         "-q",
         *spec.pytest_args,
         *validation_test_paths(),

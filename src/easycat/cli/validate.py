@@ -4,7 +4,7 @@ import json
 import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Annotated, NoReturn, TypeVar, cast
+from typing import IO, Annotated, Literal, NoReturn, TypeVar, cast
 
 import typer
 from rich.markup import escape
@@ -54,10 +54,11 @@ def _run_from_source_checkout(
     command: str,
     *,
     json_output: bool,
+    test_override_mode: Literal["paths", "root", "both"],
     operation: Callable[[], _ValidationResultT],
 ) -> _ValidationResultT:
     try:
-        ensure_validation_source_checkout()
+        ensure_validation_source_checkout(test_override_mode=test_override_mode)
         return operation()
     except ValidationSourceCheckoutError as exc:
         emit_command_error(
@@ -82,6 +83,7 @@ def _run_slice(
     result = _run_from_source_checkout(
         f"validate {slice_name}",
         json_output=json_output,
+        test_override_mode="paths",
         operation=lambda: run_validation_slice(
             slice_name,
             artifacts_dir=artifacts_dir,
@@ -522,6 +524,7 @@ def latency(
     result = _run_from_source_checkout(
         "validate latency",
         json_output=json_output,
+        test_override_mode="root",
         operation=lambda: run_latency_validation(
             mode,
             artifacts_dir=artifacts_dir,
@@ -593,6 +596,7 @@ def live(
     result = _run_from_source_checkout(
         "validate live",
         json_output=json_output,
+        test_override_mode="root",
         operation=lambda: run_live_validation(
             providers=provider,
             surfaces=surface,
@@ -680,6 +684,7 @@ def release(
     result = _run_from_source_checkout(
         "validate release",
         json_output=json_output,
+        test_override_mode="both",
         operation=lambda: run_release_validation(
             artifacts_dir=artifacts_dir,
             report_path=report,

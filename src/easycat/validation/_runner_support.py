@@ -8,13 +8,14 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 _SOURCE_CHECKOUT_ERROR = (
     "validation lanes require the EasyCat source checkout; run from the EasyCat "
     "repository root, or set EASYCAT_VALIDATION_PYTEST_COMMAND together with "
-    "EASYCAT_VALIDATION_TEST_PATHS or EASYCAT_VALIDATION_TEST_ROOT"
+    "{test_override_hint}"
 )
+_TestOverrideMode = Literal["paths", "root", "both"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,19 +51,27 @@ def _is_source_checkout_root(path: Path) -> bool:
     )
 
 
-def ensure_validation_source_checkout() -> None:
+def ensure_validation_source_checkout(*, test_override_mode: _TestOverrideMode = "both") -> None:
     """Require repository tests or explicit installed-wheel test overrides."""
     if _is_source_checkout_root(Path.cwd()):
         return
 
     pytest_override = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
-    test_override = os.environ.get("EASYCAT_VALIDATION_TEST_PATHS") or os.environ.get(
-        "EASYCAT_VALIDATION_TEST_ROOT"
-    )
-    if pytest_override and test_override:
+    required_test_overrides = {
+        "paths": ("EASYCAT_VALIDATION_TEST_PATHS",),
+        "root": ("EASYCAT_VALIDATION_TEST_ROOT",),
+        "both": (
+            "EASYCAT_VALIDATION_TEST_PATHS",
+            "EASYCAT_VALIDATION_TEST_ROOT",
+        ),
+    }[test_override_mode]
+    if pytest_override and all(os.environ.get(name) for name in required_test_overrides):
         return
 
-    raise ValidationSourceCheckoutError(_SOURCE_CHECKOUT_ERROR)
+    override_hint = " and ".join(required_test_overrides)
+    raise ValidationSourceCheckoutError(
+        _SOURCE_CHECKOUT_ERROR.format(test_override_hint=override_hint)
+    )
 
 
 def run_subprocess(
@@ -87,9 +96,9 @@ def run_subprocess(
     )
 
 
-def pytest_command_prefix() -> list[str]:
+def pytest_command_prefix(*, test_override_mode: _TestOverrideMode = "both") -> list[str]:
     """Resolve the pytest executable used by validation lanes."""
-    ensure_validation_source_checkout()
+    ensure_validation_source_checkout(test_override_mode=test_override_mode)
     raw = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
     return shlex.split(raw) if raw else ["uv", "run", "pytest"]
 
