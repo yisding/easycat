@@ -510,7 +510,7 @@ def _provider_check_name(spec: ProviderSurfaceSpec) -> str:
 
 
 def _live_pytest_command(spec: ProviderSurfaceSpec) -> list[str]:
-    command = [*pytest_command_prefix(), "-q"]
+    command = [*pytest_command_prefix(test_override_mode="root"), "-q"]
     if spec.live_pytest_target:
         command.append(resolve_validation_test_arg(spec.live_pytest_target))
     command.extend(["-m", _live_marker_expression(spec)])

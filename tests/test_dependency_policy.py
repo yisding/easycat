@@ -108,6 +108,12 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert "tests/server/test_webrtc_routes.py" in minimum_job
 
 
+def test_every_install_ships_high_quality_resampling() -> None:
+    dependencies = _pyproject()["project"]["dependencies"]
+
+    assert _requirement(dependencies, "soxr") == "soxr>=1.0.0"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [
