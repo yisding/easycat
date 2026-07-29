@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "12-evals-and-latency"
@@ -32,7 +33,7 @@ def load_script(filename: str):
 
 
 def test_coverage_probe_names_every_silent_exclusion() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "coverage_probe.py")],
         cwd=ROOT,
         check=True,

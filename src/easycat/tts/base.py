@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
-from easycat._audio_utils import resample, to_mono
+from easycat._audio_utils import PCM16StreamResampler, to_mono
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.input import TTSInput, TTSInputPolicy
@@ -33,6 +33,7 @@ class TTSBase:
         # sample width). _make_audio_event aligns the buffer here before any
         # downmix/resample, so _normalize_audio always receives whole samples.
         self._sample_carry = b""
+        self._resampler = PCM16StreamResampler(self._output_format.sample_rate)
 
     @property
     def is_cancelled(self) -> bool:
@@ -47,9 +48,10 @@ class TTSBase:
         self._cancelled = False
         self._active = True
         self._sample_carry = b""
+        self._resampler.reset()
 
     def _end_synthesis(self) -> None:
-        """Mark synthesis as complete.
+        """Mark synthesis as complete and discard unfinished conversion state.
 
         Any non-empty ``_sample_carry`` here is a sub-sample remainder (at
         most ``sample_width - 1`` bytes, i.e. less than one whole 16-bit
@@ -57,9 +59,13 @@ class TTSBase:
         dropped rather than zero-padded and emitted: a fabricated partial
         sample would inject a click far more audible than the at-most
         half-sample of silence lost, and emitting from here would force a
-        return-value contract onto every subclass's synthesis loop.
+        return-value contract onto every subclass's synthesis loop. Successful
+        synthesis paths call :meth:`_finish_audio_event` before this teardown;
+        error, cancellation, and early-generator-close paths intentionally
+        discard any delayed resampler output here.
         """
         self._sample_carry = b""
+        self._resampler.reset()
         self._active = False
 
     def _reset_audio_alignment(self) -> None:
@@ -76,9 +82,10 @@ class TTSBase:
         ``_start_synthesis``/``_end_synthesis`` perform around a synthesis run.
         """
         self._sample_carry = b""
+        self._resampler.reset()
 
-    def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent:
-        """Create a TTSEvent with AUDIO type.
+    def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent | None:
+        """Create a non-empty TTSEvent with AUDIO type.
 
         Streaming sources (WebSocket / chunked HTTP) can split a single
         16-bit PCM sample across two frames, so an individual ``data``
@@ -101,6 +108,23 @@ class TTSBase:
                 self._sample_carry = b""
         if fmt is not None:
             data = self._normalize_audio(data, fmt)
+        # Quality streaming resamplers can retain an initial filter window.
+        # Do not let that implementation detail masquerade as first audio to
+        # timeout, observability, or playback accounting downstream.
+        if not data:
+            return None
+        chunk = AudioChunk(data=data, format=self._output_format)
+        return TTSEvent(type=TTSEventType.AUDIO, audio=chunk)
+
+    def _finish_audio_event(self, *, emit: bool = True) -> TTSEvent | None:
+        """Flush delayed output after success, or discard it after cancellation."""
+        self._sample_carry = b""
+        if not emit or self._cancelled:
+            self._resampler.reset()
+            return None
+        data = self._resampler.finish()
+        if not data:
+            return None
         chunk = AudioChunk(data=data, format=self._output_format)
         return TTSEvent(type=TTSEventType.AUDIO, audio=chunk)
 
@@ -124,11 +148,11 @@ class TTSBase:
         if source_format.channels > 1:
             data = to_mono(data, source_format.channels)
 
-        if source_format.sample_rate != self._output_format.sample_rate:
-            # ``data`` is already sample-aligned: _make_audio_event held back
-            # any sub-sample remainder in _sample_carry before calling here, so
-            # resample never sees a split 16-bit sample.
-            data = resample(data, source_format.sample_rate, self._output_format.sample_rate)
+        # ``data`` is already sample-aligned: _make_audio_event held back any
+        # sub-sample remainder in _sample_carry before calling here. Route
+        # same-rate chunks through the stream converter too so a mid-stream
+        # source-rate change flushes the prior segment before pass-through.
+        data = self._resampler.process(data, source_format.sample_rate)
 
         return data
 

@@ -41,6 +41,7 @@ PUBLIC_API_SNAPSHOT = (
     "ErrorStage",
     "Event",
     "EventBus",
+    "EventBusBindable",
     "ICEServer",
     "Interruption",
     "JournalRecordKind",
@@ -96,6 +97,7 @@ PUBLIC_API_SNAPSHOT = (
     "auto_adapt_agent",
     "available_stt_providers",
     "available_tts_providers",
+    "available_vad_providers",
     "create_noise_reducer",
     "create_session",
     "create_stt_provider",
@@ -106,6 +108,7 @@ PUBLIC_API_SNAPSHOT = (
     "export_debug_bundle",
     "register_stt_provider",
     "register_tts_provider",
+    "register_vad_provider",
     "require_env",
     "run",
     "run_webrtc_config_server",
@@ -119,6 +122,22 @@ TRANSPORT_EXTENSION_SURFACE = (
     "AudioQueueMixin",
     "ServerTransportBase",
     "TransportDegraded",
+)
+
+TESTING_EXTENSION_SURFACE = (
+    "AGENT_BRIDGE_EVENT_KINDS",
+    "AgentBridgeContractSuite",
+    "ContractSuite",
+    "ProviderCapabilities",
+    "ProviderCapabilityReport",
+    "ProviderContractSuite",
+    "ProviderIdentifier",
+    "RecordingAgentRecorder",
+    "STTProviderContractSuite",
+    "TTSProviderContractSuite",
+    "TransportContractSuite",
+    "VADProviderContractSuite",
+    "contains_unredacted_sensitive_text",
 )
 
 AGENT_BRIDGE_EXTENSION_SURFACE = (
@@ -193,7 +212,8 @@ AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
     ),
     "RemoteResponsesAPIBridge": (
         "(base_url: 'str', model: 'str', *, api_key: 'str | None' = None, "
-        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None) -> 'None'"
+        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None, "
+        "reasoning_effort: 'str | None' = None) -> 'None'"
     ),
 }
 
@@ -292,6 +312,28 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     from easycat.transports import TransportDegraded as transports_transport_degraded
 
     assert transports_transport_degraded is events_transport_degraded
+    assert "extending/" in section
+
+
+def test_provider_testing_extension_surface_is_public_and_documented() -> None:
+    import easycat.testing as testing
+
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Provider Testing Extension Surface", 1)[1].split(
+            "## Agent Bridge Extension Surface", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Provider Testing Extension Surface section"
+        ) from exc
+
+    assert tuple(testing.__all__) == TESTING_EXTENSION_SURFACE
+    for name in TESTING_EXTENSION_SURFACE:
+        assert getattr(testing, name) is not None
+        assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
+
+    assert "from easycat.testing import STTProviderContractSuite" in section
     assert "extending/" in section
 
 
@@ -400,12 +442,14 @@ def test_documented_factory_surface_is_importable() -> None:
         create_stt_provider,
         create_tts_provider,
         create_vad,
+        register_vad_provider,
     )
 
     assert create_session.__name__ == "create_session"
     assert create_stt_provider.__name__ == "create_stt_provider"
     assert create_tts_provider.__name__ == "create_tts_provider"
     assert create_vad.__name__ == "create_vad"
+    assert register_vad_provider.__name__ == "register_vad_provider"
     assert create_noise_reducer.__name__ == "create_noise_reducer"
     assert STTProviderConfig.__name__ == "STTProviderConfig"
     assert TTSProviderConfig.__name__ == "TTSProviderConfig"

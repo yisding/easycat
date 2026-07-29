@@ -273,7 +273,12 @@ class ElevenLabsTTS(_WSTTSBase):
                     if self._cancelled:
                         break
                     if chunk:
-                        yield self._make_audio_event(chunk, self._source_format)
+                        event = self._make_audio_event(chunk, self._source_format)
+                        if event is not None:
+                            yield event
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except httpx.HTTPStatusError as exc:
             logger.error(
@@ -322,6 +327,9 @@ class ElevenLabsTTS(_WSTTSBase):
                     yield event
                 if terminal:
                     break
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except Exception as exc:
             if not self._cancelled:
@@ -493,7 +501,9 @@ class ElevenLabsTTS(_WSTTSBase):
         if data.get("audio"):
             audio_bytes = base64.b64decode(data["audio"])
             if audio_bytes:
-                events.append(self._make_audio_event(audio_bytes, self._source_format))
+                event = self._make_audio_event(audio_bytes, self._source_format)
+                if event is not None:
+                    events.append(event)
         if data.get("alignment"):
             events.append(self._make_markers_event([data["alignment"]]))
         # The one-shot /stream-input path signals completion with ``isFinal``;
@@ -526,6 +536,9 @@ class ElevenLabsTTS(_WSTTSBase):
 
             async for event in self._decode_persistent_frames(ctx):
                 yield event
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except Exception as exc:
             if not self._cancelled:

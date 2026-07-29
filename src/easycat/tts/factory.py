@@ -26,7 +26,12 @@ _CATALOG = ProviderCatalog(
     specs={
         # implementation, config, credential env, install extra, API domains
         "openai": ProviderSpec(
-            OpenAITTS, OpenAITTSConfig, "OPENAI_API_KEY", "openai", ("openai.com",)
+            OpenAITTS,
+            OpenAITTSConfig,
+            "OPENAI_API_KEY",
+            "openai",
+            ("openai.com",),
+            probe_module="openai",
         ),
         "deepgram": ProviderSpec(
             DeepgramTTS, DeepgramTTSConfig, "DEEPGRAM_API_KEY", "deepgram", ("deepgram.com",)
@@ -54,13 +59,22 @@ def register_tts_provider(
     provider_cls: type,
     config_cls: type,
     *,
-    env_var: str,
+    env_var: str | None = None,
     extra: str | None = None,
     api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
 ) -> None:
-    """Register a TTS provider and its discovery metadata."""
+    """Register a TTS provider and its optional credential/discovery metadata."""
     _CATALOG.register(
-        name, provider_cls, config_cls, env_var=env_var, extra=extra, api_domains=api_domains
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
     )
 
 

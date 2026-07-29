@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -135,6 +135,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._dropping_pending_final: bool = False
         self._commit_pending: bool = False
         self._final_wait_timed_out: bool = False
+        self._audio_resampler = PCM16StreamResampler(_REALTIME_SAMPLE_RATE)
 
     def _persistent_enabled(self) -> bool:
         return self._config.persistent_ws
@@ -210,6 +211,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._dropping_pending_final = False
         self._commit_pending = False
         self._final_wait_timed_out = False
+        self._audio_resampler.reset()
 
     async def _ensure_persistent_connection(self) -> None:
         ws = self._ws
@@ -301,13 +303,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         server-side ``input_audio_buffer`` is empty on a fresh socket.
         """
         assert self._ws is not None
-        self._partial_text = ""
-        self._audio_pending_commit = False
-        self._bytes_since_last_commit = 0
-        self._final_received = None
-        self._dropping_pending_final = False
-        self._commit_pending = False
-        self._final_wait_timed_out = False
+        self._reset_logical_turn_state()
         transcription: dict[str, Any] = {"model": self._config.model}
         if self._config.language:
             transcription["language"] = self._config.language
@@ -334,18 +330,11 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
-            if chunk.format.sample_rate != _REALTIME_SAMPLE_RATE:
-                chunk = resample_chunk(chunk, _REALTIME_SAMPLE_RATE)
-            audio_b64 = base64.b64encode(chunk.data).decode("ascii")
-            msg = json.dumps(
-                {
-                    "type": "input_audio_buffer.append",
-                    "audio": audio_b64,
-                }
+            data = self._audio_resampler.process(
+                chunk.data,
+                chunk.format.sample_rate,
             )
-            await self._ws.send(msg)
-            self._audio_pending_commit = True
-            self._bytes_since_last_commit += len(chunk.data)
+            await self._append_audio(data)
 
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
@@ -360,6 +349,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         return self._bytes_since_last_commit
 
     async def _on_end(self) -> None:
+        await self._flush_audio_resampler()
         if self._ws is not None and self._audio_pending_commit:
             committed = await self._send_commit(wait_for_final=True)
             if not committed and self._audio_pending_commit:
@@ -389,6 +379,24 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             logger.debug("OpenAI Realtime close failed during end", exc_info=True)
         finally:
             self._reset_logical_turn_state()
+
+    async def _append_audio(self, data: bytes) -> None:
+        if self._ws is None or not data:
+            return
+        audio_b64 = base64.b64encode(data).decode("ascii")
+        await self._ws.send(
+            json.dumps(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": audio_b64,
+                }
+            )
+        )
+        self._audio_pending_commit = True
+        self._bytes_since_last_commit += len(data)
+
+    async def _flush_audio_resampler(self) -> None:
+        await self._append_audio(self._audio_resampler.finish())
 
     async def _clear_input_buffer(self) -> bool:
         """Discard an uncommittable short tail before reusing the session."""
@@ -426,9 +434,12 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             if self._commit_pending:
                 return False
 
-        if not self._audio_pending_commit:
+        committable_bytes = (
+            self._bytes_since_last_commit + self._audio_resampler.pending_output_bytes
+        )
+        if committable_bytes == 0:
             return False
-        if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
+        if committable_bytes < self._COMMIT_MIN_BYTES:
             # Tail too short — skip the server round-trip (the server
             # would reject the commit and surface a warning).  Keep
             # ``_audio_pending_commit`` and ``_bytes_since_last_commit``
@@ -437,11 +448,15 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             # buffer and eventually reaches the 100 ms threshold.
             logger.debug(
                 "Skipping input_audio_buffer.commit: only %d bytes (<%d min)",
-                self._bytes_since_last_commit,
+                committable_bytes,
                 self._COMMIT_MIN_BYTES,
             )
             return False
 
+        # Preserve the streaming resampler's interpolation state when a short
+        # segment is rejected. Once the segment is large enough to commit,
+        # append its retained tail before asking the server to finalize it.
+        await self._flush_audio_resampler()
         final_received = asyncio.Event()
         self._final_received = final_received
         self._commit_pending = True

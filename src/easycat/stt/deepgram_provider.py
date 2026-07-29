@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -131,6 +131,7 @@ class DeepgramSTT(WebSocketSTTBase):
         # for that audio has not arrived yet, so the socket must not be
         # reused by the next turn until it is contained.
         self._bare_finalize_ack_pending = False
+        self._audio_resampler = PCM16StreamResampler(config.sample_rate)
 
     def _persistent_enabled(self) -> bool:
         return bool(self._config.persistent_ws and not self._config.is_flux)
@@ -152,6 +153,7 @@ class DeepgramSTT(WebSocketSTTBase):
                 await self._discard_connection()
 
     async def _on_start(self) -> None:
+        self._audio_resampler.reset()
         self._partial_text = ""
         self._final_received = None
         self._final_wait_sequence = None
@@ -223,6 +225,7 @@ class DeepgramSTT(WebSocketSTTBase):
             await task
 
     async def _discard_connection(self) -> None:
+        self._audio_resampler.reset()
         await self._cancel_keepalive()
         # Frames already buffered on the closing socket are still parsed while
         # the receive loop drains, so a late Finalize-triggered final is
@@ -242,10 +245,18 @@ class DeepgramSTT(WebSocketSTTBase):
         self._finalized_epoch = self._audio_epoch
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        if chunk.format.sample_rate != self._config.sample_rate:
-            chunk = resample_chunk(chunk, self._config.sample_rate)
-        await self._send_ws(chunk.data)
+        await self._append_audio(
+            self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
+        )
+
+    async def _append_audio(self, data: bytes) -> None:
+        if not data:
+            return
+        await self._send_ws(data)
         self._audio_epoch += 1
+
+    async def _flush_audio_resampler(self) -> None:
+        await self._append_audio(self._audio_resampler.finish())
 
     async def _on_commit_segment(self) -> bool:
         # Flux uses provider-side EndOfTurn endpointing, so an explicit
@@ -253,6 +264,7 @@ class DeepgramSTT(WebSocketSTTBase):
         # v2 endpoint); keep returning the base ``False`` for Flux models.
         if self._config.is_flux:
             return False
+        await self._flush_audio_resampler()
         return await self._send_finalize() is not None
 
     async def _send_finalize(self, *, wait_for_ack: bool = False) -> int | None:
@@ -282,6 +294,7 @@ class DeepgramSTT(WebSocketSTTBase):
         return sequence
 
     async def _on_end(self) -> None:
+        await self._flush_audio_resampler()
         if self._persistent_enabled():
             await self._finish_persistent_turn()
             return

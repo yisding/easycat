@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator
 from importlib.metadata import version
 from typing import Any
 
-from easycat._audio_utils import resample_chunk, to_mono_chunk
+from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -39,6 +38,7 @@ class TenVAD(_VADBase):
         self._buffer: bytes = b""
         self._ten_vad: Any = None
         self._numpy: Any = None
+        self._audio_resampler = PCM16StreamResampler(_TEN_SAMPLE_RATE)
         self._initialize()
 
     def _initialize(self) -> None:
@@ -73,11 +73,10 @@ class TenVAD(_VADBase):
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
 
-        # TEN currently runs at 16 kHz in this integration.
-        if chunk.format.sample_rate != _TEN_SAMPLE_RATE:
-            chunk = resample_chunk(chunk, _TEN_SAMPLE_RATE)
-
-        self._buffer += chunk.data
+        self._buffer += self._audio_resampler.process(
+            chunk.data,
+            chunk.format.sample_rate,
+        )
         frame_bytes = self._hop_size * 2  # PCM16: 2 bytes per sample
 
         while len(self._buffer) >= frame_bytes:
@@ -86,18 +85,20 @@ class TenVAD(_VADBase):
 
             frame = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16).copy()
             speech_prob, _ = self._ten_vad.process(frame)
-            now = time.monotonic()
-            for event in self._evaluate_speech(float(speech_prob), now):
+            audio_time_s = self._advance_audio_time(self._hop_size / _TEN_SAMPLE_RATE)
+            for event in self._evaluate_speech(float(speech_prob), audio_time_s):
                 yield event
 
     def reset(self) -> None:
         """Reset VAD internal state."""
         super().reset()
+        self._audio_resampler.reset()
         self._buffer = b""
 
     def close(self) -> None:
         """Release the native ``ten_vad`` handle."""
         super().close()
+        self._audio_resampler.reset()
         self._ten_vad = None
         self._buffer = b""
 

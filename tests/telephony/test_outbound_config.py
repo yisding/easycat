@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from easycat.config import (
@@ -10,7 +12,7 @@ from easycat.config import (
     VoicemailDetectionConfig,
     _create_telephony_helpers,
 )
-from easycat.events import CallFailed, EventBus
+from easycat.events import CallAnswered, CallFailed, EventBus
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.compliance import DNCList
 from easycat.telephony.number_health import CallDispositionTracker
@@ -284,6 +286,9 @@ class TestTelephonyConfigExtension:
             def stop(self) -> None:
                 pass
 
+            async def hangup_owned_call(self, _call_sid: str) -> None:
+                pass
+
         monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
 
         dnc = DNCList()
@@ -302,6 +307,51 @@ class TestTelephonyConfigExtension:
 
         manager = next(helper for helper in helpers if isinstance(helper, _Manager))
         assert manager.dnc_list is dnc
+
+    @pytest.mark.asyncio
+    async def test_max_duration_hangup_is_wired_to_outbound_manager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        hangups: list[str] = []
+        hung_up = asyncio.Event()
+
+        class _Manager:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.dnc_list = None
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            async def hangup_owned_call(self, call_sid: str) -> None:
+                hangups.append(call_sid)
+                hung_up.set()
+
+        monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
+
+        bus = EventBus()
+        result = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+15559876543",
+                    twilio_account_sid="AC123",
+                    twilio_auth_token="secret",
+                    max_call_duration_s=0.01,
+                ),
+            ),
+        )
+
+        result.state_machine.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await asyncio.wait_for(hung_up.wait(), timeout=0.2)
+            assert hangups == ["CA1"]
+        finally:
+            result.state_machine.stop()
 
     def test_outbound_manager_warns_on_blank_twilio_creds(
         self, caplog: pytest.LogCaptureFixture

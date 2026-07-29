@@ -62,7 +62,7 @@ async def probe() -> dict[str, object]:
                     "backend_after_stop": backend_after,
                     "records_before_stop": len(before),
                     "records_after_stop": len(after),
-                    "records_preserved": before == after,
+                    "records_preserved": after[: len(before)] == before,
                 },
                 "bundle": {
                     "exported_after_stop": bundle_path.is_file(),

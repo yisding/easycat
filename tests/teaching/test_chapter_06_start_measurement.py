@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "06-streaming-agent"
@@ -40,7 +40,7 @@ def test_start_measurer_attributes_model_startup_before_first_token(tmp_path: Pa
 
     bundle = tmp_path / "chapter-06.bundle"
     export_debug_bundle(SimpleNamespace(journal=journal), bundle)
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(MEASURER), str(bundle)],
         cwd=ROOT,
         check=True,

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -112,8 +112,10 @@ class CartesiaSTT(WebSocketSTTBase):
             close_timeout=5.0,
         )
         self._config = config
+        self._audio_resampler = PCM16StreamResampler(config.sample_rate)
 
     async def _on_start(self) -> None:
+        self._audio_resampler.reset()
         url = self._build_url()
         headers = {
             "X-API-Key": self._config.api_key,
@@ -127,15 +129,24 @@ class CartesiaSTT(WebSocketSTTBase):
         )
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        if chunk.format.sample_rate != self._config.sample_rate:
-            chunk = resample_chunk(chunk, self._config.sample_rate)
-        await self._send_ws(chunk.data)
+        await self._append_audio(
+            self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
+        )
+
+    async def _append_audio(self, data: bytes) -> None:
+        if data:
+            await self._send_ws(data)
+
+    async def _flush_audio_resampler(self) -> None:
+        await self._append_audio(self._audio_resampler.finish())
 
     async def _on_commit_segment(self) -> bool:
+        await self._flush_audio_resampler()
         return await self._send_json_control({"type": "finalize"}, label="Cartesia finalize")
 
     async def _on_end(self) -> None:
         if self._ws is not None:
+            await self._flush_audio_resampler()
             await self._send_json_control({"type": "done"}, label="Cartesia done")
 
         await self._close_active_websocket()
