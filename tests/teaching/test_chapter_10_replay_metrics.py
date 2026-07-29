@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "10-cleaning-signal"
@@ -29,7 +30,7 @@ def test_replay_metrics_probe_enforces_reference_and_records_signal_change() -> 
     runs_dir = CHAPTER / "runs"
     runs_dir_existed = runs_dir.exists()
     before = set(runs_dir.iterdir()) if runs_dir.exists() else set()
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "replay_metrics_probe.py")],
         cwd=ROOT,
         check=True,

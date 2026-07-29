@@ -210,17 +210,22 @@ def test_age_window_skips_journal_with_live_pid(tmp_path):
 
 def test_age_window_does_not_trust_reused_pid_marker(tmp_path):
     """An alive PID with a stale process-start token is not a live owner."""
-    from easycat.runtime.crash_sweep import _process_start_token
+    from easycat.runtime.crash_sweep import _boot_id, _process_start_token
 
     start_token = _process_start_token(os.getpid())
-    if start_token is None:
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
         pytest.skip("process start identity requires readable Linux /proc")
     stale = _seed_journal(tmp_path, "reused-sess")
     conn = sqlite3.connect(str(stale))
     try:
         conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
-            (f"{os.getpid()}:{int(start_token) + 1}",),
+            (str(os.getpid()),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+            (f"{boot_id}:{int(start_token) + 1}",),
         )
         conn.commit()
     finally:

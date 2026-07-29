@@ -14,7 +14,7 @@ from easycat.runtime.safe_defaults import (
     safe_config_snapshot,
     safe_env_snapshot,
 )
-from easycat.validation.redaction import REDACTED_PHONE, REDACTED_REQUEST_ID, REDACTED_SECRET
+from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
 
 @dataclass
@@ -383,18 +383,39 @@ class TestApplyWriteFilter:
         filtered = apply_write_filter(rec)
 
         assert filtered is not rec
-        assert filtered.data["text"] == f"please call {REDACTED_PHONE}"
+        assert filtered.data["text"] == "please call +1 415 555 1212"
         assert filtered.data["api_key"] == REDACTED_SECRET
         assert filtered.data["headers"]["Authorization"] == REDACTED_SECRET
-        assert filtered.data["nested"] == [{"request_id": REDACTED_REQUEST_ID}]
+        assert filtered.data["nested"] == [{"request_id": "req_abcdef123456"}]
         assert filtered.error is not None
         assert filtered.error.message == f"Authorization: {REDACTED_SECRET}"
-        assert "/Users/alice" not in (filtered.error.traceback or "")
+        assert "/Users/alice" in (filtered.error.traceback or "")
         assert "tok-secret123456" not in (filtered.error.traceback or "")
-        assert filtered.error.notes == f"provider id {REDACTED_REQUEST_ID}"
+        assert filtered.error.notes == "provider id req_abcdef123456"
         assert len(filtered.error.children) == 1
         assert filtered.error.children[0].message == f"child leaked {REDACTED_SECRET}"
-        assert filtered.error.children[0].notes == f"child request {REDACTED_REQUEST_ID}"
+        assert filtered.error.children[0].notes == "child request req_bcdef1234567"
+
+    def test_pii_policy_irreversibly_redacts_replay_content(self):
+        rec = JournalRecord(
+            sequence=1,
+            session_id="s1",
+            data={
+                "text": "the date is 2024-01-15; visit https://acme.example/orders",
+                "transcript": "order 1234567890",
+                "path": "/home/alice/report.pdf",
+                "api_key": "short",
+            },
+        )
+
+        filtered = apply_write_filter(rec, redaction="pii")
+
+        assert filtered.data == {
+            "api_key": REDACTED_SECRET,
+            "path": "~/report.pdf",
+            "text": f"the date is {REDACTED_PHONE}; visit [REDACTED_URL]",
+            "transcript": "[REDACTED_TRANSCRIPT]",
+        }
 
 
 class TestAllowlistCompleteness:

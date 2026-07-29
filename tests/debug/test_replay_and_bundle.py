@@ -73,8 +73,9 @@ def _make_bundle_zip(
 class _FakeJournal:
     """Minimal journal stub for export tests."""
 
-    def __init__(self, records=None):
+    def __init__(self, records=None, *, dropped_records: int = 0):
         self._records = records or []
+        self.dropped_records = dropped_records
 
     def read(self, start=0, limit=None):
         return self._records[start:]
@@ -848,6 +849,20 @@ class TestBundleExport:
 
 
 class TestBundleSafeDefaults:
+    def test_dropped_record_count_is_exported_and_loaded(self, tmp_path):
+        session = _FakeSession(
+            debug="light",
+            journal=_FakeJournal(dropped_records=17),
+        )
+        path = tmp_path / "export.zip"
+
+        export_debug_bundle(session, path)
+
+        with zipfile.ZipFile(path, "r") as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+        assert manifest["journal_dropped_records"] == 17
+        assert RunBundle.load(path).manifest.journal_dropped_records == 17
+
     def test_api_key_excluded_from_snapshot(self, tmp_path):
         """Config fields containing 'key' should not appear in the snapshot."""
 
@@ -887,6 +902,19 @@ class TestBundleSafeDefaults:
 
 
 class TestBundleValidation:
+    @pytest.mark.parametrize("value", [-1, True, "1"])
+    def test_journal_dropped_records_must_be_non_negative_integer(self, tmp_path, value):
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                "journal_dropped_records": value,
+            },
+        )
+
+        with pytest.raises(BundleValidationError, match="journal_dropped_records"):
+            RunBundle.load(bundle_path)
+
     def test_path_traversal(self, tmp_path):
         """Bundles with path traversal in filenames should be rejected."""
         bundle_path = tmp_path / "bad.zip"
@@ -1586,6 +1614,7 @@ class TestManifest:
         assert m.provider_versions == {}
         assert m.config_snapshot == {}
         assert m.env_metadata == {}
+        assert m.journal_dropped_records == 0
         assert m.sharing_banner == ""
 
     def test_frozen(self):

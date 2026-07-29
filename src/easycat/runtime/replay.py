@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from easycat.debug._turn_timeline import safe_turn_id
 from easycat.errors import EASYCAT_E403, EasyCatError
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS
 
@@ -43,6 +44,10 @@ if TYPE_CHECKING:
     from easycat.debug.bundle import CommittableCheckpoint, RunBundle
 
 logger = logging.getLogger(__name__)
+
+# Preserve normal recorded pacing while preventing a malformed bundle from
+# suspending one replay step indefinitely.
+_MAX_WALL_REPLAY_DELAY_NS = 30_000_000_000
 
 
 # ── Enums ────────────────────────────────────────────────────────
@@ -566,7 +571,7 @@ class ReplayRunner:
                 stage=frame_stage,
                 kind=str(record.get("kind") or ""),
                 name=name,
-                turn_id=record.get("turn_id"),
+                turn_id=safe_turn_id(record.get("turn_id")),
                 data=masked_data,
                 input_blob=self._bundle.artifact_blobs.get(input_ref) if input_ref else None,
                 output_blob=(self._bundle.artifact_blobs.get(output_ref) if output_ref else None),
@@ -605,7 +610,8 @@ class ReplayRunner:
         if current_timing_ns is None:
             return previous_timing_ns
         if previous_timing_ns is not None and current_timing_ns > previous_timing_ns:
-            self._sleep((current_timing_ns - previous_timing_ns) / 1_000_000_000)
+            delay_ns = min(current_timing_ns - previous_timing_ns, _MAX_WALL_REPLAY_DELAY_NS)
+            self._sleep(delay_ns / 1_000_000_000)
         return current_timing_ns
 
     def _apply_tool_policy(
@@ -738,7 +744,7 @@ class ReplayRunner:
                 continue
             if self._spec.stage_filter and stage not in self._spec.stage_filter:
                 continue
-            turn_id = record.get("turn_id")
+            turn_id = safe_turn_id(record.get("turn_id"))
             grouped.setdefault((stage, turn_id), []).append(record)
 
         replay_spec = replace(self._spec, fidelity=effective_fidelity)

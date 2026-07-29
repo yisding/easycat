@@ -63,6 +63,8 @@ def _twilio_stop_msg(stream_sid: str = "MZ123") -> str:
 
 
 class _DummyTwilioWebSocket:
+    request = object()
+
     async def send(self, _message: str) -> None:
         return None
 
@@ -70,10 +72,21 @@ class _DummyTwilioWebSocket:
         return None
 
 
+class _DummyWebSocket:
+    def __init__(self) -> None:
+        self.request = object()
+
+
 # ── WebSocketConnectionTransport tests ────────────────────────────
 
 
 class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
+    def test_request_exposes_underlying_handshake(self) -> None:
+        ws = _DummyWebSocket()
+        transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+
+        assert transport.request is ws.request
+
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
         port = self._unused_port()
@@ -151,6 +164,34 @@ class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
             data = await asyncio.wait_for(ws.recv(), timeout=2.0)
             assert isinstance(data, bytes)
             assert len(data) == 640
+
+        server.close()
+        await server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_clear_audio_sends_client_playback_reset(self):
+        port = self._unused_port()
+        transport_ready = asyncio.Event()
+        transport_holder: list[WebSocketConnectionTransport] = []
+
+        async def handler(ws):
+            transport = WebSocketConnectionTransport(ws)
+            transport_holder.append(transport)
+            await transport.connect()
+            transport_ready.set()
+            await ws.wait_closed()
+            await transport.disconnect()
+
+        server = await websockets.serve(handler, "127.0.0.1", port)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await asyncio.wait_for(transport_ready.wait(), timeout=2.0)
+
+            await transport_holder[0].clear_audio()
+
+            message = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            assert json.loads(message) == {"type": "clear"}
 
         server.close()
         await server.wait_closed()
@@ -297,6 +338,12 @@ class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
 
 
 class TestTwilioConnectionTransport(_UsesPytestTcpPortFactory):
+    def test_request_exposes_underlying_handshake(self) -> None:
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(ws)  # type: ignore[arg-type]
+
+        assert transport.request is ws.request
+
     def test_audio_contract_declares_distinct_tts_preference(self):
         transport = TwilioConnectionTransport(_DummyTwilioWebSocket())
 

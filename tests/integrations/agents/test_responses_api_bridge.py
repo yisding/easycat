@@ -63,6 +63,7 @@ def _make_bridge(
     model: str = "test-model",
     api_key: str = "test-key",
     metadata: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
 ) -> RemoteResponsesAPIBridge:
     """Create a RemoteResponsesAPIBridge wired to the mock ASGI server."""
     transport = httpx.ASGITransport(app=mock_server)
@@ -71,6 +72,7 @@ def _make_bridge(
         model=model,
         api_key=api_key,
         metadata=metadata,
+        reasoning_effort=reasoning_effort,
     )
     # Replace the internal client with one using the ASGI transport.
     bridge._client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
@@ -1079,6 +1081,20 @@ class TestRequestBody:
 
         req = server.received_requests[0]
         assert req["stream"] is True
+        assert "reasoning" not in req
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_in_request(self):
+        server = MockResponsesServer()
+        server.response_text = "Ok"
+        bridge = _make_bridge(server, reasoning_effort="none")
+        rec = _recorder()
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), rec):
+            pass
+
+        req = server.received_requests[0]
+        assert req["reasoning"] == {"effort": "none"}
 
     @pytest.mark.asyncio
     async def test_user_message_in_input(self):

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from easycat._privacy import redacted_phone_number_label
 from easycat.events import (
     CallAnswered,
     CallInitiated,
@@ -22,8 +23,10 @@ from easycat.events import (
     VADStopSpeaking,
     VoicemailDetected,
 )
+from easycat.runtime.scope import BackgroundTaskScope
 
 logger = logging.getLogger(__name__)
+_STT_AMD_TIMEOUT_TASK = "stt_amd_timeout"
 
 
 # ── Shared audio analysis helpers ────────────────────────────────
@@ -474,7 +477,10 @@ class VoicemailPolicyHandler:
             "transfer_number": self._config.transfer_number,
             "twiml": twiml,
         }
-        logger.info("Voicemail policy: transferring to %s", self._config.transfer_number)
+        logger.info(
+            "Voicemail policy: transferring to %s",
+            redacted_phone_number_label(),
+        )
 
 
 # ── STT-based greeting classification ──────────────────────────────
@@ -804,7 +810,7 @@ class STTAMDFusionClassifier:
         self._started = False
         self._call_answered = False
         self._screening_active = False
-        self._timeout_task: asyncio.Task[None] | None = None
+        self._tasks = BackgroundTaskScope()
 
     @property
     def amd_result(self) -> str | None:
@@ -851,9 +857,7 @@ class STTAMDFusionClassifier:
         self._call_sid = event.call_sid
 
     def _cancel_timeout(self) -> None:
-        if self._timeout_task and not self._timeout_task.done():
-            self._timeout_task.cancel()
-        self._timeout_task = None
+        self._tasks.cancel(_STT_AMD_TIMEOUT_TASK)
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
         if event.call_sid:
@@ -914,7 +918,7 @@ class STTAMDFusionClassifier:
 
         # Only one signal — use it if it's decisive, else wait.
         if self._amd_result is not None and self._amd_result != "unknown":
-            if self._stt_result is None and self._timeout_task is None:
+            if self._stt_result is None and not self._tasks.active(_STT_AMD_TIMEOUT_TASK):
                 # Start timeout to wait for STT.
                 self._start_timeout()
             return
@@ -934,10 +938,14 @@ class STTAMDFusionClassifier:
 
     def _start_timeout(self) -> None:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._timeout_task = loop.create_task(self._timeout_coro())
+        self._tasks.create_task(
+            _STT_AMD_TIMEOUT_TASK,
+            self._timeout_coro(),
+            replace=True,
+        )
 
     async def _timeout_coro(self) -> None:
         """Timeout waiting for STT — use AMD result alone."""

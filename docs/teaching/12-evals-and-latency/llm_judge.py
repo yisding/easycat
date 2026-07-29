@@ -30,7 +30,7 @@ from openai import AsyncOpenAI
 
 from easycat.debug.testing import load_bundle
 
-JUDGE_MODEL = "gpt-4o-mini"
+JUDGE_MODEL = "gpt-5.6-luna"
 SCORE_KEYS = ("relevance", "fluency", "appropriate_length")
 
 RUBRIC = """You are evaluating a single voice-bot turn.
@@ -81,6 +81,7 @@ async def judge(bundle_path: Path) -> dict:
     async with AsyncOpenAI() as client:
         resp = await client.chat.completions.create(
             model=JUDGE_MODEL,
+            reasoning_effort="none",
             messages=[
                 {"role": "system", "content": RUBRIC},
                 {"role": "user", "content": transcript},

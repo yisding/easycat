@@ -28,25 +28,28 @@ The SQLite journal backend (`debug="full"`) survives:
 - **Segfaults** — native library crashes
 - **Telephony disconnects** — remote peer hangup, network loss
 
-**Every committed record survives.** `SqliteJournal.append()` commits
-each record as part of the append itself (one `COMMIT` per `append()`,
-followed by a fresh `BEGIN`), so the worst-case application-crash loss
-window is bounded by the single in-flight `append()` that had not yet
-returned when the process died. Once `append()` returns, the record is
-committed and durable against SIGKILL/OOM/segfault.
+**Every committed batch survives.** `SqliteJournal.append()` adds the record
+to an open transaction. The transaction commits after at most 100 ms or 100
+records, whichever comes first, and commits immediately at `turn_started`,
+`turn_ended`, `flush()`, `finalize()`, and `close()`. The elapsed-time commit
+runs on a shared journal coordinator thread. The worst-case
+application-crash loss window is therefore the current batch (at most 100 ms
+or 100 records), never an entire turn. Returning from `append()` means the
+record is visible to live readers; it does not by itself promise that the
+current batch has committed.
 
 This is inherent to the write path: SQLite commits go through `write()`
 into the kernel page cache under `PRAGMA synchronous=NORMAL`. The kernel
 owns the dirty pages and flushes them to the block device regardless of
-Python process state. No `fsync()` is called on the hot path, so the
-per-append commit costs only a `write()` (no storage I/O) and stays
-within the per-turn latency budget.
+Python process state. No `fsync()` is called on the hot path. High-rate stage
+appends are also sent through a worker thread, so SQLite inserts and the
+occasional count/turn-boundary commit do not block the asyncio audio loop.
 
-The only deliberate exception is a post-`finalize()` append: those are
-wrapped in a `SAVEPOINT` and intentionally left uncommitted until the
-next `close()`/`finalize()`, so that a crash after a clean finalize
-leaves the durable database looking cleanly closed (see "Session
-teardown contract").
+The only deliberate exception is the first post-`finalize()` append. It is
+wrapped in a `SAVEPOINT` and intentionally left uncommitted until another
+append starts a batch or the next `close()`/`finalize()`, so that an isolated
+late write followed by a crash leaves the durable database looking cleanly
+closed (see "Session teardown contract").
 
 ### Why this works
 
@@ -72,19 +75,19 @@ This guarantee holds on all standard filesystems:
 
 ### Performance implications
 
-Because no `fsync()` is called during the session:
+Because no `fsync()` is called during the session and records share commits:
 
-- Write latency is bounded by memcpy + B-tree insert (~10-50µs)
+- Each transaction amortizes WAL and commit bookkeeping across many records
 - No dependency on storage I/O latency (same on NVMe, EBS, or NFS)
-- No sporadic stalls from WAL autocheckpoint (disabled via
-  `PRAGMA wal_autocheckpoint=0`)
-- Checkpoint runs once at clean session close when latency is no
-  longer a concern
+- `PRAGMA wal_autocheckpoint=1000` folds committed pages back into the main
+  database during long sessions so the WAL is reused instead of growing for
+  the entire call
+- Clean close still runs `PRAGMA wal_checkpoint(TRUNCATE)` to shrink the WAL
 
 ## Kernel-crash durability (best-effort)
 
 A kernel panic, hypervisor failure, or power loss can lose WAL pages
-not yet written back to the block device. Under the checkpoint-on-close
+not yet written back to the block device. Under the bounded auto-checkpoint
 strategy:
 
 - **Window of loss:** bounded by the OS dirty-page writeback schedule,

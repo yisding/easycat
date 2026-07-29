@@ -2062,24 +2062,24 @@ Concrete record types for Phase 0 agreement. All records share a base:
 ```python
 @dataclass(frozen=True)
 class JournalRecord:
-    sequence: int              # monotonic within session
-    op_id: str                 # stable across records in one logical op
+    sequence: int  # monotonic within session
+    op_id: str  # stable across records in one logical op
     recorded_at_monotonic_ns: int
-    recorded_at_utc: str       # RFC3339 UTC timestamp
+    recorded_at_utc: str  # RFC3339 UTC timestamp
     session_id: str
     run_id: str
     turn_id: str | None
-    stage: str                 # e.g. "stt", "agent", "tts", "vad"
-    operation: str             # e.g. "start", "complete", "error", "cancel"
-    input_ref: str | None      # artifact store key
-    output_ref: str | None     # artifact store key
+    stage: str  # e.g. "stt", "agent", "tts", "vad"
+    operation: str  # e.g. "start", "complete", "error", "cancel"
+    input_ref: str | None  # artifact store key
+    output_ref: str | None  # artifact store key
     state_before: dict | None  # stage snapshot before operation
-    state_after: dict | None   # stage snapshot after operation
-    timing: TimingInfo         # wall_ms, cpu_ms, queue_ms
+    state_after: dict | None  # stage snapshot after operation
+    timing: TimingInfo  # wall_ms, cpu_ms, queue_ms
     metrics: dict[str, float]  # stage-specific counters
-    status: str                # "ok", "error", "cancelled", "timeout"
+    status: str  # "ok", "error", "cancelled", "timeout"
     error: ErrorInfo | None
-    metadata: dict[str, Any]   # stage-specific extras, including capture status
+    metadata: dict[str, Any]  # stage-specific extras, including capture status
 ```
 
 Framework transition records extend the base with typed fields:
@@ -2089,7 +2089,7 @@ Framework transition records extend the base with typed fields:
 class FrameworkTransitionRecord(JournalRecord):
     from_unit: str | None
     to_unit: str | None
-    transition_kind: str       # "handoff", "node_change", "tool_phase"
+    transition_kind: str  # "handoff", "node_change", "tool_phase"
     reason: str | None
     framework_metadata: dict[str, Any]
     state_snapshot_ref: str | None  # artifact store key

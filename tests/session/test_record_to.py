@@ -109,6 +109,49 @@ def _restore_easycat_logger():
 
 
 @pytest.mark.asyncio
+async def test_easy_config_session_id_and_data_dir_drive_runtime_storage(tmp_path: Path) -> None:
+    data_dir = tmp_path / "tenant-a"
+    session = create_session(
+        EasyConfig(
+            agent=_DummyAgent(),
+            stt=_CustomSTT(),
+            tts=_CustomTTS(),
+            vad=_CustomVAD(),
+            transport=_CustomTransport(),
+            debug="full",
+            session_id="call-tenant-a-1",
+            data_dir=data_dir,
+        )
+    )
+
+    try:
+        assert session.session_id == "call-tenant-a-1"
+        assert (data_dir / "journals" / "call-tenant-a-1.sqlite").is_file()
+        assert not (tmp_path / "journals").exists()
+    finally:
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_text_session_config_data_dir_drives_runtime_storage(tmp_path: Path) -> None:
+    data_dir = tmp_path / "text-root"
+    session = create_text_session(
+        TextSessionConfig(
+            agent=_DummyAgent(),
+            debug="full",
+            session_id="text-session-a",
+            data_dir=data_dir,
+        )
+    )
+
+    try:
+        assert session.session_id == "text-session-a"
+        assert (data_dir / "journals" / "text-session-a.sqlite").is_file()
+    finally:
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_record_to_exports_on_stop(tmp_path: Path) -> None:
     session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
@@ -314,3 +357,38 @@ async def test_record_to_sanitizes_low_level_windows_drive_session_id(
     assert len(bundles) == 1
     assert bundles[0].parent == target
     assert ":" not in bundles[0].name
+
+
+@pytest.mark.asyncio
+async def test_record_to_distinguishes_ids_with_same_sanitized_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    import easycat.session._session as session_module
+
+    class _FixedDateTime:
+        @classmethod
+        def now(cls, tz):
+            return datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+
+    monkeypatch.setattr(session_module, "datetime", _FixedDateTime)
+    sessions = [
+        Session(
+            SessionConfig(
+                journal=InMemoryRingBuffer(),
+                record_to=tmp_path,
+                session_id=session_id,
+                runtime_mode="text_session",
+            )
+        )
+        for session_id in ("tenant:a", "tenant-a")
+    ]
+
+    for session in sessions:
+        await session.stop()
+
+    bundles = _bundles(tmp_path, "tenant-a")
+    assert len(bundles) == 2
+    assert len({bundle.name for bundle in bundles}) == 2

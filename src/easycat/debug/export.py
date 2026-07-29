@@ -88,8 +88,8 @@ def export_debug_bundle(
         raise BundleExists(f"Bundle already exists: {path}. Use overwrite=True to replace.")
 
     try:
-        manifest = _capture_manifest(session)
         journal = _snapshot_journal(journal)
+        manifest = _capture_manifest(session, journal)
         _write_bundle_archive(
             path,
             manifest=manifest,
@@ -124,11 +124,12 @@ def _require_debug_capture(
         raise DebugCaptureDisabledError("Debug capture is disabled (debug='off')")
 
 
-def _capture_manifest(session: object) -> Manifest:
+def _capture_manifest(session: object, journal: _JournalReader | None) -> Manifest:
     return Manifest(
         format_version=FORMAT_VERSION,
         provider_versions=_collect_provider_versions(session),
         config_snapshot=safe_config_snapshot_from_session(session),
+        journal_dropped_records=_journal_dropped_records(journal),
         sharing_banner=_sharing_banner(),
     )
 
@@ -239,6 +240,11 @@ def _serialized_sequence(record: dict[str, Any]) -> int | None:
     if isinstance(sequence, bool) or not isinstance(sequence, int):
         return None
     return sequence
+
+
+def _journal_dropped_records(journal: _JournalReader | None) -> int:
+    value = getattr(journal, "dropped_records", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def _iter_artifacts(session: object) -> Iterator[_ArtifactSource]:
@@ -578,7 +584,15 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
 
 def _collect_provider_versions(session: object) -> dict[str, Any]:
     versions: dict[str, Any] = {}
-    for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
+    for attr in (
+        "stt",
+        "tts",
+        "transport",
+        "vad",
+        "noise_reducer",
+        "echo_canceller",
+        "agent",
+    ):
         provider = getattr(session, attr, None)
         if provider is not None and hasattr(provider, "version_info"):
             try:
