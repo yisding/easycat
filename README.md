@@ -171,11 +171,13 @@ frameworks, and debugging/audio-processing features:
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
 
-For a broad downstream evaluation install, run `uv add 'easycat[all]'` (or
-`uv sync --extra all --group dev` in this repository). The `all` extra
-deliberately omits `ten-vad` because of its non-permissive license and omits
-both mutually exclusive PydanticAI extras; add either `pydantic-ai` (stable v1)
-or `pydantic-ai-v2` (stable v2) explicitly.
+For a broad downstream evaluation install, run
+`uv add 'easycat[all,pydantic-ai]'` for stable PydanticAI v1 or
+`uv add 'easycat[all,pydantic-ai-v2]'` for stable v2. In this repository, use
+`uv sync --extra all --extra pydantic-ai --group dev` or
+`uv sync --extra all --extra pydantic-ai-v2 --group dev`, respectively. The
+`all` extra deliberately omits `ten-vad` because of its non-permissive license
+and omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2` extras.
 
 Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
 socket per voice session by default. EasyCat calls the provider's `warmup()`

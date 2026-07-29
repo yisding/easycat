@@ -121,8 +121,10 @@ def test_readme_documents_all_extra_exclusions() -> None:
         "Cartesia TTS", 1
     )[0]
 
-    assert "easycat[all]" in all_guidance
-    assert "uv sync --extra all --group dev" in all_guidance
+    assert "easycat[all,pydantic-ai]" in all_guidance
+    assert "easycat[all,pydantic-ai-v2]" in all_guidance
+    assert "uv sync --extra all --extra pydantic-ai --group dev" in all_guidance
+    assert "uv sync --extra all --extra pydantic-ai-v2 --group dev" in all_guidance
     assert "`ten-vad`" in all_guidance
     assert "`pydantic-ai`" in all_guidance
     assert "`pydantic-ai-v2`" in all_guidance
