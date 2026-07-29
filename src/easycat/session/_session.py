@@ -339,7 +339,7 @@ class Session:
         self._closed = False
         self._stopping = False
         self._stop_task: asyncio.Task[Any] | None = None
-        self._force_stop_requested = asyncio.Event()
+        self._stop_force = False
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -1286,24 +1286,59 @@ class Session:
         Prefer the ``async with session:`` context manager, which calls
         this for you on exit.
         """
-        if self._closed:
-            self._record_debug_bundle()
-            return
-        if self._stopping:
-            if force:
-                self._force_stop_requested.set()
-                await self._turn_runner.cancel_application_prompt()
-            stop_task = self._stop_task
-            if stop_task is not None and stop_task is not asyncio.current_task():
-                await asyncio.shield(stop_task)
-            return
-        self._stopping = True
-        self._stop_task = asyncio.current_task()
-        self._force_stop_requested.clear()
-        self._is_running = False
         current_task = asyncio.current_task()
+        if current_task is None:  # pragma: no cover - asyncio always supplies one
+            raise RuntimeError("Session.stop() requires a running asyncio task")
+
+        # Idempotent callers join the active teardown. A force request may take
+        # ownership from a graceful stop: cancel the old caller task, wait a
+        # bounded interval for cooperative cleanup, then run the force path.
+        # Ownership is transferred before cancellation so another concurrent
+        # force caller joins this task rather than racing a second teardown.
+        superseded_task: asyncio.Task[Any] | None = None
+        while True:
+            active_stop = self._stop_task
+            if active_stop is None or active_stop.done():
+                self._stop_task = current_task
+                self._stop_force = force
+                self._stopping = True
+                break
+            if active_stop is current_task:
+                return
+            if force and not self._stop_force:
+                superseded_task = active_stop
+                self._stop_task = current_task
+                self._stop_force = True
+                superseded_task.cancel()
+                break
+            try:
+                await asyncio.shield(active_stop)
+            except asyncio.CancelledError:
+                if current_task.cancelling():
+                    raise
+                # The joined stop was superseded by another force caller.
+                # Re-read ownership and join its replacement.
+                continue
+            return
+
+        self._is_running = False
 
         try:
+            if superseded_task is not None:
+                done, _ = await asyncio.wait({superseded_task}, timeout=0.5)
+                if done:
+                    try:
+                        superseded_task.result()
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                else:
+                    logger.warning(
+                        "Graceful Session.stop() ignored cancellation; continuing force teardown"
+                    )
+
+            if self._closed:
+                return
+
             prompt_task = self._turn_runner.active_application_prompt
             prompt_is_current = prompt_task is current_task
             if (
@@ -1313,17 +1348,11 @@ class Session:
                 and not prompt_task.done()
             ):
                 # Application prompts are confirmed turn work. Graceful stop
-                # lets them finish unless a concurrent forced stop escalates.
-                force_waiter = asyncio.create_task(self._force_stop_requested.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        {prompt_task, force_waiter},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    force = force_waiter in done
-                finally:
-                    force_waiter.cancel()
-                    await asyncio.gather(force_waiter, return_exceptions=True)
+                # lets them finish. asyncio.wait keeps the prompt independent:
+                # a concurrent forced stop can cancel this graceful owner
+                # without propagating that cancellation into the prompt before
+                # the force path takes over.
+                await asyncio.wait({prompt_task})
 
             turn = self._turn
             if turn and not prompt_is_current:
@@ -1454,14 +1483,16 @@ class Session:
             if unregister is not None:
                 unregister()
         finally:
-            # Clear the stopping flag FIRST so it is always reset even if a
-            # later teardown step (observability / log-context reset) raises.
-            self._stopping = False
-            self._stop_task = None
-            self._force_stop_requested.clear()
-            self._mark_observability_inactive()
-            self._reset_session_log_context()
-            self._record_debug_bundle()
+            owns_stop = self._stop_task is current_task
+            if owns_stop:
+                # Clear the stopping state FIRST so it is always reset even if
+                # a later teardown step (observability / recording) raises.
+                self._stop_task = None
+                self._stop_force = False
+                self._stopping = False
+                self._mark_observability_inactive()
+                self._reset_session_log_context()
+                self._record_debug_bundle()
 
     def _reset_session_log_context(self) -> None:
         """Restore this task's pre-session logging correlation binding."""
