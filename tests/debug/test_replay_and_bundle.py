@@ -582,9 +582,14 @@ class TestBundleExport:
 
         monkeypatch.setattr(zipfile.ZipFile, "writestr", fail_write)
 
-        with pytest.raises(RuntimeError, match="archive write failed"):
+        with pytest.raises(RuntimeError, match="archive write failed") as exc_info:
             export_debug_bundle(session, path, overwrite=True)
 
+        assert exc_info.value.code == "EASYCAT_E401"
+        assert exc_info.value.context == {
+            "path": str(path),
+            "detail": "archive write failed",
+        }
         assert path.read_bytes() == b"existing archive"
         assert list(tmp_path.glob("*.tmp")) == []
 
@@ -735,6 +740,8 @@ class TestBundleValidation:
         with pytest.raises(BundleValidationError) as exc_info:
             RunBundle.load(bundle_path)
         assert exc_info.value.reason_code == "PATH_TRAVERSAL"
+        assert exc_info.value.code == "EASYCAT_E402"
+        assert exc_info.value.context["path"] == str(bundle_path)
 
     def test_bad_artifact_ref(self, tmp_path):
         """Artifact refs that are not valid SHA-256 hex should be rejected."""
@@ -857,8 +864,9 @@ class TestBundleValidation:
         assert exc_info.value.reason_code == "METADATA_TOO_LARGE"
 
     def test_file_not_found(self):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError) as exc_info:
             RunBundle.load("/nonexistent/path.zip")
+        assert exc_info.value.code == "EASYCAT_E402"
 
 
 # ── TestBundlePartialJournal ────────────────────────────────────
