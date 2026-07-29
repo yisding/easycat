@@ -284,7 +284,9 @@ def probe_module_for_extra(
         stt_catalog, tts_catalog = stt_tts_catalogs()
         catalog = stt_catalog if role == "stt" else tts_catalog
         if catalog.extras.get(provider) == extra:
-            return catalog.probe_modules.get(provider)
+            declared_probe = catalog.probe_modules.get(provider)
+            if declared_probe is not None:
+                return declared_probe
 
     if extra in EXTRA_PROBE_MODULE:
         return EXTRA_PROBE_MODULE[extra]

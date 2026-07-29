@@ -312,6 +312,45 @@ def test_registered_probe_module_overrides_non_importable_extra_name(
     assert "acme-speech" not in plan.missing_extras
 
 
+def test_selected_provider_without_explicit_probe_falls_back_to_extra_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    from easycat.planning import build_provider_plan
+    from easycat.project.schema import VoiceProfile
+
+    register_stt_provider(
+        "fakestt",
+        FakeSTT,
+        FakeSTTConfig,
+        env_var="FAKESTT_API_KEY",
+        extra="acme_speech",
+    )
+    real_find_spec = importlib.util.find_spec
+    probed: list[str] = []
+
+    def fake_find_spec(name: str, package: str | None = None):
+        probed.append(name)
+        if name == "acme_speech":
+            return object()
+        return real_find_spec(name, package)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    plan = build_provider_plan(
+        VoiceProfile(
+            name="extension",
+            transport="websocket",
+            stt="fakestt",
+            tts="openai",
+        ),
+        environ={"FAKESTT_API_KEY": "x", "OPENAI_API_KEY": "y"},
+    )
+
+    assert "acme_speech" in probed
+    assert "acme_speech" not in plan.missing_extras
+
+
 def test_selected_provider_probe_keeps_identity_when_extra_name_is_shared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
