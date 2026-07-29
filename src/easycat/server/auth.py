@@ -35,7 +35,7 @@ light.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from easycat._net import constant_time_strings_equal, is_loopback_host
@@ -192,7 +192,7 @@ class BearerTokenAuth:
     is constant-time via :func:`hmac.compare_digest`.
     """
 
-    token: str
+    token: str = field(repr=False)
     allow_query_token: bool = False
     unsafe_allow_no_auth: bool = False
 

@@ -122,6 +122,48 @@ def test_readme_optional_dependency_list_has_copyable_install_commands() -> None
     assert "uv pip install krisp_audio" in optional_block
 
 
+def test_readme_documents_all_extra_exclusions() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    all_guidance = readme.split("For a broad downstream evaluation install", 1)[1].split(
+        "Cartesia TTS", 1
+    )[0]
+
+    assert "easycat[all,pydantic-ai]" in all_guidance
+    assert "easycat[all,pydantic-ai-v2]" in all_guidance
+    assert "uv sync --extra all --extra pydantic-ai --group dev" in all_guidance
+    assert "uv sync --extra all --extra pydantic-ai-v2 --group dev" in all_guidance
+    assert "`ten-vad`" in all_guidance
+    assert "`pydantic-ai`" in all_guidance
+    assert "`pydantic-ai-v2`" in all_guidance
+    assert "mutually exclusive" in all_guidance
+
+
+def test_pydantic_ai_v1_extra_has_a_dated_compatibility_exit_plan() -> None:
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    compatibility_plan = pyproject.split("# Compatibility schedule:", 1)[1].split(
+        "pydantic-ai-v2 =", 1
+    )[0]
+
+    assert "2027-07-31" in compatibility_plan
+    assert "next breaking EasyCat release after that date" in compatibility_plan
+    assert "transitional ``pydantic-ai-v2`` alias" in compatibility_plan
+
+
+def test_local_audio_guidance_and_nightly_smoke_install_portaudio() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    nightly = (REPO_ROOT / ".github" / "workflows" / "nightly-validation.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for command in (
+        "sudo apt-get install -y libportaudio2",
+        "brew install portaudio",
+    ):
+        assert command in readme
+    assert '["local", "quickstart", "all"]' in nightly
+    assert "sudo apt-get install -y --no-install-recommends libportaudio2" in nightly
+
+
 def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
     """``quickstart`` already includes several extras; avoid redundant setup."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))

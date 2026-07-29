@@ -183,6 +183,8 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
             "TWILIO_STREAM_TOKEN_SECRET",
             "TWILIO_MAX_SESSIONS",
             "TWILIO_START_TIMEOUT_S",
+            "TWILIO_DRAIN_TIMEOUT_S",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
             "TWILIO_PUBLIC_TWIML_URL",
             "TRUST_PROXY_HEADERS",
         ),

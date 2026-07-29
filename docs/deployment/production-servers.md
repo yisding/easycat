@@ -49,6 +49,9 @@ run_websocket_config_server(config)
 Set `EASYCAT_WS_TOKEN` before exposing the server beyond loopback, and tune
 `EASYCAT_WS_MAX_SESSIONS` from measured CPU/RAM capacity. Non-browser clients
 should authenticate with `Authorization: Bearer <token>`.
+`EASYCAT_WS_DRAIN_TIMEOUT_S` (default `30`) controls the graceful session
+window, while `EASYCAT_WS_FORCE_SHUTDOWN_TIMEOUT_S` (default `10`) bounds
+forced cleanup.
 
 > **Breaking change — `?token=` query auth is now off by default.** The
 > WebSocket and WebRTC serve helpers used to accept a `?token=` query parameter

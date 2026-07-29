@@ -15,7 +15,7 @@ from websockets.http11 import Request, Response
 from easycat._net import normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websocket
-from easycat.server.transports import CapacityGate
+from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session import Session
 from easycat.session_manager import SessionManager
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
@@ -66,7 +66,12 @@ async def serve_websocket_sessions(
         unsafe_allow_no_auth=unsafe_allow_no_auth,
     )
     manager: SessionManager[int] = SessionManager()
-    gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=settings.max_sessions,
+        session_factory=session_factory,
+        runtime_feedback=runtime_feedback,
+    )
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
         if auth_policy is not None:
@@ -77,19 +82,8 @@ async def serve_websocket_sessions(
                 )
         return None
 
-    async def handle_connection(ws: ServerConnection) -> None:
-        if not gate.try_acquire():
-            await ws.close(code=1013, reason="Server is at the configured session limit")
-            return
-        try:
-            session = session_factory(ws)
-            async with manager.connection(id(ws), session, runtime_feedback=runtime_feedback):
-                await ws.wait_closed()
-        finally:
-            gate.release()
-
     server = await websockets.serve(
-        handle_connection,
+        runtime.handle,
         settings.host,
         settings.port,
         process_request=process_request,
@@ -104,9 +98,11 @@ async def serve_websocket_sessions(
     try:
         await event.wait()
     finally:
-        server.close()
-        await server.wait_closed()
-        await manager.stop_all()
+        await runtime.drain(
+            server,
+            drain_timeout_s=settings.drain_timeout_s,
+            force_timeout_s=settings.force_shutdown_timeout_s,
+        )
 
 
 async def serve_websocket_config_sessions(

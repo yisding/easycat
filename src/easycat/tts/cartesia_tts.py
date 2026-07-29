@@ -40,7 +40,7 @@ class CartesiaTTSConfig:
     # rather than the conventional ``model``.
     MODEL_FIELD: ClassVar[str] = "model_id"
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     # Sonic-3 is the default — best quality/latency balance (~90ms TTFA).
     # Use ``sonic-3.5`` for Cartesia's latest, highest-naturalness profile,
     # ``sonic-turbo`` (~40ms TTFA) for latency-critical templates, or
