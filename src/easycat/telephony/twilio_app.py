@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -18,6 +19,22 @@ if TYPE_CHECKING:
 def _settings_value(value: str | None) -> str:
     """Normalize env/settings values so blank secrets do not count as configured."""
     return (value or "").strip()
+
+
+def _non_negative_float_setting(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    default: float,
+) -> float:
+    raw = _settings_value(env.get(name))
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        value = -1.0
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError(f"{name} must be a non-negative number")
+    return value
 
 
 def _positive_int_setting(
@@ -52,6 +69,8 @@ class TwilioAppSettings:
     max_sessions: int = 64
     start_timeout_s: float = 10.0
     public_twiml_url: str = ""
+    drain_timeout_s: float = 30.0
+    force_shutdown_timeout_s: float = 10.0
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:
@@ -188,6 +207,16 @@ def twilio_app_settings_from_env(
         max_sessions=max_sessions,
         start_timeout_s=start_timeout_s,
         public_twiml_url=_settings_value(env.get("TWILIO_PUBLIC_TWIML_URL")),
+        drain_timeout_s=_non_negative_float_setting(
+            env,
+            "TWILIO_DRAIN_TIMEOUT_S",
+            default=30.0,
+        ),
+        force_shutdown_timeout_s=_non_negative_float_setting(
+            env,
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+            default=10.0,
+        ),
     )
 
 

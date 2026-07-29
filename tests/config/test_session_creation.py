@@ -453,6 +453,22 @@ def test_create_session_preserves_data_dir_before_emergency_export(
     assert armed_with == [session]
 
 
+def test_create_session_configures_event_dispatch():
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            slow_handler_threshold_s=0.125,
+            handler_error_policy="raise",
+        )
+    )
+
+    assert session.event_bus.slow_handler_threshold_s == 0.125
+    assert session.event_bus.handler_error_policy == "raise"
+
+
 @pytest.mark.asyncio
 async def test_create_session_binds_twilio_connection_identity_sink():
     transport = TwilioConnectionTransport(_DummyWebSocket())

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import textwrap
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -28,6 +29,7 @@ from easycat.runtime import (
     run_retention,
 )
 from easycat.runtime import journal_sql as journal_sql_module
+from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecordKind,
@@ -49,6 +51,13 @@ def _libsql_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _simulate_crash_after_flush(journal: SqliteJournal) -> None:
+    """Leave a committed journal without running the clean-close lifecycle."""
+    journal.flush()
+    journal._conn.close()
+    journal._closed = True
 
 
 @pytest.fixture
@@ -474,17 +483,190 @@ class TestSqliteJournalLifecycle:
         assert mode == "wal"
 
 
+class TestSqliteJournalBatching:
+    @staticmethod
+    def _durable_names(db_path: Path) -> list[str]:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            return [
+                row[0]
+                for row in conn.execute("SELECT name FROM journal ORDER BY sequence").fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def test_record_limit_commits_batch(self, tmp_path):
+        journal = SqliteJournal("batch-count", data_dir=tmp_path)
+        journal._batch_commit_interval_s = 1.0
+        journal._batch_commit_records = 3
+        try:
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="one",
+                session_id="batch-count",
+            )
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="two",
+                session_id="batch-count",
+            )
+            assert self._durable_names(journal.db_path) == []
+
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="three",
+                session_id="batch-count",
+            )
+            assert self._durable_names(journal.db_path) == ["one", "two", "three"]
+        finally:
+            journal.close()
+
+    def test_turn_boundary_commits_pending_batch(self, tmp_path):
+        journal = SqliteJournal("batch-turn", data_dir=tmp_path)
+        journal._batch_commit_interval_s = 1.0
+        journal._batch_commit_records = 100
+        try:
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="stage_start",
+                session_id="batch-turn",
+            )
+            assert self._durable_names(journal.db_path) == []
+
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="turn_ended",
+                session_id="batch-turn",
+            )
+            assert self._durable_names(journal.db_path) == ["stage_start", "turn_ended"]
+        finally:
+            journal.close()
+
+    def test_elapsed_time_commits_batch(self, tmp_path):
+        journal = SqliteJournal("batch-time", data_dir=tmp_path)
+        journal._batch_commit_interval_s = 0.02
+        try:
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="timed",
+                session_id="batch-time",
+            )
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if self._durable_names(journal.db_path) == ["timed"]:
+                    break
+                time.sleep(0.01)
+            assert self._durable_names(journal.db_path) == ["timed"]
+        finally:
+            journal.close()
+
+    def test_wal_autocheckpoint_is_bounded(self, tmp_path):
+        journal = SqliteJournal("checkpoint", data_dir=tmp_path)
+        try:
+            pages = journal._conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+            assert pages == 1000
+        finally:
+            journal.close()
+
+    async def test_async_append_runs_disk_write_off_loop(self, tmp_path):
+        journal = SqliteJournal("off-loop", data_dir=tmp_path)
+        caller_thread = threading.get_ident()
+        append_threads: list[int] = []
+        original = journal._do_append
+
+        def _recording_append(*args, **kwargs):
+            append_threads.append(threading.get_ident())
+            return original(*args, **kwargs)
+
+        journal._do_append = _recording_append
+        try:
+            sequence = await append_journal_record_async(
+                journal,
+                kind=JournalRecordKind.EVENT,
+                name="stage_start",
+                session_id="off-loop",
+            )
+            assert sequence == 1
+            assert append_threads and append_threads[0] != caller_thread
+        finally:
+            journal.close()
+
+    async def test_cancelled_async_append_waits_for_worker_completion(self, tmp_path):
+        journal = SqliteJournal("cancelled-off-loop", data_dir=tmp_path)
+        loop = asyncio.get_running_loop()
+        append_started = asyncio.Event()
+        release_append = threading.Event()
+        original = journal._do_append
+
+        def _blocked_append(*args, **kwargs):
+            loop.call_soon_threadsafe(append_started.set)
+            release_append.wait(timeout=1)
+            return original(*args, **kwargs)
+
+        journal._do_append = _blocked_append
+        task = asyncio.create_task(
+            append_journal_record_async(
+                journal,
+                kind=JournalRecordKind.EVENT,
+                name="stage_start",
+                session_id="cancelled-off-loop",
+            )
+        )
+        try:
+            await asyncio.wait_for(append_started.wait(), timeout=0.2)
+
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+
+            release_append.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=0.2)
+            assert journal.latest_sequence == 1
+        finally:
+            release_append.set()
+            if not task.done():
+                await asyncio.gather(task, return_exceptions=True)
+            journal.close()
+
+    def test_stalled_scheduled_commit_does_not_block_other_journals(self, tmp_path):
+        first = SqliteJournal("stalled-commit", data_dir=tmp_path)
+        second = SqliteJournal("independent-commit", data_dir=tmp_path)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_committed = threading.Event()
+
+        def _stalled_commit(_generation: int) -> None:
+            first_started.set()
+            release_first.wait(timeout=1)
+
+        def _record_second_commit(_generation: int) -> None:
+            second_committed.set()
+
+        first._commit_scheduled_batch = _stalled_commit
+        second._commit_scheduled_batch = _record_second_commit
+        try:
+            deadline = time.monotonic()
+            journal_sql_module._SqliteBatchCommitCoordinator.schedule(first, deadline, 1)
+            journal_sql_module._SqliteBatchCommitCoordinator.schedule(second, deadline, 1)
+
+            assert first_started.wait(timeout=0.2)
+            assert second_committed.wait(timeout=0.2)
+        finally:
+            release_first.set()
+            first.close()
+            second.close()
+
+
 class TestCrashRecovery:
     def test_unclean_shutdown_detected(self, tmp_path):
         # First session: write records but do NOT close cleanly.
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        # Simulate crash: skip close().  append() already committed each record
-        # via the production path, so the records are durable without a manual
-        # COMMIT — that is exactly the SIGKILL guarantee we rely on.
-        j1._conn.close()
-        j1._closed = True
+        # Simulate a crash after an explicit durability boundary, without
+        # writing the clean-close marker.
+        _simulate_crash_after_flush(j1)
 
         # Second session: reopen same session_id — should detect unclean shutdown.
         j2 = SqliteJournal("sess", data_dir=tmp_path)
@@ -499,13 +681,11 @@ class TestCrashRecovery:
         j2.close()
 
     def test_recovery_marker_roundtrips_as_typed_subclass(self, tmp_path):
-        # First session: write two records, then simulate an unclean crash.
-        # append() commits each record via the production path; no manual COMMIT.
+        # First session: write two records, then crash after a durability boundary.
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.close()
-        j1._closed = True
+        _simulate_crash_after_flush(j1)
 
         # Second session: the recovery marker must round-trip through SQLite as
         # a RecoveredSessionMarker with its typed fields populated, not collapse
@@ -521,13 +701,11 @@ class TestCrashRecovery:
         j2.close()
 
     def test_recovery_resets_sequence_and_drops_prior_records(self, tmp_path):
-        # First session: write two records, then simulate an unclean crash.
-        # append() commits each record via the production path; no manual COMMIT.
+        # First session: write two records, then crash after a durability boundary.
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.close()
-        j1._closed = True
+        _simulate_crash_after_flush(j1)
 
         # Second session: recovery must truncate the live journal so the new
         # session starts fresh at sequence=1 (DURABILITY.md contract).
@@ -550,9 +728,7 @@ class TestCrashRecovery:
     def test_crash_dump_promoted(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
-        # append() commits via the production path; no manual COMMIT.
-        j1._conn.close()
-        j1._closed = True
+        _simulate_crash_after_flush(j1)
 
         j2 = SqliteJournal("sess", data_dir=tmp_path)
         j2.close()
@@ -649,8 +825,7 @@ class TestCrashRecovery:
         try:
             j1 = SqliteJournal("sess", data_dir=tmp_path)
             j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
-            j1._conn.close()
-            j1._closed = True
+            _simulate_crash_after_flush(j1)
 
             j2 = SqliteJournal("sess", data_dir=tmp_path)
             j2.close()
@@ -673,9 +848,7 @@ class TestCrashRecovery:
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        # append() commits via the production path; no manual COMMIT.
-        j1._conn.close()
-        j1._closed = True
+        _simulate_crash_after_flush(j1)
 
         with mock.patch(
             "easycat.runtime.journal_sql.shutil.copy2",
@@ -703,8 +876,7 @@ class TestCrashRecovery:
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
-        j1._conn.close()
-        j1._closed = True
+        _simulate_crash_after_flush(j1)
 
         with mock.patch(
             "easycat.runtime.journal_sql._copy_journal_to_crash_dump",
@@ -835,29 +1007,35 @@ class TestCrashRecovery:
         assert not (tmp_path / "crash-dumps" / "sess.sqlite").exists()
         j2.close()
 
-    def test_append_commits_without_manual_flush(self, tmp_path):
-        """Every append() must be durable on its own — a second read-only
-        connection sees the row before any flush()/finalize()/close().
-
-        This is the unit-level guard for the DURABILITY.md SIGKILL contract:
-        if the per-append commit regresses, the read below returns nothing.
-        """
+    def test_elapsed_batch_commits_without_manual_flush(self, tmp_path):
+        """The coordinator commits an open batch without another append."""
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
         j.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
 
-        # Read via an independent read-only connection — sees only committed data.
-        ro = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
-        names = [
-            row[0]
-            for row in ro.execute(
-                "SELECT name FROM journal WHERE kind = ? ORDER BY sequence",
-                (JournalRecordKind.EVENT.value,),
-            ).fetchall()
-        ]
-        ro.close()
-        assert names == ["ev1", "ev2"]
-        j.close()
+        deadline = time.monotonic() + 1.0
+        try:
+            while time.monotonic() < deadline:
+                ro = sqlite3.connect(
+                    f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro",
+                    uri=True,
+                )
+                try:
+                    names = [
+                        row[0]
+                        for row in ro.execute(
+                            "SELECT name FROM journal WHERE kind = ? ORDER BY sequence",
+                            (JournalRecordKind.EVENT.value,),
+                        ).fetchall()
+                    ]
+                finally:
+                    ro.close()
+                if names == ["ev1", "ev2"]:
+                    break
+                time.sleep(0.01)
+            assert names == ["ev1", "ev2"]
+        finally:
+            j.close()
 
     @pytest.mark.skipif(
         sys.platform == "win32",
@@ -868,7 +1046,7 @@ class TestCrashRecovery:
         journal recovers every committed record and emits a RECOVERY marker."""
         n_records = 50
         script = textwrap.dedent(f"""\
-            import signal, sys
+            import signal, sys, time
             sys.path.insert(0, "src")
             from easycat.runtime import SqliteJournal
             from easycat.runtime.records import JournalRecordKind
@@ -880,8 +1058,9 @@ class TestCrashRecovery:
                     name=f"event_{{i}}",
                     session_id="crash-sess",
                 )
-            # No manual flush(): the production append() path must commit each
-            # record on its own so SIGKILL preserves them (DURABILITY.md).
+            # No manual flush(): wait beyond the documented 100 ms batch
+            # window, then signal that the parent may test SIGKILL recovery.
+            time.sleep(0.2)
             print("READY", flush=True)
             signal.pause()
         """)
@@ -1056,7 +1235,7 @@ class TestRetention:
 
 
 class TestSqliteHotPathBehavior:
-    """AC1.17: verify checkpoint-on-close and no-fsync-on-hot-path properties."""
+    """Verify bounded checkpoints, clean-close truncation, and no hot-path fsync."""
 
     def test_checkpoint_on_close(self, tmp_path):
         """After close(), the WAL should be checkpointed (truncated to near-zero)."""

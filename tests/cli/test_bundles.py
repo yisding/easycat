@@ -1481,6 +1481,9 @@ def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
     assert (output / "summary.json").exists()
     assert (output / "timeline.md").exists()
     assert (output / "timeline.jsonl").exists()
+    readme = (output / "README.md").read_text()
+    assert "Error messages, tracebacks, and free-form exception notes are also stripped" in readme
+    assert "machine-generated stage correlation notes are retained" in readme
 
     summary = json.loads((output / "summary.json").read_text())
     assert summary["target"] == "claude-code"

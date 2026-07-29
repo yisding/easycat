@@ -63,7 +63,7 @@ from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, parse_vad_string
 
 if TYPE_CHECKING:
@@ -76,6 +76,8 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import TwilioSessionActionConfig
 
 logger = logging.getLogger("easycat.config")
+
+_MIN_VAD_PRE_ROLL_MARGIN_MS = 150
 
 
 # ── Log-level helpers ───────────────────────────────────────────────
@@ -116,6 +118,7 @@ class EasyConfigError(ValueError):
 
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
+_VALID_HANDLER_ERROR_POLICY = {"continue", "raise"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
@@ -166,9 +169,24 @@ def _validate_journal_redaction(policy: str) -> None:
         )
 
 
+def _validate_event_dispatch(
+    slow_handler_threshold_s: float | None,
+    handler_error_policy: str,
+) -> None:
+    if slow_handler_threshold_s is not None:
+        _require_non_negative("slow_handler_threshold_s", slow_handler_threshold_s)
+    if handler_error_policy not in _VALID_HANDLER_ERROR_POLICY:
+        raise ValueError(
+            f"Invalid handler_error_policy={handler_error_policy!r}. "
+            f"Must be one of {sorted(_VALID_HANDLER_ERROR_POLICY)}."
+        )
+
+
 def _validate_common(
     *,
     debug: str,
+    slow_handler_threshold_s: float | None,
+    handler_error_policy: str,
     journal_backend: str,
     journal_capacity: int,
     journal_redaction: str,
@@ -182,6 +200,7 @@ def _validate_common(
     """Validate the shared fields used by both session factories."""
     if debug not in _VALID_DEBUG:
         raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    _validate_event_dispatch(slow_handler_threshold_s, handler_error_policy)
     if journal_backend not in _VALID_JOURNAL_BACKEND:
         raise ValueError(
             f"Invalid journal_backend={journal_backend!r}. "
@@ -510,6 +529,8 @@ class _AgentSessionConfig:
     wrap_agent: bool = True
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
+    slow_handler_threshold_s: float | None = 0.005
+    handler_error_policy: Literal["continue", "raise"] = "continue"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_capacity: int = 10_000
     journal_redaction: Literal["secrets", "pii"] = "secrets"
@@ -550,6 +571,8 @@ class EasyConfig(_AgentSessionConfig):
         debug / journal_backend / journal_capacity / journal_redaction /
         journal_retention:
             Debug-journal settings.
+        slow_handler_threshold_s / handler_error_policy: Inline EventBus
+            diagnostics and failure handling.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -592,6 +615,8 @@ class EasyConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_capacity=self.journal_capacity,
             journal_redaction=self.journal_redaction,
@@ -680,7 +705,39 @@ class EasyConfig(_AgentSessionConfig):
                 )
         if self.debug in ("light", "full"):
             self._apply_debug_defaults()
+        self._warn_if_vad_pre_roll_is_too_short()
         self._validate()
+
+    def _warn_if_vad_pre_roll_is_too_short(self) -> None:
+        """Surface VAD/pre-roll combinations that can clip utterance onset."""
+        if not isinstance(self.vad, VADConfig) or self.turn_taking.mode != TurnMode.VAD:
+            return
+        smart_turn_enabled = (
+            isinstance(self.smart_turn, SmartTurnConfig) and self.smart_turn.enabled
+        )
+        voicemail_vad_enabled = bool(self.telephony and self.telephony.enable_voicemail_detector)
+        if (
+            _stt_uses_native_endpointing(self.stt)
+            and not smart_turn_enabled
+            and not voicemail_vad_enabled
+        ):
+            # This is the same native-endpointing path that
+            # _should_auto_turn_from_stt_final() uses to disable EasyCat's VAD
+            # stage. Neither pre-roll nor min_speech_duration participates.
+            return
+        required_ms = self.vad.min_speech_duration_ms + _MIN_VAD_PRE_ROLL_MARGIN_MS
+        if self.turn_taking.pre_roll_ms >= required_ms:
+            return
+        logger.warning(
+            "turn_taking.pre_roll_ms=%d is shorter than "
+            "vad.min_speech_duration_ms=%d plus the %d ms onset margin; "
+            "the start of each utterance may be clipped. Increase pre_roll_ms "
+            "to at least %d or lower min_speech_duration_ms.",
+            self.turn_taking.pre_roll_ms,
+            self.vad.min_speech_duration_ms,
+            _MIN_VAD_PRE_ROLL_MARGIN_MS,
+            required_ms,
+        )
 
     def _resolve_provider_shortcuts(self, api_key_overrides: dict[str, str] | None) -> None:
         """Resolve every named audio-stage provider before validation/planning."""
@@ -833,6 +890,8 @@ class TextSessionConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_capacity=self.journal_capacity,
             journal_redaction=self.journal_redaction,
@@ -852,6 +911,8 @@ class TextSessionConfig(_AgentSessionConfig):
         agent: Any = None,
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
+        slow_handler_threshold_s: float | None = 0.005,
+        handler_error_policy: Literal["continue", "raise"] = "continue",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_capacity: int = 10_000,
         journal_redaction: Literal["secrets", "pii"] = "secrets",
@@ -882,6 +943,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "agent": (agent, None),
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
+                "slow_handler_threshold_s": (slow_handler_threshold_s, 0.005),
+                "handler_error_policy": (handler_error_policy, "continue"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_capacity": (journal_capacity, 10_000),
                 "journal_redaction": (journal_redaction, "secrets"),
@@ -909,6 +972,8 @@ class TextSessionConfig(_AgentSessionConfig):
             agent=agent,
             session_id=session_id,
             debug=debug,
+            slow_handler_threshold_s=slow_handler_threshold_s,
+            handler_error_policy=handler_error_policy,
             journal_backend=journal_backend,
             journal_capacity=journal_capacity,
             journal_redaction=journal_redaction,

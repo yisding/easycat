@@ -30,7 +30,9 @@ description of this protocol lives in ``docs/browser-playground.md``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -66,15 +68,22 @@ BROWSER_EVENT_TYPES = (
 # bot audio cannot grow the pending map without limit.
 _MAX_PENDING_TURNS = 32
 
+# Browser UI telemetry must never inherit a transport's unbounded write-drain
+# wait. A quarter second tolerates ordinary scheduling jitter while keeping a
+# backgrounded or congested client off the STT/agent event hot path.
+_DEFAULT_SEND_TIMEOUT_S = 0.25
+_DEFAULT_MAX_PENDING_EVENTS = 32
+
 
 class BrowserEventForwarder:
     """Forward session events to a connected browser as JSON messages.
 
     Subscribes to the session :class:`EventBus` on construction and pushes
-    each relevant event through ``send_json`` — an async best-effort sender
-    supplied by the owning transport (WebSocket text frame or WebRTC data
-    channel). Delivery is observability, never load-bearing: send failures
-    are logged at debug level and dropped.
+    each relevant event through a small bounded writer queue to ``send_json`` —
+    an async best-effort sender supplied by the owning transport (WebSocket text
+    frame or WebRTC data channel). Delivery is observability, never
+    load-bearing: event handlers never await transport I/O, and queue overflow,
+    send timeout, or send failure is logged at debug level and dropped.
 
     Call :meth:`close` (idempotent) to unsubscribe during transport teardown.
     """
@@ -83,8 +92,24 @@ class BrowserEventForwarder:
         self,
         bus: EventBus,
         send_json: Callable[[dict[str, Any]], Awaitable[None]],
+        *,
+        send_timeout_s: float = _DEFAULT_SEND_TIMEOUT_S,
+        max_pending_events: int = _DEFAULT_MAX_PENDING_EVENTS,
     ) -> None:
+        if not math.isfinite(send_timeout_s) or send_timeout_s <= 0:
+            raise ValueError("send_timeout_s must be a finite number > 0")
+        if (
+            isinstance(max_pending_events, bool)
+            or not isinstance(max_pending_events, int)
+            or max_pending_events < 1
+        ):
+            raise ValueError("max_pending_events must be an integer >= 1")
         self._send_json = send_json
+        self._send_timeout_s = send_timeout_s
+        self._send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_pending_events)
+        self._writer_task: asyncio.Task[None] | None = None
+        self._send_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
         # turn_id -> monotonic timestamp of the final user transcript.
         self._stt_final_at: dict[str | None, float] = {}
         self._subscriptions: list[EventSubscription] = [
@@ -99,10 +124,23 @@ class BrowserEventForwarder:
 
     def close(self) -> None:
         """Unsubscribe from the event bus. Safe to call more than once."""
+        self._closed = True
         for subscription in self._subscriptions:
             subscription.unsubscribe()
         self._subscriptions.clear()
         self._stt_final_at.clear()
+        while True:
+            try:
+                self._send_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                self._send_queue.task_done()
+        if self._writer_task is not None and not self._writer_task.done():
+            self._writer_task.cancel()
+        for task in self._send_tasks:
+            if not task.done():
+                task.cancel()
 
     # ── Event handlers ────────────────────────────────────────────
 
@@ -148,7 +186,82 @@ class BrowserEventForwarder:
     # ── Plumbing ──────────────────────────────────────────────────
 
     async def _send(self, payload: dict[str, Any]) -> None:
+        if self._closed:
+            return
         try:
-            await self._send_json(payload)
+            self._send_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            logger.debug(
+                "Dropping browser event %s: writer queue full",
+                payload.get("type"),
+            )
+            return
+        self._ensure_writer()
+        # Give the writer one scheduling opportunity so healthy in-memory /
+        # data-channel senders preserve the existing near-immediate behavior.
+        # This never awaits transport I/O: the writer owns that independently.
+        await asyncio.sleep(0)
+
+    def _ensure_writer(self) -> None:
+        if self._writer_task is not None and not self._writer_task.done():
+            return
+        self._writer_task = asyncio.create_task(self._writer_loop())
+        self._writer_task.add_done_callback(self._writer_done)
+
+    async def _writer_loop(self) -> None:
+        while True:
+            try:
+                payload = self._send_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await self._send_payload(payload)
+            finally:
+                self._send_queue.task_done()
+
+    async def _send_payload(self, payload: dict[str, Any]) -> None:
+        task = asyncio.create_task(self._call_send_json(payload))
+        self._send_tasks.add(task)
+        task.add_done_callback(self._send_done)
+        try:
+            # Shielding is deliberate: wait_for cancels only the shield at the
+            # deadline and therefore returns without waiting for a sender that
+            # suppresses cancellation. The detached task is cancelled below
+            # and its callback retrieves any eventual exception.
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._send_timeout_s)
+        except TimeoutError:
+            task.cancel()
+            logger.debug(
+                "Dropping browser event %s: send exceeded %.3fs",
+                payload.get("type"),
+                self._send_timeout_s,
+            )
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
         except Exception:
             logger.debug("Dropping browser event %s: send failed", payload.get("type"))
+
+    async def _call_send_json(self, payload: dict[str, Any]) -> None:
+        await self._send_json(payload)
+
+    def _send_done(self, task: asyncio.Task[None]) -> None:
+        self._send_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # _send_payload logs failures while it owns the task. This callback
+            # also retrieves exceptions from detached, timed-out sends.
+            pass
+
+    def _writer_done(self, task: asyncio.Task[None]) -> None:
+        if self._writer_task is task:
+            self._writer_task = None
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("Browser event writer stopped unexpectedly", exc_info=True)
