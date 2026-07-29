@@ -43,7 +43,7 @@ GUARD_FILES = {
     "tests/test_contributing.py",
     # Teaching prose/generated-block scanners; the rest of tests/teaching is
     # behavioral (executes chapter scripts) and stays in the fast loop.
-    "tests/teaching/test_feature_ladder.py",
+    "tests/teaching/test_regen_teaching_chapters.py",
     "tests/teaching/test_ladder_index.py",
     "tests/teaching/test_diagrams.py",
 }

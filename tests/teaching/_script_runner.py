@@ -21,13 +21,11 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from types import ModuleType
 from typing import Any, TypeAlias, cast
 
 CompletedProcess = _subprocess.CompletedProcess
 
 _CommandPart: TypeAlias = str | os.PathLike[str]
-_MISSING = object()
 
 
 def _is_simple_python_script(
@@ -70,7 +68,7 @@ def _execute_script(
     old_cwd = Path.cwd()
     old_environ = os.environ.copy()
     old_path = sys.path[:]
-    old_main = sys.modules.pop("main", _MISSING)
+    old_modules = sys.modules.copy()
 
     workdir = Path(cwd).resolve() if cwd is not None else old_cwd
     script = Path(command[1])
@@ -101,10 +99,14 @@ def _execute_script(
         os.environ.clear()
         os.environ.update(old_environ)
         sys.path[:] = old_path
-        if old_main is _MISSING:
-            sys.modules.pop("main", None)
-        else:
-            sys.modules["main"] = cast(ModuleType, old_main)
+        # Probe scripts deliberately install fake optional dependencies such as
+        # ``openai``. Restore every added or replaced module so one in-process
+        # probe cannot change import/skip decisions in a later test.
+        for name in sys.modules.keys() - old_modules.keys():
+            sys.modules.pop(name, None)
+        for name, module in old_modules.items():
+            if sys.modules.get(name) is not module:
+                sys.modules[name] = module
 
     return returncode, stdout.getvalue(), stderr.getvalue()
 
