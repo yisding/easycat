@@ -41,7 +41,7 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_runner import TurnRunner
-from easycat.session._warmup import WarmupRunner
+from easycat.session._warmup import AudioResamplingWarmup, WarmupRunner
 from easycat.session._wiring import _SessionTurnHandle, build_wiring
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
@@ -134,6 +134,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
             ("vad", session.vad),
             ("noise_reducer", session.noise_reducer),
             ("echo_canceller", session.echo_canceller),
+            ("audio_resampling", AudioResamplingWarmup()),
             ("transport", session.transport),
             ("agent", session.agent),
             ("turn_detector", session._turn_manager.endpoint_detector),

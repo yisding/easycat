@@ -6,6 +6,7 @@ import struct
 import pytest
 
 from easycat._audio_utils import (
+    PCM16StreamResampler,
     chunk_frames,
     resample,
     resample_chunk,
@@ -282,12 +283,216 @@ def test_default_resampler_suppresses_downsampling_alias():
     assert _ten_khz_alias_attenuation_db() < -60
 
 
+def test_default_stream_resampler_suppresses_downsampling_alias():
+    """The low-latency streaming mode must remain band-limited."""
+    from_rate = 48_000
+    to_rate = 16_000
+    amplitude = 12_000
+    samples = [
+        int(amplitude * math.sin(2 * math.pi * 10_000 * index / from_rate))
+        for index in range(from_rate)
+    ]
+    payload = struct.pack(f"<{len(samples)}h", *samples)
+    stream = PCM16StreamResampler(to_rate)
+    chunks = [
+        stream.process(payload[offset : offset + 1_920], from_rate)
+        for offset in range(0, len(payload), 1_920)
+    ]
+    output = b"".join([*chunks, stream.finish()])
+    output_samples = struct.unpack(f"<{len(output) // 2}h", output)
+    body = output_samples[1_000:-1_000]
+    alias_radians = 2 * math.pi * 6_000 / to_rate
+    alias_amplitude = abs(
+        sum(
+            sample * complex(math.cos(alias_radians * index), -math.sin(alias_radians * index))
+            for index, sample in enumerate(body)
+        )
+    )
+    alias_amplitude *= 2 / len(body)
+    attenuation_db = 20 * math.log10(max(alias_amplitude, 1e-12) / amplitude)
+
+    assert attenuation_db < -60
+
+
+@pytest.mark.parametrize(
+    ("from_rate", "to_rate", "frame_samples", "max_frames"),
+    [
+        (48_000, 16_000, 960, 2),
+        (8_000, 16_000, 160, 1),
+    ],
+)
+def test_default_stream_resampler_bounds_voice_startup_delay(
+    from_rate: int,
+    to_rate: int,
+    frame_samples: int,
+    max_frames: int,
+) -> None:
+    stream = PCM16StreamResampler(to_rate)
+    frame = bytes(frame_samples * 2)
+
+    outputs = [stream.process(frame, from_rate) for _ in range(max_frames)]
+
+    assert any(outputs)
+
+
 def test_linear_fallback_suppresses_downsampling_alias(monkeypatch):
     """The dependency-free recovery path must not fold a 10 kHz tone into speech."""
     import easycat._audio_utils as au
 
     monkeypatch.setattr(au, "_resolved_backend", "linear")
     assert _ten_khz_alias_attenuation_db() < -40
+
+
+@pytest.mark.parametrize(("from_rate", "to_rate"), [(24_000, 16_000), (48_000, 16_000)])
+def test_stream_resampler_matches_whole_signal_across_chunk_boundaries(
+    from_rate: int,
+    to_rate: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    samples = [
+        int(14_000 * math.sin(2 * math.pi * 1_100 * index / from_rate))
+        for index in range(from_rate // 5)
+    ]
+    payload = struct.pack(f"<{len(samples)}h", *samples)
+    whole = PCM16StreamResampler(to_rate)
+    expected = whole.process(payload, from_rate) + whole.finish()
+    stream = PCM16StreamResampler(to_rate)
+    parts: list[bytes] = []
+    cursor = 0
+    for chunk_samples in (137, 509, 43, 997, 251):
+        if cursor >= len(payload):
+            break
+        end = min(len(payload), cursor + chunk_samples * 2)
+        parts.append(stream.process(payload[cursor:end], from_rate))
+        cursor = end
+    if cursor < len(payload):
+        parts.append(stream.process(payload[cursor:], from_rate))
+    parts.append(stream.finish())
+
+    actual = b"".join(parts)
+    assert len(actual) == len(expected)
+    actual_samples = struct.unpack(f"<{len(actual) // 2}h", actual)
+    expected_samples = struct.unpack(f"<{len(expected) // 2}h", expected)
+    assert (
+        max(
+            abs(left - right) for left, right in zip(actual_samples, expected_samples, strict=True)
+        )
+        <= 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("backend", "state_name"),
+    [
+        ("soxr", "_StreamingSoxrState"),
+        ("scipy", "_StreamingScipyState"),
+    ],
+)
+def test_stream_resampler_uses_selected_quality_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    state_name: str,
+) -> None:
+    import easycat._audio_utils as au
+
+    class _State:
+        pending_output_bytes = 0
+
+        def process(self, _samples, *, final):
+            _ = final
+            return b""
+
+    sentinel = _State()
+    monkeypatch.setattr(au, "_resolved_backend", backend)
+    monkeypatch.setattr(au, state_name, lambda _from, _to: sentinel)
+
+    stream = PCM16StreamResampler(16_000)
+    stream.process(b"\x00\x00", 48_000)
+
+    assert stream._state is sentinel
+
+
+def test_stream_resampler_carries_split_sample_byte() -> None:
+    stream = PCM16StreamResampler(16_000)
+
+    first = stream.process(b"\x01\x02\x03", 16_000)
+    second = stream.process(b"\x04", 16_000)
+
+    assert first == b"\x01\x02"
+    assert second == b"\x03\x04"
+    assert stream.finish() == b""
+
+
+@pytest.mark.parametrize(("from_rate", "to_rate"), [(48_000, 16_000), (16_000, 24_000)])
+@pytest.mark.parametrize("sample_count", range(1, 12))
+def test_linear_stream_resampler_short_input_count_matches_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    from_rate: int,
+    to_rate: int,
+    sample_count: int,
+) -> None:
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack(f"<{sample_count}h", *range(sample_count))
+    stream = PCM16StreamResampler(to_rate)
+
+    output = b"".join(
+        stream.process(data[index : index + 2], from_rate) for index in range(0, len(data), 2)
+    )
+    output += stream.finish()
+
+    assert len(output) == len(au._resample_linear(data, from_rate, to_rate))
+
+
+def test_stream_resampler_reports_output_retained_until_finish() -> None:
+    import easycat._audio_utils as au
+
+    data = struct.pack("<1600h", *range(1600))
+    stream = PCM16StreamResampler(24_000)
+
+    emitted = stream.process(data, 16_000)
+    pending = stream.pending_output_bytes
+
+    assert pending == len(au._resample_linear(data, 16_000, 24_000)) - len(emitted)
+    assert len(stream.finish()) == pending
+    assert stream.pending_output_bytes == 0
+
+
+@pytest.mark.parametrize(("from_rate", "to_rate"), [(48_000, 16_000), (16_000, 24_000)])
+@pytest.mark.parametrize("sample_count", range(1, 12))
+def test_soxr_stream_pending_bytes_match_finish(
+    from_rate: int,
+    to_rate: int,
+    sample_count: int,
+) -> None:
+    stream = PCM16StreamResampler(to_rate)
+    data = struct.pack(f"<{sample_count}h", *range(sample_count))
+
+    stream.process(data, from_rate)
+    pending = stream.pending_output_bytes
+    tail = stream.finish()
+
+    assert len(tail) == pending
+
+
+def test_stream_resampler_finishes_before_source_rate_change() -> None:
+    stream = PCM16StreamResampler(16_000)
+    first_source = struct.pack("<5h", 0, 1000, 2000, 3000, 4000)
+    second_source = struct.pack("<4h", 5000, 6000, 7000, 8000)
+
+    output = stream.process(first_source, 8_000)
+    output += stream.process(second_source, 24_000)
+    output += stream.finish()
+
+    first_segment = PCM16StreamResampler(16_000)
+    expected = first_segment.process(first_source, 8_000) + first_segment.finish()
+    second_segment = PCM16StreamResampler(16_000)
+    expected += second_segment.process(second_source, 24_000) + second_segment.finish()
+    assert output == expected
 
 
 def test_linear_fallback_does_not_restart_from_zero_for_stream_frames(monkeypatch):

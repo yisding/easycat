@@ -176,6 +176,9 @@ frameworks, and debugging/audio-processing features:
 Every EasyCat install includes SoXR for filtered, native-speed sample-rate
 conversion. `easycat doctor` reports the active backend; the dependency-free
 filtered resampler remains a runtime fallback if the native backend fails.
+Continuous transport, provider, VAD, noise-reduction, and TTS paths retain
+filter history and fractional phase across chunks, so packet boundaries do
+not become audible sample-rate-conversion boundaries.
 
 Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
 socket per voice session by default. EasyCat calls the provider's `warmup()`
