@@ -13,6 +13,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+from easycat._provider_registry import stt_tts_catalogs
 from easycat.cli._app import app
 from easycat.cli.scaffold import init as init_module
 from easycat.cli.scaffold._schema import available_templates
@@ -631,9 +632,17 @@ def test_scaffold_provider_shortcuts_have_install_and_env_mappings() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     known_extras = set(pyproject["project"]["optional-dependencies"])
     provider_names = set(available_stt_providers()) | set(available_tts_providers())
+    credentialed_provider_names = {
+        name
+        for catalog in stt_tts_catalogs()
+        for name, env_var in catalog.env_vars.items()
+        if env_var is not None
+    }
 
     missing_extras = sorted(provider_names - set(init_module._provider_to_extra()))
-    missing_env_vars = sorted(provider_names - set(init_module._provider_to_env_var()))
+    missing_env_vars = sorted(
+        credentialed_provider_names - set(init_module._provider_to_env_var())
+    )
     unknown_extras = sorted(set(init_module._provider_to_extra().values()) - known_extras)
 
     assert not missing_extras, "Scaffold missing provider extra mappings: " + ", ".join(

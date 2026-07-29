@@ -89,6 +89,17 @@ def test_telephony_library_extra_excludes_reference_server_dependencies() -> Non
     assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
 
 
+def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}
+    rnnoise_names = {Requirement(dep).name for dep in extras["rnnoise"]}
+    all_names = {Requirement(dep).name for dep in extras["all"]}
+
+    assert {"pyrnnoise", "requests"} <= rnnoise_names
+    assert {"pyrnnoise", "requests"}.isdisjoint(quickstart_names)
+    assert rnnoise_names <= all_names
+
+
 def test_every_install_ships_high_quality_resampling() -> None:
     dependencies = _pyproject()["project"]["dependencies"]
 

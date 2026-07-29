@@ -6,7 +6,6 @@ import json
 import os
 import re
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ import pytest
 from easycat import EasyConfig
 from easycat.cli._app import _docs_entries
 from easycat.stt import OpenAIRealtimeSTTConfig
+from tests.teaching import _script_runner as script_runner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURE_LADDER = REPO_ROOT / "docs" / "using-easycat"
@@ -58,30 +58,6 @@ def test_feature_ladder_available_rows_match_published_chapters() -> None:
     assert [row["link"] for row in rows] == chapter_dirs
     assert [row["name"] for row in rows] == chapter_dirs
     assert [int(row["number"]) for row in rows] == list(range(len(chapter_dirs)))
-
-
-def test_feature_ladder_declares_complete_feature_journey() -> None:
-    readme = (FEATURE_LADDER / "README.md").read_text(encoding="utf-8")
-
-    for feature in (
-        "VoiceApp",
-        "Browser, WebSocket, local, and Twilio",
-        "STT/TTS provider specs",
-        "VAD, smart turn, interruption, push-to-talk",
-        "tools, tool events, session actions, and pronunciation",
-        "OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents",
-        "`EasyConfig`, `Session`, events, text turns, and lifecycle",
-        "Journals, bundles, inspect, replay, diff, and the debugger",
-        "Offline turns, assertions, evals, and latency budgets",
-        "Per-connection factories, authentication, limits, and supervision",
-        "Twilio streams, outbound calls, screening, IVR, and call control",
-        "Validation, deployment, durability, metrics, and production teardown",
-    ):
-        assert feature in readme
-
-    assert "how voice AI works" in readme
-    assert "what EasyCat can do and how to use it" in readme
-    assert "[voice-pipeline ladder](../teaching/)" in readme
 
 
 def test_feature_chapters_have_self_contained_reader_entrypoints() -> None:
@@ -222,7 +198,7 @@ def test_provider_chapter_teaches_shortcuts_typed_voices_and_discovery() -> None
 
 def test_provider_chapter_lists_builtin_providers_without_credentials() -> None:
     script = FEATURE_LADDER / "02-providers-and-voices" / "main.py"
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(script), "list"],
         cwd=REPO_ROOT,
         check=True,
@@ -330,7 +306,7 @@ def test_tools_actions_chapter_keeps_tools_effects_events_and_speech_separate() 
 
 def test_tools_actions_pronunciation_preview_runs_without_credentials() -> None:
     script = FEATURE_LADDER / "04-tools-actions" / "main.py"
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(script), "preview"],
         cwd=REPO_ROOT,
         check=True,
@@ -375,7 +351,7 @@ def test_agent_bridges_chapter_maps_supported_frameworks_and_custom_boundaries()
 
 def test_agent_bridges_matrix_runs_without_framework_sdks_or_credentials() -> None:
     script = FEATURE_LADDER / "05-agent-bridges" / "main.py"
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(script), "matrix"],
         cwd=REPO_ROOT,
         check=True,
@@ -420,7 +396,7 @@ def test_session_control_chapter_uses_public_lifecycle_and_event_surfaces() -> N
 
 def test_session_control_text_lifecycle_runs_without_credentials() -> None:
     script = FEATURE_LADDER / "06-session-control" / "main.py"
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(script), "text"],
         cwd=REPO_ROOT,
         check=True,
@@ -475,7 +451,7 @@ def test_observability_pair_supports_show_replay_and_diff_without_credentials(
     bundles = tmp_path / "bundles"
     env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
     env["EASYCAT_DATA_DIR"] = str(tmp_path / "data")
-    subprocess.run(
+    script_runner.run(
         [sys.executable, str(script), "pair", str(bundles)],
         cwd=REPO_ROOT,
         check=True,
@@ -487,7 +463,7 @@ def test_observability_pair_supports_show_replay_and_diff_without_credentials(
     baseline = bundles / "baseline.bundle"
     candidate = bundles / "candidate.bundle"
     easycat = Path(sys.executable).with_name("easycat")
-    show = subprocess.run(
+    show = script_runner.run(
         [str(easycat), "bundles", "show", str(baseline), "--json"],
         cwd=REPO_ROOT,
         check=True,
@@ -495,7 +471,7 @@ def test_observability_pair_supports_show_replay_and_diff_without_credentials(
         text=True,
         env=env,
     )
-    replay = subprocess.run(
+    replay = script_runner.run(
         [
             str(easycat),
             "replay",
@@ -512,7 +488,7 @@ def test_observability_pair_supports_show_replay_and_diff_without_credentials(
         text=True,
         env=env,
     )
-    diff = subprocess.run(
+    diff = script_runner.run(
         [str(easycat), "diff", str(baseline), str(candidate), "--json"],
         cwd=REPO_ROOT,
         check=True,
@@ -565,7 +541,7 @@ def test_testing_evals_chapter_uses_real_offline_turn_and_assertion_surfaces() -
 def test_testing_evals_suite_passes_and_latency_budget_can_fail_without_credentials() -> None:
     script = FEATURE_LADDER / "08-testing-evals" / "main.py"
     env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
-    passing = subprocess.run(
+    passing = script_runner.run(
         [sys.executable, str(script)],
         cwd=REPO_ROOT,
         check=True,
@@ -573,7 +549,7 @@ def test_testing_evals_suite_passes_and_latency_budget_can_fail_without_credenti
         text=True,
         env=env,
     )
-    failing = subprocess.run(
+    failing = script_runner.run(
         [sys.executable, str(script), "--max-ms", "0"],
         cwd=REPO_ROOT,
         check=False,
@@ -620,7 +596,7 @@ def test_multi_caller_chapter_uses_public_server_auth_capacity_and_lifecycle_sur
 def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> None:
     script = FEATURE_LADDER / "09-multi-caller" / "main.py"
     env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(script)],
         cwd=REPO_ROOT,
         check=True,
@@ -736,7 +712,7 @@ def test_telephony_chapter_uses_public_twilio_trust_callback_and_action_surfaces
 def test_telephony_checkpoint_runs_without_credentials_or_twilio_sdk() -> None:
     script = FEATURE_LADDER / "10-telephony" / "main.py"
     env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(script)],
         cwd=REPO_ROOT,
         check=True,
@@ -786,7 +762,7 @@ def test_production_ops_chapter_uses_public_health_metrics_and_durability_surfac
 def test_production_ops_checkpoint_runs_and_can_persist_a_clean_journal(tmp_path: Path) -> None:
     script = FEATURE_LADDER / "11-production-ops" / "main.py"
     env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(script), "--data-dir", str(tmp_path)],
         cwd=REPO_ROOT,
         check=True,

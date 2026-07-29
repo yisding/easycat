@@ -31,6 +31,7 @@ _LAZY_ATTR: dict[str, str] = {
     "TwilioConnectionTransport": "easycat.transports.twilio_media",
     "StreamTokenContext": "easycat.transports.twilio_media",
     "TwilioStreamTokenStore": "easycat.transports.twilio_media",
+    "twilio_websocket_signature_process_request": "easycat.transports.twilio_media",
     "TWILIO_STREAM_TOKEN_PARAMETER": "easycat.transports.twilio_media",
     "ICEServer": "easycat.transports._webrtc_config",
     "WebRTCTransport": "easycat.transports.webrtc",
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
         TwilioStreamTokenStore,
         TwilioTransport,
         TwilioTransportConfig,
+        twilio_websocket_signature_process_request,
     )
     from easycat.transports.webrtc import WebRTCTransport
     from easycat.transports.websocket import (

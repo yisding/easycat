@@ -162,6 +162,7 @@ async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
     """Consume the agent stream until cancelled."""
     stream = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {
                 "role": "system",

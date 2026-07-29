@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
 
-from easycat._provider_catalog import sensitive_api_domains
+from easycat._provider_registry import sensitive_api_domains
 
 REDACTION_VERSION = 1
 

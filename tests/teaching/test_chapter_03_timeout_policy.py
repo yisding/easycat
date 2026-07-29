@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "docs" / "teaching" / "03-parrot-naive" / "timeout_policy_probe.py"
 
 
 def test_timeout_policy_probe_exposes_the_fixed_timeout_tradeoff() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(PROBE)],
         cwd=ROOT,
         check=True,

@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).parents[2]
 CHAPTER_13 = ROOT / "docs" / "teaching" / "13-swap-providers-and-transports"
@@ -28,7 +29,7 @@ def load_script(path: Path):
 
 
 def test_session_scope_probe_distinguishes_graceful_and_cancelled_stop() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER_13 / "session_scope_probe.py")],
         cwd=ROOT,
         check=True,

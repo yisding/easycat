@@ -1169,8 +1169,6 @@ quickstart = [
     { name = "onnxruntime" },
     { name = "openai" },
     { name = "openai-agents" },
-    { name = "pyrnnoise" },
-    { name = "requests" },
     { name = "sounddevice" },
 ]
 rnnoise = [
@@ -1276,12 +1274,10 @@ requires-dist = [
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.99.0,<2.0.0" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2'", specifier = ">=2.5.1,<3.0.0" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
-    { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
     { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.29" },
     { name = "python-multipart", marker = "extra == 'telephony-fastapi'", specifier = ">=0.0.29" },
     { name = "requests", marker = "extra == 'all'", specifier = ">=2.33.0" },
-    { name = "requests", marker = "extra == 'quickstart'", specifier = ">=2.33.0" },
     { name = "requests", marker = "extra == 'rnnoise'", specifier = ">=2.33.0" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "sentencesplit", specifier = ">=0.1.0" },

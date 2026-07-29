@@ -23,7 +23,7 @@ from typing import Any, ClassVar
 import websockets
 from websockets.asyncio.server import ServerConnection
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
@@ -101,10 +101,11 @@ class WebSocketTransport(ServerTransportBase):
 
     **Outbound (server -> client):**
       - Binary frame: raw PCM16 audio bytes.
-      - Text frame: JSON control message (e.g., ``{"type": "ready"}``) or
-        session event message (``stt_partial``, ``stt_final``, ``agent_delta``,
-        ``agent_final``, ``turn_started``, ``interruption``, ``turn_latency``;
-        see :mod:`easycat.transports._browser_events`).
+      - Text frame: JSON control message (``{"type": "ready"}``,
+        ``{"type": "clear"}``) or session event message (``stt_partial``,
+        ``stt_final``, ``agent_delta``, ``agent_final``, ``turn_started``,
+        ``interruption``, ``turn_latency``; see
+        :mod:`easycat.transports._browser_events`).
 
     The maintained reader-facing description of this protocol lives in
     ``docs/browser-playground.md``.
@@ -165,7 +166,17 @@ class WebSocketTransport(ServerTransportBase):
             return False
 
     async def clear_audio(self) -> None:
-        """No-op — WebSocket sends frames immediately without buffering."""
+        """Tell the client to stop already-received and scheduled playback."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"type": "clear"}))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: client disconnected")
+            if self._ws is ws:
+                self._ws = None
+                self._client_connected.clear()
 
     # ── Server helpers ────────────────────────────────────────────
 
@@ -223,25 +234,28 @@ class WebSocketTransport(ServerTransportBase):
         audio is automatically resampled before being enqueued.
         """
         target_rate = self._config.audio_format.sample_rate
-        async for message in ws:
-            if isinstance(message, bytes):
-                if not message:
-                    logger.debug("Dropping empty WebSocket audio frame")
-                    continue
-                chunk = AudioChunk(data=message, format=self._audio_format)
-                if chunk.format.sample_rate != target_rate:
-                    # Hot path: each inbound binary frame is resampled when the
-                    # client rate differs from the pipeline rate (the common
-                    # browser-48kHz-to-16kHz case). ``resample`` re-resolves its
-                    # numpy/soxr/scipy backend per call, so there is some
-                    # per-frame allocation/import-probe churn here. This is
-                    # acceptable because frames are ~20ms (low call frequency);
-                    # if a higher-throughput backend is needed, cache the
-                    # chosen resampler callable in ``_audio_utils``.
-                    chunk = resample_chunk(chunk, target_rate)
-                self._enqueue_chunk(chunk, context="WebSocket")
-            elif isinstance(message, str):
-                self._handle_control_message(message)
+        resampler = PCM16StreamResampler(target_rate)
+        try:
+            async for message in ws:
+                if isinstance(message, bytes):
+                    if not message:
+                        logger.debug("Dropping empty WebSocket audio frame")
+                        continue
+                    data = resampler.process(message, self._audio_format.sample_rate)
+                    if data:
+                        self._enqueue_chunk(
+                            AudioChunk(data=data, format=self._config.audio_format),
+                            context="WebSocket",
+                        )
+                elif isinstance(message, str):
+                    self._handle_control_message(message)
+        finally:
+            tail = resampler.finish()
+            if tail:
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=self._config.audio_format),
+                    context="WebSocket",
+                )
 
     def _handle_control_message(self, raw: str) -> None:
         """Process a JSON control message from the client."""
@@ -379,7 +393,15 @@ class WebSocketConnectionTransport(AudioQueueMixin):
             return False
 
     async def clear_audio(self) -> None:
-        """No-op — WebSocket sends frames immediately without buffering."""
+        """Tell the client to stop already-received and scheduled playback."""
+        if not self._connected:
+            return
+        try:
+            await self._ws.send(json.dumps({"type": "clear"}))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: client disconnected")
+            self._connected = False
+            self._client_connected.clear()
 
     async def _send_client_event(self, payload: dict[str, Any]) -> None:
         if not self._connected:
@@ -388,22 +410,19 @@ class WebSocketConnectionTransport(AudioQueueMixin):
 
     async def _receive_loop(self) -> None:
         target_rate = self._config.audio_format.sample_rate
+        resampler = PCM16StreamResampler(target_rate)
         try:
             async for message in self._ws:
                 if isinstance(message, bytes):
                     if not message:
                         logger.debug("Dropping empty WebSocket audio frame")
                         continue
-                    chunk = AudioChunk(data=message, format=self._audio_format)
-                    if chunk.format.sample_rate != target_rate:
-                        # Hot path: resampled per inbound frame when the client
-                        # rate differs from the pipeline rate. ``resample``
-                        # re-resolves its numpy/soxr/scipy backend per call, but
-                        # this is acceptable because frames are ~20ms; cache the
-                        # chosen resampler in ``_audio_utils`` if throughput
-                        # becomes a concern.
-                        chunk = resample_chunk(chunk, target_rate)
-                    self._enqueue_chunk(chunk, context="WebSocket")
+                    data = resampler.process(message, self._audio_format.sample_rate)
+                    if data:
+                        self._enqueue_chunk(
+                            AudioChunk(data=data, format=self._config.audio_format),
+                            context="WebSocket",
+                        )
                 elif isinstance(message, str):
                     self._handle_control_message(message)
         except websockets.exceptions.ConnectionClosed as exc:
@@ -411,6 +430,12 @@ class WebSocketConnectionTransport(AudioQueueMixin):
             if isinstance(exc, websockets.exceptions.ConnectionClosedError):
                 self._record_transport_disconnect("websocket connection closed abnormally")
         finally:
+            tail = resampler.finish()
+            if tail:
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=self._config.audio_format),
+                    context="WebSocket",
+                )
             self._connected = False
             self._client_connected.clear()
             self._audio_format = self._config.audio_format
