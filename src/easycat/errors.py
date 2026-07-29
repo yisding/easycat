@@ -67,6 +67,26 @@ class EasyCatError(Exception):
             return entry.fix
 
 
+def _attach_error_code(exc: Exception, coded: EasyCatError) -> None:
+    """Tag an existing public exception type with a stable EasyCat code.
+
+    Some established APIs expose domain-specific exceptions such as
+    ``BundleValidationError`` and ``FileNotFoundError``. Replacing those with
+    ``EasyCatError`` would break callers, so boundary code attaches the same
+    machine-readable ``code`` and ``context`` while preserving the original
+    exception type and traceback.
+    """
+    try:
+        exc.code = coded.code  # type: ignore[attr-defined]
+        exc.context = coded.context  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        return
+    note = f"{coded.code}: {coded.message}"
+    notes = getattr(exc, "__notes__", ())
+    if note not in notes:
+        exc.add_note(note)
+
+
 @dataclass
 class ErrorEntry:
     """One entry in the error-code registry.
@@ -338,6 +358,21 @@ EASYCAT_E208 = register(
     fix="Free up disk space or point EasyCat at a larger filesystem with EASYCAT_DATA_DIR.",
     example="",
     related=["EASYCAT_E207"],
+)
+
+EASYCAT_E209 = register(
+    "EASYCAT_E209",
+    "PortAudio runtime library is unavailable.",
+    cause=(
+        "The `sounddevice` Python package is installed, but it could not load "
+        "the native PortAudio library required by local microphone and speaker I/O."
+    ),
+    fix=(
+        "Install PortAudio first (Debian/Ubuntu: `sudo apt-get install libportaudio2`; "
+        "macOS: `brew install portaudio`), then retry."
+    ),
+    example="sudo apt-get install libportaudio2  # macOS: brew install portaudio",
+    related=["EASYCAT_E202", "EASYCAT_E206"],
 )
 
 
@@ -619,6 +654,7 @@ __all__ = [
     "EASYCAT_E206",
     "EASYCAT_E207",
     "EASYCAT_E208",
+    "EASYCAT_E209",
     "EASYCAT_E301",
     "EASYCAT_E302",
     "EASYCAT_E303",

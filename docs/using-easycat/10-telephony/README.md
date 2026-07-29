@@ -259,7 +259,9 @@ Use a Twilio test project or tightly controlled destination first. Verify
 signature validation through the real proxy URL and media WebSocket handshake,
 stream-token consumption, the `TWILIO_MAX_SESSIONS` cap, status callbacks,
 teardown, recording/consent policy, and cost limits before enabling general
-outbound calls.
+outbound calls. Tune `TWILIO_DRAIN_TIMEOUT_S` and
+`TWILIO_FORCE_SHUTDOWN_TIMEOUT_S` so rolling deploys leave enough time for live
+sessions to flush before surviving media sockets are closed.
 
 Continue with [the exercises](./EXERCISES.md) to break each boundary safely and
 design a production call policy.

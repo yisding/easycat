@@ -108,14 +108,16 @@ false turns that cleanup can no longer undo.
 TurnManagerConfig(
     end_of_turn_silence_ms=700,
     punctuated_end_of_turn_silence_ms=250,
-    pre_roll_ms=300,
+    pre_roll_ms=450,
 )
 ```
 
 `pre_roll_ms` keeps a short rolling buffer from before the VAD start event, so
-the consonant that triggered speech detection is not clipped. Silence values
-are fallback timing: punctuation can shorten a pause, while an incomplete
-smart-turn decision can retain the full grace period.
+the consonant that triggered speech detection is not clipped. Keep it at least
+150 ms above `VADConfig.min_speech_duration_ms`; `EasyConfig` warns when those
+typed configs drift below that margin. Silence values are fallback timing:
+punctuation can shorten a pause, while an incomplete smart-turn decision can
+retain the full grace period.
 
 Do not chase low latency by setting every silence value to zero. That makes a
 fast demo by cutting people off mid-thought.

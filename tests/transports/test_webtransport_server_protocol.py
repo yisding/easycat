@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import easycat.transports.webtransport as webtransport_module
+from easycat.server.auth import BearerTokenAuth
 from easycat.server.webtransport import (
     run_webtransport_config_server,
     serve_webtransport_config_sessions,
@@ -25,6 +27,45 @@ from ._webtransport_helpers import _aioquic_available, _FakeH3, _FakeQuicProtoco
 
 
 class TestWebTransportServerWiring:
+    def test_config_defaults_to_loopback_without_auth(self) -> None:
+        config = WebTransportTransportConfig()
+        assert config.host == "127.0.0.1"
+        assert config.auth_token is None
+        assert config.allow_query_token is False
+        assert config.unsafe_allow_no_auth is False
+
+    def test_auth_fields_preserve_existing_positional_config_order(self) -> None:
+        names = [field.name for field in fields(WebTransportTransportConfig)]
+        assert names[:9] == [
+            "host",
+            "port",
+            "certfile",
+            "keyfile",
+            "audio_format",
+            "max_pending_chunks",
+            "outbound_max_pending",
+            "path",
+            "max_concurrent_sessions",
+        ]
+        assert names[9:] == [
+            "auth_token",
+            "allow_query_token",
+            "unsafe_allow_no_auth",
+            "max_pending_bytes",
+        ]
+
+    def test_server_keeps_auth_token_out_of_per_session_config(self) -> None:
+        async def _noop(transport: WebTransportConnectionTransport) -> None:
+            await transport.wait_closed()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(auth_token="sekrit"),
+            _noop,
+        )
+
+        assert server._auth_policy is not None  # noqa: SLF001
+        assert server._session_config.auth_token is None  # noqa: SLF001
+
     @pytest.mark.asyncio
     @pytest.mark.skipif(
         not _aioquic_available(),
@@ -114,6 +155,47 @@ class TestWebTransportServerWiring:
         server = WebTransportServer(WebTransportTransportConfig(), _noop)
         with pytest.raises(ValueError, match="certfile and keyfile"):
             await server.start()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_token", [None, "   "])
+    async def test_start_refuses_public_bind_without_auth_before_tls_setup(
+        self,
+        auth_token: str | None,
+    ) -> None:
+        async def _noop(transport: WebTransportConnectionTransport) -> None:
+            await transport.wait_closed()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                host="0.0.0.0",
+                certfile="cert.pem",
+                keyfile="key.pem",
+                auth_token=auth_token,
+            ),
+            _noop,
+        )
+        with pytest.raises(ValueError) as exc:
+            await server.start()
+        assert "0.0.0.0" in str(exc.value)
+        assert "unsafe_allow_no_auth" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config",
+        [
+            WebTransportTransportConfig(host="0.0.0.0", auth_token="sekrit"),
+            WebTransportTransportConfig(host="0.0.0.0", unsafe_allow_no_auth=True),
+        ],
+    )
+    async def test_public_bind_auth_or_explicit_escape_reaches_tls_validation(
+        self,
+        config: WebTransportTransportConfig,
+    ) -> None:
+        async def _noop(transport: WebTransportConnectionTransport) -> None:
+            await transport.wait_closed()
+
+        with pytest.raises(ValueError, match="certfile and keyfile"):
+            await WebTransportServer(config, _noop).start()
 
     @pytest.mark.asyncio
     async def test_stop_is_idempotent_before_start(self) -> None:
@@ -499,6 +581,139 @@ class _RecordingH3:
         self, stream_id: int, headers: list[tuple[bytes, bytes]], end_stream: bool = False
     ) -> None:  # noqa: FBT001, FBT002
         self.sent.append((stream_id, headers, end_stream))
+
+
+def _connect_protocol(auth_policy: BearerTokenAuth | None) -> tuple[Any, _RecordingH3, list[Any]]:
+    cls = _get_protocol_class()
+    proto = cls.__new__(cls)  # skip QUIC-bound __init__
+    h3 = _RecordingH3()
+    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
+    proto._accept_path = "/easycat"  # noqa: SLF001
+    proto._wt_transport = None  # noqa: SLF001
+    proto._accepted_session_id = None  # noqa: SLF001
+    on_session_calls: list[Any] = []
+    proto._on_session = on_session_calls.append  # noqa: SLF001
+    proto._can_accept = lambda: True  # noqa: SLF001
+    proto._session_config = WebTransportTransportConfig()  # noqa: SLF001
+    proto._auth_policy = auth_policy  # noqa: SLF001
+    proto.transmit = lambda: None  # type: ignore[method-assign]
+    return proto, h3, on_session_calls
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+@pytest.mark.parametrize(
+    "authorization",
+    [None, b"Bearer wrong"],
+)
+def test_connect_bearer_auth_rejects_missing_or_invalid_token(
+    authorization: bytes | None,
+) -> None:
+    from aioquic.h3.events import HeadersReceived
+
+    proto, h3, on_session_calls = _connect_protocol(BearerTokenAuth(token="sekrit"))
+    headers = [
+        (b":method", b"CONNECT"),
+        (b":protocol", b"webtransport"),
+        (b":path", b"/easycat"),
+    ]
+    if authorization is not None:
+        headers.append((b"authorization", authorization))
+
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(headers=headers, stream_id=0, stream_ended=False)
+    )
+
+    assert proto._wt_transport is None  # noqa: SLF001
+    assert on_session_calls == []
+    assert dict(h3.sent[0][1]).get(b":status") == b"401"
+    assert dict(h3.sent[0][1]).get(b"www-authenticate") == b"Bearer"
+    assert h3.sent[0][2] is True
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_connect_bearer_auth_accepts_correct_header() -> None:
+    from aioquic.h3.events import HeadersReceived
+
+    proto, h3, on_session_calls = _connect_protocol(BearerTokenAuth(token="sekrit"))
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(
+            headers=[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"webtransport"),
+                (b":path", b"/easycat"),
+                (b"authorization", b"Bearer sekrit"),
+            ],
+            stream_id=0,
+            stream_ended=False,
+        )
+    )
+
+    assert proto._wt_transport is not None  # noqa: SLF001
+    assert len(on_session_calls) == 1
+    assert dict(h3.sent[0][1]).get(b":status") == b"200"
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+@pytest.mark.parametrize(
+    ("allow_query_token", "expected_status"),
+    [(False, b"401"), (True, b"200")],
+)
+def test_connect_query_token_requires_explicit_opt_in(
+    allow_query_token: bool,
+    expected_status: bytes,
+) -> None:
+    from aioquic.h3.events import HeadersReceived
+
+    proto, h3, on_session_calls = _connect_protocol(
+        BearerTokenAuth(token="sekrit", allow_query_token=allow_query_token)
+    )
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(
+            headers=[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"webtransport"),
+                (b":path", b"/easycat?token=sekrit"),
+            ],
+            stream_id=0,
+            stream_ended=False,
+        )
+    )
+
+    assert dict(h3.sent[0][1]).get(b":status") == expected_status
+    assert len(on_session_calls) == (1 if allow_query_token else 0)
+
+
+@pytest.mark.skipif(
+    not _aioquic_available(),
+    reason="aioquic not installed ([webtransport] extra)",
+)
+def test_connect_malformed_path_is_rejected_without_protocol_crash() -> None:
+    from aioquic.h3.events import HeadersReceived
+
+    proto, h3, on_session_calls = _connect_protocol(None)
+    proto._handle_h3_event(  # noqa: SLF001
+        HeadersReceived(
+            headers=[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"webtransport"),
+                (b":path", b"//[malformed"),
+            ],
+            stream_id=0,
+            stream_ended=False,
+        )
+    )
+
+    assert dict(h3.sent[0][1]).get(b":status") == b"400"
+    assert on_session_calls == []
 
 
 @pytest.mark.skipif(

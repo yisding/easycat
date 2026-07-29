@@ -62,6 +62,18 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
+Local microphone/speaker modes also need the PortAudio runtime. Install it
+before the Python extra on Linux or macOS:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install -y libportaudio2
+
+# macOS
+brew install portaudio
+```
+
 EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
@@ -149,7 +161,8 @@ uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + NumPy (LocalTransport and local audio): `uv sync --extra local --group dev`
+- sounddevice + NumPy (LocalTransport and local audio buffers; requires the
+  PortAudio runtime above): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
@@ -209,8 +222,9 @@ easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat serve            # serve the browser voice playground on localhost
 easycat plan             # show the provider/capability plan for a manifest profile
 easycat plan --json      # emit the machine-readable provider/capability plan
-easycat docs             # show docs for learning, maintenance, validation, operations
-easycat docs --audience learners # filter docs by reader audience or broad role
+easycat docs             # list route labels and available audience filters
+easycat docs --verbose   # expand every route with descriptions and command hints
+easycat docs --audience learners # expand routes for one reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat docs --audience app-builders # filter docs to scaffold and app-building routes

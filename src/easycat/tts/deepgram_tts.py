@@ -32,7 +32,7 @@ _FLUSH_RATE_LIMITED = "__flush_rate_limited__"
 class DeepgramTTSConfig:
     """Configuration for the Deepgram TTS provider."""
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "aura-asteria-en"
     encoding: str = "linear16"
     sample_rate: int = 24000
