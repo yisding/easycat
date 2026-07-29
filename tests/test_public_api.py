@@ -193,7 +193,8 @@ AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
     ),
     "RemoteResponsesAPIBridge": (
         "(base_url: 'str', model: 'str', *, api_key: 'str | None' = None, "
-        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None) -> 'None'"
+        "timeout: 'float' = 120.0, metadata: 'dict[str, Any] | None' = None, "
+        "reasoning_effort: 'str | None' = None) -> 'None'"
     ),
 }
 
