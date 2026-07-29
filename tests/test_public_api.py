@@ -96,6 +96,7 @@ PUBLIC_API_SNAPSHOT = (
     "auto_adapt_agent",
     "available_stt_providers",
     "available_tts_providers",
+    "available_vad_providers",
     "create_noise_reducer",
     "create_session",
     "create_stt_provider",
@@ -106,6 +107,7 @@ PUBLIC_API_SNAPSHOT = (
     "export_debug_bundle",
     "register_stt_provider",
     "register_tts_provider",
+    "register_vad_provider",
     "require_env",
     "run",
     "run_webrtc_config_server",
@@ -438,12 +440,14 @@ def test_documented_factory_surface_is_importable() -> None:
         create_stt_provider,
         create_tts_provider,
         create_vad,
+        register_vad_provider,
     )
 
     assert create_session.__name__ == "create_session"
     assert create_stt_provider.__name__ == "create_stt_provider"
     assert create_tts_provider.__name__ == "create_tts_provider"
     assert create_vad.__name__ == "create_vad"
+    assert register_vad_provider.__name__ == "register_vad_provider"
     assert create_noise_reducer.__name__ == "create_noise_reducer"
     assert STTProviderConfig.__name__ == "STTProviderConfig"
     assert TTSProviderConfig.__name__ == "TTSProviderConfig"

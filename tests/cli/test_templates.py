@@ -380,6 +380,25 @@ def test_scaffold_dependency_floor_tracks_project_version() -> None:
     assert _easycat_version_floor() == pyproject["project"]["version"]
 
 
+def test_provider_template_registers_and_selects_named_vad() -> None:
+    cfg = InitConfig(template="provider")
+    mapping = _substitutions(cfg, project_name="demo")
+    template = _template_dir("provider")
+    pyproject = tomllib.loads(
+        _render_text((template / "pyproject.toml").read_text(encoding="utf-8"), mapping)
+    )
+    custom_vad = (template / "custom_vad.py").read_text(encoding="utf-8")
+    agent = (template / "agent.py").read_text(encoding="utf-8")
+
+    assert pyproject["project"]["entry-points"]["easycat.vad_providers"] == {
+        "energy": "custom_vad:register"
+    }
+    assert pyproject["build-system"]["build-backend"] == "setuptools.build_meta"
+    assert pyproject["tool"]["setuptools"]["py-modules"] == ["custom_vad"]
+    assert "register_vad_provider(" in custom_vad
+    assert 'vad="energy"' in agent
+
+
 def _template_dir(name: str) -> Path:
     return _templates_root() / name
 

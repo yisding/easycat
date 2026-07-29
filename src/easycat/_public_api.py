@@ -48,7 +48,13 @@ _register("easycat.turn_manager", "TurnManagerConfig", "TurnMode")
 _register("easycat.integrations.agents", "auto_adapt_agent")
 
 # Pluggable audio backends.
-_register("easycat.vad", "VADConfig", "create_vad")
+_register(
+    "easycat.vad",
+    "VADConfig",
+    "available_vad_providers",
+    "create_vad",
+    "register_vad_provider",
+)
 _register("easycat.noise_reduction", "NoiseReducerConfig", "create_noise_reducer")
 
 # Provider factory functions and explicit config types.

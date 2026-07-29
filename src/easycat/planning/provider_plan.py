@@ -14,9 +14,12 @@ Metadata sourcing (per the M6b spec):
   it (``"provider/model"``), but WITHOUT calling ``parse_string`` (which reads the
   env, raises ``EASYCAT_E203``, and constructs a config — all side effects the
   planner must avoid).
-* **vad / transport / agent / noise_reducer / echo_canceller** — NET-NEW
-  declarative metadata from :mod:`easycat.planning.transport_registry`. There is
-  no catalog for these five roles.
+* **vad / noise_reducer / echo_canceller** — registered third-party providers
+  reuse :class:`~easycat._provider_catalog.ProviderCatalog`; built-in fallback
+  chains retain their declarative metadata in
+  :mod:`easycat.planning.transport_registry`.
+* **transport / agent** — declarative metadata from
+  :mod:`easycat.planning.transport_registry`.
 
 Missing-env detection reads the env mapping directly (no provider construction).
 Missing-extra detection uses :func:`importlib.util.find_spec` on the extra's
@@ -153,7 +156,7 @@ _AUTO_VAD_PROBE_MODULES: tuple[str, ...] = ("onnxruntime", "ten_vad", "krisp_aud
 _AUTO_VAD_INSTALL_EXTRA = "silero-vad"
 
 
-# ── STT / TTS catalog resolution ─────────────────────────────────────
+# ── Catalog resolution ───────────────────────────────────────────────
 
 
 def _split_shortcut(spec: str) -> tuple[str, str | None]:
@@ -168,7 +171,7 @@ def _select_catalog_role(
     *,
     catalog: Any,
 ) -> ProviderSelection:
-    """Resolve an stt/tts role from the catalog WITHOUT instantiating it.
+    """Resolve a provider role from the catalog WITHOUT instantiating it.
 
     ``spec`` is the value on the config: a shortcut string, a concrete config
     instance, or ``None``. The provider name, config-type, extra, and required
@@ -205,7 +208,7 @@ def _select_catalog_role(
     )
 
 
-# ── Non-catalog role resolution ──────────────────────────────────────
+# ── Built-in and injected role resolution ────────────────────────────
 
 
 def _backend_selection(
@@ -241,7 +244,21 @@ def _select_transport(transport: Any) -> ProviderSelection:
     return _backend_selection("transport", shortcut, backend)
 
 
-def _select_vad(vad: Any) -> ProviderSelection:
+def _injected_selection(role: Role, provider: Any) -> ProviderSelection:
+    """Describe a live injected provider without pretending it is a built-in."""
+    provider_type = type(provider).__name__
+    return ProviderSelection(
+        role=role,
+        provider=provider_type,
+        model=None,
+        config_type=provider_type,
+        extra=None,
+        required_env=None,
+        capabilities=frozenset({"injected"}),
+    )
+
+
+def _select_vad(vad: Any, *, catalog: Any) -> ProviderSelection:
     """Resolve the vad role from a config value (string, VADConfig, or instance).
 
     An UNKNOWN backend shortcut RAISES rather than silently falling back to the
@@ -253,15 +270,32 @@ def _select_vad(vad: Any) -> ProviderSelection:
     parity contract. The readiness path catches this and renders a structured
     not-ready response (see ``VoiceServer._manifest_readiness``).
     """
+    catalog.discover()
+    if catalog.is_config_instance(vad):
+        return _select_catalog_role("vad", vad, catalog=catalog)
+    if (
+        vad is not None
+        and not isinstance(vad, str)
+        and callable(getattr(vad, "process", None))
+        and callable(getattr(vad, "configure", None))
+    ):
+        return _injected_selection("vad", vad)
+
     backend_name = DEFAULT_VAD
     if isinstance(vad, str):
-        backend_name = vad
+        provider, _model = _split_shortcut(vad)
+        if provider in catalog.providers:
+            return _select_catalog_role("vad", vad, catalog=catalog)
+        backend_name = provider
     elif vad is not None and hasattr(vad, "backend"):
         backend_name = vad.backend
     backend = VAD_BACKENDS.get(backend_name)
     if backend is None:
-        allowed = ", ".join(sorted(VAD_BACKENDS))
-        raise ValueError(f"Unknown VAD backend {backend_name!r}. Expected one of: {allowed}.")
+        allowed = ", ".join(sorted(set(VAD_BACKENDS) | set(catalog.providers)))
+        raise ValueError(
+            f"Unknown VAD backend {backend_name!r} or registered provider. "
+            f"Expected one of: {allowed}."
+        )
     selection = _backend_selection("vad", backend_name, backend)
     if backend_name == "auto":
         # ``auto`` is satisfiable by ANY backend in the create_vad union, so it
@@ -275,7 +309,7 @@ def _select_vad(vad: Any) -> ProviderSelection:
     return selection
 
 
-def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
+def _select_noise_reducer(config: EasyConfig, *, catalog: Any) -> ProviderSelection:
     enabled = bool(config.enable_noise_reduction or config.noise_reduction is not None)
     if not enabled:
         return ProviderSelection(
@@ -291,7 +325,16 @@ def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
     fallback_policy = "passthrough"
     cfg = config.noise_reduction
     if cfg is not None:
-        if hasattr(cfg, "backend"):
+        if catalog.is_config_instance(cfg):
+            return _select_catalog_role("noise_reducer", cfg, catalog=catalog)
+        if isinstance(cfg, str):
+            provider, _model = _split_shortcut(cfg)
+            if provider in catalog.providers:
+                return _select_catalog_role("noise_reducer", cfg, catalog=catalog)
+            backend_name = provider
+        elif callable(getattr(cfg, "process", None)):
+            return _injected_selection("noise_reducer", cfg)
+        elif hasattr(cfg, "backend"):
             backend_name = cfg.backend
         fallback_policy = str(getattr(cfg, "fallback_policy", "passthrough"))
     # An UNKNOWN backend RAISES rather than silently falling back to the default
@@ -348,8 +391,20 @@ def _echo_canceller_selection(*, enabled: bool, fallback_policy: str) -> Provide
     )
 
 
-def _select_echo_canceller(config: EasyConfig) -> ProviderSelection:
+def _select_echo_canceller(config: EasyConfig, *, catalog: Any) -> ProviderSelection:
     cfg = config.echo_cancellation
+    if catalog.is_config_instance(cfg):
+        return _select_catalog_role("echo_canceller", cfg, catalog=catalog)
+    if isinstance(cfg, str):
+        provider, _model = _split_shortcut(cfg)
+        if provider in catalog.providers:
+            return _select_catalog_role("echo_canceller", cfg, catalog=catalog)
+    if (
+        cfg is not None
+        and callable(getattr(cfg, "process", None))
+        and callable(getattr(cfg, "feed_reference", None))
+    ):
+        return _injected_selection("echo_canceller", cfg)
     enabled = bool(getattr(cfg, "enabled", False))
     fallback_policy = str(getattr(cfg, "fallback_policy", "passthrough"))
     return _echo_canceller_selection(enabled=enabled, fallback_policy=fallback_policy)
@@ -404,21 +459,33 @@ def build_provider_plan(
     """
     env = dict(environ) if environ is not None else dict(os.environ)
 
+    from easycat.echo_cancellation import _CATALOG as echo_canceller_catalog
+    from easycat.noise_reduction import _CATALOG as noise_reducer_catalog
     from easycat.stt.factory import _CATALOG as stt_catalog
     from easycat.tts.factory import _CATALOG as tts_catalog
+    from easycat.vad.factory import _CATALOG as vad_catalog
 
     selected: dict[str, ProviderSelection] = {}
     if _is_voice_profile(config):
-        selected = _select_from_profile(config, stt_catalog=stt_catalog, tts_catalog=tts_catalog)
+        selected = _select_from_profile(
+            config,
+            stt_catalog=stt_catalog,
+            tts_catalog=tts_catalog,
+            vad_catalog=vad_catalog,
+        )
     else:
         easy_config: EasyConfig = config  # type: ignore[assignment]
         selected["stt"] = _select_catalog_role("stt", easy_config.stt, catalog=stt_catalog)
         selected["tts"] = _select_catalog_role("tts", easy_config.tts, catalog=tts_catalog)
-        selected["vad"] = _select_vad(easy_config.vad)
+        selected["vad"] = _select_vad(easy_config.vad, catalog=vad_catalog)
         selected["transport"] = _select_transport(easy_config.transport)
         selected["agent"] = _select_agent(easy_config)
-        selected["noise_reducer"] = _select_noise_reducer(easy_config)
-        selected["echo_canceller"] = _select_echo_canceller(easy_config)
+        selected["noise_reducer"] = _select_noise_reducer(
+            easy_config, catalog=noise_reducer_catalog
+        )
+        selected["echo_canceller"] = _select_echo_canceller(
+            easy_config, catalog=echo_canceller_catalog
+        )
 
     missing_env: set[str] = set()
     missing_extras: set[str] = set()
@@ -478,7 +545,11 @@ def _select_catalog_string(
 
 
 def _select_from_profile(
-    profile: VoiceProfile, *, stt_catalog: Any, tts_catalog: Any
+    profile: VoiceProfile,
+    *,
+    stt_catalog: Any,
+    tts_catalog: Any,
+    vad_catalog: Any,
 ) -> dict[str, ProviderSelection]:
     """Resolve all seven roles DIRECTLY from a manifest ``VoiceProfile``.
 
@@ -495,7 +566,7 @@ def _select_from_profile(
     selected["tts"] = _select_catalog_string(
         "tts", profile.tts, catalog=tts_catalog, default_provider="openai"
     )
-    selected["vad"] = _select_vad(profile.vad)
+    selected["vad"] = _select_vad(profile.vad, catalog=vad_catalog)
 
     # Transport: map the manifest shortcut to its backend.
     transport_backend = TRANSPORT_BACKENDS.get(profile.transport)

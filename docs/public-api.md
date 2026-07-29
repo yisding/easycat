@@ -242,12 +242,14 @@ from easycat.integrations.agents import PydanticAIBridge
 - `VADConfig`
 - `available_stt_providers`
 - `available_tts_providers`
+- `available_vad_providers`
 - `create_noise_reducer`
 - `create_stt_provider`
 - `create_tts_provider`
 - `create_vad`
 - `register_stt_provider`
 - `register_tts_provider`
+- `register_vad_provider`
 
 ### Events
 

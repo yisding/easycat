@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
+from easycat._provider_catalog import ProviderCatalog
 from easycat.providers import VADProvider
 from easycat.vad._base import (
     _DEFAULT_VAD_SENSITIVITY,
+    _VALID_VAD_BACKENDS,
     VADBackend,
     _validate_non_negative_ms,
     _validate_positive_int,
@@ -24,6 +26,18 @@ from easycat.vad.ten import _TEN_DEFAULT_SENSITIVITY, TenVAD
 logger = logging.getLogger(__name__)
 
 _ConcreteVADBackend: TypeAlias = Literal["silero", "funasr", "ten", "krisp"]
+VAD_PROVIDER_ENTRY_POINT_GROUP = "easycat.vad_providers"
+
+# Built-ins continue to use the optimized fallback chain below. The catalog is
+# intentionally extension-only because every built-in shares ``VADConfig``;
+# registering that one config type four times would make reverse dispatch
+# ambiguous. Third-party providers use their own config type and therefore map
+# cleanly through the same open catalog as STT/TTS.
+_CATALOG = ProviderCatalog(
+    specs={},
+    kind="VAD",
+    entry_point_group=VAD_PROVIDER_ENTRY_POINT_GROUP,
+)
 
 
 @dataclass(slots=True)
@@ -109,7 +123,55 @@ _BACKEND_BY_NAME: dict[_ConcreteVADBackend, _VADBackendSpec] = {
 }
 
 
-def create_vad(config: VADConfig | None = None) -> VADProvider:
+def register_vad_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str | None = None,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
+) -> None:
+    """Register a third-party VAD provider and its discovery metadata."""
+    normalized = name.strip().lower() if isinstance(name, str) else ""
+    if normalized in _VALID_VAD_BACKENDS:
+        raise ValueError(f"VAD provider name {normalized!r} is reserved by a built-in backend.")
+    _CATALOG.register(
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
+    )
+
+
+def available_vad_providers() -> list[str]:
+    """Return every valid built-in or registered ``vad=`` provider name."""
+    return sorted(set(_VALID_VAD_BACKENDS) | set(_CATALOG.available_names()))
+
+
+def is_vad_config(value: object) -> bool:
+    """True when ``value`` is a built-in or registered VAD config."""
+    return isinstance(value, VADConfig) or _CATALOG.is_config_instance(value)
+
+
+def parse_vad_string(spec: str) -> Any:
+    """Parse a built-in or registered ``provider/model`` VAD shortcut."""
+    provider, separator, model = spec.partition("/")
+    normalized = provider.strip().lower()
+    if normalized in _VALID_VAD_BACKENDS:
+        if separator and model.strip():
+            raise ValueError(f"Built-in VAD backend {normalized!r} does not accept a model.")
+        return VADConfig(backend=normalized)
+    return _CATALOG.parse_string(spec)
+
+
+def create_vad(config: Any = None) -> VADProvider:
     """Create the best available VAD provider.
 
     Selection order:
@@ -125,7 +187,23 @@ def create_vad(config: VADConfig | None = None) -> VADProvider:
 
     Returns an object satisfying the VADProvider protocol.
     """
+    if isinstance(config, str):
+        config = parse_vad_string(config)
+    if (
+        config is not None
+        and callable(getattr(config, "process", None))
+        and callable(getattr(config, "configure", None))
+    ):
+        return config
+    if _CATALOG.is_config_instance(config):
+        return _CATALOG.create_from_config(config, event_bus=None)
+
     cfg = config if config is not None else VADConfig()
+    if not isinstance(cfg, VADConfig):
+        raise ValueError(
+            f"Unsupported VAD configuration type: {type(cfg).__name__!r}. "
+            "Pass VADConfig, a registered VAD config, or a VAD provider instance."
+        )
     backend = _validate_vad_backend(cfg.backend)
     if backend == "auto":
         return _create_first_available(cfg)

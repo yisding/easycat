@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import asyncio
 
-from easycat import PCM16_MONO_16K, AudioChunk, VADStartSpeaking, VADStopSpeaking
+from easycat import (
+    PCM16_MONO_16K,
+    AudioChunk,
+    VADStartSpeaking,
+    VADStopSpeaking,
+    available_vad_providers,
+    create_vad,
+)
 from easycat.testing import VADProviderContractSuite
 
-from custom_vad import EnergyVAD, EnergyVADConfig
+from custom_vad import EnergyVAD, EnergyVADConfig, register
 
 LOUD = AudioChunk(data=b"\xe8\x03" * 160, format=PCM16_MONO_16K)  # 1000-amplitude PCM16
 QUIET = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)
@@ -27,6 +34,12 @@ def events_for(vad: EnergyVAD, chunk: AudioChunk) -> list[object]:
 
 class TestEnergyVADContract(VADProviderContractSuite):
     provider_factory = EnergyVAD
+
+
+def test_registers_named_vad_shortcut() -> None:
+    register()
+    assert "energy" in available_vad_providers()
+    assert isinstance(create_vad("energy"), EnergyVAD)
 
 
 def test_version_info_reports_journal_fields() -> None:

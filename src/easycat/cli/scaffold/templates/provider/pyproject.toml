@@ -7,6 +7,16 @@ dependencies = [
     "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
 ]
 
+[project.entry-points."easycat.vad_providers"]
+energy = "custom_vad:register"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["custom_vad"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.9",

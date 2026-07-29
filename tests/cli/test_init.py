@@ -13,7 +13,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from easycat._provider_catalog import stt_tts_catalogs
+from easycat._provider_registry import stt_tts_catalogs
 from easycat.cli._app import app
 from easycat.cli.scaffold import init as init_module
 from easycat.cli.scaffold._schema import available_templates
