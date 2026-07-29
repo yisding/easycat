@@ -188,11 +188,11 @@
 +if TYPE_CHECKING:
 +    from openai import AsyncOpenAI
 +
-+MODEL = "gpt-4o-mini"
++MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,115 +76,189 @@
+@@ -75,115 +76,192 @@
      )
 
 
@@ -311,7 +311,10 @@
 +            return
 +
 +        stream = await self._client.chat.completions.create(
-+            model=MODEL, messages=self._history, stream=True
++            model=MODEL,
++            reasoning_effort="none",
++            messages=self._history,
++            stream=True,
          )
 -    )
 -
@@ -630,7 +633,10 @@ class MyWorkflow:
             return
 
         stream = await self._client.chat.completions.create(
-            model=MODEL, messages=self._history, stream=True
+            model=MODEL,
+            reasoning_effort="none",
+            messages=self._history,
+            stream=True,
         )
         full = ""
         try:
