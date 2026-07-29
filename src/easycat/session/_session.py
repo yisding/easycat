@@ -1333,8 +1333,7 @@ class Session:
                         pass
                 else:
                     logger.warning(
-                        "Graceful Session.stop() ignored cancellation; "
-                        "continuing force teardown"
+                        "Graceful Session.stop() ignored cancellation; continuing force teardown"
                     )
 
             if self._closed:
