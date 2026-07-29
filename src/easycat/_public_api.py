@@ -48,7 +48,13 @@ _register("easycat.turn_manager", "TurnManagerConfig", "TurnMode")
 _register("easycat.integrations.agents", "auto_adapt_agent")
 
 # Pluggable audio backends.
-_register("easycat.vad", "VADConfig", "create_vad")
+_register(
+    "easycat.vad",
+    "VADConfig",
+    "available_vad_providers",
+    "create_vad",
+    "register_vad_provider",
+)
 _register("easycat.noise_reduction", "NoiseReducerConfig", "create_noise_reducer")
 
 # Provider factory functions and explicit config types.
@@ -80,6 +86,7 @@ _register(
     "easycat.events",
     "AgentDelta",
     "AgentFinal",
+    "AgentRequestStarted",
     "AudioIn",
     "AudioOut",
     "BotStartedSpeaking",
@@ -87,27 +94,51 @@ _register(
     "CallAnswered",
     "CallEnded",
     "CallFailed",
+    "CallInitiated",
+    "CallRinging",
+    "CallScreening",
+    "CallStateChanged",
+    "DTMF",
+    "DTMFAggregated",
     "Error",
     "ErrorStage",
     "Event",
     "EventBus",
+    "IVRAction",
     "Interruption",
+    "PlaybackMarkAck",
+    "ReconnectAttempt",
+    "ReconnectFailure",
+    "ReconnectSuccess",
+    "ScreeningResponse",
+    "ScreeningTimedOut",
+    "SessionActionCompleted",
+    "SessionActionFailed",
+    "SessionActionRequested",
+    "SessionActionStarted",
     "STTFinal",
     "STTPartial",
     "SupervisorListenerAttached",
     "SupervisorListenerDetached",
     "TTSAudio",
     "TTSMarkers",
+    "ToolCallDelta",
+    "ToolCallResult",
+    "ToolCallStarted",
+    "TransportAudioDelivered",
+    "TransportDegraded",
     "TurnEnded",
     "TurnStarted",
     "VADStartSpeaking",
     "VADStopSpeaking",
+    "VoicemailDetected",
 )
 
 # Stable provider protocols.
 _register(
     "easycat.providers",
     "EchoCanceller",
+    "EventBusBindable",
     "NoiseReducer",
     "STTProvider",
     "Transport",

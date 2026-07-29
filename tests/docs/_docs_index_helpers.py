@@ -11,9 +11,9 @@ from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
     _docs_entries,
 )
+from scripts._justfile import just_guard_recipes
 from tests._command_hints import (
     command_hint_problems as _shared_command_hint_problems,
 )
@@ -46,7 +46,7 @@ EXAMPLE_README_ROW_RE = re.compile(
 
 ONBOARDING_GUARD_COMMANDS = _DOCS_ONBOARDING_GUARD_COMMANDS
 
-RAW_ONBOARDING_GUARD_COMMANDS = _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
+RAW_ONBOARDING_GUARD_COMMANDS = tuple(guard.command for guard in just_guard_recipes(REPO_ROOT))
 
 DOCS_MAP_COMMANDS = ("uv run easycat docs", "uv run easycat docs --json")
 

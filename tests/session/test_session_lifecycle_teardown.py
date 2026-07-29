@@ -14,6 +14,7 @@ from easycat.cancel import CancelToken
 from easycat.events import (
     Interruption,
     TTSAudio,
+    VADStartSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
@@ -68,7 +69,7 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     # ``warmup`` hook to forward to.
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
-    assert warmed == ["stt", "tts", "agent", "transport"]
+    assert warmed == ["stt", "tts", "audio_resampling", "agent", "transport"]
 
 
 @pytest.mark.asyncio
@@ -112,6 +113,44 @@ async def test_stop_unregisters_armed_emergency_export():
         _factory._EXPORT_PREVIOUS_EXCEPTHOOK = saved_previous
         _factory._EXPORT_EXCEPTHOOK = saved_hook
         sys.excepthook = saved_excepthook
+
+
+@pytest.mark.asyncio
+async def test_force_stop_preempts_hung_graceful_stop() -> None:
+    class HungOnceDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.disconnect_started = asyncio.Event()
+            self.disconnect_cancelled = asyncio.Event()
+            self.disconnect_calls = 0
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            if self.disconnect_calls != 1:
+                return
+            self.disconnect_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.disconnect_cancelled.set()
+                raise
+
+    transport = HungOnceDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+
+    graceful = asyncio.create_task(session.stop())
+    await asyncio.wait_for(transport.disconnect_started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await graceful
+    assert transport.disconnect_cancelled.is_set()
+    assert transport.disconnect_calls == 2
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._stop_task is None
 
 
 @pytest.mark.asyncio
@@ -452,6 +491,136 @@ async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
     assert len(cause_records) == 1
     assert cause_records[0].data["cause"] == "barge_in"
     assert cause_records[0].data["signal_id"] == next(iter(signal_ids))
+
+
+@pytest.mark.asyncio
+async def test_runtime_barge_in_returns_after_cutoff_before_slow_handlers_finish():
+    class CutoffTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleared = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.cleared.set()
+
+    transport = CutoffTransport()
+    session = Session(_full_config(transport=transport))
+    turn = TurnContext("test-turn-fast-cutoff", CancelToken())
+    session._turn = turn
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+    interruptions: list[Interruption] = []
+
+    async def slow_handler(event: Interruption) -> None:
+        interruptions.append(event)
+        handler_started.set()
+        await handler_release.wait()
+
+    session.event_bus.subscribe(Interruption, slow_handler)
+
+    result = await asyncio.wait_for(session._cancel.for_barge_in(), timeout=0.25)
+
+    assert result is True
+    assert transport.cleared.is_set()
+    assert turn.cancel_token.is_cancelled
+    await asyncio.wait_for(handler_started.wait(), timeout=0.25)
+    assert session._runtime_scope.tasks("barge_in_cleanup")
+    assert interruptions[0].turn_id == turn.id
+
+    handler_release.set()
+    await session._runtime_scope.drain("barge_in_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_drains_barge_in_cleanup_before_provider_teardown():
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+    session._turn = TurnContext("stop-during-barge-in", CancelToken())
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+    handler_finished = asyncio.Event()
+
+    async def slow_handler(_event: Interruption) -> None:
+        handler_started.set()
+        await handler_release.wait()
+        assert not transport.disconnected
+        handler_finished.set()
+
+    session.event_bus.subscribe(Interruption, slow_handler)
+    assert await session._cancel.for_barge_in() is True
+    await asyncio.wait_for(handler_started.wait(), timeout=0.25)
+
+    stopping = asyncio.create_task(session.stop())
+    await asyncio.sleep(0)
+    assert not stopping.done()
+    assert not transport.disconnected
+
+    handler_release.set()
+    await asyncio.wait_for(stopping, timeout=1)
+
+    assert handler_finished.is_set()
+    assert transport.disconnected
+    assert not session._runtime_scope.tasks("barge_in_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_vad_barge_in_starts_successor_while_old_notifications_drain():
+    session = Session(_full_config())
+    old_turn = TurnContext("old-turn", CancelToken())
+    session._turn = old_turn
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+
+    async def slow_handler(_event: Interruption) -> None:
+        handler_started.set()
+        await handler_release.wait()
+
+    session.event_bus.subscribe(Interruption, slow_handler)
+
+    await asyncio.wait_for(
+        session._turn_manager.on_vad_event(VADStartSpeaking()),
+        timeout=0.25,
+    )
+
+    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+    assert old_turn.cancel_token.is_cancelled
+    await asyncio.wait_for(handler_started.wait(), timeout=0.25)
+
+    handler_release.set()
+    await session._runtime_scope.drain("barge_in_cleanup")
+
+
+@pytest.mark.asyncio
+async def test_runtime_barge_in_bounds_a_stuck_transport_clear(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class StuckClearTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clear_started = asyncio.Event()
+            self.clear_cancelled = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.clear_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.clear_cancelled.set()
+                raise
+
+    monkeypatch.setattr("easycat.session._session._BARGE_IN_CUTOFF_TIMEOUT_S", 0.01)
+    transport = StuckClearTransport()
+    session = Session(_full_config(transport=transport))
+    session._turn = TurnContext("stuck-clear-turn", CancelToken())
+
+    result = await asyncio.wait_for(session._cancel.for_barge_in(), timeout=0.1)
+
+    assert result is True
+    assert transport.clear_started.is_set()
+    assert transport.clear_cancelled.is_set()
+    await session._runtime_scope.drain("barge_in_cleanup")
 
 
 @pytest.mark.asyncio

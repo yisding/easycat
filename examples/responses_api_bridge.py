@@ -9,7 +9,7 @@ local bridge.
 Setup: export OPENAI_API_KEY=...                       # for STT/TTS
        export EASYCAT_REMOTE_AGENT_BASE_URL=https://api.openai.com
        export EASYCAT_REMOTE_AGENT_API_KEY=...         # bearer token
-       export EASYCAT_REMOTE_AGENT_MODEL=gpt-4o-mini
+       export EASYCAT_REMOTE_AGENT_MODEL=gpt-5.6-luna
        uv sync --extra quickstart --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
@@ -28,6 +28,11 @@ model = require_env("EASYCAT_REMOTE_AGENT_MODEL")
 
 run(
     EasyConfig.mic(
-        agent=RemoteResponsesAPIBridge(base_url=base_url, model=model, api_key=remote_key),
+        agent=RemoteResponsesAPIBridge(
+            base_url=base_url,
+            model=model,
+            api_key=remote_key,
+            reasoning_effort="none",
+        ),
     )
 )

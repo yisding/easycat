@@ -623,6 +623,24 @@ class VoiceApp:
         public_twiml_url = kwargs.pop("public_twiml_url", None) or os.environ.get(
             "TWILIO_PUBLIC_TWIML_URL"
         )
+        drain_timeout_s = kwargs.pop(
+            "drain_timeout_s",
+            float(
+                os.environ.get(
+                    "TWILIO_DRAIN_TIMEOUT_S",
+                    TwilioVoiceServerConfig.drain_timeout_s,
+                )
+            ),
+        )
+        force_shutdown_timeout_s = kwargs.pop(
+            "force_shutdown_timeout_s",
+            float(
+                os.environ.get(
+                    "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+                    TwilioVoiceServerConfig.force_shutdown_timeout_s,
+                )
+            ),
+        )
         self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
             host=host,
@@ -637,6 +655,8 @@ class VoiceApp:
             max_sessions=max_sessions,
             start_timeout_s=start_timeout_s,
             public_twiml_url=public_twiml_url,
+            drain_timeout_s=drain_timeout_s,
+            force_shutdown_timeout_s=force_shutdown_timeout_s,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

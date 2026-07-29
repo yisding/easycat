@@ -21,11 +21,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from easycat.echo_cancellation import EchoCancellationConfig
+from easycat.echo_cancellation import (
+    EchoCancellationConfig,
+    is_echo_canceller_config,
+    parse_echo_canceller_string,
+)
 from easycat.errors import EASYCAT_E203
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
-from easycat.noise_reduction import NoiseReducerConfig
+from easycat.noise_reduction import NoiseReducerConfig, parse_noise_reducer_string
 from easycat.providers import (
     EchoCanceller,
     NoiseReducer,
@@ -59,8 +63,8 @@ from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
-from easycat.vad import VADConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
+from easycat.vad import VADConfig, parse_vad_string
 
 if TYPE_CHECKING:
     # Annotation-only references to telephony runtime types. Kept out of the
@@ -72,6 +76,8 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import TwilioSessionActionConfig
 
 logger = logging.getLogger("easycat.config")
+
+_MIN_VAD_PRE_ROLL_MARGIN_MS = 150
 
 
 # ── Log-level helpers ───────────────────────────────────────────────
@@ -112,6 +118,7 @@ class EasyConfigError(ValueError):
 
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
+_VALID_HANDLER_ERROR_POLICY = {"continue", "raise"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
@@ -162,9 +169,24 @@ def _validate_journal_redaction(policy: str) -> None:
         )
 
 
+def _validate_event_dispatch(
+    slow_handler_threshold_s: float | None,
+    handler_error_policy: str,
+) -> None:
+    if slow_handler_threshold_s is not None:
+        _require_non_negative("slow_handler_threshold_s", slow_handler_threshold_s)
+    if handler_error_policy not in _VALID_HANDLER_ERROR_POLICY:
+        raise ValueError(
+            f"Invalid handler_error_policy={handler_error_policy!r}. "
+            f"Must be one of {sorted(_VALID_HANDLER_ERROR_POLICY)}."
+        )
+
+
 def _validate_common(
     *,
     debug: str,
+    slow_handler_threshold_s: float | None,
+    handler_error_policy: str,
     journal_backend: str,
     journal_capacity: int,
     journal_redaction: str,
@@ -178,6 +200,7 @@ def _validate_common(
     """Validate the shared fields used by both session factories."""
     if debug not in _VALID_DEBUG:
         raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    _validate_event_dispatch(slow_handler_threshold_s, handler_error_policy)
     if journal_backend not in _VALID_JOURNAL_BACKEND:
         raise ValueError(
             f"Invalid journal_backend={journal_backend!r}. "
@@ -229,22 +252,13 @@ def _stt_uses_native_endpointing(stt: Any) -> bool:
     neither smart-turn nor the Silero VAD it pulls in (which would otherwise
     double-endpoint and produce duplicate FINAL transcripts).
 
-    Covers:
-      - Deepgram **Flux** (native end-of-turn signal),
-      - Cartesia **ink-2** (native semantic turn detection), and
-      - ElevenLabs realtime with the built-in **VAD** commit strategy.
+    The answer comes from the open STT provider catalog, so third-party
+    providers can declare the same ``native_endpointing`` capability as the
+    built-ins instead of falling through a closed config-type check.
     """
-    from easycat.stt.cartesia_provider import CartesiaSTTConfig
-    from easycat.stt.deepgram_provider import DeepgramSTTConfig
-    from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
+    from easycat.stt.factory import _CATALOG
 
-    if isinstance(stt, DeepgramSTTConfig):
-        return stt.is_flux
-    if isinstance(stt, CartesiaSTTConfig):
-        return stt.resolved_model == "ink-2"
-    if isinstance(stt, ElevenLabsSTTConfig):
-        return stt.mode == "realtime" and stt.realtime_commit_strategy == "vad"
-    return False
+    return "native_endpointing" in _CATALOG.capabilities_for_config(stt)
 
 
 def _normalize_smart_turn_config(
@@ -503,7 +517,7 @@ class _AgentSessionConfig:
 
     agent: Any = None
     agent_model: str | None = None
-    remote_agent_api_key: str | None = None
+    remote_agent_api_key: str | None = field(default=None, repr=False)
     agent_runner: AgentRunnerConfig | None = None
     # When True (default), a plain ``async run(text) -> str`` agent is
     # auto-wrapped in :class:`AgentRunner` so it gets timeout, history,
@@ -515,6 +529,8 @@ class _AgentSessionConfig:
     wrap_agent: bool = True
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
+    slow_handler_threshold_s: float | None = 0.005
+    handler_error_policy: Literal["continue", "raise"] = "continue"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_capacity: int = 10_000
     journal_redaction: Literal["secrets", "pii"] = "secrets"
@@ -538,9 +554,12 @@ class EasyConfig(_AgentSessionConfig):
             implement EasyCat's provider Protocols. Leave both unset with
             ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
             OpenAI realtime STT + TTS chain.
-        vad: ``VADConfig`` or a live ``VADProvider``.
-        noise_reduction: ``NoiseReducerConfig`` or a live ``NoiseReducer``.
-        echo_cancellation: ``EchoCancellationConfig`` or a live
+        vad: A built-in/registered shortcut string, ``VADConfig``, registered
+            config, or live ``VADProvider``.
+        noise_reduction: A built-in/registered shortcut string,
+            ``NoiseReducerConfig``, registered config, or live ``NoiseReducer``.
+        echo_cancellation: A built-in/registered shortcut string,
+            ``EchoCancellationConfig``, registered config, or live
             ``EchoCanceller``.
         smart_turn / smart_turn_sensitivity: Optional semantic end-of-turn
             detection.
@@ -552,6 +571,8 @@ class EasyConfig(_AgentSessionConfig):
         debug / journal_backend / journal_capacity / journal_redaction /
         journal_retention:
             Debug-journal settings.
+        slow_handler_threshold_s / handler_error_policy: Inline EventBus
+            diagnostics and failure handling.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -560,12 +581,12 @@ class EasyConfig(_AgentSessionConfig):
             changes are not supported.
     """
 
-    openai_api_key: str | None = None
+    openai_api_key: str | None = field(default=None, repr=False)
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
-    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
-    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
+    vad: VADConfig | VADProvider | str = field(default_factory=VADConfig)
+    noise_reduction: NoiseReducerConfig | NoiseReducer | str | None = None
+    echo_cancellation: EchoCancellationConfig | EchoCanceller | str | None = None
     enable_noise_reduction: bool = False
     enable_echo_cancellation: bool | None = None
     smart_turn: SmartTurnConfig | bool | None = None
@@ -594,6 +615,8 @@ class EasyConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_capacity=self.journal_capacity,
             journal_redaction=self.journal_redaction,
@@ -624,10 +647,7 @@ class EasyConfig(_AgentSessionConfig):
         api_key_overrides = (
             {"OPENAI_API_KEY": self.openai_api_key} if self.openai_api_key else None
         )
-        if isinstance(self.stt, str):
-            self.stt = parse_stt_string(self.stt, api_key_overrides=api_key_overrides)
-        if isinstance(self.tts, str):
-            self.tts = parse_tts_string(self.tts, api_key_overrides=api_key_overrides)
+        self._resolve_provider_shortcuts(api_key_overrides)
 
         if self.openai_api_key:
             if self.stt is None:
@@ -669,6 +689,12 @@ class EasyConfig(_AgentSessionConfig):
                 self.echo_cancellation = replace(
                     self.echo_cancellation, enabled=self.enable_echo_cancellation
                 )
+            elif is_echo_canceller_config(self.echo_cancellation):
+                logger.warning(
+                    "enable_echo_cancellation=%s ignored because a registered "
+                    "echo-canceller config was supplied via echo_cancellation=",
+                    self.enable_echo_cancellation,
+                )
             else:
                 # Pre-built ``EchoCanceller`` instance: the flag cannot be
                 # folded in, so warn on the conflict rather than ignore it.
@@ -679,7 +705,52 @@ class EasyConfig(_AgentSessionConfig):
                 )
         if self.debug in ("light", "full"):
             self._apply_debug_defaults()
+        self._warn_if_vad_pre_roll_is_too_short()
         self._validate()
+
+    def _warn_if_vad_pre_roll_is_too_short(self) -> None:
+        """Surface VAD/pre-roll combinations that can clip utterance onset."""
+        if not isinstance(self.vad, VADConfig) or self.turn_taking.mode != TurnMode.VAD:
+            return
+        smart_turn_enabled = (
+            isinstance(self.smart_turn, SmartTurnConfig) and self.smart_turn.enabled
+        )
+        voicemail_vad_enabled = bool(self.telephony and self.telephony.enable_voicemail_detector)
+        if (
+            _stt_uses_native_endpointing(self.stt)
+            and not smart_turn_enabled
+            and not voicemail_vad_enabled
+        ):
+            # This is the same native-endpointing path that
+            # _should_auto_turn_from_stt_final() uses to disable EasyCat's VAD
+            # stage. Neither pre-roll nor min_speech_duration participates.
+            return
+        required_ms = self.vad.min_speech_duration_ms + _MIN_VAD_PRE_ROLL_MARGIN_MS
+        if self.turn_taking.pre_roll_ms >= required_ms:
+            return
+        logger.warning(
+            "turn_taking.pre_roll_ms=%d is shorter than "
+            "vad.min_speech_duration_ms=%d plus the %d ms onset margin; "
+            "the start of each utterance may be clipped. Increase pre_roll_ms "
+            "to at least %d or lower min_speech_duration_ms.",
+            self.turn_taking.pre_roll_ms,
+            self.vad.min_speech_duration_ms,
+            _MIN_VAD_PRE_ROLL_MARGIN_MS,
+            required_ms,
+        )
+
+    def _resolve_provider_shortcuts(self, api_key_overrides: dict[str, str] | None) -> None:
+        """Resolve every named audio-stage provider before validation/planning."""
+        if isinstance(self.stt, str):
+            self.stt = parse_stt_string(self.stt, api_key_overrides=api_key_overrides)
+        if isinstance(self.tts, str):
+            self.tts = parse_tts_string(self.tts, api_key_overrides=api_key_overrides)
+        if isinstance(self.vad, str):
+            self.vad = parse_vad_string(self.vad)
+        if isinstance(self.noise_reduction, str):
+            self.noise_reduction = parse_noise_reducer_string(self.noise_reduction)
+        if isinstance(self.echo_cancellation, str):
+            self.echo_cancellation = parse_echo_canceller_string(self.echo_cancellation)
 
     def _default_echo_cancellation_for_transport(self) -> EchoCancellationConfig:
         # ``enable_echo_cancellation`` is tri-state: None means "use the
@@ -819,6 +890,8 @@ class TextSessionConfig(_AgentSessionConfig):
     def __post_init__(self) -> None:
         _validate_common(
             debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
             journal_backend=self.journal_backend,
             journal_capacity=self.journal_capacity,
             journal_redaction=self.journal_redaction,
@@ -838,6 +911,8 @@ class TextSessionConfig(_AgentSessionConfig):
         agent: Any = None,
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
+        slow_handler_threshold_s: float | None = 0.005,
+        handler_error_policy: Literal["continue", "raise"] = "continue",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_capacity: int = 10_000,
         journal_redaction: Literal["secrets", "pii"] = "secrets",
@@ -868,6 +943,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "agent": (agent, None),
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
+                "slow_handler_threshold_s": (slow_handler_threshold_s, 0.005),
+                "handler_error_policy": (handler_error_policy, "continue"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_capacity": (journal_capacity, 10_000),
                 "journal_redaction": (journal_redaction, "secrets"),
@@ -895,6 +972,8 @@ class TextSessionConfig(_AgentSessionConfig):
             agent=agent,
             session_id=session_id,
             debug=debug,
+            slow_handler_threshold_s=slow_handler_threshold_s,
+            handler_error_policy=handler_error_policy,
             journal_backend=journal_backend,
             journal_capacity=journal_capacity,
             journal_redaction=journal_redaction,

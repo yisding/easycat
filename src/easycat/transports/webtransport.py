@@ -83,6 +83,15 @@ TLS/QUIC handshake but never sends a valid CONNECT (or targets a wrong
 ``:path`` and gets a 404/503) holds no session resources and is torn down by
 QUIC's ``idle_timeout`` (``_IDLE_TIMEOUT_SEC``); that timeout is the only
 bound on such lingering connections.
+
+Authentication and bind safety
+------------------------------
+The default bind is loopback-only. A non-loopback bind requires
+``auth_token`` unless ``unsafe_allow_no_auth=True`` is set explicitly.
+Token-bearing servers authorize the HTTP/3 CONNECT request before allocating a
+session. ``Authorization: Bearer`` is the default credential path;
+``?token=`` is accepted only with ``allow_query_token=True`` for browser
+clients that cannot set arbitrary CONNECT headers.
 """
 
 from __future__ import annotations
@@ -93,10 +102,12 @@ import logging
 import struct
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
+from urllib.parse import urlsplit
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
+from easycat._net import normalize_auth_token
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
@@ -106,6 +117,7 @@ from easycat.transports._base import (
     _enqueue_inbound_chunk,
     make_version_info,
 )
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports.websocket import _valid_config_sample_rate
 
 if TYPE_CHECKING:
@@ -113,6 +125,8 @@ if TYPE_CHECKING:
     from aioquic.asyncio.server import QuicServer
     from aioquic.h3.connection import H3Connection
     from aioquic.quic.configuration import QuicConfiguration
+
+    from easycat.server.auth import AuthPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -197,13 +211,14 @@ _DEGRADED_REJECTED_STREAM_FLOOD = "rejected_stream_flood"
 _DEGRADED_OUTBOUND_WRITER_CRASHED = "outbound_writer_crashed"
 _DEGRADED_BARGE_IN_RESET_FAILED = "barge_in_reset_failed"
 # Outbound backpressure relies on reading aioquic's private per-stream send
-# buffer (``_quic`` / ``_streams`` / ``sender._buffer``).  If a future aioquic
-# release renames any of these, the probe can no longer measure buffered bytes
-# and the gate silently degrades to a no-op — re-exposing the unbounded-memory
-# failure ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent.  Emitting this
-# (once per session) makes that regression visible in the journal instead of
-# silent.
+# buffer (``_quic`` / ``_streams`` / ``sender._buffer``). Server startup
+# preflights that exact path and refuses to bind when it is incompatible. This
+# degraded event remains as defense in depth for directly-constructed sessions
+# and unexpected runtime mutation.
 _DEGRADED_OUTBOUND_BACKPRESSURE_BLIND = "outbound_backpressure_blind"
+_AIOQUIC_BACKPRESSURE_ACCESS_PATH = (
+    "QuicConnectionProtocol._quic -> QuicConnection._streams -> QuicStream.sender._buffer"
+)
 
 # Signature of the per-session degraded-event emitter injected by
 # :class:`WebTransportConnectionTransport`.  ``fatal`` marks conditions that
@@ -213,6 +228,47 @@ _DegradedEmitter = Callable[..., None]
 # Type alias for the user-supplied per-session handler. Module-private — not
 # part of the public surface.
 _SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
+
+
+class _AioquicBackpressureCompatibilityError(RuntimeError):
+    """Installed aioquic cannot support the bounded WebTransport writer."""
+
+
+def _read_aioquic_send_buffer(
+    quic_protocol: object,
+    stream_id: int,
+) -> tuple[Any | None, str | None]:
+    """Resolve aioquic's private per-stream send buffer.
+
+    The second tuple item is an incompatibility reason. A missing stream is a
+    legitimate lifecycle state and returns ``(None, None)``.
+    """
+    quic = getattr(quic_protocol, "_quic", None)
+    if quic is None:
+        return None, "QuicConnectionProtocol._quic missing"
+    streams = getattr(quic, "_streams", None)
+    if not isinstance(streams, dict):
+        return None, "QuicConnection._streams missing"
+    stream = streams.get(stream_id)
+    if stream is None:
+        return None, None
+    sender = getattr(stream, "sender", None)
+    raw_buffer = getattr(sender, "_buffer", None) if sender is not None else None
+    if raw_buffer is None:
+        return None, "QuicStream.sender._buffer missing"
+    try:
+        len(raw_buffer)
+    except TypeError:
+        return None, "QuicStream.sender._buffer is not sized"
+    return raw_buffer, None
+
+
+def _raise_aioquic_backpressure_incompatible(reason: str) -> NoReturn:
+    raise _AioquicBackpressureCompatibilityError(
+        "Installed aioquic is incompatible with EasyCat's bounded WebTransport "
+        f"writer: {reason}. Required access path: {_AIOQUIC_BACKPRESSURE_ACCESS_PATH}. "
+        "Install a supported aioquic version or upgrade EasyCat before serving traffic."
+    )
 
 
 def _noop_degraded(reason: str, detail: str = "", *, fatal: bool = False) -> None:
@@ -234,9 +290,11 @@ class WebTransportTransportConfig:
     :class:`WebTransportServer`.
     """
 
-    default_echo_cancellation_enabled: ClassVar[bool] = True
+    # The server sees datagram/write time, not the browser's playout clock, so
+    # browser endpoint echo cancellation is the safe automatic default.
+    default_echo_cancellation_enabled: ClassVar[bool] = False
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 4433
     certfile: str = ""
     keyfile: str = ""
@@ -249,6 +307,16 @@ class WebTransportTransportConfig:
     # inbound/outbound queues; without a cap a single client IP can open
     # arbitrarily many sessions and exhaust process memory.
     max_concurrent_sessions: int = 64
+    # Bearer auth is enforced on the HTTP/3 CONNECT request before any session
+    # transport or provider-backed EasyCat session is created. These auth fields
+    # stay last to preserve the existing positional config parameter order.
+    auth_token: str | None = None
+    # Browser WebTransport cannot set arbitrary CONNECT headers. Query-token
+    # auth therefore exists as an explicit opt-in and remains off by default.
+    allow_query_token: bool = False
+    # The only way to bind a non-loopback interface without ``auth_token``.
+    unsafe_allow_no_auth: bool = False
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
@@ -386,6 +454,7 @@ class _WebTransportSession:
         # reset when that stream ends so a re-opened one re-reads its header.
         self._inbound_rate: int | None = None
         self._inbound_rate_hdr = bytearray()
+        self._inbound_resampler = PCM16StreamResampler(target_sample_rate)
         # Sample rate of the currently-open server→client audio stream, or
         # None when no audio stream is open.  A change opens a fresh stream
         # (see ``_outbound_writer`` / ``_end_audio_stream``).
@@ -431,6 +500,7 @@ class _WebTransportSession:
             except asyncio.CancelledError:
                 pass
         self._writer_task = None
+        self._inbound_resampler.reset()
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
         if stream_id in self._rejected_stream_ids:
@@ -461,6 +531,14 @@ class _WebTransportSession:
             self._pending_tags.pop(stream_id, None)
             self._rejected_stream_ids.discard(stream_id)
             if stream_id == self._inbound_audio_stream_id:
+                tail = self._inbound_resampler.finish()
+                if tail:
+                    _enqueue_inbound_chunk(
+                        self._in_queue,
+                        AudioChunk(data=tail, format=self._audio_format),
+                        emit_degraded=self._emit_degraded,
+                        context="WebTransport",
+                    )
                 self._inbound_audio_stream_id = None
                 # A re-opened audio stream is a fresh, self-describing
                 # stream; force its inline rate header to be re-read.
@@ -608,15 +686,17 @@ class _WebTransportSession:
             if not pcm:
                 return
             data = pcm
-        chunk = AudioChunk(data=data, format=self._inbound_format)
-        if chunk.format.sample_rate != self._target_rate:
-            chunk = resample_chunk(chunk, self._target_rate)
-        _enqueue_inbound_chunk(
-            self._in_queue,
-            chunk,
-            emit_degraded=self._emit_degraded,
-            context="WebTransport",
+        converted = self._inbound_resampler.process(
+            data,
+            self._inbound_format.sample_rate,
         )
+        if converted:
+            _enqueue_inbound_chunk(
+                self._in_queue,
+                AudioChunk(data=converted, format=self._audio_format),
+                emit_degraded=self._emit_degraded,
+                context="WebTransport",
+            )
 
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
@@ -763,36 +843,28 @@ class _WebTransportSession:
         because the writer is parked here, not suspended mid-send.  While we
         wait, ``_out_queue`` fills and ``send_audio`` starts returning False
         — i.e. TTS is dropped under sustained backpressure, which is the
-        documented behaviour.  ``aioquic``'s private ``_streams`` /
-        ``sender._buffer`` are read defensively (``getattr``); there is no
-        public accessor for per-stream buffered bytes.  If any of those private
-        accessors is missing (a future aioquic rename), the probe can't measure
-        the buffer and the gate would silently no-op, so we emit
-        ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND`` once to make that regression
-        observable rather than a silent unbounded-memory hazard.
+        documented behaviour. There is no public aioquic accessor for
+        per-stream buffered bytes, so server startup preflights the private
+        ``_quic`` / ``_streams`` / ``sender._buffer`` path before binding. The
+        defensive checks here still emit
+        ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND`` for directly-constructed
+        sessions or unexpected runtime mutation.
         """
-        quic = getattr(self._quic_protocol, "_quic", None)
-        if quic is None:
-            self._report_backpressure_blind("QuicConnectionProtocol._quic missing")
-            return
         while not self._on_close.is_set():
             sid = self._outbound_audio_stream_id
             if sid is None:
                 # No outbound audio stream open yet — a legitimate idle state,
                 # not an aioquic rename, so don't flag the probe as blind.
                 return
-            streams = getattr(quic, "_streams", None)
-            if not isinstance(streams, dict):
-                self._report_backpressure_blind("QuicConnection._streams missing")
+            raw_buffer, incompatibility = _read_aioquic_send_buffer(
+                self._quic_protocol,
+                sid,
+            )
+            if incompatibility is not None:
+                self._report_backpressure_blind(incompatibility)
                 return
-            stream = streams.get(sid)
-            if stream is None:
-                # Stream not yet registered or already finished — legitimate.
-                return
-            sender = getattr(stream, "sender", None)
-            raw_buffer = getattr(sender, "_buffer", None) if sender is not None else None
             if raw_buffer is None:
-                self._report_backpressure_blind("QuicStream.sender._buffer missing")
+                # Stream not yet registered or already finished — legitimate.
                 return
             if len(raw_buffer) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
                 return
@@ -801,11 +873,10 @@ class _WebTransportSession:
     def _report_backpressure_blind(self, reason: str) -> None:
         """Emit the backpressure-blind degraded signal at most once per session.
 
-        Called when an aioquic private accessor the outbound backpressure gate
-        depends on is missing (most likely an upstream rename).  When that
-        happens the gate can no longer measure buffered bytes and silently
-        degrades to a no-op, re-exposing the unbounded-memory failure
-        ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent — so surface it.
+        Server startup rejects known-incompatible aioquic versions before
+        binding. This runtime signal is defense in depth for custom
+        integrations that construct sessions directly or for an accessor that
+        disappears unexpectedly after startup.
         """
         if self._backpressure_blind_reported:
             return
@@ -933,6 +1004,7 @@ def _get_protocol_class() -> type:
             # followed by CONNECTION_CLOSE.
             self._can_accept: Callable[[], bool] = lambda: True
             self._session_config: WebTransportTransportConfig = WebTransportTransportConfig()
+            self._auth_policy: AuthPolicy | None = None
 
         def quic_event_received(self, event: Any) -> None:
             if isinstance(event, quic_events.ConnectionTerminated):
@@ -1004,13 +1076,41 @@ def _get_protocol_class() -> type:
             method = headers.get(b":method", b"").decode("ascii", errors="ignore")
             protocol = headers.get(b":protocol", b"").decode("ascii", errors="ignore")
             path = headers.get(b":path", b"").decode("ascii", errors="ignore")
+            try:
+                request_path = urlsplit(path).path
+            except ValueError:
+                self._h3.send_headers(
+                    event.stream_id,
+                    [(b":status", b"400")],
+                    end_stream=True,
+                )
+                self.transmit()
+                return
 
             if method != "CONNECT" or protocol != "webtransport":
                 self._h3.send_headers(event.stream_id, [(b":status", b"400")], end_stream=True)
                 self.transmit()
                 return
 
-            if path != self._accept_path:
+            auth_policy = getattr(self, "_auth_policy", None)
+            if auth_policy is not None:
+                from easycat.server.auth import from_h3_headers
+
+                auth_result = auth_policy.authorize(from_h3_headers(event.headers, path))
+                if not auth_result.allowed:
+                    logger.warning(
+                        "Rejecting WebTransport CONNECT — bearer authentication %s",
+                        auth_result.reason,
+                    )
+                    self._h3.send_headers(
+                        event.stream_id,
+                        [(b":status", b"401"), (b"www-authenticate", b"Bearer")],
+                        end_stream=True,
+                    )
+                    self.transmit()
+                    return
+
+            if request_path != self._accept_path:
                 self._h3.send_headers(event.stream_id, [(b":status", b"404")], end_stream=True)
                 self.transmit()
                 return
@@ -1080,6 +1180,7 @@ def _protocol_factory(
     on_session: Callable[[WebTransportConnectionTransport], None],
     can_accept: Callable[[], bool],
     session_config: WebTransportTransportConfig,
+    auth_policy: AuthPolicy | None,
 ) -> Callable[..., Any]:
     """Build the ``create_protocol`` callable for :func:`aioquic.asyncio.serve`."""
 
@@ -1091,9 +1192,48 @@ def _protocol_factory(
         proto._on_session = on_session
         proto._can_accept = can_accept
         proto._session_config = session_config
+        proto._auth_policy = auth_policy
         return proto
 
     return factory
+
+
+def _preflight_aioquic_backpressure_api() -> None:
+    """Fail startup when aioquic no longer exposes the bounded-writer probe.
+
+    The probe uses a disposable client-side ``QuicConnection`` to create one
+    real stream, then resolves the exact private access path used by live
+    WebTransport sessions. No socket is opened and no traffic is sent.
+    """
+    configuration_module = require_module(
+        "aioquic.quic.configuration",
+        extra="webtransport",
+        purpose="WebTransport transport",
+    )
+    connection_module = require_module(
+        "aioquic.quic.connection",
+        extra="webtransport",
+        purpose="WebTransport transport",
+    )
+    try:
+        configuration = configuration_module.QuicConfiguration(is_client=True)
+        quic = connection_module.QuicConnection(configuration=configuration)
+        protocol = _get_protocol_class()(quic)
+        stream_id = quic.get_next_available_stream_id()
+        quic.send_stream_data(stream_id, b"\0")
+        raw_buffer, incompatibility = _read_aioquic_send_buffer(protocol, stream_id)
+        if incompatibility is not None:
+            _raise_aioquic_backpressure_incompatible(incompatibility)
+        if raw_buffer is None:
+            _raise_aioquic_backpressure_incompatible(
+                "probe stream missing after QuicConnection.send_stream_data"
+            )
+    except _AioquicBackpressureCompatibilityError:
+        raise
+    except Exception as exc:
+        _raise_aioquic_backpressure_incompatible(
+            f"compatibility probe raised {type(exc).__name__}"
+        )
 
 
 # ── Per-session transport ──────────────────────────────────────────
@@ -1112,7 +1252,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,
@@ -1124,7 +1264,10 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     ) -> None:
         self._config = config or WebTransportTransportConfig()
         self._audio_format = self._config.audio_format
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
         self._out_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
             maxsize=self._config.outbound_max_pending,
         )
@@ -1340,6 +1483,18 @@ class WebTransportServer:
         self._server: QuicServer | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
         self._started = False
+        token = normalize_auth_token(config.auth_token)
+        if token is None:
+            self._auth_policy: AuthPolicy | None = None
+        else:
+            from easycat.server.auth import BearerTokenAuth
+
+            self._auth_policy = BearerTokenAuth(
+                token=token,
+                allow_query_token=config.allow_query_token,
+            )
+        # Per-session transports need media settings, never the server secret.
+        self._session_config = replace(config, auth_token=None)
 
     def _can_accept_session(self) -> bool:
         """Capacity gate consulted by the protocol *before* it sends the 200.
@@ -1378,13 +1533,22 @@ class WebTransportServer:
     async def start(self) -> None:
         if self._started:
             return
+        from easycat.server.auth import enforce_bind_guard
+
+        enforce_bind_guard(
+            self._config.host,
+            auth=self._auth_policy,
+            unsafe_allow_no_auth=self._config.unsafe_allow_no_auth,
+        )
         quic_config = _build_quic_configuration(self._config.certfile, self._config.keyfile)
+        _preflight_aioquic_backpressure_api()
 
         factory = _protocol_factory(
             accept_path=self._config.path,
             on_session=self._dispatch_session,
             can_accept=self._can_accept_session,
-            session_config=self._config,
+            session_config=self._session_config,
+            auth_policy=self._auth_policy,
         )
         aioquic_server = require_module(
             "aioquic.asyncio.server",
@@ -1472,7 +1636,7 @@ class WebTransportTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(self, config: WebTransportTransportConfig | None = None) -> None:
         self._config = config or WebTransportTransportConfig()
@@ -1480,7 +1644,10 @@ class WebTransportTransport(AudioQueueMixin):
         # We don't push into the mixin's ``_in_queue`` (``receive_audio``
         # below delegates), but ``_init_audio_queue`` also sets up
         # ``_connected`` and ``_client_connected`` which we do use.
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
         # ``_event_bus`` comes from ``AudioQueueMixin`` (``_init_audio_queue``

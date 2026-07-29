@@ -256,9 +256,12 @@ uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0
 ```
 
 Use a Twilio test project or tightly controlled destination first. Verify
-signature validation through the real proxy URL, stream-token consumption,
-status callbacks, teardown, recording/consent policy, and cost limits before
-enabling general outbound calls.
+signature validation through the real proxy URL and media WebSocket handshake,
+stream-token consumption, the `TWILIO_MAX_SESSIONS` cap, status callbacks,
+teardown, recording/consent policy, and cost limits before enabling general
+outbound calls. Tune `TWILIO_DRAIN_TIMEOUT_S` and
+`TWILIO_FORCE_SHUTDOWN_TIMEOUT_S` so rolling deploys leave enough time for live
+sessions to flush before surviving media sockets are closed.
 
 Continue with [the exercises](./EXERCISES.md) to break each boundary safely and
 design a production call policy.
@@ -267,8 +270,10 @@ design a production call policy.
 
 > Why are both webhook signatures and stream tokens needed?
 
-They authenticate different hops: Twilio-to-HTTP control and subsequent
-client-to-WebSocket media.
+They establish different properties. The signature authenticates Twilio on
+both HTTP control requests and the WebSocket handshake. The one-time stream
+token proves that the connection came from TwiML this app accepted and blocks
+replay when the `start` frame arrives.
 
 > Can outbound DTMF be written into the Media Stream?
 

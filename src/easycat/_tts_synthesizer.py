@@ -235,4 +235,4 @@ class TTSSynthesizer:
         try:
             await self._tts.cancel()
         except Exception:
-            pass
+            logger.debug("TTS provider cancel raised", exc_info=True)

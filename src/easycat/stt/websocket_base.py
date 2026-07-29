@@ -10,7 +10,7 @@ from typing import Any
 import websockets
 
 from easycat._provider_helpers import ProviderErrorEmitter
-from easycat.errors import EASYCAT_E304, EASYCAT_E305
+from easycat.errors import EASYCAT_E304
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
@@ -44,7 +44,10 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         close_timeout: float = 2.0,
         dynamic_event_queue: bool = False,
     ) -> None:
-        super().__init__(expected_sample_rate=expected_sample_rate)
+        super().__init__(
+            expected_sample_rate=expected_sample_rate,
+            allow_end_during_audio_send=True,
+        )
         self._provider_name = provider_name
         self._provider_error_name = provider_error_name
         self._close_timeout = close_timeout
@@ -213,6 +216,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         finally:
             self._on_receive_loop_end()
             if ws.died_abnormally:
+                from easycat.errors import EASYCAT_E305
+
                 self._emit_provider_error(
                     EASYCAT_E305(
                         provider=self._provider_error_name,

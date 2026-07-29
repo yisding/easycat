@@ -6,6 +6,7 @@ Setup:
   export TWILIO_ACCOUNT_SID="AC..."
   export TWILIO_AUTH_TOKEN="..."
   export TWILIO_STREAM_TOKEN_SECRET="..."  # optional, pins stream-token signing key
+  export TWILIO_MAX_SESSIONS="8"  # optional
   export TWILIO_VOICE_FROM="+15551234567"  # optional, enables POST /calls
   export TWILIO_TWIML_URL="https://your-public-host/twiml"
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
@@ -21,18 +22,12 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
 
 import websockets
-from websockets.asyncio.server import ServerConnection
 
 from easycat import (
-    CallAnswered,
-    CallEnded,
-    CallFailed,
     EasyConfig,
     EventBus,
     SessionManager,
@@ -41,8 +36,11 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.server.transports import WebSocketSessionRuntime
 from easycat.telephony import (
+    TwilioCallSessionIndex,
     TwilioWebhookSignatureError,
+    bearer_token_matches,
     emit_call_status,
     twilio_app_settings_from_env,
     twilio_form_items_from_request,
@@ -50,78 +48,64 @@ from easycat.telephony import (
     twilio_stream_parameters_from_form,
     twilio_webhook_idempotency_key,
 )
-from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+from easycat.transports import (
+    TwilioStreamTokenStore,
+    TwilioTransportConfig,
+    twilio_websocket_signature_process_request,
+)
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
 def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     api_key = api_key or require_env("OPENAI_API_KEY")
-    settings = twilio_app_settings_from_env(stream_url=stream_url)
+    settings = twilio_app_settings_from_env(
+        stream_url=stream_url,
+        require_auth_token=True,
+    )
 
     manager: SessionManager[int] = SessionManager()
-    session_slots = asyncio.Semaphore(settings.max_sessions)
-    sessions_by_call_sid: dict[str, Any] = {}
+    sessions_by_call_sid = TwilioCallSessionIndex()
     stream_tokens = TwilioStreamTokenStore(settings.stream_token_secret_or_auth_token)
     outbound_bus = EventBus()
     outbound_manager = settings.start_outbound_manager(outbound_bus)
 
-    async def handle_twilio_connection(ws: ServerConnection) -> None:
+    async def build_session(ws: object) -> object | None:
         from agents import Agent  # type: ignore[import-untyped]
 
-        if session_slots.locked():
-            await ws.close(code=1013, reason="Too many active Twilio sessions")
-            return
-        async with session_slots:
-            transport = TwilioConnectionTransport(
-                ws,
-                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
+        )
+        if not await transport.wait_for_start(timeout_s=settings.start_timeout_s):
+            return None
+
+        agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
+        telephony = TelephonyConfig(enable_dtmf_aggregator=True, enable_voicemail_detector=True)
+        actions = settings.twilio_session_actions()
+        if actions is not None:
+            telephony.twilio_actions = actions
+        try:
+            return create_session(
+                EasyConfig(
+                    openai_api_key=api_key,
+                    transport=transport,
+                    telephony=telephony,
+                    agent=agent,
+                )
             )
-            if not await transport.wait_for_start(timeout_s=settings.start_timeout_s):
-                return
+        except BaseException:
+            await transport.disconnect()
+            raise
 
-            agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-            telephony = TelephonyConfig(
-                enable_dtmf_aggregator=True, enable_voicemail_detector=True
-            )
-            actions = settings.twilio_session_actions()
-            if actions is not None:
-                telephony.twilio_actions = actions
-            session_config = EasyConfig(
-                openai_api_key=api_key,
-                transport=transport,
-                telephony=telephony,
-                agent=agent,
-            )
-            try:
-                session = create_session(session_config)
-            except BaseException:
-                await transport.disconnect()
-                raise
-            key = id(ws)
-            call_sid: str | None = None
-
-            def remember_call(event: CallAnswered) -> None:
-                nonlocal call_sid
-                if event.call_sid:
-                    call_sid = event.call_sid
-                    sessions_by_call_sid[event.call_sid] = session
-
-            def forget_call(event: CallEnded | CallFailed) -> None:
-                nonlocal call_sid
-                if event.call_sid:
-                    sessions_by_call_sid.pop(event.call_sid, None)
-                if event.call_sid == call_sid:
-                    call_sid = None
-
-            session.event_bus.subscribe(CallAnswered, remember_call)
-            session.event_bus.subscribe(CallEnded, forget_call)
-            session.event_bus.subscribe(CallFailed, forget_call)
-            try:
-                async with manager.connection(key, session, runtime_feedback=True):
-                    await ws.wait_closed()
-            finally:
-                if call_sid:
-                    sessions_by_call_sid.pop(call_sid, None)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=settings.max_sessions,
+        session_factory=build_session,
+        runtime_feedback=True,
+        capacity_reason="Too many active Twilio sessions",
+        on_session=sessions_by_call_sid.track,
+    )
 
     from fastapi import FastAPI, HTTPException, Request, Response
 
@@ -137,15 +121,27 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        twilio_server = await websockets.serve(handle_twilio_connection, "0.0.0.0", 8766)
+        twilio_server = await websockets.serve(
+            runtime.handle,
+            "0.0.0.0",
+            8766,
+            process_request=twilio_websocket_signature_process_request(
+                settings.auth_token,
+                settings.stream_url,
+            ),
+            compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        )
         try:
             yield
         finally:
             if outbound_manager is not None:
                 outbound_manager.stop()
-            twilio_server.close()
-            await twilio_server.wait_closed()
-            await manager.stop_all()
+            await runtime.drain(
+                twilio_server,
+                drain_timeout_s=settings.drain_timeout_s,
+                force_timeout_s=settings.force_shutdown_timeout_s,
+            )
 
     app = FastAPI(lifespan=lifespan)
 
@@ -197,7 +193,10 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 status_code=503,
                 detail="Set TWILIO_CALL_API_TOKEN before exposing POST /calls.",
             )
-        if request.headers.get("authorization") != f"Bearer {settings.call_api_token}":
+        if not bearer_token_matches(
+            request.headers.get("authorization"),
+            settings.call_api_token,
+        ):
             raise HTTPException(status_code=401)
         payload = await request.json()
         to = str(payload.get("to", "")).strip()

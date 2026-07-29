@@ -41,7 +41,7 @@ route discovery or run `uv run easycat explain json-schema`.
   `uv run pytest tests/test_public_api.py`. If `just` is not installed, use the
   raw command table in
   [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop), or run
-  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
+  `uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
 
 ## Preferred Imports
 
@@ -113,6 +113,38 @@ from easycat.transports import AudioQueueMixin, ServerTransportBase, TransportDe
 See the [extending guides](extending/) for complete custom provider and
 transport walkthroughs, and `examples/custom_transport.py` for a runnable
 custom transport.
+
+## Provider Testing Extension Surface
+
+Out-of-tree provider and bridge packages can subclass the offline contract
+suites shipped from `easycat.testing`. This module is versioned as an extension
+surface but is not re-exported at the top level, keeping `import easycat`
+lightweight:
+
+- `STTProviderContractSuite`
+- `TTSProviderContractSuite`
+- `VADProviderContractSuite`
+- `TransportContractSuite`
+- `AgentBridgeContractSuite`
+- `ContractSuite`
+- `ProviderContractSuite`
+- `RecordingAgentRecorder`
+- `AGENT_BRIDGE_EVENT_KINDS`
+- `ProviderCapabilities`
+- `ProviderCapabilityReport`
+- `ProviderIdentifier`
+- `contains_unredacted_sensitive_text`
+
+```python
+from easycat.testing import STTProviderContractSuite
+
+
+class TestAcmeSTT(STTProviderContractSuite):
+    provider_factory = AcmeSTT
+```
+
+The [extending guides](extending/) show the corresponding suite for each
+provider surface and how to add optional live checks.
 
 ## Agent Bridge Extension Surface
 
@@ -199,6 +231,7 @@ from easycat.integrations.agents import PydanticAIBridge
 ### Provider Protocols And Factories
 
 - `EchoCanceller`
+- `EventBusBindable`
 - `NoiseReducer`
 - `STTProvider`
 - `Transport`
@@ -210,17 +243,20 @@ from easycat.integrations.agents import PydanticAIBridge
 - `VADConfig`
 - `available_stt_providers`
 - `available_tts_providers`
+- `available_vad_providers`
 - `create_noise_reducer`
 - `create_stt_provider`
 - `create_tts_provider`
 - `create_vad`
 - `register_stt_provider`
 - `register_tts_provider`
+- `register_vad_provider`
 
 ### Events
 
 - `AgentDelta`
 - `AgentFinal`
+- `AgentRequestStarted`
 - `AudioIn`
 - `AudioOut`
 - `BotStartedSpeaking`
@@ -228,21 +264,44 @@ from easycat.integrations.agents import PydanticAIBridge
 - `CallAnswered`
 - `CallEnded`
 - `CallFailed`
+- `CallInitiated`
+- `CallRinging`
+- `CallScreening`
+- `CallStateChanged`
+- `DTMF`
+- `DTMFAggregated`
 - `Error`
 - `ErrorStage`
 - `Event`
 - `EventBus`
+- `IVRAction`
 - `Interruption`
+- `PlaybackMarkAck`
+- `ReconnectAttempt`
+- `ReconnectFailure`
+- `ReconnectSuccess`
+- `ScreeningResponse`
+- `ScreeningTimedOut`
+- `SessionActionCompleted`
+- `SessionActionFailed`
+- `SessionActionRequested`
+- `SessionActionStarted`
 - `STTFinal`
 - `STTPartial`
 - `SupervisorListenerAttached`
 - `SupervisorListenerDetached`
 - `TTSAudio`
 - `TTSMarkers`
+- `ToolCallDelta`
+- `ToolCallResult`
+- `ToolCallStarted`
+- `TransportAudioDelivered`
+- `TransportDegraded`
 - `TurnEnded`
 - `TurnStarted`
 - `VADStartSpeaking`
 - `VADStopSpeaking`
+- `VoicemailDetected`
 
 ### Audio And Transports
 

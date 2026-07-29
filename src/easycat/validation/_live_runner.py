@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from easycat._provider_catalog import provider_names
+from easycat._provider_registry import provider_names
 from easycat.validation._environment import runtime_secret_values
 from easycat.validation._failure_classification import (
     FailureCategory,

@@ -28,11 +28,202 @@ per-transport ``Callable[[TransportT], EasyConfig | Session]`` factory.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Hashable, Iterable
 from functools import partial
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 KeyT = TypeVar("KeyT", bound=Hashable)
+logger = logging.getLogger(__name__)
+
+
+async def close_websocket_connections(
+    connections: Iterable[object],
+    *,
+    timeout_s: float | None,
+    code: int = 1001,
+    reason: str = "Server shutdown after drain",
+) -> None:
+    """Close surviving WebSocket connections after their session drain.
+
+    ``websockets.Server.close(close_connections=False)`` stops accepting but
+    intentionally leaves established connections open. Calling ``close()``
+    again cannot switch that mode because the method is idempotent, so servers
+    must retain the accepted connection objects and close survivors explicitly
+    after the graceful session window.
+    """
+    close_tasks: list[asyncio.Task[object]] = []
+    seen: set[int] = set()
+    for connection in connections:
+        identity = id(connection)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        close = getattr(connection, "close", None)
+        if close is None:
+            continue
+        try:
+            result = close(code=code, reason=reason)
+        except Exception:
+            continue
+        if isinstance(result, Awaitable):
+            close_tasks.append(asyncio.ensure_future(result))
+    if close_tasks:
+        await _safe_await(
+            asyncio.gather(*close_tasks, return_exceptions=True),
+            timeout_s=timeout_s,
+        )
+
+
+async def cancel_handler_tasks(
+    tasks: Iterable[asyncio.Task[object]],
+    *,
+    timeout_s: float | None,
+) -> None:
+    """Cancel and reap connection handlers that survived transport shutdown."""
+    current = asyncio.current_task()
+    pending = [task for task in tasks if task is not current and not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await _safe_await(asyncio.gather(*pending, return_exceptions=True), timeout_s=timeout_s)
+
+
+class WebSocketSessionRuntime:
+    """Own one raw-WebSocket server's live session and drain bookkeeping."""
+
+    def __init__(
+        self,
+        *,
+        manager: Any,
+        max_sessions: int,
+        session_factory: Callable[[object], object | Awaitable[object | None]],
+        runtime_feedback: bool = False,
+        capacity_reason: str = "Server is at the configured session limit",
+        on_session: Callable[[object], Callable[[], None] | None] | None = None,
+    ) -> None:
+        self.manager = manager
+        self.gate: CapacityGate[int] = CapacityGate(max_sessions)
+        self._session_factory = session_factory
+        self._runtime_feedback = runtime_feedback
+        self._capacity_reason = capacity_reason
+        self._on_session = on_session
+        self._sessions: dict[int, object] = {}
+        self._connections: dict[int, object] = {}
+        self._handler_tasks: set[asyncio.Task[object]] = set()
+
+    async def handle(self, connection: object) -> None:
+        """Build and run one session, deferring teardown while draining."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._handler_tasks.add(task)
+        try:
+            if not self.gate.try_acquire():
+                reason = "Server is draining" if self.gate.is_draining else self._capacity_reason
+                await connection.close(code=1013, reason=reason)  # type: ignore[attr-defined]
+                return
+            await self._run_connection(connection)
+        finally:
+            if task is not None:
+                self._handler_tasks.discard(task)
+
+    async def _run_connection(self, connection: object) -> None:
+        key = id(connection)
+        cleanup: Callable[[], None] | None = None
+        try:
+            created = self._session_factory(connection)
+            session = await created if isinstance(created, Awaitable) else created
+            if session is None:
+                return
+            # The connection must be visible to shutdown immediately, but the
+            # session is not drainable until manager.add() has completed
+            # Session.start(). A drain during startup closes the connection and
+            # cancels this handler, leaving Session.start() to roll itself back.
+            self._connections[key] = connection
+            if self._on_session is not None:
+                cleanup = self._on_session(session)
+            if self._runtime_feedback:
+                from easycat.helpers import attach_runtime_feedback
+
+                attach_runtime_feedback(session)
+            await self.manager.add(key, session)
+            if self.gate.is_draining:
+                # Shutdown began in the final scheduling window of startup.
+                # Roll the newly-started session back instead of publishing it
+                # after the drain snapshot has already been taken.
+                await self.manager.remove(key)
+                return
+            self.gate.track(key)
+            self._sessions[key] = session
+            try:
+                await connection.wait_closed()  # type: ignore[attr-defined]
+            finally:
+                if not self.gate.is_draining:
+                    await self.manager.remove(key)
+        finally:
+            if cleanup is not None:
+                cleanup()
+            self.gate.untrack(key)
+            self._sessions.pop(key, None)
+            self._connections.pop(key, None)
+            self.gate.release()
+
+    def start_draining(self, server: object) -> None:
+        """Reject new work and stop accepting without severing live sockets."""
+        self.gate.start_draining()
+        server.close(close_connections=False)  # type: ignore[attr-defined]
+
+    async def drain(
+        self,
+        server: object,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        """Drain sessions, then close surviving sockets and reap handlers."""
+        self.start_draining(server)
+        await self.gate.drain(
+            self._active_session_pairs,
+            drain_timeout_s=max(drain_timeout_s, 0.0),
+            force_after=True,
+            force_timeout_s=max(force_timeout_s, 0.0),
+        )
+        await close_websocket_connections(
+            self._connections.values(),
+            timeout_s=max(force_timeout_s, 0.0),
+        )
+        await cancel_handler_tasks(
+            self._handler_tasks,
+            timeout_s=max(force_timeout_s, 0.0),
+        )
+        await self._bounded_cleanup(
+            server.wait_closed(),  # type: ignore[attr-defined]
+            timeout_s=max(force_timeout_s, 0.0),
+            label="WebSocket server handlers",
+        )
+        await self._bounded_cleanup(
+            self.manager.stop_all(),
+            timeout_s=max(force_timeout_s, 0.0),
+            label="WebSocket sessions",
+        )
+        self._sessions.clear()
+        self._connections.clear()
+
+    def _active_session_pairs(self) -> list[tuple[int, object]]:
+        return [
+            (key, self._sessions[key]) for key in self.gate.active_keys() if key in self._sessions
+        ]
+
+    @staticmethod
+    async def _bounded_cleanup(
+        awaitable: Awaitable[object],
+        *,
+        timeout_s: float,
+        label: str,
+    ) -> None:
+        completed = await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+        if not completed:
+            logger.warning("%s did not close within force timeout %ss", label, timeout_s)
 
 
 class CapacityGate(Generic[KeyT]):
@@ -167,23 +358,21 @@ class CapacityGate(Generic[KeyT]):
         single, effective stop. It does NOT route draining through
         ``SessionManager`` (which has no draining state).
 
-        Why the drain owns the stop (review fix): the real
-        :meth:`~easycat.session._session.Session.stop` has a ``_stopping``
-        idempotency guard, so a ``force=True`` call after an in-progress graceful
-        ``stop`` is a NO-OP. If the handler had already started a graceful stop
-        that hung, the drain could never preempt it and ``stop()`` would deadlock.
-        By making the drain start the (single) graceful stop itself, the
-        force-escalation path stays effective:
+        The drain owns the stop so there is one lifecycle authority per session
+        during server shutdown. :meth:`~easycat.session._session.Session.stop`
+        can now force-preempt an in-progress graceful stop, while session-like
+        integrations with older idempotency-only semantics are still handled by
+        the follow-on task cancellation:
 
         1. Snapshot the active ``(key, session)`` pairs and launch a graceful
            ``session.stop()`` task for each.
         2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
            they all complete in time, the drain stayed graceful (no force).
         3. For any session whose graceful stop did NOT finish, CANCEL and reap
-           the still-pending graceful task first. This clears the real
-           ``Session._stopping`` guard before force escalation.
+           the still-pending graceful task first. This also supports session-like
+           integrations that retain idempotency-only stop semantics.
         4. Call ``session.stop(force=True)`` after the cancelled graceful task
-           has unwound, so the force path can perform backend teardown.
+           has unwound, so the force path owns backend teardown.
         5. Untrack every drained key.
 
         ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace

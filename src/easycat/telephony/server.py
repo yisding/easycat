@@ -30,14 +30,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import websockets
-from websockets.asyncio.server import ServerConnection
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
+from easycat.server.transports import WebSocketSessionRuntime
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 if TYPE_CHECKING:
     from easycat.config import EasyConfig
@@ -141,14 +142,13 @@ class TwilioVoiceServerConfig:
     TLS-terminating proxy/load balancer so the public URL Twilio signed is
     reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
 
-    ``max_sessions`` caps concurrent media sockets and sessions. The media
-    listener defaults to a public bind (``host="0.0.0.0"``), so each connection
-    is held behind this gate while its first ``start`` frame's one-time stream
-    token is validated. Invalid sockets never build an EasyCat session; valid
-    sessions and idle pre-start sockets are bounded by the same gate. Over-limit
-    connections are rejected with WebSocket close code ``1013`` (Try Again
-    Later). ``start_timeout_s`` bounds how long a socket may hold one of those
-    slots without presenting an authenticated Twilio ``start`` frame.
+    The media listener validates Twilio's ``X-Twilio-Signature`` during the
+    WebSocket handshake when an auth token is configured. The one-time token in
+    the first ``start`` frame remains an independent replay and claims check.
+    ``max_sessions`` caps concurrent media sockets and sessions, including idle
+    pre-start sockets. Invalid sockets never build an EasyCat session, and
+    ``start_timeout_s`` bounds how long a socket may hold a slot without
+    presenting an authenticated Twilio ``start`` frame.
     """
 
     host: str = "0.0.0.0"
@@ -156,13 +156,15 @@ class TwilioVoiceServerConfig:
     http_host: str = "0.0.0.0"
     http_port: int = 8000
     stream_url: str | None = None
-    stream_token_secret: str | None = None
-    twilio_auth_token: str | None = None
+    stream_token_secret: str | None = field(default=None, repr=False)
+    twilio_auth_token: str | None = field(default=None, repr=False)
     trust_proxy_headers: bool = False
     unsafe_allow_unsigned_webhooks: bool = False
     max_sessions: int = 64
     start_timeout_s: float = 10.0
     public_twiml_url: str | None = None
+    drain_timeout_s: float = 30.0
+    force_shutdown_timeout_s: float = 10.0
 
 
 async def _start_twiml_http_listener(
@@ -239,34 +241,35 @@ async def serve_twilio_voice_app(
 
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
-    from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
+    from easycat.transports import (
+        TwilioStreamTokenStore,
+        TwilioTransportConfig,
+        twilio_websocket_signature_process_request,
+    )
     from easycat.transports.twilio_media import TwilioConnectionTransport
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(config.stream_token_secret)
-    session_slots = asyncio.Semaphore(config.max_sessions)
 
-    async def handle_twilio_connection(ws: ServerConnection) -> None:
-        # Gate before validating the first Twilio ``start`` frame. Invalid
-        # sockets never reach config_factory/create_session, while idle pre-start
-        # sockets and valid sessions are both bounded.
-        if session_slots.locked():
-            await ws.close(code=1013, reason="Server is at the configured session limit")
-            return
-        async with session_slots:
-            transport = TwilioConnectionTransport(
-                ws,
-                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
-            )
-            if not await transport.wait_for_start(timeout_s=config.start_timeout_s):
-                return
-            try:
-                session = create_session(config_factory(transport))
-            except BaseException:
-                await transport.disconnect()
-                raise
-            async with manager.connection(id(ws), session, runtime_feedback=True):
-                await ws.wait_closed()
+    async def build_session(ws: object) -> object | None:
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
+        )
+        if not await transport.wait_for_start(timeout_s=config.start_timeout_s):
+            return None
+        try:
+            return create_session(config_factory(transport))
+        except BaseException:
+            await transport.disconnect()
+            raise
+
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=config.max_sessions,
+        session_factory=build_session,
+        runtime_feedback=True,
+    )
 
     async def handle_twiml(request: Any) -> Any:
         return await _handle_twiml_request(
@@ -276,11 +279,21 @@ async def serve_twilio_voice_app(
             stream_tokens=stream_tokens,
         )
 
+    process_request = (
+        twilio_websocket_signature_process_request(
+            config.twilio_auth_token,
+            config.stream_url,
+        )
+        if config.twilio_auth_token
+        else None
+    )
     media_server = await websockets.serve(
-        handle_twilio_connection,
+        runtime.handle,
         config.host,
         config.media_port,
+        process_request=process_request,
         compression=None,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
     )
 
     # Start the TwiML HTTP listener; the helper closes the already-bound media
@@ -299,11 +312,14 @@ async def serve_twilio_voice_app(
     try:
         await event.wait()
     finally:
-        media_server.close()
-        await media_server.wait_closed()
+        runtime.start_draining(media_server)
         await site.stop()
         await runner.cleanup()
-        await manager.stop_all()
+        await runtime.drain(
+            media_server,
+            drain_timeout_s=config.drain_timeout_s,
+            force_timeout_s=config.force_shutdown_timeout_s,
+        )
 
 
 def run_twilio_voice_app(

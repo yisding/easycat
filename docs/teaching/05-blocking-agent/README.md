@@ -151,7 +151,7 @@ build movement (chapters 6-9) exists to close this gap.
  
 -PREROLL_FRAMES = 15  # 15 × 20 ms = 300 ms of audio *before* VAD fires
 +PREROLL_FRAMES = 15
-+MODEL = "gpt-4o-mini"
++MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 +SESSION_ID = f"ch05-blocking-{int(time.time())}"
  
@@ -174,7 +174,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -67,121 +61,171 @@
+@@ -67,121 +61,172 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -243,6 +243,7 @@ build movement (chapters 6-9) exists to close this gap.
 +    """One LLM call. Wait for the full response. Return the string."""
 +    resp = await client.chat.completions.create(
 +        model=MODEL,
++        reasoning_effort="none",
 +        messages=[
 +            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
 +            {"role": "user", "content": user_text},
@@ -425,7 +426,7 @@ build movement (chapters 6-9) exists to close this gap.
      finally:
          if stt is not None:
              try:
-@@ -191,22 +235,8 @@
+@@ -191,22 +236,8 @@
  
  
  async def main() -> None:
@@ -450,7 +451,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -215,7 +245,7 @@
+@@ -215,7 +246,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -459,7 +460,7 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
-@@ -226,16 +256,19 @@
+@@ -226,16 +257,19 @@
  
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
@@ -508,7 +509,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L105-L114)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L105-L115)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->
@@ -517,6 +518,7 @@ async def blocking_agent(client: AsyncOpenAI, user_text: str) -> str:
     """One LLM call. Wait for the full response. Return the string."""
     resp = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
             {"role": "user", "content": user_text},
@@ -649,7 +651,7 @@ start the LLM sooner:
 
 Three experiments, all quick:
 
-1. Change `MODEL = "gpt-4o-mini"` to `"gpt-4o"`. Re-run the same
+1. Change `MODEL = "gpt-5.6-luna"` to `"gpt-5.6-sol"`. Re-run the same
    question. Which span grew?
 2. Add a system prompt: *"Answer in one word."* Total gap drops.
    Which span shrank — and which did *not*?

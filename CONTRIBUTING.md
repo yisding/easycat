@@ -12,10 +12,9 @@ just                       # list every task (or read the justfile)
 just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 ```
 
-Run `uv run easycat docs` for the maintained reader-facing map, including
-quickstart, CLI and scaffold commands, examples, teaching chapters, public API,
-validation, and operations. Use `uv run easycat docs --audience contributors`
-to narrow the map to contributor-facing routes, or
+Run `uv run easycat docs` for the compact reader-facing route index, or
+`uv run easycat docs --verbose` to expand every route and command hint. Use
+`uv run easycat docs --audience contributors` to show contributor-facing routes, or
 `uv run easycat docs --audience contributors --json` when automation needs
 that smaller route map.
 Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
@@ -69,7 +68,7 @@ in the `justfile`, then re-run the script.
 <!-- BEGIN auto:guard-commands format=table -->
 | Docs guard | `just` recipe | Raw command |
 | --- | --- | --- |
-| Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py` |
+| Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py` |
 | Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py` |
 | Guard examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
 | Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py` |

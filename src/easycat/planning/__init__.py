@@ -11,9 +11,10 @@ M6b ``/health/ready`` manifest-loaded + plan-no-blocking-errors checks.
 Metadata sourcing (per the M6b spec):
 
 * **stt / tts** — REUSE the STT/TTS :class:`~easycat._provider_catalog.ProviderCatalog`.
-* **vad / transport / agent / noise_reducer / echo_canceller** — NET-NEW
-  declarative metadata in :mod:`easycat.planning.transport_registry` (there is
-  NO catalog for these five roles; capabilities are declared net-new).
+* **vad / noise_reducer / echo_canceller** — use provider catalogs for
+  third-party extensions and declarative built-in fallback metadata.
+* **transport / agent** — use declarative built-in metadata in
+  :mod:`easycat.planning.transport_registry`.
 
 The planner-vs-``create_session`` PARITY TEST is the required gate: the
 manifest/plan readiness checks may only ship once parity is green.
@@ -34,12 +35,14 @@ from easycat.planning.provider_plan import (
     build_provider_plan,
 )
 from easycat.planning.transport_registry import (
+    BUILTIN_BACKEND_ROLES,
     EXTRA_PROBE_MODULE,
     NON_CATALOG_ROLES,
     RoleBackend,
 )
 
 __all__ = [
+    "BUILTIN_BACKEND_ROLES",
     "EXTRA_PROBE_MODULE",
     "NON_CATALOG_ROLES",
     "ProviderPlan",

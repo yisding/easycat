@@ -169,6 +169,34 @@ class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
         await server.wait_closed()
 
     @pytest.mark.asyncio
+    async def test_clear_audio_sends_client_playback_reset(self):
+        port = self._unused_port()
+        transport_ready = asyncio.Event()
+        transport_holder: list[WebSocketConnectionTransport] = []
+
+        async def handler(ws):
+            transport = WebSocketConnectionTransport(ws)
+            transport_holder.append(transport)
+            await transport.connect()
+            transport_ready.set()
+            await ws.wait_closed()
+            await transport.disconnect()
+
+        server = await websockets.serve(handler, "127.0.0.1", port)
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await asyncio.wait_for(transport_ready.wait(), timeout=2.0)
+
+            await transport_holder[0].clear_audio()
+
+            message = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            assert json.loads(message) == {"type": "clear"}
+
+        server.close()
+        await server.wait_closed()
+
+    @pytest.mark.asyncio
     async def test_control_message_config(self):
         port = self._unused_port()
         transport_holder: list[WebSocketConnectionTransport] = []

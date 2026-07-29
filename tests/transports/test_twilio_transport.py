@@ -12,6 +12,8 @@ import time
 
 import pytest
 import websockets
+from websockets.datastructures import Headers
+from websockets.http11 import Request
 
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
 from easycat.events import (
@@ -22,6 +24,8 @@ from easycat.events import (
     PlaybackMarkAck,
     TransportDegraded,
 )
+from easycat.telephony import compute_twilio_webhook_signature
+from easycat.transports._base import ServerTransportBase
 from easycat.transports.twilio_media import (
     _DEGRADED_TWILIO_SEQUENCE_GAP,
     _DEGRADED_TWILIO_TIMESTAMP_GAP,
@@ -34,6 +38,7 @@ from easycat.transports.twilio_media import (
     _TwilioProtocolMixin,
     mulaw_to_pcm16,
     pcm16_to_mulaw,
+    twilio_websocket_signature_process_request,
     twiml_connect_stream,
     twiml_stream,
 )
@@ -256,6 +261,95 @@ class TestTwilioStreamTokenStore:
         )
 
 
+def test_twilio_transport_defaults_to_loopback() -> None:
+    assert TwilioTransportConfig().host == "127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_twilio_transport_rejects_unauthenticated_public_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected = False
+
+    async def _connect(_self: ServerTransportBase) -> None:
+        nonlocal connected
+        connected = True
+
+    monkeypatch.setattr(ServerTransportBase, "connect", _connect)
+    transport = TwilioTransport(TwilioTransportConfig(host="0.0.0.0"))
+
+    with pytest.raises(ValueError, match="stream_token_validator"):
+        await transport.connect()
+    assert connected is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [
+        TwilioTransportConfig(
+            host="0.0.0.0",
+            stream_token_validator=lambda _token: True,
+        ),
+        TwilioTransportConfig(host="0.0.0.0", unsafe_allow_no_auth=True),
+    ],
+)
+async def test_twilio_transport_allows_explicitly_guarded_public_bind(
+    config: TwilioTransportConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected = False
+
+    async def _connect(_self: ServerTransportBase) -> None:
+        nonlocal connected
+        connected = True
+
+    monkeypatch.setattr(ServerTransportBase, "connect", _connect)
+
+    await TwilioTransport(config).connect()
+    assert connected is True
+
+
+def test_twilio_media_handshake_validates_signature_against_public_url() -> None:
+    auth_token = "twilio-auth"
+    websocket_url = "wss://voice.example.com/media"
+    signature = compute_twilio_webhook_signature(
+        auth_token=auth_token,
+        url=websocket_url,
+        params=[],
+    )
+    process_request = twilio_websocket_signature_process_request(
+        auth_token,
+        websocket_url,
+    )
+
+    authorized = Request(
+        "/media",
+        Headers([("X-Twilio-Signature", signature)]),
+    )
+    rejected = Request(
+        "/media",
+        Headers([("X-Twilio-Signature", "forged")]),
+    )
+    duplicated = Request(
+        "/media",
+        Headers(
+            [
+                ("X-Twilio-Signature", signature),
+                ("X-Twilio-Signature", signature),
+            ]
+        ),
+    )
+
+    assert process_request(None, authorized) is None  # type: ignore[arg-type]
+    response = process_request(None, rejected)  # type: ignore[arg-type]
+    assert response is not None
+    assert response.status_code == 401
+    duplicated_response = process_request(None, duplicated)  # type: ignore[arg-type]
+    assert duplicated_response is not None
+    assert duplicated_response.status_code == 401
+
+
 class TestTwilioStreamTokenValidation:
     @pytest.mark.parametrize(
         ("kwargs", "message"),
@@ -274,6 +368,20 @@ class TestTwilioStreamTokenValidation:
     ) -> None:
         with pytest.raises(ValueError, match=message):
             TwilioTransportConfig(**kwargs)  # type: ignore[arg-type]
+
+    def test_audio_byte_limit_preserves_existing_positional_timeout(self) -> None:
+        config = TwilioTransportConfig(
+            "127.0.0.1",
+            8766,
+            PCM16_MONO_16K,
+            200,
+            None,
+            TWILIO_STREAM_TOKEN_PARAMETER,
+            0.25,
+        )
+
+        assert config.stream_token_validation_timeout_s == 0.25
+        assert config.max_pending_bytes == TwilioTransportConfig().max_pending_bytes
 
     @pytest.mark.asyncio
     async def test_server_transport_consumes_token_and_hides_parameter(self) -> None:
@@ -1123,7 +1231,8 @@ class TestTwilioStreamLifecycleRaces:
         assert transport._in_queue.empty()
         assert ended == []
 
-        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1154,7 +1263,8 @@ class TestTwilioStreamLifecycleRaces:
         assert transport._in_queue.empty()
         assert ended == []
 
-        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1287,7 +1397,8 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
             # Create some mulaw audio (160 samples = 20ms at 8kHz).
             pcm_silence = bytes(320)  # 160 samples * 2 bytes
             mulaw_data = pcm16_to_mulaw(pcm_silence, source_rate=8000)
-            await ws.send(_twilio_media_msg(mulaw_data))
+            for _ in range(4):
+                await ws.send(_twilio_media_msg(mulaw_data))
 
             await asyncio.wait_for(collect_task, timeout=2.0)
 
@@ -1322,9 +1433,10 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         )
         assert transport._in_queue.empty()
 
-        await transport._handle_message(
-            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
-        )
+        for _ in range(4):
+            await transport._handle_message(
+                _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+            )
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1359,9 +1471,10 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         )
         assert transport._in_queue.empty()
 
-        await transport._handle_message(
-            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
-        )
+        for _ in range(4):
+            await transport._handle_message(
+                _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+            )
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
