@@ -91,6 +91,16 @@ class STTProviderConfig:
     api_key: str | None = field(default=None, repr=False)
     params: dict[str, Any] | None = None
 
+    def __repr__(self) -> str:
+        # Import lazily: safe_defaults discovers provider catalogs while it is
+        # initializing its redaction policy.
+        from easycat.runtime.safe_defaults import _safe_repr
+
+        return (
+            f"STTProviderConfig(provider={_safe_repr(self.provider)}, "
+            f"params={_safe_repr(self.params)})"
+        )
+
 
 def create_stt_provider(config: STTProviderConfig, event_bus: EventBus | None = None) -> STTBase:
     """Create a registered STT provider, optionally wiring its event bus."""

@@ -77,6 +77,16 @@ class TTSProviderConfig:
     api_key: str | None = field(default=None, repr=False)
     params: dict[str, Any] | None = None
 
+    def __repr__(self) -> str:
+        # Import lazily: safe_defaults discovers provider catalogs while it is
+        # initializing its redaction policy.
+        from easycat.runtime.safe_defaults import _safe_repr
+
+        return (
+            f"TTSProviderConfig(provider={_safe_repr(self.provider)}, "
+            f"params={_safe_repr(self.params)})"
+        )
+
 
 def create_tts_provider(
     config: TTSProviderConfig, event_bus: EventBus | None = None

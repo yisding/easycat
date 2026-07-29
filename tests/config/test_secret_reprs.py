@@ -125,3 +125,20 @@ def test_credential_config_repr_omits_secret_fields(
         assert _is_secret_name(field_name)
         assert fields_by_name[field_name].repr is False
     assert _SENTINEL not in repr(factory())
+
+
+@pytest.mark.parametrize("config_cls", [STTProviderConfig, TTSProviderConfig])
+def test_named_provider_config_repr_redacts_nested_param_credentials(config_cls: type) -> None:
+    config = config_cls(
+        provider="custom",
+        params={
+            "api_key": _SENTINEL,
+            "nested": {"authorization": _SENTINEL},
+            "model": "safe-model",
+        },
+    )
+
+    rendered = repr(config)
+    assert _SENTINEL not in rendered
+    assert "safe-model" in rendered
+    assert rendered.count("***") == 2
