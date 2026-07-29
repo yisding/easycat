@@ -107,6 +107,7 @@ def _summarise_bundle(
         # stable; an absent sidecar yields all-zero counts).
         "annotations": summarise_annotations(annotations or {}).to_dict(),
         "provider_versions": dict(bundle.manifest.provider_versions),
+        "journal_dropped_records": bundle.manifest.journal_dropped_records,
         "artifact_count": len(bundle.artifact_index),
         "replay_entry_points": [
             {

@@ -6,9 +6,9 @@ Responsibilities:
   (transport -> tts -> agent -> turn -> stt -> vad -> audio), giving each
   stage a chance to observe and record the signal via
   ``Stage.handle_upstream``.
-- Compose ``STTCommitter.cancel()`` and ``TTSScheduler.cancel()``
-  during a turn cancel (Session drives the composition; the
-  orchestrator owns the signal-propagation tail of that path).
+- Initiate Session's fast barge-in cutoff; Session owns captured provider
+  cleanup while the orchestrator owns suppression policy and the
+  signal-propagation tail of that path.
 - Implement the barge-in suppression policy: if a queued session
   action declares ``no_interrupt=True`` (e.g. an end-call
   announcement), barge-in is suppressed and the orchestrator returns
@@ -85,7 +85,7 @@ class CancelOrchestrator:
         self._current_turn = wiring.current_turn
         self._session_actions = wiring.session_actions
         self._telephony_helpers_present = wiring.telephony_helpers_present
-        self._cancel_turn_impl = wiring.cancel_turn
+        self._begin_barge_in = wiring.begin_barge_in
 
     # ── Read-only config accessors ─────────────────────────────
 
@@ -112,6 +112,7 @@ class CancelOrchestrator:
         signal: _ControlSignal,
         *,
         cause: str | None = None,
+        turn_id: str | None = None,
     ) -> None:
         """Walk the upstream signal through every stage, late -> early.
 
@@ -145,7 +146,7 @@ class CancelOrchestrator:
             self._journal_sink.append_record(
                 kind=JournalRecordKind.CONTROL,
                 name="control_signal_cause",
-                turn_id=turn.id if turn else None,
+                turn_id=turn_id if turn_id is not None else (turn.id if turn else None),
                 data={"signal_id": signal.signal_id, "cause": cause},
             )
 
@@ -163,7 +164,7 @@ class CancelOrchestrator:
         if actions is not None and actions.no_interrupt:
             logger.debug("Barge-in suppressed: queued action has no_interrupt=True")
             return False
-        await self._cancel_turn_impl(barge_in=True)
+        await self._begin_barge_in()
         return True
 
     def record_interruption(

@@ -6,14 +6,15 @@ routes to the appropriate internal path.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import shlex
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -21,6 +22,9 @@ from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import (
     aclose_quietly,
+    bridge_version_info,
+    record_usage_from_result,
+    resolve_model_name,
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
@@ -42,6 +46,16 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+
+def _completion_text(accumulated: str, structured_output: Any) -> str:
+    """Prefer streamed text, falling back to a speakable structured result."""
+    if accumulated:
+        return accumulated
+    if structured_output is None:
+        return ""
+    return str(structured_output)
+
+
 _DEFAULT_HISTORY_KEY = "__default__"
 
 
@@ -52,7 +66,7 @@ class PydanticAIBridge:
     ``state_factory`` and ``initial_node_factory`` (graph mode).
     """
 
-    COMMITTABLE_BOUNDARIES = {
+    COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
         UnitKind.AGENT: CommitRule.BETWEEN_TURNS,
         UnitKind.MODEL_NODE: CommitRule.NON_COMMITTABLE,
         UnitKind.TOOL_CALL: CommitRule.BETWEEN_PHASES,
@@ -175,6 +189,22 @@ class PydanticAIBridge:
         return state
 
     # ── ExternalAgentBridge interface ─────────────────────────────
+
+    def version_info(self) -> dict[str, str]:
+        """Return model and SDK metadata for journal reproducibility."""
+        return bridge_version_info(
+            provider="pydantic_ai",
+            model=self._model_name(),
+            distribution="pydantic-ai",
+        )
+
+    def _model_name(self) -> str | None:
+        candidates = [self._agent, *(self._agents or [])]
+        for agent in candidates:
+            model = resolve_model_name(getattr(agent, "model", None))
+            if model is not None:
+                return model
+        return None
 
     async def invoke(
         self,
@@ -302,13 +332,28 @@ class PydanticAIBridge:
             return
 
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import (
+                ModelRequest,
+                ModelResponse,
+                TextPart,
+                UserPromptPart,
+            )
         except ImportError:
             return
 
         history = self._history_for_key(history_key or self._last_history_key)
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                # PydanticAI may expose the current user request before it
+                # commits a streaming ModelResponse. Preserve what was heard
+                # as this turn's response rather than walking across the user
+                # boundary and rewriting the previous completed turn.
+                if replacement:
+                    history.append(ModelResponse(parts=[TextPart(content=replacement)]))
+                break
             if isinstance(msg, ModelResponse):
                 text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
                 for idx, part in enumerate(text_parts):
@@ -350,10 +395,14 @@ class PydanticAIBridge:
         rather than the raw LLM output.
         """
         try:
-            from pydantic_ai.messages import ModelResponse
+            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
         except ImportError:
             return
         for msg in reversed(self._history_for_key(self._last_history_key)):
+            if isinstance(msg, ModelRequest) and any(
+                isinstance(part, UserPromptPart) for part in msg.parts
+            ):
+                return
             if not isinstance(msg, ModelResponse):
                 continue
             text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
@@ -436,7 +485,12 @@ class PydanticAIBridge:
                         yield ev
                     raw_output = self._last_output
                 else:
-                    inner = self._stream_via_run_stream(turn_input, cancel_token, history_key)
+                    inner = self._stream_via_run_stream(
+                        turn_input,
+                        recorder,
+                        cancel_token,
+                        history_key,
+                    )
                     async for ev in inner:
                         if ev.kind == "text_delta":
                             accumulated += ev.text
@@ -455,7 +509,7 @@ class PydanticAIBridge:
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
-                text=accumulated,
+                text=_completion_text(accumulated, raw_output),
                 structured_output=raw_output,
             )
 
@@ -472,37 +526,63 @@ class PydanticAIBridge:
             turn_input.text,
             **self._agent_run_kwargs(agent.iter, turn_input, history_key),
         ) as agent_run:
-            interrupted = False
-            async for node in agent_run:
-                node_cls = type(node).__name__
-                is_tool_node = node_cls == "CallToolsNode"
+            try:
+                interrupted = False
+                async for node in agent_run:
+                    node_cls = type(node).__name__
+                    is_tool_node = node_cls == "CallToolsNode"
 
-                if cancel_token and cancel_token.is_cancelled:
-                    interrupted = True
-                    if not is_tool_node:
-                        break
+                    if cancel_token and cancel_token.is_cancelled:
+                        interrupted = True
+                        if not is_tool_node:
+                            break
 
-                if not hasattr(node, "stream"):
-                    continue
+                    if not hasattr(node, "stream"):
+                        continue
 
-                async with node.stream(agent_run.ctx) as stream:
-                    async for event in stream:
-                        if cancel_token and cancel_token.is_cancelled and not interrupted:
-                            interrupted = True
-                            if not is_tool_node:
-                                break
-                        mapped = translate_event(event, recorder)
-                        if mapped is not None:
-                            if interrupted and mapped.kind == "text_delta":
-                                continue
-                            yield mapped
+                    async with node.stream(agent_run.ctx) as stream:
+                        async for event in stream:
+                            if cancel_token and cancel_token.is_cancelled and not interrupted:
+                                interrupted = True
+                                if not is_tool_node:
+                                    break
+                            mapped = translate_event(event, recorder)
+                            if mapped is not None:
+                                if interrupted and mapped.kind == "text_delta":
+                                    continue
+                                yield mapped
 
-            self._set_history_for_key(history_key, await _run_new_messages(agent_run))
-            self._last_output = await _run_output(agent_run)
+            except GeneratorExit:
+                # Do not inject GeneratorExit into PydanticAI's Agent.iter
+                # context: v1 records it as a node failure and re-raises it
+                # during __aexit__. Snapshot the partial turn, then consume the
+                # normal async-generator close signal here so the SDK context
+                # exits cleanly.
+                await self._commit_interrupted_agent_run(history_key, agent_run)
+                return
+            except BaseException:
+                # A hard task cancel or consumer ``aclose()`` can unwind at the
+                # suspended yield above before normal fall-through commits this
+                # turn. PydanticAI exposes ``new_messages()`` while the run is
+                # still active, so snapshot it before the context exits; the
+                # follow-up interruption rewrite must target this turn rather
+                # than the previous completed assistant response.
+                await self._commit_interrupted_agent_run(history_key, agent_run)
+                raise
+            else:
+                await self._commit_agent_run(history_key, agent_run)
+            finally:
+                await record_usage_from_result(
+                    recorder,
+                    agent_run,
+                    provider="pydantic_ai",
+                    model=self._model_name(),
+                )
 
     async def _stream_via_run_stream(
         self,
         turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
         cancel_token: CancelToken | None,
         history_key: str,
     ) -> AsyncIterator[AgentBridgeEvent]:
@@ -512,17 +592,51 @@ class PydanticAIBridge:
             turn_input.text,
             **self._agent_run_kwargs(agent.run_stream, turn_input, history_key),
         ) as result:
-            accumulated = ""
-            async for full_text in result.stream_text():
-                if cancel_token and cancel_token.is_cancelled:
-                    break
-                delta = full_text[len(accumulated) :]
-                if delta:
-                    yield AgentBridgeEvent(kind="text_delta", text=delta)
-                accumulated = full_text
+            try:
+                accumulated = ""
+                async for full_text in result.stream_text():
+                    if cancel_token and cancel_token.is_cancelled:
+                        break
+                    delta = full_text[len(accumulated) :]
+                    if delta:
+                        yield AgentBridgeEvent(kind="text_delta", text=delta)
+                    accumulated = full_text
 
-            self._set_history_for_key(history_key, await _run_new_messages(result))
-            self._last_output = await _run_output(result)
+            except GeneratorExit:
+                await self._commit_interrupted_agent_run(history_key, result)
+                return
+            except BaseException:
+                await self._commit_interrupted_agent_run(history_key, result)
+                raise
+            else:
+                await self._commit_agent_run(history_key, result)
+            finally:
+                await record_usage_from_result(
+                    recorder,
+                    result,
+                    provider="pydantic_ai",
+                    model=self._model_name(),
+                )
+
+    async def _commit_interrupted_agent_run(self, history_key: str, run: Any) -> None:
+        """Best-effort history snapshot while cancellation is already active."""
+        try:
+            await self._commit_agent_run(history_key, run)
+        except (asyncio.CancelledError, Exception):
+            # Never replace the cancellation/GeneratorExit with a secondary
+            # SDK snapshot failure. The user-boundary guard below still keeps
+            # a missing current turn from clobbering the prior assistant.
+            logger.warning(
+                "Failed to snapshot interrupted PydanticAI run history",
+                exc_info=True,
+            )
+
+    async def _commit_agent_run(self, history_key: str, run: Any) -> None:
+        """Append the SDK's current-turn messages to bridge-owned history."""
+        new_messages = await _run_new_messages(run)
+        history = self._history_for_key(history_key)
+        self._set_history_for_key(history_key, [*history, *new_messages])
+        self._last_output = await _run_output(run)
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:
@@ -603,6 +717,7 @@ class PydanticAIBridge:
         state._easycat_event_handler = _handler
 
         accumulated = ""
+        graph_output: Any = None
         prev_node_name: str | None = None
         prev_cursor: ExecutionCursor | None = None
 
@@ -632,6 +747,7 @@ class PydanticAIBridge:
                         if not graph_units:
                             output = _graph_item_output(graph_item)
                             if output is not _UNSET:
+                                graph_output = output
                                 self._last_output = output
                                 if isinstance(output, str):
                                     accumulated = accumulated or output
@@ -691,10 +807,10 @@ class PydanticAIBridge:
             # Capture result.
             output = await _run_output(graph_run)
             if output is not None:
+                graph_output = output
                 self._last_output = output
                 if isinstance(output, str):
                     accumulated = accumulated or output
-
             # Capture graph run history as a state snapshot record.
             run_history = getattr(graph_run, "history", None)
             if run_history is None:
@@ -768,8 +884,8 @@ class PydanticAIBridge:
 
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
-            structured_output=self._last_output,
+            text=_completion_text(accumulated, graph_output),
+            structured_output=graph_output,
         )
 
 
@@ -816,9 +932,17 @@ class _GraphEventHandler:
             await self._handle_event(args[0])
             return
         if len(args) == 2:
-            _ctx, events = args
-            async for event in events:
-                await self._handle_event(event)
+            ctx, events = args
+            try:
+                async for event in events:
+                    await self._handle_event(event)
+            finally:
+                await record_usage_from_result(
+                    self._recorder,
+                    ctx,
+                    provider="pydantic_ai",
+                    model=resolve_model_name(getattr(ctx, "model", None)),
+                )
             return
         raise TypeError("_GraphEventHandler expects event or (ctx, events)")
 

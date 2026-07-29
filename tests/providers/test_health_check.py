@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+import pytest
 
 from easycat._health_check import HealthCheckable, PeriodicHealthChecker
 from easycat.events import Error, ErrorStage, EventBus
@@ -148,6 +151,41 @@ class TestPeriodicHealthChecker:
 
         assert len(errors) >= 1
 
+    async def test_periodic_loop_logs_strict_error_handler_failure(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        event_bus = EventBus(handler_error_policy="raise")
+
+        async def fail(_event: Error) -> None:
+            raise RuntimeError("health handler failed")
+
+        event_bus.subscribe(Error, fail)
+        provider = NotifyingUnhealthyProvider()
+        checker = PeriodicHealthChecker(
+            provider,
+            interval=0,
+            provider_name="strict-provider",
+            event_bus=event_bus,
+        )
+
+        with caplog.at_level(logging.ERROR, logger="easycat._health_check"):
+            checker.start()
+            await asyncio.wait_for(provider.checked.wait(), timeout=0.5)
+            task = checker._task
+            assert task is not None
+            await asyncio.wait_for(task, timeout=0.5)
+
+        assert "Periodic health check loop failed for strict-provider" in caplog.text
+        assert "health handler failed" in caplog.text
+        assert checker.is_running is False
+
+        provider.checked.clear()
+        checker.start()
+        await asyncio.wait_for(provider.checked.wait(), timeout=0.5)
+        assert checker.is_running is True
+        await checker.stop()
+
     async def test_failure_threshold_delays_escalation(self):
         event_bus = EventBus()
         errors = []
@@ -246,7 +284,5 @@ class TestPeriodicHealthChecker:
         assert calls == ["stale_ws"]
 
     def test_invalid_failure_threshold(self):
-        import pytest
-
         with pytest.raises(ValueError):
             PeriodicHealthChecker(UnhealthyProvider(), failure_threshold=0)

@@ -1047,11 +1047,14 @@ async def test_serve_webrtc_config_sessions_bounds_shutdown(
         drain_timeout_s: float,
         force_after: bool,
         force_timeout_s: float | None,
+        stop_for_key: Callable[[object, bool], object] | None = None,
     ) -> None:
         assert tuple(sessions_for_keys()) == ()
+        assert stop_for_key is not None
         drain_calls.append((drain_timeout_s, force_after, force_timeout_s))
 
-    async def hanging_stop_all(_self: object) -> None:
+    async def hanging_stop_all(_self: object, *, force: bool = False) -> None:
+        assert force
         await asyncio.Event().wait()
 
     monkeypatch.setattr(transports_module.CapacityGate, "drain", record_drain)

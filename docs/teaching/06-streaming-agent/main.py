@@ -51,7 +51,7 @@ from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
 PREROLL_FRAMES = 15
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch06-streaming-{int(time.time())}"
 
@@ -96,6 +96,7 @@ async def stream_sentences_to_tts(
     """
     stream = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
             {"role": "user", "content": user_text},

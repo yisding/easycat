@@ -13,9 +13,10 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
-from easycat.audio_format import PCM16_MONO_48K, AudioChunk
+from easycat._provider_catalog import ProviderCatalog
+from easycat.audio_format import AudioChunk, AudioFormat
 
 if TYPE_CHECKING:
     import numpy as np
@@ -29,6 +30,12 @@ _VALID_NOISE_REDUCER_BACKENDS: tuple[NoiseReducerBackend, ...] = (
     "auto",
     "krisp",
     "rnnoise",
+)
+NOISE_REDUCER_PROVIDER_ENTRY_POINT_GROUP = "easycat.noise_reducer_providers"
+_CATALOG = ProviderCatalog(
+    specs={},
+    kind="noise reducer",
+    entry_point_group=NOISE_REDUCER_PROVIDER_ENTRY_POINT_GROUP,
 )
 NoiseReducerFallbackPolicy: TypeAlias = Literal["passthrough", "error"]
 _VALID_NOISE_REDUCER_FALLBACK_POLICIES: tuple[NoiseReducerFallbackPolicy, ...] = (
@@ -107,6 +114,9 @@ class RNNoiseReducer:
         # backends, we accumulate whole frames here and defer the sub-frame
         # remainder to the next call.
         self._buffer_48k: bytes = b""
+        self._stream_rate: int | None = None
+        self._input_resampler = PCM16StreamResampler(48_000)
+        self._output_resampler: PCM16StreamResampler | None = None
         self._load_rnnoise()
 
     def _load_rnnoise(self) -> None:
@@ -139,16 +149,31 @@ class RNNoiseReducer:
         to drain a trailing partial frame at end-of-stream.
         """
         original_rate = chunk.format.sample_rate
+        if self._stream_rate != original_rate:
+            # One reducer stream has one output format. If an upstream device
+            # changes rates, start a clean RNNoise/resampler segment instead
+            # of concatenating old-rate frame remainders with the new format.
+            self._input_resampler.reset()
+            self._buffer_48k = b""
+            self._output_resampler = PCM16StreamResampler(original_rate)
+            self._stream_rate = original_rate
 
         # Step 1: Resample to 48 kHz if needed, then accumulate.
-        chunk_48k = resample_chunk(chunk, 48000)
-        self._buffer_48k += chunk_48k.data
+        self._buffer_48k += self._input_resampler.process(
+            chunk.data,
+            original_rate,
+        )
 
         cleaned_48k = self._process_buffered_frames(flush=False)
 
         # Step 2: Resample the cleaned 48 kHz audio back to the input rate.
-        cleaned = AudioChunk(data=cleaned_48k, format=PCM16_MONO_48K, timestamp=chunk.timestamp)
-        return resample_chunk(cleaned, original_rate)
+        assert self._output_resampler is not None
+        cleaned = self._output_resampler.process(cleaned_48k, 48_000)
+        return AudioChunk(
+            data=cleaned,
+            format=AudioFormat(sample_rate=original_rate, channels=1, sample_width=2),
+            timestamp=chunk.timestamp,
+        )
 
     def _process_buffered_frames(self, *, flush: bool) -> bytes:
         """Run buffered 48 kHz PCM16 through RNNoise, whole frames only.
@@ -182,15 +207,30 @@ class RNNoiseReducer:
     def flush(self) -> AudioChunk:
         """Drain any buffered trailing audio, zero-padding the final frame.
 
-        Returns the cleaned tail at 48 kHz (empty data when nothing is
-        buffered).  Call at end-of-stream so a final partial frame is not
-        silently dropped.
+        Returns the cleaned tail at the source stream's sample rate (empty
+        data when nothing is buffered). Call at end-of-stream so neither a
+        partial RNNoise frame nor delayed resampler output is silently dropped.
         """
+        output_rate = self._stream_rate or 48_000
+        self._buffer_48k += self._input_resampler.finish()
         cleaned_48k = self._process_buffered_frames(flush=True)
-        return AudioChunk(data=cleaned_48k, format=PCM16_MONO_48K)
+        if self._output_resampler is not None:
+            cleaned = self._output_resampler.process(cleaned_48k, 48_000)
+            cleaned += self._output_resampler.finish()
+        else:
+            cleaned = cleaned_48k
+        self._stream_rate = None
+        return AudioChunk(
+            data=cleaned,
+            format=AudioFormat(sample_rate=output_rate, channels=1, sample_width=2),
+        )
 
     def close(self) -> None:
         """Release RNNoise state."""
+        self._input_resampler.reset()
+        if self._output_resampler is not None:
+            self._output_resampler.reset()
+        self._stream_rate = None
         self._buffer_48k = b""
         if self._state and self._rnnoise:
             try:
@@ -331,7 +371,59 @@ class PassthroughNoiseReducer:
         }
 
 
-def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
+def register_noise_reducer_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str | None = None,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
+) -> None:
+    """Register a third-party noise reducer and its discovery metadata."""
+    normalized = name.strip().lower() if isinstance(name, str) else ""
+    if normalized in _VALID_NOISE_REDUCER_BACKENDS:
+        raise ValueError(
+            f"Noise reducer provider name {normalized!r} is reserved by a built-in backend."
+        )
+    _CATALOG.register(
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
+    )
+
+
+def available_noise_reducer_providers() -> list[str]:
+    """Return every built-in or registered noise-reducer provider name."""
+    return sorted(set(_VALID_NOISE_REDUCER_BACKENDS) | set(_CATALOG.available_names()))
+
+
+def is_noise_reducer_config(value: object) -> bool:
+    """True when ``value`` is a built-in or registered noise-reducer config."""
+    return isinstance(value, NoiseReducerConfig) or _CATALOG.is_config_instance(value)
+
+
+def parse_noise_reducer_string(spec: str) -> Any:
+    """Parse a built-in or registered ``provider/model`` shortcut."""
+    provider, separator, model = spec.partition("/")
+    normalized = provider.strip().lower()
+    if normalized in _VALID_NOISE_REDUCER_BACKENDS:
+        if separator and model.strip():
+            raise ValueError(
+                f"Built-in noise reducer backend {normalized!r} does not accept a model."
+            )
+        return NoiseReducerConfig(backend=normalized)
+    return _CATALOG.parse_string(spec)
+
+
+def create_noise_reducer(config: Any = None) -> Any:
     """Create the best available noise reducer.
 
     Selection order:
@@ -346,7 +438,19 @@ def create_noise_reducer(config: NoiseReducerConfig | None = None) -> Any:
 
     Returns an object satisfying the NoiseReducer protocol.
     """
+    if isinstance(config, str):
+        config = parse_noise_reducer_string(config)
+    if config is not None and callable(getattr(config, "process", None)):
+        return config
+    if _CATALOG.is_config_instance(config):
+        return _CATALOG.create_from_config(config, event_bus=None)
+
     cfg = config or NoiseReducerConfig()
+    if not isinstance(cfg, NoiseReducerConfig):
+        raise ValueError(
+            f"Unsupported noise reducer configuration type: {type(cfg).__name__!r}. "
+            "Pass NoiseReducerConfig, a registered config, or a noise-reducer instance."
+        )
     cfg.backend = _validate_noise_reducer_backend(cfg.backend)
     cfg.fallback_policy = _validate_noise_reducer_fallback_policy(cfg.fallback_policy)
 
