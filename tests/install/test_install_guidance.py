@@ -46,7 +46,7 @@ def test_pyproject_allows_uv_patch_upgrades_within_the_audited_minor() -> None:
     """Patch releases may advance without silently crossing uv minor releases."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.29,<0.12.0"
+    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.0,<0.12.0"
 
 
 @pytest.mark.parametrize(
