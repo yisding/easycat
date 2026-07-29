@@ -43,8 +43,9 @@ takes `--json` (`uv run easycat validate quick --json`,
 emit the run or saved report inside the standard CLI envelope.
 
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
-RNNoise, NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. It does not
-install every framework/provider variant. Install cells are repo-local commands that start with EasyCat extras,
+NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. RNNoise is opt-in
+through the `rnnoise` extra. It does not install every framework/provider
+variant. Install cells are repo-local commands that start with EasyCat extras,
 such as `uv sync --extra quickstart --group dev`; anything after a semicolon is
 an additional third-party package to install in the same environment with
 `uv pip install`.
@@ -134,7 +135,7 @@ Support files:
 | [push_to_talk.py](push_to_talk.py) | Manually call `start_turn()` / `end_turn()` instead of VAD. | `uv run python examples/push_to_talk.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [smart_turn_demo.py](smart_turn_demo.py) | ONNX endpoint classifier for faster turn completion. | `uv run python examples/smart_turn_demo.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [vad_backends.py](vad_backends.py) | Pin VAD backend (`silero`, `funasr`, `ten`, `krisp`, or `auto`). | `uv run python examples/vad_backends.py --backend silero` | `uv sync --extra quickstart --group dev`; `--extra funasr-vad`, `--extra ten-vad`, or `uv pip install krisp_audio` for those backends | `OPENAI_API_KEY` |
-| [noise_reduction_backends.py](noise_reduction_backends.py) | Pin noise-reduction backend (`rnnoise`, `krisp`, or `auto`). | `uv run python examples/noise_reduction_backends.py --backend rnnoise` | `uv sync --extra quickstart --group dev`; `uv pip install krisp_audio` for Krisp | `OPENAI_API_KEY` |
+| [noise_reduction_backends.py](noise_reduction_backends.py) | Pin noise-reduction backend (`rnnoise`, `krisp`, or `auto`). | `uv run python examples/noise_reduction_backends.py --backend rnnoise` | `uv sync --extra quickstart --extra rnnoise --group dev`; `uv pip install krisp_audio` for Krisp | `OPENAI_API_KEY` |
 | [echo_cancellation.py](echo_cancellation.py) | Enable LiveKit AEC3 on local mic/speaker. | `uv run python examples/echo_cancellation.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [output_processors.py](output_processors.py) | Pre-TTS pronunciation and pacing processors. | `uv run python examples/output_processors.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 

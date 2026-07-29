@@ -3,7 +3,8 @@
 ``NoiseReducerConfig.backend`` accepts ``"krisp"``, ``"rnnoise"``, or
 ``"auto"`` (default; tries Krisp → RNNoise → passthrough).
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev  # RNNoise included
+Setup: export OPENAI_API_KEY=...;
+       uv sync --extra quickstart --extra rnnoise --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -17,7 +18,8 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "openai-agents is required. For an app, run: "
-        "uv add 'easycat[quickstart]'. In this repo, run: uv sync --extra quickstart --group dev"
+        "uv add 'easycat[quickstart,rnnoise]'. In this repo, run: "
+        "uv sync --extra quickstart --extra rnnoise --group dev"
     ) from exc
 
 from easycat import EasyConfig, run
