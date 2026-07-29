@@ -279,7 +279,7 @@ def probe_module_for_extra(
     """
     if extra is None:
         return None
-    from easycat._provider_catalog import provider_catalogs, provider_probe_modules
+    from easycat._provider_registry import provider_catalogs, provider_probe_modules
 
     catalog_kind = {
         "stt": "STT",

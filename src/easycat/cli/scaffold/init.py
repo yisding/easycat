@@ -24,7 +24,7 @@ import typer
 from rich.markup import escape
 from rich.prompt import Prompt
 
-from easycat._provider_catalog import provider_env_vars, provider_extras
+from easycat._provider_registry import provider_env_vars, provider_extras
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
     emit_command_error,

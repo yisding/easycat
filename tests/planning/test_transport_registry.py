@@ -92,7 +92,7 @@ def test_extra_probe_module_covers_every_named_extra() -> None:
     ):
         named_extras.update(b.extra for b in table.values() if b.extra is not None)
     # Plus the STT/TTS catalog extras.
-    from easycat._provider_catalog import provider_extras
+    from easycat._provider_registry import provider_extras
 
     named_extras.update(e for e in provider_extras().values() if e)
 

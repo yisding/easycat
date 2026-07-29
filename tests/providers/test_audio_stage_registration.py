@@ -14,7 +14,7 @@ from easycat import (
     create_vad,
     register_vad_provider,
 )
-from easycat._provider_catalog import provider_env_vars, provider_extras
+from easycat._provider_registry import provider_env_vars, provider_extras
 from easycat.config import EasyConfig
 from easycat.echo_cancellation import (
     _CATALOG as ECHO_CATALOG,
