@@ -136,6 +136,18 @@ async def test_drain_awaits_pending_tasks():
     assert len(bus.events) == 1
 
 
+@pytest.mark.asyncio
+async def test_drain_does_not_await_the_current_error_handler_task():
+    probe = _ConfigProbe(_Config())
+    current = asyncio.current_task()
+    assert current is not None
+    probe._emit_tasks.add(current)
+    try:
+        await asyncio.wait_for(probe._drain_emit_tasks(), timeout=0.1)
+    finally:
+        probe._emit_tasks.discard(current)
+
+
 def test_get_package_version_returns_unknown_for_missing_package():
     assert get_package_version("easycat-definitely-not-installed") == "unknown"
 

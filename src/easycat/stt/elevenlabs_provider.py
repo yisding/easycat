@@ -633,7 +633,6 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 if isinstance(exc, httpx.HTTPStatusError):
                     context["http_status"] = exc.response.status_code
                 self._emit_provider_error(exc, **context)
-                await self._drain_emit_tasks()
                 raise
         finally:
             if owns_client:

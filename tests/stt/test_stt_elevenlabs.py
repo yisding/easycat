@@ -389,6 +389,7 @@ async def test_elevenlabs_batch_api_error_is_emitted_before_propagation():
 
     with pytest.raises(httpx.HTTPStatusError):
         await stt.end_stream()
+    await stt.close()
 
     assert len(errors) == 1
     assert errors[0].provider == "elevenlabs"

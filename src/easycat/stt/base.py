@@ -211,6 +211,12 @@ class STTBase:
                 break
             yield event
 
+    async def close(self) -> None:
+        """Drain provider-scoped event emissions after stream locks are released."""
+        drain = getattr(self, "_drain_emit_tasks", None)
+        if callable(drain):
+            await drain()
+
     # -- Protected helpers for subclasses ----------------------------------
 
     def _emit_event(self, event: STTEvent) -> None:

@@ -101,7 +101,10 @@ class ProviderErrorEmitter:
         if not self._emit_tasks:
             return
         # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
-        await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
+        current = asyncio.current_task()
+        pending = [task for task in self._emit_tasks if task is not current]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def get_package_version(pkg: str) -> str:
