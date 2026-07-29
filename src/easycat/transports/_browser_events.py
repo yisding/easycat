@@ -106,6 +106,7 @@ class BrowserEventForwarder:
             raise ValueError("max_pending_events must be an integer >= 1")
         self._send_json = send_json
         self._send_timeout_s = send_timeout_s
+        self._max_send_tasks = max_pending_events
         self._send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_pending_events)
         self._writer_task: asyncio.Task[None] | None = None
         self._send_tasks: set[asyncio.Task[None]] = set()
@@ -220,6 +221,13 @@ class BrowserEventForwarder:
                 self._send_queue.task_done()
 
     async def _send_payload(self, payload: dict[str, Any]) -> None:
+        live_send_tasks = sum(not task.done() for task in self._send_tasks)
+        if live_send_tasks >= self._max_send_tasks:
+            logger.debug(
+                "Dropping browser event %s: too many timed-out sends still running",
+                payload.get("type"),
+            )
+            return
         task = asyncio.create_task(self._call_send_json(payload))
         self._send_tasks.add(task)
         task.add_done_callback(self._send_done)

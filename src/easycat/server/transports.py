@@ -187,7 +187,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
     ) -> None:
         """Drain sessions, then close surviving sockets and reap handlers."""
         self.start_draining(server)
-        await self.gate.drain(
+        force_deadline = await self.gate.drain(
             self._active_session_pairs,
             drain_timeout_s=max(drain_timeout_s, 0.0),
             force_after=True,
@@ -195,20 +195,20 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         )
         await close_websocket_connections(
             self._connections.values(),
-            timeout_s=max(force_timeout_s, 0.0),
+            timeout_s=_remaining_timeout(force_deadline),
         )
         await cancel_handler_tasks(
             self._handler_tasks,
-            timeout_s=max(force_timeout_s, 0.0),
+            timeout_s=_remaining_timeout(force_deadline),
         )
         await self._bounded_cleanup(
             server.wait_closed(),  # type: ignore[attr-defined]
-            timeout_s=max(force_timeout_s, 0.0),
+            timeout_s=_remaining_timeout(force_deadline),
             label="WebSocket server handlers",
         )
         await self._bounded_cleanup(
             self.manager.stop_all(),
-            timeout_s=max(force_timeout_s, 0.0),
+            timeout_s=_remaining_timeout(force_deadline),
             label="WebSocket sessions",
         )
         self._sessions.clear()
@@ -353,7 +353,7 @@ class CapacityGate(Generic[KeyT]):
         force_timeout_s: float | None = None,
         poll_interval_s: float = 0.05,
         stop_for_key: Callable[[KeyT, bool], object] | None = None,
-    ) -> None:
+    ) -> float | None:
         """Drive each active session GRACEFULLY, then force-escalate the stragglers.
 
         ``sessions_for_keys`` returns the ``(key, session)`` pairs that are
@@ -390,7 +390,7 @@ class CapacityGate(Generic[KeyT]):
         """
         pairs = list(sessions_for_keys())
         if not pairs:
-            return
+            return _deadline_after(force_timeout_s)
 
         # (1) launch the single graceful stop per active session. Servers pass a
         # keyed manager callback so handler cleanup and drain escalation share
@@ -412,6 +412,7 @@ class CapacityGate(Generic[KeyT]):
             if pending_tasks and drain_timeout_s > 0:
                 await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
         finally:
+            force_deadline = _deadline_after(force_timeout_s)
             # Teardown ownership survives cancellation of the caller running
             # drain. This prevents graceful tasks from becoming detached and
             # preserves a keyed path for later force escalation.
@@ -419,7 +420,7 @@ class CapacityGate(Generic[KeyT]):
                 self._finish_drain(
                     graceful,
                     force_after=force_after,
-                    force_timeout_s=force_timeout_s,
+                    force_deadline=force_deadline,
                     stop_for_key=stop_for_key,
                 )
             )
@@ -427,13 +428,14 @@ class CapacityGate(Generic[KeyT]):
             finish_task.add_done_callback(self._drain_tasks.discard)
 
         await asyncio.shield(finish_task)
+        return force_deadline
 
     async def _finish_drain(
         self,
         graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]],
         *,
         force_after: bool,
-        force_timeout_s: float | None,
+        force_deadline: float | None,
         stop_for_key: Callable[[KeyT, bool], object] | None,
     ) -> None:
         """Escalate all remaining sessions concurrently under one deadline."""
@@ -453,13 +455,25 @@ class CapacityGate(Generic[KeyT]):
         if escalations:
             await _safe_await(
                 asyncio.gather(*escalations, return_exceptions=True),
-                timeout_s=force_timeout_s,
+                timeout_s=_remaining_timeout(force_deadline),
             )
         for key in graceful:
             self.untrack(key)
 
     def _untrack_after_escalation(self, key: KeyT, _task: asyncio.Task[None]) -> None:
         self.untrack(key)
+
+
+def _deadline_after(timeout_s: float | None) -> float | None:
+    if timeout_s is None:
+        return None
+    return asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+
+
+def _remaining_timeout(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    return max(deadline - asyncio.get_running_loop().time(), 0.0)
 
 
 def _call_stop(

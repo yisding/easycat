@@ -95,7 +95,7 @@ recoverable from image history.
 
 ## What the image contains
 
-- `python:3.11-slim-bookworm` runtime
+- `python:3.14-slim-bookworm` runtime
 - EasyCat installed with the Dockerfile `EXTRAS` default: `openai`,
   `openai-agents`, `silero-vad`, `rnnoise`
 - Bundled Silero VAD and Smart-Turn v3.2 ONNX models

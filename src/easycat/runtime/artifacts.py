@@ -301,6 +301,8 @@ class FilesystemArtifactStore:
         return self._existing_ref_path(ref) is not None
 
     def delete(self, ref: str) -> None:
+        if not _is_sha256_ref(ref):
+            return
         with self._lock:
             for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
                 try:

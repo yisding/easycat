@@ -261,8 +261,8 @@ class TwilioTransportConfig:
     stream_token_validator: StreamTokenValidator | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
     stream_token_validation_timeout_s: float = 5.0
-    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
     unsafe_allow_no_auth: bool = False
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
     def __post_init__(self) -> None:
         if not self.stream_token_parameter:

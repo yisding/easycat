@@ -439,6 +439,7 @@ class SqliteJournal(_SqlJournalBase):
         self._recovered = False
         self._original_session_id = session_id
         self._clean_close_marked = False
+        self._degraded_marker_safe = True
         self._pending_records = 0
         self._batch_generation = 0
         self._batch_deadline: float | None = None
@@ -863,7 +864,7 @@ class SqliteJournal(_SqlJournalBase):
             name in self._commit_boundary_names
             or self._pending_records >= self._batch_commit_records
         ):
-            self._commit_transaction_locked()
+            self._commit_transaction_locked(recover_failed_batch=True)
             return
         self._schedule_batch_commit_locked()
 
@@ -889,18 +890,55 @@ class SqliteJournal(_SqlJournalBase):
             ):
                 return
             try:
-                self._commit_transaction_locked()
+                self._commit_transaction_locked(recover_failed_batch=True)
             except Exception as commit_exc:
                 exc = commit_exc
         if exc is not None:
             self._enter_degraded(self._session_id, exc)
 
-    def _commit_transaction_locked(self, *, reopen: bool = True) -> None:
+    def _commit_transaction_locked(
+        self,
+        *,
+        reopen: bool = True,
+        recover_failed_batch: bool = False,
+    ) -> None:
         """Commit the open transaction and invalidate any scheduled deadline."""
-        self._conn.execute("COMMIT")
+        try:
+            self._execute_commit_locked()
+        except Exception:
+            if recover_failed_batch:
+                self._recover_failed_batch_commit_locked(reopen=reopen)
+            raise
         self._reset_batch_state_locked()
         if reopen:
             self._conn.execute("BEGIN")
+
+    def _execute_commit_locked(self) -> None:
+        """Execute COMMIT through a narrow seam used by failure-path tests."""
+        self._conn.execute("COMMIT")
+
+    def _recover_failed_batch_commit_locked(self, *, reopen: bool) -> None:
+        """Rollback a failed batch before degraded-marker persistence."""
+        rollback_succeeded = False
+        try:
+            self._conn.execute("ROLLBACK")
+            rollback_succeeded = True
+        except sqlite3.Error:
+            logger.debug("Failed to roll back journal batch after COMMIT error", exc_info=True)
+        self._reset_batch_state_locked()
+        self._degraded_marker_safe = rollback_succeeded
+        if not rollback_succeeded:
+            return
+        try:
+            row = self._conn.execute(
+                "SELECT MAX(sequence) FROM journal WHERE sequence >= 0"
+            ).fetchone()
+            self._seq = int(row[0]) if row and row[0] is not None else 0
+            if reopen:
+                self._conn.execute("BEGIN")
+        except sqlite3.Error:
+            self._degraded_marker_safe = False
+            logger.debug("Failed to restore journal after batch rollback", exc_info=True)
 
     def _reset_batch_state_locked(self) -> None:
         self._pending_records = 0
@@ -920,7 +958,7 @@ class SqliteJournal(_SqlJournalBase):
         # clean_close marker).  Persisting a degraded marker here would both
         # add a spurious journal row and COMMIT, defeating that rollback and
         # making a crash-after-finalize DB look uncleanly closed.  Skip it.
-        if self._clean_close_marked:
+        if self._clean_close_marked or not self._degraded_marker_safe:
             return
         with self._lock:
             _persist_degraded_marker(self._conn, session_id, exc)
