@@ -20,7 +20,7 @@ from easycat.stages.base import (
     audio_format_fields,
     captures_verbose_stage_io,
     journal_append_control_signal,
-    journal_append_event,
+    journal_append_event_async,
     journal_ctx,
     live_replay_input,
     put_artifact_async,
@@ -101,7 +101,7 @@ class VADStage:
                 else 0,
             }
             start_extra.update(audio_format_fields(input))
-            start_sequence = journal_append_event(
+            start_sequence = await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_start",
@@ -149,7 +149,7 @@ class VADStage:
             self._last_decision = type(events[-1]).__name__
         if capture_detail:
             state_after = self.snapshot_state()
-            journal_append_event(
+            await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_complete",

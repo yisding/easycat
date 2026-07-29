@@ -20,7 +20,16 @@ SOURCE_ROOT = REPO_ROOT / "src"
 PACKAGE_ROOT = SOURCE_ROOT / "easycat"
 JOURNAL_REFERENCE = REPO_ROOT / "docs" / "reference" / "journal-records.md"
 
-_RECORD_CALLS = frozenset({"append", "append_record", "journal_append_event", "_append"})
+_RECORD_CALLS = frozenset(
+    {
+        "append",
+        "append_record",
+        "append_record_async",
+        "journal_append_event",
+        "journal_append_event_async",
+        "_append",
+    }
+)
 _TYPED_RECORD_NAMES = {
     "BufferOverflow": "buffer_overflow",
     "JournalDegraded": "journal_degraded",

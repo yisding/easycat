@@ -241,7 +241,8 @@ def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
 def test_twilio_scaffold_keeps_runtime_feedback_opt_in() -> None:
     source = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
 
-    assert "manager.connection(id(ws), session)" in source
+    assert "WebSocketSessionRuntime(" in source
+    assert "session_factory=build_session" in source
     assert "runtime_feedback=True" not in source
     assert "attach_runtime_feedback" not in source
 
@@ -1098,6 +1099,8 @@ def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
     assert "TWILIO_AUTH_TOKEN" in env_example
     assert "TWILIO_MAX_SESSIONS" in env_example
     assert "TWILIO_START_TIMEOUT_S" in env_example
+    assert "TWILIO_DRAIN_TIMEOUT_S" in env_example
+    assert "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S" in env_example
     assert "TWILIO_PUBLIC_TWIML_URL" in env_example
     assert "TRUST_PROXY_HEADERS" in env_example
     assert "one-time stream token" in readme

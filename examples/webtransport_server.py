@@ -19,11 +19,17 @@ requires a trusted certificate; for local development, launch Chrome with
 your cert with ``openssl x509 ...``) or use ``--ignore-certificate-errors``.
 
 Each connecting browser tab gets its own EasyCat ``Session``.
+
+The server binds loopback by default. For a public bind, set
+``EASYCAT_SERVE_TOKEN``, pass ``--host 0.0.0.0 --allow-query-token``, and open
+the browser client with ``?token=<the same token>``. Treat token-bearing URLs
+as secrets.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 
 from easycat import (
     EasyConfig,
@@ -46,16 +52,23 @@ def main(args: argparse.Namespace) -> None:
     run_webtransport_config_server(
         config,
         WebTransportTransportConfig(
-            host=args.host, port=args.port, certfile=args.cert, keyfile=args.key, path=args.path
+            host=args.host,
+            port=args.port,
+            certfile=args.cert,
+            keyfile=args.key,
+            path=args.path,
+            auth_token=os.getenv("EASYCAT_SERVE_TOKEN"),
+            allow_query_token=args.allow_query_token,
         ),
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4433)
     parser.add_argument("--cert", required=True, help="TLS certificate (PEM)")
     parser.add_argument("--key", required=True, help="TLS private key (PEM)")
     parser.add_argument("--path", default="/easycat")
+    parser.add_argument("--allow-query-token", action="store_true")
     main(parser.parse_args())

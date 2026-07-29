@@ -129,7 +129,7 @@ class TestFilesystemArtifactStore:
     def test_file_created(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"data")
-        path = tmp_path / "artifacts" / "sess" / f"{ref}.bin"
+        path = tmp_path / "artifacts" / "sess" / ref[:2] / f"{ref}.bin"
         assert path.exists()
 
     def test_dedup_no_rewrite(self, tmp_path):
@@ -163,8 +163,9 @@ class TestFilesystemArtifactStore:
     def test_permissions(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"secret data")
-        path = tmp_path / "artifacts" / "sess" / f"{ref}.bin"
+        path = tmp_path / "artifacts" / "sess" / ref[:2] / f"{ref}.bin"
         assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
 
     def test_max_bytes_refuses_new_writes_past_cap(self, tmp_path):
         """Once the byte cap is reached, new artifacts are refused (return "")
@@ -207,6 +208,42 @@ class TestFilesystemArtifactStore:
         assert ref2 == ref1
         # A genuinely new 60-byte payload would exceed the cap and be refused.
         assert store.put(b"d" * 60) == ""
+
+    def test_restart_seeds_existing_byte_budget(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        ref = first.put(b"a" * 60)
+        assert ref
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+
+        assert reopened._current_bytes == 60
+        assert reopened.put(b"b" * 60) == ""
+        assert reopened.get(ref) == b"a" * 60
+
+    def test_legacy_flat_artifacts_remain_readable_and_counted(self, tmp_path):
+        payload = b"legacy-data"
+        ref = hashlib.sha256(payload).hexdigest()
+        artifact_dir = tmp_path / "artifacts" / "sess"
+        artifact_dir.mkdir(parents=True)
+        legacy_path = artifact_dir / f"{ref}.bin"
+        legacy_path.write_bytes(payload)
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=len(payload))
+
+        assert store._current_bytes == len(payload)
+        assert store.get(ref) == payload
+        assert store.has(ref)
+        assert store.put(payload) == ref
+
+    def test_delete_reclaims_seeded_byte_budget(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 10)
+        assert store._current_bytes == 10
+
+        store.delete(ref)
+
+        assert store._current_bytes == 0
+        assert store.put(b"b" * 10)
 
 
 class TestRingBufferArtifactEviction:

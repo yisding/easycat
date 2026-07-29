@@ -3,7 +3,7 @@
 These exercise behavior (not call-spy assertions) for the bearer/query token
 policies, the ``NoAuth`` open policy, the structured non-loopback bind guard
 (the property that closes the ``0.0.0.0`` WebSocket gap), the env helper, and
-the two ``RequestLike`` adapters for both transport request shapes.
+the ``RequestLike`` adapters for all three server request shapes.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from easycat.server.auth import (
     bearer_auth_from_env,
     enforce_bind_guard,
     from_aiohttp_request,
+    from_h3_headers,
     from_websocket,
 )
 
@@ -269,6 +270,31 @@ def test_from_websocket_adapter_reads_header_and_query() -> None:
 
 def test_from_websocket_adapter_handles_missing_credentials() -> None:
     req = from_websocket(_WsHeaders({}), "/voice")
+    assert req.authorization_header is None
+    assert req.query_token is None
+
+
+def test_from_h3_headers_adapter_reads_bearer_and_query_token() -> None:
+    req = from_h3_headers(
+        [
+            (b":method", b"CONNECT"),
+            (b"authorization", b"Bearer sekrit"),
+        ],
+        "/easycat?token=qtok",
+    )
+    assert req.authorization_header == "Bearer sekrit"
+    assert req.query_token == "qtok"
+
+
+def test_from_h3_headers_adapter_rejects_non_ascii_without_decode_error() -> None:
+    req = from_h3_headers([(b"authorization", b"Bearer \xff")], "/easycat")
+    result = BearerTokenAuth(token="sekrit").authorize(req)
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+def test_from_h3_headers_adapter_handles_malformed_path() -> None:
+    req = from_h3_headers([], "//[malformed")
     assert req.authorization_header is None
     assert req.query_token is None
 

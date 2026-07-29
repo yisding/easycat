@@ -256,6 +256,7 @@ from easycat.integrations.agents import PydanticAIBridge
 
 - `AgentDelta`
 - `AgentFinal`
+- `AgentRequestStarted`
 - `AudioIn`
 - `AudioOut`
 - `BotStartedSpeaking`
@@ -263,21 +264,44 @@ from easycat.integrations.agents import PydanticAIBridge
 - `CallAnswered`
 - `CallEnded`
 - `CallFailed`
+- `CallInitiated`
+- `CallRinging`
+- `CallScreening`
+- `CallStateChanged`
+- `DTMF`
+- `DTMFAggregated`
 - `Error`
 - `ErrorStage`
 - `Event`
 - `EventBus`
+- `IVRAction`
 - `Interruption`
+- `PlaybackMarkAck`
+- `ReconnectAttempt`
+- `ReconnectFailure`
+- `ReconnectSuccess`
+- `ScreeningResponse`
+- `ScreeningTimedOut`
+- `SessionActionCompleted`
+- `SessionActionFailed`
+- `SessionActionRequested`
+- `SessionActionStarted`
 - `STTFinal`
 - `STTPartial`
 - `SupervisorListenerAttached`
 - `SupervisorListenerDetached`
 - `TTSAudio`
 - `TTSMarkers`
+- `ToolCallDelta`
+- `ToolCallResult`
+- `ToolCallStarted`
+- `TransportAudioDelivered`
+- `TransportDegraded`
 - `TurnEnded`
 - `TurnStarted`
 - `VADStartSpeaking`
 - `VADStopSpeaking`
+- `VoicemailDetected`
 
 ### Audio And Transports
 
