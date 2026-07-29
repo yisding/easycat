@@ -22,6 +22,7 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
+from easycat.validation.redaction import RedactionPolicy, validate_redaction_policy
 
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import InMemoryArtifactStore
@@ -39,15 +40,16 @@ class InMemoryRingBuffer:
     record when capacity is exceeded and emits a ``BufferOverflow`` marker.
     """
 
-    writes_block = False
-
     def __init__(
         self,
         capacity: int = 10_000,
         artifact_store: InMemoryArtifactStore | None = None,
+        *,
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
         if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
             raise ValueError("capacity must be a positive integer")
+        self._redaction = validate_redaction_policy(redaction)
         self._capacity = capacity
         self._buf: collections.deque[JournalRecord] = collections.deque(maxlen=capacity)
         self._lock = threading.Lock()
@@ -55,6 +57,7 @@ class InMemoryRingBuffer:
         self._degraded = False
         logger.debug("In-memory journal: crash-durability waived (data lost on process exit)")
         self._dropped_records = 0
+        self._overflow_marker_sequence: int | None = None
         self._artifact_store = artifact_store
         self._ref_counts: dict[str, int] = {}  # ref → number of records referencing it
 
@@ -107,7 +110,7 @@ class InMemoryRingBuffer:
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         with self._lock:
-            records = list(self._buf)
+            records = self._records_with_current_overflow_count()
         return copy.deepcopy(_read_records(records, start=start, limit=limit))
 
     def slice(
@@ -120,7 +123,7 @@ class InMemoryRingBuffer:
         tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         with self._lock:
-            records = list(self._buf)
+            records = self._records_with_current_overflow_count()
         return copy.deepcopy(
             _slice_records(
                 records,
@@ -145,7 +148,7 @@ class InMemoryRingBuffer:
         """Return a read-only copy of the current buffer contents."""
         with self._lock:
             return FrozenJournalSnapshot(
-                copy.deepcopy(list(self._buf)),
+                copy.deepcopy(self._records_with_current_overflow_count()),
                 degraded=self._degraded,
                 latest_sequence=self._seq,
                 dropped_records=self._dropped_records,
@@ -186,6 +189,7 @@ class InMemoryRingBuffer:
         )
         with self._lock:
             was_full = len(self._buf) == self._capacity
+            evicted_sequence = self._buf[0].sequence if was_full else None
 
             # Collect artifact refs from the record about to be evicted.
             evicted_refs = self._refs_of_next_eviction() if was_full else []
@@ -204,6 +208,7 @@ class InMemoryRingBuffer:
                 input_ref=input_ref,
                 output_ref=output_ref,
                 tags=tags,
+                redaction=self._redaction,
             )
             self._buf.append(record)
 
@@ -217,43 +222,49 @@ class InMemoryRingBuffer:
             if was_full:
                 self._dropped_records += 1
                 self._decrement_and_evict_refs(evicted_refs)
+                if evicted_sequence == self._overflow_marker_sequence:
+                    self._overflow_marker_sequence = None
 
-            if was_full:
-                self._upsert_overflow_marker(session_id, now_timing)
+            if was_full and self._overflow_marker_sequence is None:
+                self._insert_overflow_marker(session_id, now_timing)
         return seq
 
-    def _upsert_overflow_marker(self, session_id: str, timing: TimingInfo) -> None:
-        """Keep one current loss marker in the bounded buffer. Caller holds lock."""
-        for index, record in enumerate(self._buf):
-            if record.name == "buffer_overflow":
-                self._buf[index] = replace(
+    def _insert_overflow_marker(self, session_id: str, timing: TimingInfo) -> None:
+        """Insert the loss marker after its first or latest eviction. Caller holds lock."""
+        evicted_refs = self._refs_of_next_eviction() if len(self._buf) == self._capacity else []
+        if len(self._buf) == self._capacity:
+            self._dropped_records += 1
+        self._seq += 1
+        marker = BufferOverflow(
+            sequence=self._seq,
+            session_id=session_id,
+            timing=timing,
+            data={
+                "dropped_from": "ring_buffer",
+                "dropped_records": self._dropped_records,
+            },
+        )
+        self._buf.append(marker)
+        self._overflow_marker_sequence = marker.sequence
+        if evicted_refs:
+            self._decrement_and_evict_refs(evicted_refs)
+
+    def _records_with_current_overflow_count(self) -> list[JournalRecord]:
+        """Copy the deque and refresh its marker for readers. Caller holds lock."""
+        records = list(self._buf)
+        if self._overflow_marker_sequence is None:
+            return records
+        for index, record in enumerate(records):
+            if record.sequence == self._overflow_marker_sequence:
+                records[index] = replace(
                     record,
                     data={
                         "dropped_from": "ring_buffer",
                         "dropped_records": self._dropped_records,
                     },
                 )
-                return
-
-        # The prior marker was itself evicted. Reinsert it and account for the
-        # additional record displaced to make the loss signal visible.
-        evicted_refs = self._refs_of_next_eviction() if len(self._buf) == self._capacity else []
-        if len(self._buf) == self._capacity:
-            self._dropped_records += 1
-        self._seq += 1
-        self._buf.append(
-            BufferOverflow(
-                sequence=self._seq,
-                session_id=session_id,
-                timing=timing,
-                data={
-                    "dropped_from": "ring_buffer",
-                    "dropped_records": self._dropped_records,
-                },
-            )
-        )
-        if evicted_refs:
-            self._decrement_and_evict_refs(evicted_refs)
+                break
+        return records
 
     def _refs_of_next_eviction(self) -> list[str]:
         """Artifact refs held by the record about to be evicted. Caller holds lock."""
@@ -312,10 +323,13 @@ class InMemoryRingBuffer:
         try:
             with self._lock:
                 was_full = len(self._buf) == self._capacity
+                evicted_sequence = self._buf[0].sequence if was_full else None
                 evicted_refs = self._refs_of_next_eviction() if was_full else []
                 self._buf.append(marker)
                 if was_full:
                     self._dropped_records += 1
                     self._decrement_and_evict_refs(evicted_refs)
+                    if evicted_sequence == self._overflow_marker_sequence:
+                        self._overflow_marker_sequence = None
         except Exception:
             pass

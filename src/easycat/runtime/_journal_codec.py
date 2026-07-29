@@ -24,6 +24,7 @@ from easycat.runtime.records import (
     TimingInfo,
 )
 from easycat.runtime.safe_defaults import apply_write_filter
+from easycat.validation.redaction import RedactionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +379,7 @@ def _journal_record_for_append(
     tags: frozenset[str],
     input_ref: str | None,
     output_ref: str | None,
+    redaction: RedactionPolicy,
 ) -> JournalRecord:
     return apply_write_filter(
         JournalRecord(
@@ -392,7 +394,8 @@ def _journal_record_for_append(
             input_ref=input_ref,
             output_ref=output_ref,
             tags=tags,
-        )
+        ),
+        redaction=redaction,
     )
 
 

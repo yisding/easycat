@@ -53,6 +53,7 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
+from easycat.validation.redaction import RedactionPolicy, validate_redaction_policy
 
 logger = logging.getLogger(__name__)
 
@@ -412,7 +413,9 @@ class SqliteJournal(_SqlJournalBase):
         *,
         data_dir: str | Path | None = None,
         retention_mode: Literal["archive", "delete"] = "archive",
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
+        self._redaction = validate_redaction_policy(redaction)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._root = root
         self._retention_mode = retention_mode
@@ -807,6 +810,7 @@ class SqliteJournal(_SqlJournalBase):
                     tags=tags,
                     input_ref=input_ref,
                     output_ref=output_ref,
+                    redaction=self._redaction,
                 )
                 self._conn.execute(
                     _JOURNAL_INSERT_SQL,
@@ -961,8 +965,14 @@ class LitestreamSqliteJournal:
         data_dir: str | Path | None = None,
         replica_url: str | None = None,
         retention_mode: Literal["archive", "delete"] = "archive",
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
-        self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
+        self._inner = SqliteJournal(
+            session_id,
+            data_dir=data_dir,
+            retention_mode=retention_mode,
+            redaction=redaction,
+        )
         replica_root = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
         self._replica_url = _session_replica_url(replica_root, session_id) if replica_root else ""
         self._sidecar: subprocess.Popen[bytes] | None = None
@@ -1159,7 +1169,9 @@ class LibsqlJournal(_SqlJournalBase):
         sync_url: str | None = None,
         auth_token: str | None = None,
         sync_interval_s: float | None = None,
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
+        self._redaction = validate_redaction_policy(redaction)
         import libsql_experimental as libsql  # noqa: F811 — intentional conditional import
 
         self._libsql = libsql
@@ -1340,6 +1352,7 @@ class LibsqlJournal(_SqlJournalBase):
                     tags=tags,
                     input_ref=input_ref,
                     output_ref=output_ref,
+                    redaction=self._redaction,
                 )
                 self._conn.execute(
                     _JOURNAL_INSERT_SQL,

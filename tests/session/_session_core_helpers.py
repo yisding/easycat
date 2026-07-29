@@ -7,19 +7,17 @@ from collections.abc import AsyncIterator
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
-    Event,
     STTEvent,
     STTEventType,
     TTSEvent,
     TTSEventType,
-    VADStartSpeaking,
-    VADStopSpeaking,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._types import SessionConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
+from tests._fakes import FakeSTT, FakeTransport, FakeTTS, FakeVAD
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
@@ -31,31 +29,6 @@ def _make_chunk(n_bytes: int = 320) -> AudioChunk:
 def _make_loud_chunk(n_samples: int = 160, amplitude: int = 6000) -> AudioChunk:
     sample = int(amplitude).to_bytes(2, "little", signed=True)
     return AudioChunk(data=sample * n_samples, format=PCM16_MONO_16K)
-
-
-class FakeTransport:
-    def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
-        self.chunks = chunks or []
-        self.sent: list[AudioChunk] = []
-        self.connected = False
-        self.disconnected = False
-
-    async def connect(self) -> None:
-        self.connected = True
-
-    async def disconnect(self) -> None:
-        self.disconnected = True
-
-    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-        for chunk in self.chunks:
-            yield chunk
-
-    async def send_audio(self, chunk: AudioChunk) -> bool:
-        self.sent.append(chunk)
-        return True
-
-    async def clear_audio(self) -> None:
-        pass
 
 
 class WarmupTransport(FakeTransport):
@@ -91,47 +64,6 @@ class FakePlaybackAckTransport(FakeTransport):
 
 class ReportingTransport(FakeTransport):
     reports_audio_delivery = True
-
-
-class FakeVAD:
-    def __init__(self) -> None:
-        self._call_count = 0
-
-    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        self._call_count += 1
-        if self._call_count == 1:
-            yield VADStartSpeaking()
-        elif self._call_count == 2:
-            yield VADStopSpeaking()
-
-    def configure(self, **kwargs: object) -> None:
-        pass
-
-
-class FakeSTT:
-    """STT that uses provider-scoped STTEvent via events() iterator."""
-
-    def __init__(self, transcript: str = "hello world") -> None:
-        self._transcript = transcript
-        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
-
-    async def start_stream(self) -> None:
-        pass
-
-    async def send_audio(self, chunk: AudioChunk) -> None:
-        pass
-
-    async def end_stream(self) -> None:
-        if self._transcript:
-            await self._queue.put(STTEvent(type=STTEventType.FINAL, text=self._transcript))
-        await self._queue.put(None)
-
-    async def events(self) -> AsyncIterator[STTEvent]:
-        while True:
-            event = await self._queue.get()
-            if event is None:
-                break
-            yield event
 
 
 class WarmupSTT(FakeSTT):
@@ -213,24 +145,9 @@ class FakeAgent:
         return text.upper()
 
 
-class FakeTTS:
-    """TTS that uses provider-scoped TTSEvent."""
-
-    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-        yield TTSEvent(
-            type=TTSEventType.AUDIO,
-            audio=_make_chunk(),
-        )
-
-    async def stop(self) -> None:
-        pass
-
-    async def cancel(self) -> None:
-        pass
-
-
 class WarmupTTS(FakeTTS):
     def __init__(self, calls: list[str]) -> None:
+        super().__init__()
         self._calls = calls
 
     def warmup(self) -> None:

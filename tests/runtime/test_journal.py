@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import threading
 from typing import Protocol
@@ -39,6 +40,10 @@ class TestInMemoryRingBuffer:
         with pytest.raises(ValueError, match="capacity must be a positive integer"):
             InMemoryRingBuffer(capacity=capacity)  # type: ignore[arg-type]
 
+    def test_rejects_unknown_redaction_policy(self):
+        with pytest.raises(ValueError, match="Unknown redaction policy"):
+            InMemoryRingBuffer(redaction="everything")  # type: ignore[arg-type]
+
     def test_append_and_read(self):
         j = InMemoryRingBuffer(capacity=100)
         seq = j.append(
@@ -73,10 +78,21 @@ class TestInMemoryRingBuffer:
         record = j.read()[0]
         assert record.data == {
             "api_key": REDACTED_SECRET,
-            "text": f"phone {REDACTED_PHONE}",
+            "text": "phone +1 415 555 1212",
         }
         assert record.error is not None
         assert record.error.message == f"Authorization: {REDACTED_SECRET}"
+
+    def test_append_can_apply_pii_write_filter(self):
+        j = InMemoryRingBuffer(capacity=100, redaction="pii")
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="sensitive",
+            session_id="s1",
+            data={"text": "phone +1 415 555 1212"},
+        )
+
+        assert j.read()[0].data["text"] == f"phone {REDACTED_PHONE}"
 
     def test_monotonic_sequence(self):
         j = InMemoryRingBuffer(capacity=1000)
@@ -202,6 +218,18 @@ class TestInMemoryRingBuffer:
 
         snapshot = j.snapshot()
         assert snapshot.dropped_records == j.dropped_records
+
+    def test_overflow_append_does_not_scan_the_ring(self):
+        class _NoIterationDeque(collections.deque):
+            def __iter__(self):
+                raise AssertionError("the append hot path must not scan the ring")
+
+        j = InMemoryRingBuffer(capacity=10)
+        for i in range(11):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        j._buf = _NoIterationDeque(j._buf, maxlen=10)
+        j.append(kind=JournalRecordKind.EVENT, name="after-overflow", session_id="s1")
 
     def test_close_is_noop(self):
         j = InMemoryRingBuffer(capacity=10)

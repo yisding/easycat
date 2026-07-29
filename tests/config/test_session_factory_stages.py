@@ -32,7 +32,7 @@ def test_successful_session_build_transfers_journal_ownership(
     journal.close.assert_not_called()
 
 
-def test_session_build_forwards_journal_capacity(
+def test_session_build_forwards_journal_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_audio_backends(monkeypatch)
@@ -51,12 +51,14 @@ def test_session_build_forwards_journal_capacity(
             agent=_DummyAgent(),
             debug="full",
             journal_capacity=42_000,
+            journal_redaction="pii",
         )
     )
 
     assert session._journal is journal
     assert session._run_ctx.journal_detail == "full"
     assert captured["capacity"] == 42_000
+    assert captured["redaction"] == "pii"
 
 
 def test_post_build_failure_rolls_back_acquired_journal(

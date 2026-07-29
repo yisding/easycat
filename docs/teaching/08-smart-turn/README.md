@@ -55,8 +55,8 @@
 ## Prerequisites
 
 - [Chapter 7](../07-tools/)
-- `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
-  extra installs `numpy` + `onnxruntime`, which smart-turn needs.
+- `uv sync --extra quickstart --extra deepgram --group dev` — core installs
+  SoXR; the `quickstart` extra adds NumPy + onnxruntime for smart-turn.
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 - Running this chapter makes live provider calls that may incur charges.

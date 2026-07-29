@@ -183,7 +183,7 @@ entry points include:
   `bundles`, `scanned` - `easycat bundles list --json`
   `path`, `session_id`, `turn_count`, `turns`, `issues`, `errors`,
   `error_type`, `failing_turn_id`, `tool_calls`, `records`, `duration_ms`,
-  `annotations`, `provider_versions`, `artifact_count`,
+  `annotations`, `provider_versions`, `journal_dropped_records`, `artifact_count`,
   `replay_entry_points`, `format_version` -
                          `easycat bundles show PATH --json` and
                          `easycat inspect PATH --json`; `turns` is the

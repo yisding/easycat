@@ -6,7 +6,7 @@ import functools
 import re
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, TypeAlias, cast
 
 from easycat._provider_catalog import sensitive_api_domains
 
@@ -19,6 +19,8 @@ REDACTED_REQUEST_ID = "[REDACTED_REQUEST_ID]"
 REDACTED_SECRET = "[REDACTED_SECRET]"
 REDACTED_TRANSCRIPT = "[REDACTED_TRANSCRIPT]"
 REDACTED_URL = "[REDACTED_URL]"
+
+RedactionPolicy: TypeAlias = Literal["secrets", "pii"]
 
 UNSAFE_TEXT_FIELDS: Mapping[str, str] = MappingProxyType(
     {
@@ -65,6 +67,13 @@ _SECRET_KEY_RE = re.compile(
 )
 
 _URL_RE = re.compile(r"https?://[^\s\"')\]}]+")
+_URL_USERINFO_SECRET_RE = re.compile(r"(?i)(https?://[^/\s:@]+:)[^/\s@]+(@)")
+_URL_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:"
+    r"[^&=#\s]*(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|"
+    r"password|signature|credential)[^&=#\s]*|key|sig"
+    r")=)[^&#\s]+"
+)
 # Provider API domains come from the STT/TTS provider catalogs, so a
 # newly registered provider's URLs are flagged without touching this file.
 _SENSITIVE_URL_RE = re.compile(
@@ -102,14 +111,24 @@ def _redacted_home_path(match: re.Match[str]) -> str:
     return f"{match.group('prefix')}~"
 
 
+def _redacted_url_secret(match: re.Match[str]) -> str:
+    suffix = match.group(2) if match.lastindex == 2 else ""
+    return f"{match.group(1)}{REDACTED_SECRET}{suffix}"
+
+
 _TextReplacement = str | Callable[[re.Match[str]], str]
-_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = (
-    (_URL_RE, REDACTED_URL),
+_SECRET_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = (
+    (_URL_USERINFO_SECRET_RE, _redacted_url_secret),
+    (_URL_QUERY_SECRET_RE, _redacted_url_secret),
     (_HEADER_SECRET_RE, _secret_after_prefix),
     (_BEARER_RE, _secret_after_prefix),
     (_KEY_VALUE_SECRET_RE, _secret_after_prefix),
     (_JWT_RE, REDACTED_SECRET),
     (_SECRET_RE, REDACTED_SECRET),
+)
+_PII_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = (
+    (_URL_RE, REDACTED_URL),
+    *_SECRET_TEXT_REDACTIONS,
     (_REQUEST_ID_RE, REDACTED_REQUEST_ID),
     (_PHONE_RE, REDACTED_PHONE),
     (_HOME_PATH_RE, _redacted_home_path),
@@ -120,10 +139,14 @@ _TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = (
 # force numbered transcripts through all nine substitution regexes.  Checking
 # this superset first keeps that work off common hot-path values.  False
 # positives are harmless: they merely fall through to the complete policy.
-_TEXT_REDACTION_TRIGGER_RE = re.compile(
+_PII_TEXT_REDACTION_TRIGGER_RE = re.compile(
     rf"[:/=_\-.]|bearer\s|{_PHONE_RE.pattern}",
     re.IGNORECASE,
 )
+_SECRET_TEXT_REDACTION_TRIGGER_RE = re.compile(r"[:=_\-.]|bearer\s", re.IGNORECASE)
+# Backwards-compatible private aliases used by the validation policy tests.
+_TEXT_REDACTIONS = _PII_TEXT_REDACTIONS
+_TEXT_REDACTION_TRIGGER_RE = _PII_TEXT_REDACTION_TRIGGER_RE
 _SENSITIVE_COMMAND_FLAGS = frozenset(
     {
         "--access-token",
@@ -136,12 +159,33 @@ _SENSITIVE_COMMAND_FLAGS = frozenset(
 )
 
 
-def redact_text(value: str) -> str:
-    """Redact sensitive substrings from free-form validation text."""
-    if _TEXT_REDACTION_TRIGGER_RE.search(value) is None:
+def validate_redaction_policy(policy: str) -> RedactionPolicy:
+    """Validate and narrow a journal/validation redaction policy."""
+    if policy not in ("secrets", "pii"):
+        raise ValueError(f"Unknown redaction policy: {policy!r}")
+    return cast(RedactionPolicy, policy)
+
+
+def redact_text(value: str, *, policy: RedactionPolicy = "pii") -> str:
+    """Redact sensitive substrings from free-form text.
+
+    ``policy="secrets"`` preserves replay-relevant customer content such as
+    phone numbers, URLs, request IDs, and filesystem paths while still
+    scrubbing credentials. ``policy="pii"`` applies the complete
+    validation/export policy and remains the default for existing callers.
+    """
+    if policy == "secrets":
+        redactions = _SECRET_TEXT_REDACTIONS
+        trigger = _SECRET_TEXT_REDACTION_TRIGGER_RE
+    elif policy == "pii":
+        redactions = _PII_TEXT_REDACTIONS
+        trigger = _PII_TEXT_REDACTION_TRIGGER_RE
+    else:
+        raise ValueError(f"Unknown redaction policy: {policy!r}")
+    if trigger.search(value) is None:
         return value
     redacted = value
-    for pattern, replacement in _TEXT_REDACTIONS:
+    for pattern, replacement in redactions:
         redacted = pattern.sub(replacement, redacted)
     return redacted
 
@@ -154,27 +198,37 @@ def redact_runtime_secrets(value: str, secrets: Sequence[str] | None = None) -> 
     return redacted
 
 
-def redact_value(value: Any, key: str | None = None) -> Any:
+def redact_value(
+    value: Any,
+    key: str | None = None,
+    *,
+    policy: RedactionPolicy = "pii",
+) -> Any:
     """Redact a JSON-compatible value using both field-name and value policy."""
     normalized_key = str(key).lower() if key is not None else None
     if normalized_key == "command":
-        return redact_command(value)
-    if normalized_key is not None and normalized_key in UNSAFE_TEXT_FIELDS and _has_value(value):
+        return redact_command(value, policy=policy)
+    if (
+        policy == "pii"
+        and normalized_key is not None
+        and normalized_key in UNSAFE_TEXT_FIELDS
+        and _has_value(value)
+    ):
         return UNSAFE_TEXT_FIELDS[normalized_key]
     if _is_secret_value_key(normalized_key) and not isinstance(value, bool | type(None)):
         return REDACTED_SECRET
 
     if isinstance(value, str):
-        return redact_text(value)
+        return redact_text(value, policy=policy)
     if isinstance(value, bool | int | float) or value is None:
         return value
     if isinstance(value, Mapping):
         return {
-            str(item_key): redact_value(item_value, str(item_key))
+            str(item_key): redact_value(item_value, str(item_key), policy=policy)
             for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
         }
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [redact_value(item, key) for item in value]
+        return [redact_value(item, key, policy=policy) for item in value]
     return value
 
 
@@ -190,28 +244,30 @@ def contains_unredacted_sensitive_text(value: str) -> bool:
     return False
 
 
-def redact_command(value: Any) -> Any:
+def redact_command(value: Any, *, policy: RedactionPolicy = "pii") -> Any:
     """Redact command strings and argv-style command sequences."""
     if isinstance(value, str):
-        return redact_text(value)
+        return redact_text(value, policy=policy)
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
-        return redact_value(value)
+        return redact_value(value, policy=policy)
 
     redacted: list[Any] = []
     redact_next = False
     for item in value:
         if redact_next:
-            redacted.append(REDACTED_SECRET if isinstance(item, str) else redact_value(item))
+            redacted.append(
+                REDACTED_SECRET if isinstance(item, str) else redact_value(item, policy=policy)
+            )
             redact_next = False
             continue
         if isinstance(item, str):
-            redacted_item = redact_text(item)
+            redacted_item = redact_text(item, policy=policy)
             flag_name = item.split("=", 1)[0].lower()
             if flag_name in _SENSITIVE_COMMAND_FLAGS and "=" not in item:
                 redact_next = True
             redacted.append(redacted_item)
             continue
-        redacted.append(redact_value(item))
+        redacted.append(redact_value(item, policy=policy))
     return redacted
 
 
@@ -255,6 +311,7 @@ def _is_placeholder_match(value: str) -> bool:
 __all__ = [
     "REDACTION_VERSION",
     "REDACTED_SECRET",
+    "RedactionPolicy",
     "UNSAFE_TEXT_FIELDS",
     "contains_unredacted_sensitive_text",
     "redact_command",
@@ -262,4 +319,5 @@ __all__ = [
     "redact_text",
     "redact_value",
     "should_redact_key",
+    "validate_redaction_policy",
 ]

@@ -58,7 +58,7 @@ from easycat.runtime.artifacts import ArtifactClass, ArtifactStore, FilesystemAr
 from easycat.runtime.journal import ExecutionJournal, append_journal_record_async
 from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
-from easycat.validation.redaction import redact_value
+from easycat.validation.redaction import RedactionPolicy, redact_value
 
 logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
@@ -242,7 +242,12 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
+def _redact_session_action_data(
+    value: Any,
+    key: str | None = None,
+    *,
+    policy: RedactionPolicy = "secrets",
+) -> Any:
     """Redact sensitive session-action fields before journaling.
 
     Session actions can carry telephony secrets and customer content (DTMF
@@ -258,27 +263,31 @@ def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
         return _REDACTED_SESSION_ACTION_VALUE
     if isinstance(value, dict):
         return {
-            str(item_key): _redact_session_action_data(item_value, str(item_key))
+            str(item_key): _redact_session_action_data(
+                item_value,
+                str(item_key),
+                policy=policy,
+            )
             for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
         }
     if isinstance(value, list):
-        return [_redact_session_action_data(item, key) for item in value]
-    return redact_value(value, key)
+        return [_redact_session_action_data(item, key, policy=policy) for item in value]
+    return redact_value(value, key, policy=policy)
 
 
-def _journal_attr_value(attr: str, value: Any) -> Any:
+def _journal_attr_value(attr: str, value: Any, *, policy: RedactionPolicy) -> Any:
     jsonable = _to_jsonable(value) if attr in _JSONABLE_ATTRS else value
     if attr in {"action", "result"}:
-        return _redact_session_action_data(jsonable)
+        return _redact_session_action_data(jsonable, policy=policy)
     return jsonable
 
 
-def _event_attributes(event: Event) -> dict[str, Any]:
+def _event_attributes(event: Event, *, policy: RedactionPolicy) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for attr in _JOURNAL_ATTRS:
         value = getattr(event, attr, None)
         if value is not None and (attr not in _NONEMPTY_ATTRS or value):
-            data[attr] = _journal_attr_value(attr, value)
+            data[attr] = _journal_attr_value(attr, value, policy=policy)
     return data
 
 
@@ -298,8 +307,12 @@ def _exception_attributes(event: Event) -> dict[str, Any]:
     return data
 
 
-def _project_journal_event(event: Event) -> _JournalEventProjection:
-    data = _event_attributes(event)
+def _project_journal_event(
+    event: Event,
+    *,
+    policy: RedactionPolicy = "secrets",
+) -> _JournalEventProjection:
+    data = _event_attributes(event, policy=policy)
     exception = getattr(event, "exception", None)
     if exception is None:
         return _JournalEventProjection(data=data or None, error=None)
@@ -331,6 +344,7 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: TurnIdResolver
+    redaction: RedactionPolicy = "secrets"
     _subscribed: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
@@ -468,7 +482,7 @@ class SessionJournalSink:
             journal = self.journal
             if journal is None:
                 return
-            projection = _project_journal_event(event)
+            projection = _project_journal_event(event, policy=self.redaction)
             validate_builtin_record(name=name, kind=kind, data=projection.data)
             await append_journal_record_async(
                 journal,
