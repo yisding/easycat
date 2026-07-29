@@ -334,6 +334,21 @@ def test_audio_stage_registration_rejects_builtin_names() -> None:
         register_echo_canceller_provider("livekit", FakeEchoCanceller, FakeEchoConfig)
 
 
+def test_audio_stage_probe_keeps_selected_identity_when_extra_name_is_shared() -> None:
+    from easycat.planning.transport_registry import probe_module_for_extra
+
+    register_vad_provider(
+        "fake-vad",
+        FakeVAD,
+        FakeVADConfig,
+        extra="webrtc",
+        probe_module="fake_audio",
+    )
+
+    assert probe_module_for_extra("webrtc", role="vad", provider="fake-vad") == "fake_audio"
+    assert probe_module_for_extra("webrtc") == "aiortc"
+
+
 def test_audio_stage_metadata_cannot_overwrite_speech_provider_names() -> None:
     register_vad_provider(
         "deepgram",

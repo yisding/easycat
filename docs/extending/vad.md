@@ -22,16 +22,28 @@ An RMS energy gate — no model download, fully offline, and the same shape the
 import math
 from array import array
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from easycat import Event, VADStartSpeaking, VADStopSpeaking
 from easycat.audio_format import AudioChunk
 
 
+@dataclass
+class EnergyVADConfig:
+    threshold: float = 500.0
+
+
 class EnergyVAD:
     """Flags speech whenever PCM16 RMS energy crosses a threshold."""
 
-    def __init__(self, threshold: float = 500.0) -> None:
-        self._threshold = threshold
+    def __init__(
+        self,
+        config: EnergyVADConfig | None = None,
+        *,
+        threshold: float | None = None,
+    ) -> None:
+        configured = config or EnergyVADConfig()
+        self._threshold = configured.threshold if threshold is None else threshold
         self._speaking = False
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
@@ -79,14 +91,7 @@ Reusable packages can make a config selectable by shortcut from `EasyConfig`,
 `easycat.toml`, and the provider planner:
 
 ```python
-from dataclasses import dataclass
-
 from easycat import register_vad_provider
-
-
-@dataclass
-class EnergyVADConfig:
-    threshold: float = 500.0
 
 
 def register() -> None:
