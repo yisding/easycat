@@ -482,6 +482,7 @@ def test_docker_base_images_are_digest_pinned_and_tracked_by_dependabot() -> Non
 
 def test_docker_builder_and_runtime_use_the_same_python_minor() -> None:
     dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
     stages = {
         stage: version
         for version, stage in re.findall(
@@ -492,6 +493,7 @@ def test_docker_builder_and_runtime_use_the_same_python_minor() -> None:
     }
 
     assert stages["builder"] == stages["runtime"]
+    assert f"`python:{stages['runtime']}-slim-bookworm` runtime" in guide
 
 
 def test_docker_builder_pins_a_supported_uv_binary() -> None:
