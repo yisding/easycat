@@ -94,7 +94,172 @@ def websocket_session_server_config_from_env(
     )
 
 
-class WebSocketTransport(ServerTransportBase):
+class _WebSocketProtocolMixin(AudioQueueMixin):
+    """Shared PCM/JSON wire protocol for both WebSocket lifecycle models."""
+
+    _config: WebSocketTransportConfig
+    _ws: ServerConnection | None
+    _audio_format: AudioFormat
+    _outbound_rate: int | None
+
+    @property
+    def audio_format(self) -> AudioFormat:
+        """The current audio format for this transport."""
+        return self._audio_format
+
+    async def _send_ready(self, ws: ServerConnection) -> bool:
+        """Send the handshake message without surfacing a normal close race."""
+        try:
+            await ws.send(json.dumps({"type": "ready"}))
+            return True
+        except websockets.exceptions.ConnectionClosed as exc:
+            self._note_client_disconnected(exc)
+            return False
+
+    async def _run_receive_loop(self, ws: ServerConnection) -> None:
+        """Run the shared receiver with common disconnect handling."""
+        try:
+            await self._receive_loop(ws)
+        except websockets.exceptions.ConnectionClosed as exc:
+            self._note_client_disconnected(exc)
+        finally:
+            self._finish_websocket(ws)
+
+    def _note_client_disconnected(self, exc: websockets.exceptions.ConnectionClosed) -> None:
+        logger.info("WebSocket client disconnected")
+        if isinstance(exc, websockets.exceptions.ConnectionClosedError):
+            self._record_transport_disconnect("websocket connection closed abnormally")
+
+    def _finish_websocket(self, ws: ServerConnection) -> None:
+        """Release protocol state only when *ws* still owns this transport."""
+        if self._ws is not ws:
+            return
+        self._ws = None
+        self._client_connected.clear()
+        self._audio_format = self._config.audio_format
+        self._outbound_rate = None
+        self._enqueue_sentinel()
+        self._after_websocket_finished()
+
+    def _after_websocket_finished(self) -> None:
+        """Lifecycle hook for the per-connection transport."""
+
+    def _websocket_is_active(self, ws: ServerConnection) -> bool:
+        return self._ws is ws
+
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        ws = self._ws
+        if ws is None or not self._websocket_is_active(ws):
+            return
+        await ws.send(json.dumps(payload))
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        """Send audio, announcing sample-rate changes before binary PCM."""
+        ws = self._ws
+        if ws is None or not self._websocket_is_active(ws):
+            return False
+        try:
+            rate = chunk.format.sample_rate
+            if rate != self._outbound_rate:
+                await ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
+                self._outbound_rate = rate
+            await ws.send(chunk.data)
+            return True
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send audio: client disconnected")
+            self._finish_websocket(ws)
+            return False
+
+    async def clear_audio(self) -> None:
+        """Tell the client to stop already-received and scheduled playback."""
+        await self._send_client_event({"type": "clear"})
+
+    async def _receive_loop(self, ws: ServerConnection | None = None) -> None:
+        """Route inbound binary audio and JSON control messages."""
+        manage_lifecycle = ws is None
+        if ws is None:
+            ws = self._ws
+        if ws is None:
+            return
+        target_rate = self._config.audio_format.sample_rate
+        resampler = PCM16StreamResampler(target_rate)
+        try:
+            async for message in ws:
+                self._route_inbound_message(message, resampler)
+        except websockets.exceptions.ConnectionClosed as exc:
+            if not manage_lifecycle:
+                raise
+            self._note_client_disconnected(exc)
+        finally:
+            tail = resampler.finish()
+            if tail:
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=self._config.audio_format),
+                    context="WebSocket",
+                )
+            if manage_lifecycle:
+                self._finish_websocket(ws)
+
+    def _route_inbound_message(
+        self,
+        message: str | bytes,
+        resampler: PCM16StreamResampler,
+    ) -> None:
+        if isinstance(message, bytes):
+            if not message:
+                logger.debug("Dropping empty WebSocket audio frame")
+                return
+            data = resampler.process(message, self._audio_format.sample_rate)
+            if data:
+                self._enqueue_chunk(
+                    AudioChunk(data=data, format=self._config.audio_format),
+                    context="WebSocket",
+                )
+        else:
+            self._handle_control_message(message)
+
+    def _handle_control_message(self, raw: str) -> None:
+        """Process one JSON control message from the client."""
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring invalid JSON control message")
+            self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
+            return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object JSON control message")
+            self._emit_degraded(
+                _DEGRADED_CONTROL_DECODE_FAILED,
+                "control frame is not a JSON object",
+            )
+            return
+
+        msg_type = msg.get("type")
+        if msg_type == "config":
+            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
+            if sample_rate is not None:
+                self._audio_format = AudioFormat(
+                    sample_rate=sample_rate,
+                    channels=self._audio_format.channels,
+                    sample_width=self._audio_format.sample_width,
+                    encoding=self._audio_format.encoding,
+                )
+                logger.info("Client negotiated audio format: %s", self._audio_format)
+            elif "sample_rate" in msg:
+                logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
+                self._emit_degraded(
+                    _DEGRADED_INVALID_SAMPLE_RATE,
+                    f"ignored invalid negotiated sample_rate {msg['sample_rate']!r}",
+                )
+        elif msg_type == "start":
+            logger.debug("Client sent start signal")
+        elif msg_type == "stop":
+            logger.debug("Client sent stop signal")
+        else:
+            logger.debug("Unknown control message type: %s", msg_type)
+
+
+class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
     """Transport that accepts a single WebSocket client connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -145,49 +310,6 @@ class WebSocketTransport(ServerTransportBase):
         self._close_browser_event_forwarder()
         await super().disconnect()
 
-    async def _send_client_event(self, payload: dict[str, Any]) -> None:
-        ws = self._ws
-        if ws is None:
-            return
-        await ws.send(json.dumps(payload))
-
-    async def send_audio(self, chunk: AudioChunk) -> bool:
-        """Send an audio chunk to the connected WebSocket client as a binary frame.
-
-        When the outbound sample rate changes (e.g. TTS provider switch), an
-        ``audio_format`` JSON control message is sent first so the client can
-        create playback buffers at the correct rate.
-        """
-        ws = self._ws
-        if ws is None:
-            return False
-        try:
-            rate = chunk.format.sample_rate
-            if rate != self._outbound_rate:
-                await ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
-                self._outbound_rate = rate
-            await ws.send(chunk.data)
-            return True
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot send audio: client disconnected")
-            if self._ws is ws:
-                self._ws = None
-                self._client_connected.clear()
-            return False
-
-    async def clear_audio(self) -> None:
-        """Tell the client to stop already-received and scheduled playback."""
-        ws = self._ws
-        if ws is None:
-            return
-        try:
-            await ws.send(json.dumps({"type": "clear"}))
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot clear audio: client disconnected")
-            if self._ws is ws:
-                self._ws = None
-                self._client_connected.clear()
-
     # ── Server helpers ────────────────────────────────────────────
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
@@ -214,104 +336,16 @@ class WebSocketTransport(ServerTransportBase):
         logger.info("WebSocket client connected")
 
         try:
-            await ws.send(json.dumps({"type": "ready"}))
-            await self._receive_loop(ws)
-        except websockets.exceptions.ConnectionClosed as exc:
-            logger.info("WebSocket client disconnected")
-            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
-                self._record_transport_disconnect("websocket connection closed abnormally")
+            if await self._send_ready(ws):
+                await self._run_receive_loop(ws)
         finally:
-            if self._ws is ws:
-                self._ws = None
-                self._client_connected.clear()
-                # Reset negotiated format so the next client starts fresh.
-                self._audio_format = self._config.audio_format
-                self._outbound_rate = None
-                self._enqueue_sentinel()
-            elif self._ws is None:
-                # ``send_audio`` may already have noticed this connection is
-                # closed and cleared the slot. Finish cleanup only if no newer
-                # client has claimed it in the meantime.
-                self._audio_format = self._config.audio_format
-                self._outbound_rate = None
-                self._enqueue_sentinel()
-
-    async def _receive_loop(self, ws: ServerConnection) -> None:
-        """Read messages from the client connection.
-
-        If the client negotiated a sample rate different from the configured
-        pipeline rate (e.g. browser at 48 kHz vs. pipeline at 16 kHz), inbound
-        audio is automatically resampled before being enqueued.
-        """
-        target_rate = self._config.audio_format.sample_rate
-        resampler = PCM16StreamResampler(target_rate)
-        try:
-            async for message in ws:
-                if isinstance(message, bytes):
-                    if not message:
-                        logger.debug("Dropping empty WebSocket audio frame")
-                        continue
-                    data = resampler.process(message, self._audio_format.sample_rate)
-                    if data:
-                        self._enqueue_chunk(
-                            AudioChunk(data=data, format=self._config.audio_format),
-                            context="WebSocket",
-                        )
-                elif isinstance(message, str):
-                    self._handle_control_message(message)
-        finally:
-            tail = resampler.finish()
-            if tail:
-                self._enqueue_chunk(
-                    AudioChunk(data=tail, format=self._config.audio_format),
-                    context="WebSocket",
-                )
-
-    def _handle_control_message(self, raw: str) -> None:
-        """Process a JSON control message from the client."""
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Ignoring invalid JSON control message")
-            self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
-            return
-        if not isinstance(msg, dict):
-            logger.warning("Ignoring non-object JSON control message")
-            self._emit_degraded(
-                _DEGRADED_CONTROL_DECODE_FAILED,
-                "control frame is not a JSON object",
-            )
-            return
-
-        msg_type = msg.get("type")
-        if msg_type == "config":
-            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
-            if sample_rate is not None:
-                self._audio_format = AudioFormat(
-                    sample_rate=sample_rate,
-                    channels=self._audio_format.channels,
-                    sample_width=self._audio_format.sample_width,
-                    encoding=self._audio_format.encoding,
-                )
-                logger.info("Client negotiated audio format: %s", self._audio_format)
-            elif "sample_rate" in msg:
-                logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
-                self._emit_degraded(
-                    _DEGRADED_INVALID_SAMPLE_RATE,
-                    f"ignored invalid negotiated sample_rate {msg['sample_rate']!r}",
-                )
-        elif msg_type == "start":
-            logger.debug("Client sent start signal")
-        elif msg_type == "stop":
-            logger.debug("Client sent stop signal")
-        else:
-            logger.debug("Unknown control message type: %s", msg_type)
+            self._finish_websocket(ws)
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("websocket", "websockets")
 
 
-class WebSocketConnectionTransport(AudioQueueMixin):
+class WebSocketConnectionTransport(_WebSocketProtocolMixin):
     """Transport bound to a single existing WebSocket connection.
 
     Useful for servers that already own the WebSocket accept loop and want
@@ -326,7 +360,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         ws: ServerConnection,
         config: WebSocketTransportConfig | None = None,
     ) -> None:
-        self._ws = ws
+        self._ws: ServerConnection | None = ws
         self._config = config or WebSocketTransportConfig()
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
@@ -337,11 +371,6 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         )
 
     @property
-    def audio_format(self) -> AudioFormat:
-        """The current audio format for this transport."""
-        return self._audio_format
-
-    @property
     def request(self) -> Any | None:
         """Accepted WebSocket handshake request, when exposed by ``websockets``."""
         return getattr(self._ws, "request", None)
@@ -349,21 +378,39 @@ class WebSocketConnectionTransport(AudioQueueMixin):
     async def connect(self) -> None:
         if self._connected:
             return
+        ws = self._ws
+        if ws is None:
+            return
         self._reset_audio_queue()
         self._connected = True
         self._client_connected.set()
+        self._audio_format = self._config.audio_format
         self._outbound_rate = None
         self._ensure_browser_event_forwarder()
-        await self._ws.send(json.dumps({"type": "ready"}))
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        try:
+            if not await self._send_ready(ws):
+                self._finish_websocket(ws)
+                return
+        except BaseException:
+            # Keep the accepted socket reachable so disconnect() can close it.
+            # Clearing _ws here leaks the connection when ready-send
+            # cancellation or a non-ConnectionClosed send error interrupts
+            # connect().
+            self._connected = False
+            self._client_connected.clear()
+            self._audio_format = self._config.audio_format
+            self._outbound_rate = None
+            self._enqueue_sentinel()
+            self._after_websocket_finished()
+            raise
+        self._receive_task = asyncio.create_task(self._run_receive_loop(ws))
 
     async def disconnect(self) -> None:
-        # Remote EOF clears ``_connected`` in the receive loop before the
-        # owner calls disconnect. Only skip once every owned teardown resource
-        # has been released; liveness alone does not mean cleanup is complete.
+        receive_task = self._receive_task
         if (
             not self._connected
-            and self._receive_task is None
+            and self._ws is None
+            and (receive_task is None or receive_task.done())
             and self._browser_event_forwarder is None
             and not self._emit_tasks
         ):
@@ -371,7 +418,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
-        receive_task = self._receive_task
+        ws = self._ws
         self._receive_task = None
         if receive_task is not None and receive_task is not asyncio.current_task():
             if not receive_task.done():
@@ -382,108 +429,22 @@ class WebSocketConnectionTransport(AudioQueueMixin):
                 pass
             except Exception:
                 logger.debug("WebSocket receive loop failed during disconnect", exc_info=True)
-        try:
-            await self._ws.close()
-        except Exception:
-            logger.debug("Error closing WebSocket connection", exc_info=True)
-        self._enqueue_sentinel()
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                logger.debug("Error closing WebSocket connection", exc_info=True)
+            self._finish_websocket(ws)
         await self._drain_emit_tasks()
 
-    async def send_audio(self, chunk: AudioChunk) -> bool:
-        if not self._connected:
-            return False
-        try:
-            rate = chunk.format.sample_rate
-            if rate != self._outbound_rate:
-                await self._ws.send(json.dumps({"type": "audio_format", "sample_rate": rate}))
-                self._outbound_rate = rate
-            await self._ws.send(chunk.data)
-            return True
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot send audio: client disconnected")
-            self._connected = False
-            self._client_connected.clear()
-            return False
+    def _after_websocket_finished(self) -> None:
+        self._connected = False
+        if self._receive_task is asyncio.current_task():
+            self._receive_task = None
+        self._close_browser_event_forwarder()
 
-    async def clear_audio(self) -> None:
-        """Tell the client to stop already-received and scheduled playback."""
-        if not self._connected:
-            return
-        try:
-            await self._ws.send(json.dumps({"type": "clear"}))
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot clear audio: client disconnected")
-            self._connected = False
-            self._client_connected.clear()
-
-    async def _send_client_event(self, payload: dict[str, Any]) -> None:
-        if not self._connected:
-            return
-        await self._ws.send(json.dumps(payload))
-
-    async def _receive_loop(self) -> None:
-        target_rate = self._config.audio_format.sample_rate
-        resampler = PCM16StreamResampler(target_rate)
-        try:
-            async for message in self._ws:
-                if isinstance(message, bytes):
-                    if not message:
-                        logger.debug("Dropping empty WebSocket audio frame")
-                        continue
-                    data = resampler.process(message, self._audio_format.sample_rate)
-                    if data:
-                        self._enqueue_chunk(
-                            AudioChunk(data=data, format=self._config.audio_format),
-                            context="WebSocket",
-                        )
-                elif isinstance(message, str):
-                    self._handle_control_message(message)
-        except websockets.exceptions.ConnectionClosed as exc:
-            logger.info("WebSocket client disconnected")
-            if isinstance(exc, websockets.exceptions.ConnectionClosedError):
-                self._record_transport_disconnect("websocket connection closed abnormally")
-        finally:
-            tail = resampler.finish()
-            if tail:
-                self._enqueue_chunk(
-                    AudioChunk(data=tail, format=self._config.audio_format),
-                    context="WebSocket",
-                )
-            self._connected = False
-            self._client_connected.clear()
-            self._audio_format = self._config.audio_format
-            self._enqueue_sentinel()
-
-    def _handle_control_message(self, raw: str) -> None:
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Ignoring invalid JSON control message")
-            self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
-            return
-        if not isinstance(msg, dict):
-            logger.warning("Ignoring non-object JSON control message")
-            self._emit_degraded(
-                _DEGRADED_CONTROL_DECODE_FAILED,
-                "control frame is not a JSON object",
-            )
-            return
-
-        if msg.get("type") == "config":
-            sample_rate = _valid_config_sample_rate(msg.get("sample_rate"))
-            if sample_rate is not None:
-                self._audio_format = AudioFormat(
-                    sample_rate=sample_rate,
-                    channels=self._audio_format.channels,
-                    sample_width=self._audio_format.sample_width,
-                    encoding=self._audio_format.encoding,
-                )
-            elif "sample_rate" in msg:
-                logger.warning("Ignoring invalid WebSocket sample_rate: %r", msg["sample_rate"])
-                self._emit_degraded(
-                    _DEGRADED_INVALID_SAMPLE_RATE,
-                    f"ignored invalid negotiated sample_rate {msg['sample_rate']!r}",
-                )
+    def _websocket_is_active(self, ws: ServerConnection) -> bool:
+        return self._connected and super()._websocket_is_active(ws)
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("websocket-connection", "websockets")
