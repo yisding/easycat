@@ -368,7 +368,16 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
                 self._finish_websocket(ws)
                 return
         except BaseException:
-            self._finish_websocket(ws)
+            # Keep the accepted socket reachable so disconnect() can close it.
+            # Clearing _ws here leaks the connection when ready-send
+            # cancellation or a non-ConnectionClosed send error interrupts
+            # connect().
+            self._connected = False
+            self._client_connected.clear()
+            self._audio_format = self._config.audio_format
+            self._outbound_rate = None
+            self._enqueue_sentinel()
+            self._after_websocket_finished()
             raise
         self._receive_task = asyncio.create_task(self._run_receive_loop(ws))
 

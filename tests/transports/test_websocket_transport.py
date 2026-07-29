@@ -28,6 +28,30 @@ class _ClosingReadyWebSocket:
         raise websockets.exceptions.ConnectionClosed(None, None)
 
 
+class _BlockingReadyWebSocket:
+    def __init__(self) -> None:
+        self.send_started = asyncio.Event()
+        self.closed = False
+
+    async def send(self, _message: str | bytes) -> None:
+        self.send_started.set()
+        await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FailingReadyWebSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def send(self, _message: str | bytes) -> None:
+        raise RuntimeError("ready send failed")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def test_websocket_transport_config_defaults_to_loopback():
     config = WebSocketTransportConfig()
 
@@ -74,6 +98,39 @@ async def test_connection_transport_ready_disconnect_is_not_raised():
     assert transport._ws is None
     assert transport._receive_task is None
     assert transport._in_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_connect_cancellation_keeps_socket_for_disconnect():
+    ws = _BlockingReadyWebSocket()
+    transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+
+    connect_task = asyncio.create_task(transport.connect())
+    await ws.send_started.wait()
+    connect_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await connect_task
+
+    assert transport.is_connected is False
+    assert transport._ws is ws
+    await transport.disconnect()
+    assert ws.closed is True
+    assert transport._ws is None
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_ready_error_keeps_socket_for_disconnect():
+    ws = _FailingReadyWebSocket()
+    transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="ready send failed"):
+        await transport.connect()
+
+    assert transport.is_connected is False
+    assert transport._ws is ws
+    await transport.disconnect()
+    assert ws.closed is True
+    assert transport._ws is None
 
 
 @pytest.mark.asyncio
