@@ -272,7 +272,7 @@ def _execute_latency_lane(
 
 def _latency_command(mode: LatencyMode, junit_path: Path) -> list[str]:
     return [
-        *pytest_command_prefix(),
+        *pytest_command_prefix(test_override_mode="root"),
         "-q",
         f"--junitxml={junit_path}",
         *[resolve_validation_test_arg(arg) for arg in latency_pytest_args(mode)],

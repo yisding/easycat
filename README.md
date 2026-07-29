@@ -62,14 +62,14 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
-EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart]'`
+EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
 a `[tool.uv.sources]` block; for a hand-written `pyproject.toml`, add:
 
 ```toml
 [project]
-dependencies = ["easycat[quickstart]"]
+dependencies = ["easycat[quickstart,webrtc]"]
 
 [tool.uv.sources]
 easycat = { path = "/path/to/easycat", editable = true }
@@ -79,7 +79,7 @@ For this repository, four commands go from clone to a talking bot. Keys live
 in a project `.env` — the same convention `easycat init` scaffolds:
 
 ```bash
-uv sync --extra quickstart --group dev
+uv sync --extra quickstart --extra webrtc --group dev
 echo 'OPENAI_API_KEY=your-api-key' > .env
 uv run easycat doctor --env-file .env
 uv run --env-file .env python examples/openai_agents_voice.py
