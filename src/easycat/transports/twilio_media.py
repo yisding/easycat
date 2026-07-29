@@ -42,6 +42,7 @@ from easycat.transports._base import (
     ServerTransportBase,
     make_version_info,
 )
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,7 @@ class TwilioTransportConfig:
     stream_token_validator: StreamTokenValidator | None = None
     stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
     stream_token_validation_timeout_s: float = 5.0
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
     unsafe_allow_no_auth: bool = False
 
     def __post_init__(self) -> None:
@@ -1149,6 +1151,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             host=resolved_config.host,
             port=resolved_config.port,
             max_pending_chunks=resolved_config.max_pending_chunks,
+            max_pending_bytes=resolved_config.max_pending_bytes,
         )
         self._init_twilio_protocol(resolved_config, event_bus)
 
@@ -1411,7 +1414,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._pending_start_message: dict[str, Any] | None = None
         self._pending_start_claims: dict[str, str] | None = None
         self._connection_generation = 0
-        self._init_audio_queue(resolved_config.max_pending_chunks)
+        self._init_audio_queue(
+            resolved_config.max_pending_chunks,
+            resolved_config.max_pending_bytes,
+        )
         self._init_twilio_protocol(resolved_config, event_bus)
 
     def _current_ws(self) -> ServerConnection | None:

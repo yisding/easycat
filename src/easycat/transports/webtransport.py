@@ -117,6 +117,7 @@ from easycat.transports._base import (
     _enqueue_inbound_chunk,
     make_version_info,
 )
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports.websocket import _valid_config_sample_rate
 
 if TYPE_CHECKING:
@@ -315,6 +316,7 @@ class WebTransportTransportConfig:
     allow_query_token: bool = False
     # The only way to bind a non-loopback interface without ``auth_token``.
     unsafe_allow_no_auth: bool = False
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
@@ -1262,7 +1264,10 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     ) -> None:
         self._config = config or WebTransportTransportConfig()
         self._audio_format = self._config.audio_format
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
         self._out_queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue(
             maxsize=self._config.outbound_max_pending,
         )
@@ -1639,7 +1644,10 @@ class WebTransportTransport(AudioQueueMixin):
         # We don't push into the mixin's ``_in_queue`` (``receive_audio``
         # below delegates), but ``_init_audio_queue`` also sets up
         # ``_connected`` and ``_client_connected`` which we do use.
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
         # ``_event_bus`` comes from ``AudioQueueMixin`` (``_init_audio_queue``

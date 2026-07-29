@@ -23,6 +23,7 @@ from easycat.telephony.server import (
     serve_twilio_voice_app,
 )
 from easycat.transports import TwilioStreamTokenStore
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import (
     TWILIO_STREAM_TOKEN_PARAMETER,
     twiml_connect_stream,
@@ -508,10 +509,10 @@ def test_media_listener_closed_when_http_startup_fails(
     assert web.runner_cleaned is True
 
 
-def test_media_listener_disables_permessage_deflate(
+def test_media_listener_bounds_messages_and_disables_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Twilio media listener passes ``compression=None`` to ``websockets.serve``.
+    """The Twilio listener bounds messages and disables permessage-deflate.
 
     permessage-deflate must stay off for the raw μ-law media stream; the listener
     otherwise inherits the library default and fragments/buffers the audio frames.
@@ -525,6 +526,7 @@ def test_media_listener_disables_permessage_deflate(
     asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, body))
 
     assert harness.serve_kwargs.get("compression", "MISSING") is None
+    assert harness.serve_kwargs["max_size"] == MAX_WEBSOCKET_MESSAGE_BYTES
     assert callable(harness.serve_kwargs.get("process_request"))
 
 

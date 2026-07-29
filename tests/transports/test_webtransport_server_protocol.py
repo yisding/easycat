@@ -47,7 +47,12 @@ class TestWebTransportServerWiring:
             "path",
             "max_concurrent_sessions",
         ]
-        assert names[9:] == ["auth_token", "allow_query_token", "unsafe_allow_no_auth"]
+        assert names[9:] == [
+            "auth_token",
+            "allow_query_token",
+            "unsafe_allow_no_auth",
+            "max_pending_bytes",
+        ]
 
     def test_server_keeps_auth_token_out_of_per_session_config(self) -> None:
         async def _noop(transport: WebTransportConnectionTransport) -> None:

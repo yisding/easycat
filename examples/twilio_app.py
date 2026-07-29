@@ -54,6 +54,7 @@ from easycat.transports import (
     TwilioTransportConfig,
     twilio_websocket_signature_process_request,
 )
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
@@ -129,6 +130,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 settings.auth_token, settings.stream_url
             ),
             compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )
         try:
             yield

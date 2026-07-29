@@ -38,6 +38,7 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 if TYPE_CHECKING:
     from easycat.config import EasyConfig
@@ -294,6 +295,7 @@ async def serve_twilio_voice_app(
         config.media_port,
         process_request=process_request,
         compression=None,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
     )
 
     # Start the TwiML HTTP listener; the helper closes the already-bound media
