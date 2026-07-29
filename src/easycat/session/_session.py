@@ -494,6 +494,35 @@ class Session:
             return self._turn
         return None
 
+    @property
+    def current_turn(self) -> TurnContext | None:
+        """Return the live turn context, including post-playback bookkeeping.
+
+        Most applications should use :attr:`turn_state` for lifecycle decisions.
+        This lower-level accessor exists for diagnostics, replay, and focused
+        test harnesses that need to inspect per-turn accounting without reaching
+        into Session's collaborator graph.
+        """
+        return self._turn
+
+    def begin_turn(
+        self,
+        turn_id: str,
+        cancel_token: CancelToken | None = None,
+    ) -> TurnContext:
+        """Create and install a turn context without advancing the turn manager.
+
+        This is a low-level seam for diagnostics, replay, and focused test
+        harnesses. Applications that initiate user speech should call
+        :meth:`start_turn`, which performs the full lifecycle transition.
+        """
+        if not turn_id.strip():
+            raise ValueError("turn_id must be a non-empty string")
+        turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
+        self._turn = turn
+        self._turn_generation = turn.generation
+        return turn
+
     def _with_correlation(self, event: Any) -> Any:
         """Attach session/turn identifiers to events when supported."""
         if not hasattr(event, "session_id") and not hasattr(event, "turn_id"):

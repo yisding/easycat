@@ -268,8 +268,7 @@ class TurnRunner:
             prev.cancel_token.cancel()
 
         cancel_token = self._turn_manager.cancel_token or CancelToken()
-        turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token)
-        self._turn.set(turn)
+        turn = self._turn.begin(turn_id, cancel_token)
         self._preemptive_turn_generation = turn.generation
         self._preemptive_attempts = 0
         # Tag startup records for this turn without leaving the EventBus task
