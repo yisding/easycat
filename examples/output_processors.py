@@ -25,7 +25,7 @@ except ImportError as exc:
 
 from easycat import EasyConfig, PauseProcessor, PhoneticReplacementProcessor, run
 
-# default_pronunciation_processors(name_pronunciations=..., phone_pause_ms=...)
+# default_pronunciation_processors(name_pronunciations=..., phone_ellipsis_count=1)
 # bundles the two below into one call.
 run(
     EasyConfig.mic(
