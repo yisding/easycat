@@ -8,9 +8,11 @@ and event-bus subscription handlers.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -21,6 +23,10 @@ from easycat.events import (
     AgentRequestStarted,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    CallAnswered,
+    CallEnded,
+    CallFailed,
+    CallScreening,
     Error,
     Event,
     EventBus,
@@ -49,10 +55,11 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
-from easycat.runtime.journal import ExecutionJournal
+from easycat.runtime.artifacts import ArtifactClass, ArtifactStore, FilesystemArtifactStore
+from easycat.runtime.journal import ExecutionJournal, append_journal_record_async
+from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
-from easycat.validation.redaction import redact_value
+from easycat.validation.redaction import RedactionPolicy, redact_value
 
 logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
@@ -61,12 +68,22 @@ _JOURNAL_ATTRS = (
     "result",
     "action",
     "executor",
+    "provider",
     "tool_name",
     "call_id",
+    "attempt",
+    "call_sid",
+    "answered_by",
+    "platform",
+    "sip_code",
+    "duration_s",
+    "disposition",
+    "number",
     "delta",
     "listener_id",
     "queue_size",
     "dropped_frames",
+    "mark_name",
     "reason",
     "error",
     "structured_output",
@@ -79,6 +96,7 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
+_NONEMPTY_ATTRS = frozenset({"provider"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 _REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
 _REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"
@@ -116,6 +134,10 @@ _SIMPLE_EVENT_RECORDS = (
     _EventRecordSpec(AgentRequestStarted, JournalRecordKind.EVENT, "agent_request_started"),
     _EventRecordSpec(AgentDelta, JournalRecordKind.EVENT, "agent_delta"),
     _EventRecordSpec(AgentFinal, JournalRecordKind.EVENT, "agent_final"),
+    _EventRecordSpec(CallAnswered, JournalRecordKind.EVENT, "call_answered"),
+    _EventRecordSpec(CallEnded, JournalRecordKind.EVENT, "call_ended"),
+    _EventRecordSpec(CallFailed, JournalRecordKind.EVENT, "call_failed"),
+    _EventRecordSpec(CallScreening, JournalRecordKind.EVENT, "call_screening"),
     _EventRecordSpec(BotStartedSpeaking, JournalRecordKind.EVENT, "bot_started_speaking"),
     _EventRecordSpec(BotStoppedSpeaking, JournalRecordKind.EVENT, "bot_stopped_speaking"),
     _EventRecordSpec(Error, JournalRecordKind.EVENT, "error"),
@@ -221,7 +243,12 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
+def _redact_session_action_data(
+    value: Any,
+    key: str | None = None,
+    *,
+    policy: RedactionPolicy = "secrets",
+) -> Any:
     """Redact sensitive session-action fields before journaling.
 
     Session actions can carry telephony secrets and customer content (DTMF
@@ -237,27 +264,31 @@ def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
         return _REDACTED_SESSION_ACTION_VALUE
     if isinstance(value, dict):
         return {
-            str(item_key): _redact_session_action_data(item_value, str(item_key))
+            str(item_key): _redact_session_action_data(
+                item_value,
+                str(item_key),
+                policy=policy,
+            )
             for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
         }
     if isinstance(value, list):
-        return [_redact_session_action_data(item, key) for item in value]
-    return redact_value(value, key)
+        return [_redact_session_action_data(item, key, policy=policy) for item in value]
+    return redact_value(value, key, policy=policy)
 
 
-def _journal_attr_value(attr: str, value: Any) -> Any:
+def _journal_attr_value(attr: str, value: Any, *, policy: RedactionPolicy) -> Any:
     jsonable = _to_jsonable(value) if attr in _JSONABLE_ATTRS else value
     if attr in {"action", "result"}:
-        return _redact_session_action_data(jsonable)
+        return _redact_session_action_data(jsonable, policy=policy)
     return jsonable
 
 
-def _event_attributes(event: Event) -> dict[str, Any]:
+def _event_attributes(event: Event, *, policy: RedactionPolicy) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for attr in _JOURNAL_ATTRS:
         value = getattr(event, attr, None)
-        if value is not None:
-            data[attr] = _journal_attr_value(attr, value)
+        if value is not None and (attr not in _NONEMPTY_ATTRS or value):
+            data[attr] = _journal_attr_value(attr, value, policy=policy)
     return data
 
 
@@ -277,8 +308,12 @@ def _exception_attributes(event: Event) -> dict[str, Any]:
     return data
 
 
-def _project_journal_event(event: Event) -> _JournalEventProjection:
-    data = _event_attributes(event)
+def _project_journal_event(
+    event: Event,
+    *,
+    policy: RedactionPolicy = "secrets",
+) -> _JournalEventProjection:
+    data = _event_attributes(event, policy=policy)
     exception = getattr(event, "exception", None)
     if exception is None:
         return _JournalEventProjection(data=data or None, error=None)
@@ -310,6 +345,7 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: TurnIdResolver
+    redaction: RedactionPolicy = "secrets"
     _subscribed: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
@@ -361,9 +397,12 @@ class SessionJournalSink:
         output_bytes: bytes | None = None,
         input_artifact_class: ArtifactClass = "debug_verbose",
         output_artifact_class: ArtifactClass = "debug_verbose",
-    ) -> None:
+        tags: frozenset[str] = frozenset(),
+        inherit_turn_id: bool = True,
+    ) -> int | None:
         if self.journal is None:
-            return
+            return None
+        validate_builtin_record(name=name, kind=kind, data=data)
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
             if input_bytes is not None
@@ -374,13 +413,69 @@ class SessionJournalSink:
             if output_bytes is not None
             else None
         )
-        resolved_turn_id = self.current_turn_id(turn_id)
-        self.journal.append(
+        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+        return self.journal.append(
             kind=kind,
             name=name,
             session_id=self.session_id,
             turn_id=resolved_turn_id,
             data=data,
+            tags=tags,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
+    async def append_record_async(
+        self,
+        *,
+        name: str,
+        kind: JournalRecordKind = JournalRecordKind.EVENT,
+        turn_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        input_bytes: bytes | None = None,
+        output_bytes: bytes | None = None,
+        input_artifact_class: ArtifactClass = "debug_verbose",
+        output_artifact_class: ArtifactClass = "debug_verbose",
+        tags: frozenset[str] = frozenset(),
+        inherit_turn_id: bool = True,
+    ) -> None:
+        """Async event-bus write path for persistent journal/store backends."""
+        journal = self.journal
+        if journal is None:
+            return
+        validate_builtin_record(name=name, kind=kind, data=data)
+
+        async def _store(
+            payload: bytes | None,
+            artifact_class: ArtifactClass,
+        ) -> str | None:
+            if payload is None or self.artifact_store is None:
+                return None
+            store = self.artifact_store
+            writes_block = getattr(store, "writes_block", None)
+            if bool(writes_block) or (
+                writes_block is None and isinstance(store, FilesystemArtifactStore)
+            ):
+                ref = await asyncio.to_thread(
+                    store.put,
+                    payload,
+                    artifact_class=artifact_class,
+                )
+                return ref or None
+            ref = store.put(payload, artifact_class=artifact_class)
+            return ref or None
+
+        input_ref = await _store(input_bytes, input_artifact_class)
+        output_ref = await _store(output_bytes, output_artifact_class)
+        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+        await append_journal_record_async(
+            journal,
+            kind=kind,
+            name=name,
+            session_id=self.session_id,
+            turn_id=resolved_turn_id,
+            data=data,
+            tags=tags,
             input_ref=input_ref,
             output_ref=output_ref,
         )
@@ -388,13 +483,19 @@ class SessionJournalSink:
     def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
 
-    def _make_event_handler(self, kind: JournalRecordKind, name: str) -> EventHandler:
-        def _handler(event: Event) -> None:
+    def _make_event_handler(
+        self,
+        kind: JournalRecordKind,
+        name: str,
+    ) -> Callable[[Event], Coroutine[Any, Any, None]]:
+        async def _handler(event: Event) -> None:
             journal = self.journal
             if journal is None:
                 return
-            projection = _project_journal_event(event)
-            journal.append(
+            projection = _project_journal_event(event, policy=self.redaction)
+            validate_builtin_record(name=name, kind=kind, data=projection.data)
+            await append_journal_record_async(
+                journal,
                 kind=kind,
                 name=name,
                 session_id=getattr(event, "session_id", None) or self.session_id,
@@ -418,8 +519,8 @@ class SessionJournalSink:
         """
         journal_handler = self._make_event_handler(kind, "interruption")
 
-        def _handler(event: Any) -> None:
-            journal_handler(event)
+        async def _handler(event: Any) -> None:
+            await journal_handler(event)
             observability.increment_counter(
                 "easycat.interruption.total",
                 attributes={"easycat.surface": "vad"},
@@ -427,11 +528,11 @@ class SessionJournalSink:
 
         return _handler
 
-    def _handle_tts_audio(self, event: TTSAudio) -> None:
+    async def _handle_tts_audio(self, event: TTSAudio) -> None:
         # TTSStage captures replay-critical audio bytes via ``tts_frame``.
         # The session-level ``tts_audio`` record stays metadata-only for
         # legacy observers.
-        self.append_record(
+        await self.append_record_async(
             name="tts_audio",
             turn_id=event.turn_id,
             data={
@@ -445,17 +546,17 @@ class SessionJournalSink:
             },
         )
 
-    def _handle_tts_markers(self, event: TTSMarkers) -> None:
-        self.append_record(
+    async def _handle_tts_markers(self, event: TTSMarkers) -> None:
+        await self.append_record_async(
             name="tts_markers",
             turn_id=event.turn_id,
             data={"markers": event.markers},
         )
 
-    def _handle_transport_degraded(self, event: TransportDegraded) -> None:
+    async def _handle_transport_degraded(self, event: TransportDegraded) -> None:
         # Fatal teardowns are control-plane events (mirrors ``interruption``);
         # recoverable single-frame drops stay on the EVENT timeline.
-        self.append_record(
+        await self.append_record_async(
             name="transport_degraded",
             kind=JournalRecordKind.CONTROL if event.fatal else JournalRecordKind.EVENT,
             turn_id=event.turn_id,

@@ -88,7 +88,8 @@ def export_debug_bundle(
         raise BundleExists(f"Bundle already exists: {path}. Use overwrite=True to replace.")
 
     try:
-        manifest = _capture_manifest(session)
+        journal = _snapshot_journal(journal)
+        manifest = _capture_manifest(session, journal)
         _write_bundle_archive(
             path,
             manifest=manifest,
@@ -123,11 +124,12 @@ def _require_debug_capture(
         raise DebugCaptureDisabledError("Debug capture is disabled (debug='off')")
 
 
-def _capture_manifest(session: object) -> Manifest:
+def _capture_manifest(session: object, journal: _JournalReader | None) -> Manifest:
     return Manifest(
         format_version=FORMAT_VERSION,
         provider_versions=_collect_provider_versions(session),
         config_snapshot=safe_config_snapshot_from_session(session),
+        journal_dropped_records=_journal_dropped_records(journal),
         sharing_banner=_sharing_banner(),
     )
 
@@ -144,6 +146,7 @@ def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
         page = _read_journal_page(journal, cursor, supports_paging=supports_paging)
         if not page:
             return
+        _validate_page_continuity(page, cursor)
 
         last_sequence: int | None = None
         for record in page:
@@ -162,6 +165,37 @@ def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
         cursor = last_sequence + 1
         if snapshot_end is not None and cursor > snapshot_end:
             return
+
+
+def _validate_page_continuity(page: list[object], cursor: int) -> None:
+    """Reject a page whose first sequence jumped past the requested cursor."""
+    if cursor <= 0:
+        return
+    for record in page:
+        sequence = _serialized_sequence(record_to_dict(record))
+        if sequence is None:
+            continue
+        if sequence > cursor:
+            raise BundleValidationError(
+                "Journal records were evicted during export",
+                reason_code="JOURNAL_CHANGED_DURING_EXPORT",
+            )
+        return
+
+
+def _snapshot_journal(journal: _JournalReader | None) -> _JournalReader | None:
+    """Freeze a bounded in-memory journal before its records can be evicted."""
+    if journal is None:
+        return None
+    candidates = (journal, getattr(journal, "_journal", None))
+    for candidate in candidates:
+        snapshot = getattr(candidate, "snapshot", None)
+        if not callable(snapshot):
+            continue
+        frozen = snapshot()
+        if isinstance(frozen, _JournalReader):
+            return frozen
+    return journal
 
 
 def _journal_snapshot_end(journal: _JournalReader) -> int | None:
@@ -208,16 +242,33 @@ def _serialized_sequence(record: dict[str, Any]) -> int | None:
     return sequence
 
 
+def _journal_dropped_records(journal: _JournalReader | None) -> int:
+    value = getattr(journal, "dropped_records", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
 def _iter_artifacts(session: object) -> Iterator[_ArtifactSource]:
     """Yield artifact descriptors without reading filesystem blobs."""
     artifact_store = getattr(session, "_artifact_store", None)
     if artifact_store is None:
         return
     if isinstance(artifact_store, _MemoryArtifactStore):
-        yield from _iter_memory_artifacts(artifact_store._store)
+        yield from _iter_memory_artifacts(_snapshot_memory_artifacts(artifact_store))
         return
     if isinstance(artifact_store, _FilesystemArtifactStore):
         yield from _iter_filesystem_artifacts(artifact_store._dir)
+
+
+def _snapshot_memory_artifacts(
+    artifact_store: _MemoryArtifactStore,
+) -> dict[str, bytes | str]:
+    """Copy an in-memory store under its lock when it exposes one."""
+    store = artifact_store._store
+    lock = getattr(artifact_store, "_lock", None)
+    if lock is None:
+        return dict(store)
+    with lock:
+        return dict(store)
 
 
 def _iter_memory_artifacts(store: Mapping[str, bytes | str]) -> Iterator[_ArtifactSource]:
@@ -533,7 +584,15 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
 
 def _collect_provider_versions(session: object) -> dict[str, Any]:
     versions: dict[str, Any] = {}
-    for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
+    for attr in (
+        "stt",
+        "tts",
+        "transport",
+        "vad",
+        "noise_reducer",
+        "echo_canceller",
+        "agent",
+    ):
         provider = getattr(session, attr, None)
         if provider is not None and hasattr(provider, "version_info"):
             try:

@@ -94,4 +94,5 @@ class Manifest:
     provider_versions: dict[str, Any] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     env_metadata: dict[str, str] = field(default_factory=dict)
+    journal_dropped_records: int = 0
     sharing_banner: str = ""

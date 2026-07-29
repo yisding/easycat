@@ -123,6 +123,7 @@ if TYPE_CHECKING:
     from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
     from easycat.providers import (
         EchoCanceller,
+        EventBusBindable,
         NoiseReducer,
         STTProvider,
         Transport,
@@ -169,7 +170,12 @@ if TYPE_CHECKING:
         register_tts_provider,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
-    from easycat.vad import VADConfig, create_vad
+    from easycat.vad import (
+        VADConfig,
+        available_vad_providers,
+        create_vad,
+        register_vad_provider,
+    )
     from easycat.voice_app import VoiceApp
 
 

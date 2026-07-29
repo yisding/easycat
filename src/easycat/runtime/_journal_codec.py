@@ -24,6 +24,7 @@ from easycat.runtime.records import (
     TimingInfo,
 )
 from easycat.runtime.safe_defaults import apply_write_filter
+from easycat.validation.redaction import RedactionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +379,7 @@ def _journal_record_for_append(
     tags: frozenset[str],
     input_ref: str | None,
     output_ref: str | None,
+    redaction: RedactionPolicy,
 ) -> JournalRecord:
     return apply_write_filter(
         JournalRecord(
@@ -392,7 +394,8 @@ def _journal_record_for_append(
             input_ref=input_ref,
             output_ref=output_ref,
             tags=tags,
-        )
+        ),
+        redaction=redaction,
     )
 
 
@@ -447,8 +450,8 @@ def _persist_degraded_marker(conn: Any, session_id: str, exc: Exception) -> None
         )
     except Exception:
         logger.debug("Failed to persist degraded journal marker", exc_info=True)
-    # Commit so the markers survive process death even though no further
-    # append() (which would otherwise COMMIT) will run after degraded mode.
+    # Commit so the markers and any preceding open batch survive process death.
+    # No later append can reach a normal batch boundary after degraded mode.
     try:
         conn.commit()
     except Exception:

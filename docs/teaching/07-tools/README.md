@@ -123,7 +123,7 @@
  from contextlib import AsyncExitStack
 @@ -53,11 +57,56 @@
  PREROLL_FRAMES = 15
- MODEL = "gpt-4o-mini"
+ MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch06-streaming-{int(time.time())}"
 +SESSION_ID = f"ch07-tools-{int(time.time())}"
@@ -180,7 +180,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -82,84 +131,162 @@
+@@ -82,85 +131,163 @@
                  self._preroll.append(chunk)
 
 
@@ -226,6 +226,7 @@
      """
 -    stream = await client.chat.completions.create(
 -        model=MODEL,
+-        reasoning_effort="none",
 -        messages=[
 -            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
 -            {"role": "user", "content": user_text},
@@ -251,6 +252,7 @@
 +    for _ in range(2):
 +        stream = await client.chat.completions.create(
 +            model=MODEL,
++            reasoning_effort="none",
 +            messages=messages,
 +            tools=TOOLS,
 +            stream=True,
@@ -403,7 +405,7 @@
          synth_start = time.monotonic()
          sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-@@ -174,7 +301,12 @@
+@@ -175,7 +302,12 @@
                              kind=JournalRecordKind.EVENT,
                              name="tts.first_audio",
                              session_id=SESSION_ID,
@@ -417,7 +419,7 @@
                          )
                  else:
                      rejected_chunks += 1
-@@ -185,6 +317,8 @@
+@@ -186,6 +318,8 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -426,7 +428,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -195,7 +329,6 @@
+@@ -196,7 +330,6 @@
 
 
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -434,7 +436,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -206,16 +339,10 @@
+@@ -207,16 +340,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -453,7 +455,7 @@
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
      first_audio_t, accepted_chunks, rejected_chunks = delivery
-@@ -305,7 +432,7 @@
+@@ -306,7 +433,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
@@ -612,14 +614,17 @@ branch that accidentally accumulates into the same buffer as
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
 b = load_bundle(next(Path("docs/teaching/07-tools/runs/").glob("*.bundle")))
 for r in b.records():
     if r["name"] in ("tool.call.started", "tool.call.result"):
         print(r["name"], r["data"].get("tool_call_id"), r["data"].get("filler_enqueued"))
     if r["name"] == "stage.tts.execute":
         d = r["data"]
-        print(f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
-              f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}")
+        print(
+            f"  tts [{d['kind']:>6}] call={d['tool_call_id']} "
+            f"accepted={d['accepted_chunks']} rejected={d['rejected_chunks']}"
+        )
 ```
 
 You will see `filler`-kind TTS spans interleaved with

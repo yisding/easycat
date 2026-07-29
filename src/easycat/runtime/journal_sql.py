@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import heapq
+import itertools
 import json
 import logging
 import os
@@ -11,9 +14,12 @@ import sqlite3
 import subprocess
 import threading
 import time
+import weakref
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import (
@@ -35,7 +41,8 @@ from easycat.runtime._private_files import (
 )
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
-    _current_process_identity,
+    _has_live_pid,
+    _process_birth_identity,
     sweep_crashed_journals,
 )
 from easycat.runtime.journal import _validate_read_limit
@@ -46,8 +53,178 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
+from easycat.validation.redaction import RedactionPolicy, validate_redaction_policy
 
 logger = logging.getLogger(__name__)
+
+_LIVE_SQLITE_JOURNALS_LOCK = threading.Lock()
+_LIVE_SQLITE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = (
+    weakref.WeakValueDictionary()
+)
+_CRASH_SWEEP_INTERVAL_SECONDS = 60.0
+_CRASH_SWEEP_RETRY_SECONDS = 1.0
+_CRASH_SWEEP_MAX_ROOTS = 128
+_CRASH_SWEEP_STATE_LOCK = threading.Lock()
+
+
+@dataclass
+class _CrashSweepState:
+    lock: threading.Lock
+    last_success: float | None = None
+    timer: threading.Timer | None = None
+
+
+_CRASH_SWEEP_STATES: OrderedDict[Path, _CrashSweepState] = OrderedDict()
+
+
+def _crash_sweep_key(root: Path) -> Path:
+    return root.absolute()
+
+
+def _reset_crash_sweep_state_after_fork() -> None:
+    global _CRASH_SWEEP_STATE_LOCK, _CRASH_SWEEP_STATES
+    _CRASH_SWEEP_STATE_LOCK = threading.Lock()
+    _CRASH_SWEEP_STATES = OrderedDict()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_crash_sweep_state_after_fork)
+
+
+def _clear_crash_sweep_states() -> None:
+    """Cancel scheduled scans and clear process-local coordination state."""
+    with _CRASH_SWEEP_STATE_LOCK:
+        states = list(_CRASH_SWEEP_STATES.values())
+        _CRASH_SWEEP_STATES.clear()
+    for state in states:
+        if state.timer is not None:
+            state.timer.cancel()
+
+
+def _crash_sweep_state(root_key: Path) -> _CrashSweepState:
+    with _CRASH_SWEEP_STATE_LOCK:
+        state = _CRASH_SWEEP_STATES.get(root_key)
+        if state is None:
+            state = _CrashSweepState(lock=threading.Lock())
+            _CRASH_SWEEP_STATES[root_key] = state
+        else:
+            _CRASH_SWEEP_STATES.move_to_end(root_key)
+
+        while len(_CRASH_SWEEP_STATES) > _CRASH_SWEEP_MAX_ROOTS:
+            old_key, old_state = next(iter(_CRASH_SWEEP_STATES.items()))
+            if old_state.timer is not None:
+                old_state.timer.cancel()
+            del _CRASH_SWEEP_STATES[old_key]
+        return state
+
+
+def _schedule_crash_sweep(root_key: Path, state: _CrashSweepState, delay: float) -> None:
+    if state.timer is not None:
+        return
+    timer = threading.Timer(
+        max(0.0, delay),
+        _run_scheduled_crash_sweep,
+        args=(root_key, state),
+    )
+    timer.daemon = True
+    state.timer = timer
+    timer.start()
+
+
+def _run_scheduled_crash_sweep(root_key: Path, state: _CrashSweepState) -> None:
+    with _CRASH_SWEEP_STATE_LOCK:
+        if _CRASH_SWEEP_STATES.get(root_key) is not state:
+            return
+    with state.lock:
+        state.timer = None
+        _run_crash_sweep(root_key, state, skip=None)
+
+
+def _run_crash_sweep(root: Path, state: _CrashSweepState, *, skip: Path | None) -> None:
+    try:
+        sweep_crashed_journals(root, skip=skip)
+    except (OSError, sqlite3.DatabaseError):
+        logger.debug("Crash-journal sweep failed", exc_info=True)
+        _schedule_crash_sweep(root, state, _CRASH_SWEEP_RETRY_SECONDS)
+        return
+
+    state.last_success = time.monotonic()
+    _schedule_crash_sweep(root, state, _CRASH_SWEEP_INTERVAL_SECONDS)
+
+
+def _sweep_crashed_journals_if_due(root: Path, *, skip: Path) -> None:
+    """Periodically scan *root* without putting an O(n) scan on every open."""
+    root_key = _crash_sweep_key(root)
+    state = _crash_sweep_state(root_key)
+    with state.lock:
+        now = time.monotonic()
+        elapsed = None if state.last_success is None else now - state.last_success
+        if elapsed is not None and 0 <= elapsed < _CRASH_SWEEP_INTERVAL_SECONDS:
+            _schedule_crash_sweep(
+                root_key,
+                state,
+                _CRASH_SWEEP_INTERVAL_SECONDS - elapsed,
+            )
+            return
+        if state.timer is not None:
+            state.timer.cancel()
+            state.timer = None
+        _run_crash_sweep(root_key, state, skip=skip)
+
+
+class _SqliteBatchCommitCoordinator:
+    """Schedule elapsed-time SQLite batch commits with bounded isolation.
+
+    One coordinator maintains the deadline heap while a small worker pool runs
+    due commits. A stalled filesystem operation can occupy one worker without
+    delaying every other journal. Heap entries carry a journal generation, so
+    stale deadlines become cheap no-ops after a count/turn/lifecycle boundary
+    commits the transaction first.
+    """
+
+    _condition = threading.Condition()
+    _deadlines: list[tuple[float, int, weakref.ReferenceType[Any], int]] = []
+    _counter = itertools.count()
+    _thread: threading.Thread | None = None
+    _executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=4,
+        thread_name_prefix="easycat-sqlite-journal-commit",
+    )
+
+    @classmethod
+    def schedule(cls, journal: SqliteJournal, deadline: float, generation: int) -> None:
+        with cls._condition:
+            heapq.heappush(
+                cls._deadlines,
+                (deadline, next(cls._counter), weakref.ref(journal), generation),
+            )
+            if cls._thread is None:
+                cls._thread = threading.Thread(
+                    target=cls._run,
+                    daemon=True,
+                    name="easycat-sqlite-journal-commit",
+                )
+                cls._thread.start()
+            cls._condition.notify()
+
+    @classmethod
+    def _run(cls) -> None:
+        while True:
+            with cls._condition:
+                while True:
+                    if not cls._deadlines:
+                        cls._thread = None
+                        return
+                    deadline, _order, journal_ref, generation = cls._deadlines[0]
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        cls._condition.wait(timeout=remaining)
+                        continue
+                    heapq.heappop(cls._deadlines)
+                    break
+            journal = journal_ref()
+            if journal is not None:
+                cls._executor.submit(journal._commit_scheduled_batch, generation)
 
 
 class _SqlJournalBase:
@@ -216,11 +393,19 @@ class SqliteJournal(_SqlJournalBase):
 
     - ``PRAGMA synchronous=NORMAL`` — writes go to the kernel page cache,
       application-crash durable without fsync on the hot path.
-    - ``PRAGMA wal_autocheckpoint=0`` — no inline checkpoints; checkpoint
-      happens once at clean close via ``PRAGMA wal_checkpoint(TRUNCATE)``.
+    - Appends share a transaction for at most 100 ms or 100 records; turn
+      boundaries and lifecycle flushes commit immediately.
+    - ``PRAGMA wal_autocheckpoint=1000`` — committed WAL pages are folded
+      back into the database throughout long-running sessions.
     - Single-writer discipline via ``threading.Lock``.
     - Eager file-open warmup so the first turn doesn't pay cold-PRAGMA cost.
     """
+
+    writes_block = True
+    _batch_commit_interval_s = 0.1
+    _batch_commit_records = 100
+    _wal_autocheckpoint_pages = 1000
+    _commit_boundary_names = frozenset({"turn_started", "turn_ended"})
 
     def __init__(
         self,
@@ -228,7 +413,9 @@ class SqliteJournal(_SqlJournalBase):
         *,
         data_dir: str | Path | None = None,
         retention_mode: Literal["archive", "delete"] = "archive",
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
+        self._redaction = validate_redaction_policy(redaction)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._root = root
         self._retention_mode = retention_mode
@@ -241,10 +428,7 @@ class SqliteJournal(_SqlJournalBase):
         # same-id recovery path below only fires when *this* session's id is
         # reused; orphaned ids never reopen, so the sweep is what promotes them
         # to crash-dumps/.  Best-effort: never block or fail journal startup.
-        try:
-            sweep_crashed_journals(root, skip=self._db_path)
-        except (OSError, sqlite3.DatabaseError):
-            logger.debug("Crash-journal sweep failed", exc_info=True)
+        _sweep_crashed_journals_if_due(root, skip=self._db_path)
 
         touch_private_file(self._db_path)
         self._session_id = session_id
@@ -255,6 +439,9 @@ class SqliteJournal(_SqlJournalBase):
         self._recovered = False
         self._original_session_id = session_id
         self._clean_close_marked = False
+        self._pending_records = 0
+        self._batch_generation = 0
+        self._batch_deadline: float | None = None
 
         # ── Check for prior unclean shutdown ─────────────────────
         existed = self._db_path.exists()
@@ -264,6 +451,43 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
+        self._claim_live_journal()
+        try:
+            self._initialize_live_journal(session_id, existed=existed)
+        except BaseException:
+            self._release_live_journal()
+            self._conn.close()
+            raise
+
+    # ── Startup phases ────────────────────────────────────────────
+
+    def _claim_live_journal(self) -> None:
+        """Reject a second live writer for this process/path identity."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            current = _LIVE_SQLITE_JOURNALS.get(key)
+            if current is not None and not current._closed:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+
+            row = self._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            if row is not None and row[0] not in (None, ""):
+                try:
+                    live_pid = int(row[0])
+                except (TypeError, ValueError):
+                    live_pid = 0
+                if live_pid != os.getpid() and _has_live_pid(self._conn):
+                    raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
+            _LIVE_SQLITE_JOURNALS[key] = self
+
+    def _release_live_journal(self) -> None:
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_SQLITE_JOURNALS_LOCK:
+            if _LIVE_SQLITE_JOURNALS.get(key) is self:
+                _LIVE_SQLITE_JOURNALS.pop(key, None)
+
+    def _initialize_live_journal(self, session_id: str, *, existed: bool) -> None:
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
         # After reconcile the live table is empty (prior rows were promoted
         # or truncated), so the pre-v2 backfill only stamps the version.
@@ -272,17 +496,24 @@ class SqliteJournal(_SqlJournalBase):
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
-        # Stamp our process identity as a liveness marker (committed so a
-        # separate crash-sweep connection can read it). An idle WAL journal
-        # between turns holds no write lock, so the orphan sweep cannot tell
-        # "live but idle" from "crashed" by lock alone. On Linux the marker
-        # includes /proc's process start token as well as the PID, preventing
-        # a recycled PID from making a crashed journal look live forever.
-        # Cleared on clean close.
+        # Stamp our PID and process-birth identity as liveness markers
+        # (committed so a separate crash-sweep connection can read them).
+        # An idle WAL journal between turns holds no write lock, so the
+        # orphan sweep cannot tell "live but idle" from "crashed" by lock
+        # alone. The birth identity distinguishes this process from a later
+        # process that reuses its PID, even after a reboot.
         self._conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
-            (_current_process_identity(),),
+            (str(os.getpid()),),
         )
+        process_birth = _process_birth_identity(os.getpid())
+        if process_birth is not None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+                (process_birth,),
+            )
+        else:
+            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
         self._conn.commit()
 
         # Recover sequence counter from any existing records.  Both the
@@ -299,8 +530,8 @@ class SqliteJournal(_SqlJournalBase):
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
             self._insert_recovery_marker(session_id, prior_count)
-
-    # ── Startup phases ────────────────────────────────────────────
+            self._pending_records = 1
+            self._schedule_batch_commit_locked()
 
     def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -310,7 +541,7 @@ class SqliteJournal(_SqlJournalBase):
         )
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute(f"PRAGMA wal_autocheckpoint={self._wal_autocheckpoint_pages}")
         harden_sqlite_files(self._db_path)
         return conn
 
@@ -450,7 +681,7 @@ class SqliteJournal(_SqlJournalBase):
         self._closed = True
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked(reopen=False)
                 harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass  # no active transaction or already closed
@@ -460,7 +691,9 @@ class SqliteJournal(_SqlJournalBase):
                 )
                 # Drop the liveness marker: the process is shutting down, so
                 # the journal is no longer "live" for the crash sweep.
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -473,6 +706,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.close()
             except sqlite3.ProgrammingError:
                 pass  # already closed
+        self._release_live_journal()
         # Run retention opportunistically — never block a turn.
         try:
             run_retention(self._root, mode=self._retention_mode, skip=self._db_path)
@@ -485,9 +719,8 @@ class SqliteJournal(_SqlJournalBase):
             return
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked()
                 harden_sqlite_files(self._db_path)
-                self._conn.execute("BEGIN")
             except sqlite3.OperationalError:
                 pass
 
@@ -503,7 +736,7 @@ class SqliteJournal(_SqlJournalBase):
             return
         with self._lock:
             try:
-                self._conn.execute("COMMIT")
+                self._commit_transaction_locked(reopen=False)
                 harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -511,7 +744,9 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
-                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+                self._conn.execute(
+                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                )
                 self._conn.commit()
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
@@ -524,6 +759,7 @@ class SqliteJournal(_SqlJournalBase):
             # Restart a transaction so subsequent appends are batched.
             try:
                 self._conn.execute("BEGIN")
+                self._reset_batch_state_locked()
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
 
@@ -573,6 +809,7 @@ class SqliteJournal(_SqlJournalBase):
                     tags=tags,
                     input_ref=input_ref,
                     output_ref=output_ref,
+                    redaction=self._redaction,
                 )
                 self._conn.execute(
                     _JOURNAL_INSERT_SQL,
@@ -612,29 +849,63 @@ class SqliteJournal(_SqlJournalBase):
                         finally:
                             self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
                 raise
-            if clear_clean_close:
-                self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
-                self._clean_close_marked = False
-            else:
-                # Commit on every append so records genuinely survive process
-                # death (SIGKILL/OOM/segfault), honoring the DURABILITY.md
-                # contract.  Under ``synchronous=NORMAL`` this is only a
-                # ``write()`` into the kernel page cache (no fsync), so the
-                # per-turn latency budget still holds.  Reopen a transaction so
-                # ``flush()``/``finalize()``/``close()`` always find an active
-                # one to COMMIT and the post-finalize SAVEPOINT machinery keeps
-                # working.  The post-finalize branch is intentionally NOT
-                # committed here: it must stay rolled-back-able so a crash after
-                # ``finalize()`` leaves the durable DB looking cleanly closed.
-                #
-                # Permissions are hardened once at open (after the WAL PRAGMAs
-                # create the sidecars) and re-hardened at every checkpoint
-                # boundary (flush/finalize/close); re-chmod'ing on every
-                # per-token COMMIT only adds redundant stat/chmod syscalls to the
-                # hot path, so it is intentionally omitted here.
-                self._conn.execute("COMMIT")
-                self._conn.execute("BEGIN")
+            self._finish_append_locked(name, post_finalize=clear_clean_close)
         return seq
+
+    def _finish_append_locked(self, name: str, *, post_finalize: bool) -> None:
+        if post_finalize:
+            self._conn.execute("RELEASE SAVEPOINT post_finalize_append")
+            self._clean_close_marked = False
+        self._pending_records += 1
+        if post_finalize:
+            return
+        if (
+            name in self._commit_boundary_names
+            or self._pending_records >= self._batch_commit_records
+        ):
+            self._commit_transaction_locked()
+            return
+        self._schedule_batch_commit_locked()
+
+    def _schedule_batch_commit_locked(self) -> None:
+        if self._batch_deadline is not None or self._closed:
+            return
+        self._batch_generation += 1
+        generation = self._batch_generation
+        deadline = time.monotonic() + self._batch_commit_interval_s
+        self._batch_deadline = deadline
+        _SqliteBatchCommitCoordinator.schedule(self, deadline, generation)
+
+    def _commit_scheduled_batch(self, generation: int) -> None:
+        """Commit a still-current elapsed-time batch on the coordinator thread."""
+        exc: Exception | None = None
+        with self._lock:
+            if (
+                self._closed
+                or self._degraded
+                or generation != self._batch_generation
+                or self._batch_deadline is None
+                or self._pending_records == 0
+            ):
+                return
+            try:
+                self._commit_transaction_locked()
+            except Exception as commit_exc:
+                exc = commit_exc
+        if exc is not None:
+            self._enter_degraded(self._session_id, exc)
+
+    def _commit_transaction_locked(self, *, reopen: bool = True) -> None:
+        """Commit the open transaction and invalidate any scheduled deadline."""
+        self._conn.execute("COMMIT")
+        self._reset_batch_state_locked()
+        if reopen:
+            self._conn.execute("BEGIN")
+
+    def _reset_batch_state_locked(self) -> None:
+        self._pending_records = 0
+        self._batch_deadline = None
+        self._batch_generation += 1
 
     def _clear_clean_close_marker_before_write(self) -> None:
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
@@ -667,6 +938,14 @@ def _sanitize_replica_url(url: str) -> str:
         return "<unparseable>"
 
 
+def _session_replica_url(base_url: str, session_id: str) -> str:
+    """Namespace a replica root by session without disturbing URL options."""
+    parsed = urlsplit(base_url)
+    session_path = f"{quote(session_id, safe='')}.sqlite"
+    path = f"{parsed.path.rstrip('/')}/{session_path}"
+    return urlunsplit(parsed._replace(path=path))
+
+
 class LitestreamSqliteJournal:
     """SqliteJournal with a Litestream sidecar for WAL replication.
 
@@ -676,6 +955,8 @@ class LitestreamSqliteJournal:
     warning and degrades to plain ``SqliteJournal`` (no crash).
     """
 
+    writes_block = True
+
     def __init__(
         self,
         session_id: str,
@@ -683,9 +964,16 @@ class LitestreamSqliteJournal:
         data_dir: str | Path | None = None,
         replica_url: str | None = None,
         retention_mode: Literal["archive", "delete"] = "archive",
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
-        self._inner = SqliteJournal(session_id, data_dir=data_dir, retention_mode=retention_mode)
-        self._replica_url = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        self._inner = SqliteJournal(
+            session_id,
+            data_dir=data_dir,
+            retention_mode=retention_mode,
+            redaction=redaction,
+        )
+        replica_root = replica_url or os.environ.get("EASYCAT_JOURNAL_LITESTREAM_REPLICA", "")
+        self._replica_url = _session_replica_url(replica_root, session_id) if replica_root else ""
         self._sidecar: subprocess.Popen[bytes] | None = None
         self._litestream_available = False
         self._stderr_thread: threading.Thread | None = None
@@ -870,6 +1158,8 @@ class LibsqlJournal(_SqlJournalBase):
     to ``SqliteJournal``.
     """
 
+    writes_block = True
+
     def __init__(
         self,
         session_id: str,
@@ -878,7 +1168,9 @@ class LibsqlJournal(_SqlJournalBase):
         sync_url: str | None = None,
         auth_token: str | None = None,
         sync_interval_s: float | None = None,
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
+        self._redaction = validate_redaction_policy(redaction)
         import libsql_experimental as libsql  # noqa: F811 — intentional conditional import
 
         self._libsql = libsql
@@ -1059,6 +1351,7 @@ class LibsqlJournal(_SqlJournalBase):
                     tags=tags,
                     input_ref=input_ref,
                     output_ref=output_ref,
+                    redaction=self._redaction,
                 )
                 self._conn.execute(
                     _JOURNAL_INSERT_SQL,

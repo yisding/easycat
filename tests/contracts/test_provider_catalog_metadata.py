@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from easycat._provider_catalog import (
+from easycat._provider_registry import (
     credential_env_vars,
     provider_env_vars,
     stt_tts_catalogs,

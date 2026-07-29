@@ -432,6 +432,28 @@ class TestReplayRunner:
         assert len(result.frames) == 3
         assert delays == [0.125, 0.05]
 
+    def test_timing_wall_caps_untrusted_recorded_gap(self, tmp_path):
+        records = [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "first",
+                "timing": {"mono_ns": 1},
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "second",
+                "timing": {"mono_ns": 10**100},
+            },
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+        delays = []
+
+        ReplayRunner(bundle, _spec(timing="wall"), sleep=delays.append).run()
+
+        assert delays == [30.0]
+
     def test_stage_filter(self, tmp_path):
         records = [
             {
@@ -470,6 +492,24 @@ class TestReplayRunner:
         result = bundle.replay(_spec(from_sequence=1, to_sequence=4))
 
         assert [f.sequence for f in result.frames] == [3]
+
+    def test_normalizes_unhashable_turn_id_before_stage_grouping(self, tmp_path):
+        records = [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stage_complete",
+                "turn_id": ["untrusted"],
+                "data": {"stage": "stt", "transcript": "hello"},
+            }
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+
+        result = bundle.replay(_spec())
+
+        assert result.frames[0].turn_id is None
+        assert result.stage_replays[0].turn_id is None
+        assert result.stage_replays[0].output == "hello"
 
 
 # ── Version-match policy on ReplayRunner ─────────────────────────

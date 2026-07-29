@@ -26,6 +26,15 @@ from easycat.runtime._private_files import chmod_private_file, mkdir_private
 logger = logging.getLogger(__name__)
 
 
+def _boot_id() -> str | None:
+    """Return Linux's stable identifier for the current boot, when available."""
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    return boot_id if boot_id and ":" not in boot_id else None
+
+
 def _process_start_token(pid: int) -> str | None:
     """Return Linux's stable start-time token for *pid*, when available.
 
@@ -50,15 +59,15 @@ def _process_start_token(pid: int) -> str | None:
     return token if token.isdecimal() else None
 
 
-def _current_process_identity() -> str:
-    """Return the owner marker persisted in ``session_state.live_pid``."""
-    pid = os.getpid()
+def _process_birth_identity(pid: int) -> str | None:
+    """Return a boot-scoped process start identity where the OS exposes one."""
     start_token = _process_start_token(pid)
     if start_token is None:
-        # Non-Linux or restricted /proc: retain the legacy conservative
-        # marker instead of weakening liveness protection.
-        return str(pid)
-    return f"{pid}:{start_token}"
+        return None
+    boot_id = _boot_id()
+    if boot_id is None:
+        return None
+    return f"{boot_id}:{start_token}"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -87,8 +96,9 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     across this call (the in-session promoter closes its live connection
     first; the sweep operates on orphaned files no one owns).  We open our
     own short-lived connection to fold any uncheckpointed WAL pages into the
-    main database before the byte copy — with ``wal_autocheckpoint=0`` recent
-    records may live only in the WAL, and a bare copy would lose them.
+    main database before the byte copy — even with bounded auto-checkpointing,
+    recent committed records may live only in the WAL and a bare copy would
+    lose them.
     """
     try:
         conn = sqlite3.connect(str(db_path))
@@ -130,9 +140,10 @@ def _crashed_state(db_path: Path) -> str:
     block on a writer:
 
     1. A ``live_pid`` owner marker (written on journal open, cleared on
-       clean close). On Linux it pairs the PID with the process start token,
-       so PID reuse does not create a false owner. A matching owner catches
-       the idle-but-live window a lock probe would miss.
+       clean close). On Linux it pairs the PID with the process start token
+       and boot ID, so PID reuse within or across boots does not create a
+       false owner. A matching owner catches the idle-but-live window a lock
+       probe would miss.
     2. A ``BEGIN IMMEDIATE`` write-lock probe on a would-be crash, as a
        backstop for an actively-writing session: if the lock is held, skip.
     """
@@ -188,32 +199,26 @@ def _read_only_state(db_path: Path) -> str:
 
 
 def _has_live_pid(conn: sqlite3.Connection) -> bool:
-    """True if the journal's owner marker still identifies that process.
-
-    New markers use ``"<pid>:<start-token>"``. Bare integer markers from
-    older EasyCat versions remain supported conservatively.
-    """
+    """True if the journal's PID and process-birth markers identify a live owner."""
     row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
     if row is None or row[0] in (None, ""):
         return False
-    marker = str(row[0])
-    pid_text, separator, expected_start = marker.partition(":")
     try:
-        pid = int(pid_text)
+        pid = int(row[0])
     except (TypeError, ValueError):
         return False
     if not _pid_alive(pid):
         return False
-    if not separator:
+
+    birth_row = conn.execute(
+        "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+    ).fetchone()
+    if birth_row is None or birth_row[0] in (None, ""):
         return True
-    if not expected_start:
-        return False
-    actual_start = _process_start_token(pid)
-    if actual_start is None:
-        # An alive process whose /proc identity cannot be inspected might
-        # still own the journal. Preserve it rather than risk data loss.
+    current_birth = _process_birth_identity(pid)
+    if current_birth is None:
         return True
-    return actual_start == expected_start
+    return str(birth_row[0]) == current_birth
 
 
 def is_journal_live(db_path: Path) -> bool:

@@ -5,15 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
+import threading
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import resample_chunk, to_mono_chunk
+from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import Event
 from easycat.vad._base import _VADBase
 
@@ -28,6 +29,26 @@ _SILERO_DEFAULT_RATE = 16000
 _SILERO_FRAME_SAMPLES_AT: dict[int, int] = {8000: 256, 16000: 512}
 _SILERO_CONTEXT_SAMPLES_AT: dict[int, int] = {8000: 32, 16000: 64}
 _SILERO_ONNX_MODEL = Path(__file__).parent.parent / "models" / "silero_vad.onnx"
+
+
+@dataclass
+class _OnnxSessionEntry:
+    session: Any
+    owners: int
+
+
+_ONNX_SESSION_CACHE: dict[tuple[int, str], _OnnxSessionEntry] = {}
+_ONNX_SESSION_CACHE_LOCK = threading.Lock()
+
+
+def _reset_onnx_session_cache_after_fork() -> None:
+    global _ONNX_SESSION_CACHE, _ONNX_SESSION_CACHE_LOCK
+    _ONNX_SESSION_CACHE = {}
+    _ONNX_SESSION_CACHE_LOCK = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_onnx_session_cache_after_fork)
 
 
 def _silero_backend_override() -> str | None:
@@ -50,12 +71,14 @@ def _silero_onnx_model_path() -> str:
     return str(_SILERO_ONNX_MODEL)
 
 
-class _SileroOnnxModel:
-    """Small ONNX-only Silero wrapper that mirrors the recurrent model contract."""
-
-    def __init__(self, model_path: str) -> None:
-        numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
-        onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
+def _acquire_onnx_session(model_path: str, onnxruntime: Any) -> tuple[tuple[int, str], Any]:
+    """Load each immutable ONNX graph once while keeping VAD state per instance."""
+    cache_key = (os.getpid(), model_path)
+    with _ONNX_SESSION_CACHE_LOCK:
+        cached = _ONNX_SESSION_CACHE.get(cache_key)
+        if cached is not None:
+            cached.owners += 1
+            return cache_key, cached.session
 
         opts = onnxruntime.SessionOptions()
         opts.inter_op_num_threads = 1
@@ -67,13 +90,42 @@ class _SileroOnnxModel:
             providers = ["CPUExecutionProvider"]
 
         if providers is None:
-            self._session = onnxruntime.InferenceSession(model_path, sess_options=opts)
+            session = onnxruntime.InferenceSession(model_path, sess_options=opts)
         else:
-            self._session = onnxruntime.InferenceSession(
-                model_path, providers=providers, sess_options=opts
+            session = onnxruntime.InferenceSession(
+                model_path,
+                providers=providers,
+                sess_options=opts,
             )
+        _ONNX_SESSION_CACHE[cache_key] = _OnnxSessionEntry(session=session, owners=1)
+        return cache_key, session
+
+
+def _release_onnx_session(cache_key: tuple[int, str], session: Any) -> None:
+    with _ONNX_SESSION_CACHE_LOCK:
+        cached = _ONNX_SESSION_CACHE.get(cache_key)
+        if cached is None or cached.session is not session:
+            return
+        cached.owners -= 1
+        if cached.owners <= 0:
+            del _ONNX_SESSION_CACHE[cache_key]
+
+
+class _SileroOnnxModel:
+    """Small ONNX-only Silero wrapper that mirrors the recurrent model contract."""
+
+    def __init__(self, model_path: str) -> None:
+        numpy = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
+        onnxruntime = require_module("onnxruntime", extra="silero-vad", purpose="Silero VAD ONNX")
+        self._cache_key: tuple[int, str] | None = None
+        self._session: Any = None
         self._numpy = numpy
-        self.reset_states()
+        try:
+            self._cache_key, self._session = _acquire_onnx_session(model_path, onnxruntime)
+            self.reset_states()
+        except Exception:
+            self.close()
+            raise
 
     def reset_states(self) -> None:
         np = self._numpy
@@ -83,6 +135,11 @@ class _SileroOnnxModel:
 
     def close(self) -> None:
         """Release the onnxruntime InferenceSession handle."""
+        cache_key = getattr(self, "_cache_key", None)
+        session = getattr(self, "_session", None)
+        if cache_key is not None and session is not None:
+            _release_onnx_session(cache_key, session)
+        self._cache_key = None
         self._session = None
 
     def __del__(self) -> None:
@@ -146,6 +203,7 @@ class SileroVAD(_VADBase):
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
         self._buffer_rate: int | None = None
+        self._audio_resampler = PCM16StreamResampler(_SILERO_DEFAULT_RATE)
 
         self._load_model()
 
@@ -201,7 +259,19 @@ class SileroVAD(_VADBase):
         # Silero v6.2.1 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
         # 48 k, …) resamples to 16 kHz to preserve fidelity.
         if chunk.format.sample_rate not in _SILERO_SUPPORTED_RATES:
-            chunk = resample_chunk(chunk, _SILERO_DEFAULT_RATE)
+            chunk = AudioChunk(
+                data=self._audio_resampler.process(
+                    chunk.data,
+                    chunk.format.sample_rate,
+                ),
+                format=PCM16_MONO_16K,
+                timestamp=chunk.timestamp,
+            )
+        elif self._audio_resampler.source_rate is not None:
+            # A native-rate chunk starts a new format segment. The VAD drops
+            # stale frame remainders on rate changes, so discard the old
+            # converter tail rather than mixing 16 kHz output with 8 kHz data.
+            self._audio_resampler.reset()
         target_rate = chunk.format.sample_rate
 
         # A mid-stream 8k<->16k switch would concatenate old-rate remainder
@@ -230,9 +300,9 @@ class SileroVAD(_VADBase):
             # so the ~40us thread-hop dispatch adds latency and a context
             # switch per frame without meaningfully freeing the event loop.
             speech_prob = self._model.predict(float_samples, target_rate)
-            now = time.monotonic()
+            audio_time_s = self._advance_audio_time(frame_samples / target_rate)
 
-            for event in self._evaluate_speech(speech_prob, now):
+            for event in self._evaluate_speech(speech_prob, audio_time_s):
                 yield event
 
             # A transport may deliver many frames in one chunk (e.g. a buffered
@@ -264,6 +334,7 @@ class SileroVAD(_VADBase):
     def reset(self) -> None:
         """Reset VAD internal state."""
         super().reset()
+        self._audio_resampler.reset()
         self._buffer = b""
         self._buffer_rate = None
         if self._model is not None:

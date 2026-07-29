@@ -16,9 +16,11 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
-    journal_append_event,
+    journal_append_event_async,
     journal_ctx,
     live_replay_input,
     put_artifact_async,
@@ -46,12 +48,12 @@ class TTSStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = journal_ctx(ctx, self._journal)
-        capture_enabled = ctx.journal is not None or ctx.artifact_store is not None
+        capture_enabled = captures_verbose_stage_io(ctx)
         started = time.perf_counter()
         state_before = self.snapshot_state() if capture_enabled else None
         start_sequence = None
         if capture_enabled:
-            start_sequence = journal_append_event(
+            start_sequence = await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_start",
@@ -83,7 +85,7 @@ class TTSStage:
         if capture_enabled:
             state_after = self.snapshot_state()
             elapsed_ms = (time.perf_counter() - started) * 1000
-            journal_append_event(
+            await journal_append_event_async(
                 ctx,
                 stage=self.name,
                 name="stage_complete",
@@ -170,7 +172,11 @@ class TTSStage:
                     audio = getattr(event, "audio", None)
                     audio_bytes = getattr(audio, "data", None) if audio is not None else None
                     if audio_bytes:
-                        output_ref = await put_artifact_async(ctx, audio_bytes)
+                        output_ref = await put_artifact_async(
+                            ctx,
+                            audio_bytes,
+                            capture_allowed=audio_capture_allowed(ctx, audio),
+                        )
                         extra = {
                             "audio_bytes": len(audio_bytes),
                             "frame_index": frame_count,
@@ -179,7 +185,7 @@ class TTSStage:
                         duration = getattr(audio, "duration_ms", None)
                         if duration is not None:
                             extra["duration_ms"] = duration
-                        journal_append_event(
+                        await journal_append_event_async(
                             ctx,
                             stage=self.name,
                             name="tts_frame",
@@ -214,7 +220,7 @@ class TTSStage:
                 )
         state_after = self.snapshot_state()
         elapsed_ms = (time.perf_counter() - started) * 1000
-        journal_append_event(
+        await journal_append_event_async(
             ctx,
             stage=self.name,
             name="stage_complete",

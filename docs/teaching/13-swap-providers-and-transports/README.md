@@ -220,10 +220,10 @@ the owner's shutdown policy.
 
 ```python
 EasyConfig(
-    agent=agent,                       # ← same across every cell
+    agent=agent,  # ← same across every cell
     transport=LocalTransportConfig(),  # ← axis 2 switch
-    stt="deepgram/nova-2",             # ← axis 1 switch
-    tts="elevenlabs",                  # ← axis 1 switch
+    stt="deepgram/nova-2",  # ← axis 1 switch
+    tts="elevenlabs",  # ← axis 1 switch
 )
 ```
 

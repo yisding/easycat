@@ -2,8 +2,10 @@
 
 EasyCat providers are duck-typed: every pluggable stage is defined as a
 `typing.Protocol` in `easycat.providers`, so an out-of-tree provider is just a
-class with the right methods — no base class, no registry entry, and no fork
-of this repository. This directory teaches that path, one page per protocol:
+class with the right methods — no base class and no fork of this repository.
+Live-instance injection is always available; reusable packages can additionally
+register named configs and entry points. This directory teaches those paths,
+one page per protocol:
 
 - [stt.md](stt.md) — speech-to-text (`STTProvider`)
 - [tts.md](tts.md) — text-to-speech (`TTSProvider`)
@@ -34,33 +36,52 @@ run(
 ```
 
 `EasyConfig` accepts provider *instances* anywhere it accepts a provider
-shortcut string or config dataclass: `stt=`, `tts=`, `vad=`, `transport=`,
-and `agent=`. Registry entries (`stt/factory.py`, `tts/factory.py`) are only
-for providers shipped inside EasyCat itself.
+shortcut string or config dataclass: `stt=`, `tts=`, `vad=`,
+`noise_reduction=`, `echo_cancellation=`, `transport=`, and `agent=`.
+
+An instance that emits provider-scoped events implements synchronous
+`set_event_bus(event_bus)`. Session calls that public hook for every audio
+stage before work starts; providers no longer need to expose a guessed private
+attribute name. Registered config dataclasses can instead declare an optional
+`event_bus` field, which session construction fills when unset.
+
+Reusable STT, TTS, VAD, noise-reducer, and echo-canceller packages can register
+a provider/config pair. Registration adds shortcut parsing, planner metadata,
+readiness probes, and lazy package discovery while preserving direct injection:
+
+- `register_stt_provider` / `easycat.stt_providers`
+- `register_tts_provider` / `easycat.tts_providers`
+- `register_vad_provider` / `easycat.vad_providers`
+- `easycat.noise_reduction.register_noise_reducer_provider` /
+  `easycat.noise_reducer_providers`
+- `easycat.echo_cancellation.register_echo_canceller_provider` /
+  `easycat.echo_canceller_providers`
 
 ## Verifying conformance
 
-Each protocol in `easycat.providers` is `@runtime_checkable`, so the cheapest
-conformance check is structural:
+Subclass the installable behavioral contract kit in your provider package:
 
 ```python
-from easycat import STTProvider
+from easycat.testing import STTProviderContractSuite
 
-assert isinstance(MySTT(), STTProvider)
+
+class TestMySTT(STTProviderContractSuite):
+    provider_factory = MySTT
 ```
 
-That catches missing methods but not behavior. For behavior, mirror the
-offline protocol contract tests under [`tests/contracts/`](../../tests/contracts/README.md)
-— they define what the Session actually relies on per stage (event ordering,
-cancellation, teardown). Each extending page includes a minimal pytest
-conformance test you can copy into your package.
+The suite exercises the async signatures and lifecycle semantics Session
+actually relies on. The `@runtime_checkable` protocols in
+`easycat.providers` remain useful for dispatch, but `isinstance()` checks only
+member names—not callability, async behavior, signatures, or return types—so
+do not use it as a provider acceptance test. Each extending page shows the
+matching suite and any surface-specific knobs.
 
 ## Scaffolding an external provider package
 
 `easycat init` ships a `provider` template that generates a standalone
 package skeleton — `pyproject.toml`, a Protocol-conforming provider with a
-config dataclass, a conformance test, and a runnable demo that injects the
-provider through `EasyConfig`:
+config dataclass, a conformance test, an `easycat.vad_providers` entry point,
+and a runnable demo that selects `vad="energy"` through `EasyConfig`:
 
 ```bash
 uv run easycat init my-provider --template provider

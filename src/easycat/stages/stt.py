@@ -13,9 +13,11 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_capture_allowed,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
-    journal_append_event,
+    journal_append_event_async,
     journal_ctx,
     live_replay_input,
     put_artifact_async,
@@ -47,27 +49,34 @@ class STTStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
+        capture_detail = captures_verbose_stage_io(ctx)
         with observability.span(
             "easycat.stt.stream",
             {"easycat.stage": self.name, "easycat.surface": "stt"},
         ):
             data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
-            input_ref = await put_artifact_async(ctx, data_bytes)
-            extra = {
-                "audio_bytes": len(data_bytes)
-                if isinstance(data_bytes, (bytes, bytearray))
-                else 0,
-            }
-            extra.update(audio_format_fields(input))
-            start_sequence = journal_append_event(
-                ctx,
-                stage=self.name,
-                name="stage_start",
-                turn_id=turn.id,
-                state_before=state_before,
-                input_ref=input_ref,
-                data_extra=extra,
-            )
+            start_sequence: int | None = None
+            if capture_detail:
+                input_ref = await put_artifact_async(
+                    ctx,
+                    data_bytes,
+                    capture_allowed=audio_capture_allowed(ctx, input),
+                )
+                extra = {
+                    "audio_bytes": len(data_bytes)
+                    if isinstance(data_bytes, (bytes, bytearray))
+                    else 0,
+                }
+                extra.update(audio_format_fields(input))
+                start_sequence = await journal_append_event_async(
+                    ctx,
+                    stage=self.name,
+                    name="stage_start",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    input_ref=input_ref,
+                    data_extra=extra,
+                )
             try:
                 await self._provider.send_audio(input)
                 result = input
@@ -92,17 +101,18 @@ class STTStage:
                     time.perf_counter() - started,
                     {"easycat.stage": self.name, "easycat.result": result_attr},
                 )
-            state_after = self.snapshot_state()
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            journal_append_event(
-                ctx,
-                stage=self.name,
-                name="stage_complete",
-                turn_id=turn.id,
-                state_before=state_before,
-                state_after=state_after,
-                data_extra={"elapsed_ms": elapsed_ms},
-            )
+            if capture_detail:
+                state_after = self.snapshot_state()
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                await journal_append_event_async(
+                    ctx,
+                    stage=self.name,
+                    name="stage_complete",
+                    turn_id=turn.id,
+                    state_before=state_before,
+                    state_after=state_after,
+                    data_extra={"elapsed_ms": elapsed_ms},
+                )
             return result
 
     def snapshot_state(self) -> StageStateSnapshot:

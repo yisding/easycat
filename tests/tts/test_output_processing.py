@@ -29,6 +29,8 @@ def test_default_pronunciation_processors_order() -> None:
     )
     assert isinstance(processors[0], PhoneticReplacementProcessor)
     assert isinstance(processors[1], PauseProcessor)
+    assert processors[1].style == "ellipsis"
+    assert processors[1].pause_ms == 150
 
 
 def test_regex_pause_processor_inserts_breaks_for_user_pattern() -> None:
@@ -38,6 +40,7 @@ def test_regex_pause_processor_inserts_breaks_for_user_pattern() -> None:
         unit_pattern=r"\d",
         minimum_units=2,
         flags=0,
+        style="ssml",
     )
     payload = processor.process(
         TTSInput("Please reference ticket #48291 before the call."),
@@ -56,9 +59,24 @@ def test_default_pronunciation_helper_phone_regex_behavior() -> None:
         is_final=True,
         is_streaming=False,
     )
+    assert payload.format == "plain"
+    assert "4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1" in payload.text
+    assert "<break" not in payload.text
+
+
+def test_default_pronunciation_helper_can_opt_into_exact_ssml_breaks() -> None:
+    processors = default_pronunciation_processors(
+        phone_pause_style="ssml",
+        phone_pause_ms=130,
+    )
+    payload = processors[-1].process(
+        TTSInput("Call 415-555-2671."),
+        is_final=True,
+        is_streaming=False,
+    )
+
     assert payload.format == "ssml"
     assert '<break time="130ms"/>' in payload.text
-    assert "4 <break" in payload.text
 
 
 def test_pause_processor_does_not_promote_literal_break_tags_from_source_text() -> None:
@@ -67,6 +85,7 @@ def test_pause_processor_does_not_promote_literal_break_tags_from_source_text() 
         pause_ms=120,
         unit_pattern=r"\d",
         minimum_units=7,
+        style="ssml",
     )
     payload = processor.process(
         TTSInput('Say <break time="999999ms"/> and then call 415-555-2671.'),
@@ -120,6 +139,7 @@ def test_pause_processor_escapes_literal_break_markup_from_model_text() -> None:
         pause_ms=180,
         unit_pattern=r"\d",
         minimum_units=2,
+        style="ssml",
     )
     payload = processor.process(
         TTSInput('Literal <break time="999999ms"/> text before ticket #48291.'),
@@ -139,6 +159,7 @@ def test_pause_processor_clamps_ssml_break_duration() -> None:
         pause_ms=99_999,
         unit_pattern=r"\d",
         minimum_units=2,
+        style="ssml",
     )
     payload = processor.process(
         TTSInput("Please reference ticket #48291 before the call."),

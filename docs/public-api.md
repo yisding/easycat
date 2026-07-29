@@ -41,7 +41,7 @@ route discovery or run `uv run easycat explain json-schema`.
   `uv run pytest tests/test_public_api.py`. If `just` is not installed, use the
   raw command table in
   [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop), or run
-  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
+  `uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py`.
 
 ## Preferred Imports
 
@@ -114,6 +114,89 @@ See the [extending guides](extending/) for complete custom provider and
 transport walkthroughs, and `examples/custom_transport.py` for a runnable
 custom transport.
 
+## Provider Testing Extension Surface
+
+Out-of-tree provider and bridge packages can subclass the offline contract
+suites shipped from `easycat.testing`. This module is versioned as an extension
+surface but is not re-exported at the top level, keeping `import easycat`
+lightweight:
+
+- `STTProviderContractSuite`
+- `TTSProviderContractSuite`
+- `VADProviderContractSuite`
+- `TransportContractSuite`
+- `AgentBridgeContractSuite`
+- `ContractSuite`
+- `ProviderContractSuite`
+- `RecordingAgentRecorder`
+- `AGENT_BRIDGE_EVENT_KINDS`
+- `ProviderCapabilities`
+- `ProviderCapabilityReport`
+- `ProviderIdentifier`
+- `contains_unredacted_sensitive_text`
+
+```python
+from easycat.testing import STTProviderContractSuite
+
+
+class TestAcmeSTT(STTProviderContractSuite):
+    provider_factory = AcmeSTT
+```
+
+The [extending guides](extending/) show the corresponding suite for each
+provider surface and how to add optional live checks.
+
+## Agent Bridge Extension Surface
+
+Agent framework bridges are public from `easycat.integrations.agents`, not from
+the top-level `easycat` package. Application compilers and bridge authors can
+depend on this surface:
+
+- `ExternalAgentBridge` — async protocol implemented by every bridge.
+- `AgentTurnInput` — normalized user turn input passed into bridges.
+- `AgentBridgeEvent` — normalized stream event yielded by bridges.
+- `AgentRecorder` — write-side journal protocol passed into bridge turns.
+- `CancellationMode` — supported interruption and drain strategies.
+- `FrameworkStateSnapshot` — JSON-safe framework state captured by bridges.
+- `InterruptionPlan` — planned framework mutation used by interruption handling.
+- `INTERRUPTION_NOTE` — standard history note used when a partial assistant
+  response is interrupted.
+- `BridgeTemplate` — starter base class for custom bridge authors; constructor
+  `BridgeTemplate(*, display_name=None)`.
+- `register_agent_detector` / `clear_agent_detectors` / `auto_adapt_agent` —
+  registry hooks for adapting framework-native agent objects.
+- `is_reusable_agent_spec` — reports whether an agent specification can be
+  shared safely across sessions.
+- `AgentRunner` / `AgentRunnerConfig` — wrapper for plain async `run(text)`
+  agents; constructor `AgentRunner(agent, config=None)`.
+- `OpenAIAgentsBridge` — constructor `OpenAIAgentsBridge(agent, *,
+  run_config=None, context=None, use_previous_response_id=True, max_turns=None,
+  hooks=None, mcp_servers=None)`.
+- `PydanticAIBridge` — constructor `PydanticAIBridge(*, agent=None, deps=None,
+  model_settings=None, graph=None, state_factory=None, initial_node_factory=None,
+  agents=None, mcp_servers=None, toolsets=None)`.
+- `RemoteResponsesAPIBridge` — constructor
+  `RemoteResponsesAPIBridge(base_url, model, *, api_key=None, timeout=120.0,
+  metadata=None)`.
+- `GenericWorkflowBridge` — constructor
+  `GenericWorkflowBridge(workflow, *, display_name=None)`.
+- `LangChainBridge` — constructor `LangChainBridge(runnable, *,
+  display_name=None, input_key="input", history_key="history",
+  messages_input=False, include_types=..., session_id=None, config=None)`.
+- `LangGraphBridge` — constructor `LangGraphBridge(graph, *, thread_id=None,
+  messages_key="messages", display_name=None, include_types=...)`.
+- `LlamaAgentsBridge` — constructor `LlamaAgentsBridge(workflow=None, *,
+  client=None, base_url=None, workflow_name=None, input_key="message",
+  context_key="context", turn_id_key="turn_id",
+  interruption_note_key="easycat_interruption_note", preserve_context=True,
+  run_kwargs=None, start_event_factory=None, event_text_extractor=None,
+  human_response_event_factory=None, human_response_key="response",
+  human_response_step=None, display_name=None, include_internal_events=False)`.
+
+```python
+from easycat.integrations.agents import PydanticAIBridge
+```
+
 ## Top-Level Allowlist
 
 ### App Construction
@@ -148,6 +231,7 @@ custom transport.
 ### Provider Protocols And Factories
 
 - `EchoCanceller`
+- `EventBusBindable`
 - `NoiseReducer`
 - `STTProvider`
 - `Transport`
@@ -159,12 +243,14 @@ custom transport.
 - `VADConfig`
 - `available_stt_providers`
 - `available_tts_providers`
+- `available_vad_providers`
 - `create_noise_reducer`
 - `create_stt_provider`
 - `create_tts_provider`
 - `create_vad`
 - `register_stt_provider`
 - `register_tts_provider`
+- `register_vad_provider`
 
 ### Events
 
@@ -237,6 +323,20 @@ custom transport.
 - `WebTransportConnectionTransport`
 - `WebTransportServer`
 - `WebTransportTransportConfig`
+
+`WebSocketConnectionTransport.request` and
+`TwilioConnectionTransport.request` expose the accepted `websockets`
+handshake request when the server provides one. `WebRTCTransport.offer_request`
+exposes the accepted aiohttp offer request when the transport is created by
+the mounted WebRTC route, so session factories can derive per-connection
+configuration from headers or URL query parameters.
+
+`AuthResult` intentionally carries only an authorization verdict, not an
+application principal. Applications that need a typed tenant or caller identity
+should use the same verifier in the server auth policy and in the session
+factory, reading the accepted request from the transport. See
+[Binding a typed principal](deployment/production-servers.md#binding-a-typed-principal)
+for the complete composition.
 
 ### Output Processing
 

@@ -17,8 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from easycat.debug.testing import load_bundle
-
 
 @pytest.fixture
 def easycat_bundle():
@@ -30,6 +28,8 @@ def easycat_bundle():
     """
 
     def _load(path: str | Path):
+        from easycat.debug.testing import load_bundle
+
         return load_bundle(path)
 
     return _load
