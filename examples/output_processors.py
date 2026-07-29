@@ -3,7 +3,7 @@
   * ``PhoneticReplacementProcessor`` rewrites hard-to-pronounce names
     (``Siobhan`` → ``shi-vawn``).
   * ``PauseProcessor`` inserts pauses between digits in phone numbers
-    (SSML breaks for providers that support it; ellipsis fallback otherwise).
+    using provider-neutral ellipsis cues.
 
 Once running, ask: "What's Siobhan's number?"
 
@@ -43,7 +43,6 @@ run(
                 pattern=r"\+?\d[\d\s().-]{5,}\d",
                 unit_pattern=r"\d",
                 minimum_units=7,
-                pause_ms=140,
             ),
         ],
     )
