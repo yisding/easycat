@@ -26,6 +26,15 @@ from easycat.runtime._private_files import chmod_private_file, mkdir_private
 logger = logging.getLogger(__name__)
 
 
+def _boot_id() -> str | None:
+    """Return Linux's stable identifier for the current boot, when available."""
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    return boot_id if boot_id and ":" not in boot_id else None
+
+
 def _process_start_token(pid: int) -> str | None:
     """Return Linux's stable start-time token for *pid*, when available.
 
@@ -58,7 +67,10 @@ def _current_process_identity() -> str:
         # Non-Linux or restricted /proc: retain the legacy conservative
         # marker instead of weakening liveness protection.
         return str(pid)
-    return f"{pid}:{start_token}"
+    boot_id = _boot_id()
+    if boot_id is None:
+        return f"{pid}:{start_token}"
+    return f"{pid}:{start_token}:{boot_id}"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -130,9 +142,10 @@ def _crashed_state(db_path: Path) -> str:
     block on a writer:
 
     1. A ``live_pid`` owner marker (written on journal open, cleared on
-       clean close). On Linux it pairs the PID with the process start token,
-       so PID reuse does not create a false owner. A matching owner catches
-       the idle-but-live window a lock probe would miss.
+       clean close). On Linux it pairs the PID with the process start token
+       and boot ID, so PID reuse within or across boots does not create a
+       false owner. A matching owner catches the idle-but-live window a lock
+       probe would miss.
     2. A ``BEGIN IMMEDIATE`` write-lock probe on a would-be crash, as a
        backstop for an actively-writing session: if the lock is held, skip.
     """
@@ -187,27 +200,48 @@ def _read_only_state(db_path: Path) -> str:
         conn.close()
 
 
+def _parse_process_identity(marker: str) -> tuple[int, str | None, str | None] | None:
+    """Parse a current or legacy journal-owner marker."""
+    marker_parts = marker.split(":")
+    if not 1 <= len(marker_parts) <= 3:
+        return None
+    try:
+        pid = int(marker_parts[0])
+    except (TypeError, ValueError):
+        return None
+    expected_start = marker_parts[1] if len(marker_parts) >= 2 else None
+    expected_boot = marker_parts[2] if len(marker_parts) == 3 else None
+    if expected_start == "" or expected_boot == "":
+        return None
+    return pid, expected_start, expected_boot
+
+
 def _has_live_pid(conn: sqlite3.Connection) -> bool:
     """True if the journal's owner marker still identifies that process.
 
-    New markers use ``"<pid>:<start-token>"``. Bare integer markers from
-    older EasyCat versions remain supported conservatively.
+    New markers use ``"<pid>:<start-token>:<boot-id>"``. Bare integer and
+    ``"<pid>:<start-token>"`` markers from older EasyCat versions remain
+    supported conservatively.
     """
     row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
     if row is None or row[0] in (None, ""):
         return False
-    marker = str(row[0])
-    pid_text, separator, expected_start = marker.partition(":")
-    try:
-        pid = int(pid_text)
-    except (TypeError, ValueError):
+    identity = _parse_process_identity(str(row[0]))
+    if identity is None:
         return False
+    pid, expected_start, expected_boot = identity
     if not _pid_alive(pid):
         return False
-    if not separator:
+    if expected_start is None:
         return True
-    if not expected_start:
-        return False
+    if expected_boot is not None:
+        actual_boot = _boot_id()
+        if actual_boot is None:
+            # The process is alive, but the boot identity is temporarily
+            # unreadable. Preserve the journal rather than risk data loss.
+            return True
+        if actual_boot != expected_boot:
+            return False
     actual_start = _process_start_token(pid)
     if actual_start is None:
         # An alive process whose /proc identity cannot be inspected might

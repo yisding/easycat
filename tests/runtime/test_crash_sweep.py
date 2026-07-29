@@ -11,6 +11,7 @@ import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
 from easycat.runtime.crash_sweep import (
+    _boot_id,
     _copy_journal_to_crash_dump,
     _crashed_state,
     _current_process_identity,
@@ -87,16 +88,47 @@ def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:
 
 
 def test_live_owner_marker_includes_process_start_identity(tmp_path) -> None:
+    start_token = _process_start_token(os.getpid())
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
+        pytest.skip("full process identity requires readable Linux /proc")
+
     journal = SqliteJournal("owned", data_dir=tmp_path)
     try:
         marker = journal._conn.execute(
             "SELECT value FROM session_state WHERE key = 'live_pid'"
         ).fetchone()
         assert marker is not None
+        assert marker[0] == f"{os.getpid()}:{start_token}:{boot_id}"
         assert marker[0] == _current_process_identity()
         assert is_journal_live(tmp_path / "journals" / "owned.sqlite") is True
     finally:
         journal.close()
+
+
+def test_sweep_promotes_orphan_when_boot_identity_changed(tmp_path) -> None:
+    """A matching PID/start token from a different boot is not the owner."""
+    start_token = _process_start_token(os.getpid())
+    boot_id = _boot_id()
+    if start_token is None or boot_id is None:
+        pytest.skip("full process identity requires readable Linux /proc")
+
+    journal = SqliteJournal("prior-boot", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="prior-boot")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        (f"{os.getpid()}:{start_token}:not-{boot_id}",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    db_path = tmp_path / "journals" / "prior-boot.sqlite"
+
+    assert is_journal_live(db_path) is False
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not db_path.exists()
+    assert (tmp_path / "crash-dumps" / "prior-boot.sqlite").exists()
 
 
 def test_sweep_leaves_clean_closed_journal(tmp_path) -> None:
