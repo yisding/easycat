@@ -79,7 +79,9 @@
 // When opened directly as a file:// URL, location.hostname is empty —
 // fall back to localhost so the example works as written.
 var WT_HOST = location.hostname || "localhost";
-var WT_URL = "https://" + WT_HOST + ":4433/easycat";
+var WT_BASE_URL = "https://" + WT_HOST + ":4433/easycat";
+var WT_TOKEN = new URLSearchParams(location.search).get("token");
+var WT_URL = WT_BASE_URL + (WT_TOKEN ? "?token=" + encodeURIComponent(WT_TOKEN) : "");
 var DESIRED_RATE = 16000;
 
 // ── Stream tags (must match server) ──────────────────────────────
@@ -112,7 +114,8 @@ var startBtn  = document.getElementById("startBtn");
 var stopBtn   = document.getElementById("stopBtn");
 var statusEl  = document.getElementById("status");
 var levelFill = document.getElementById("levelFill");
-document.getElementById("urlEl").textContent = WT_URL;
+document.getElementById("urlEl").textContent =
+  WT_BASE_URL + (WT_TOKEN ? "?token=<redacted>" : "");
 
 function setStatus(text, type) {
   statusEl.textContent = text;

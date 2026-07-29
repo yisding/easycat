@@ -129,7 +129,11 @@ class WebRTCTransport(AudioQueueMixin):
 
     def __init__(self, config: WebRTCTransportConfig | None = None) -> None:
         self._config = config or WebRTCTransportConfig()
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
+        self._offer_request: Any | None = None
 
         # Peer connection state.
         self._pc: Any | None = None
@@ -158,6 +162,11 @@ class WebRTCTransport(AudioQueueMixin):
         # Per-server stats rate-limit / record state, shared with each lazily
         # built signaling-handlers instance (see ``_signaling``).
         self._stats_state = WebRTCStatsState()
+
+    @property
+    def offer_request(self) -> Any | None:
+        """Accepted aiohttp offer request, when this transport was built by a route."""
+        return self._offer_request
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -359,7 +368,9 @@ class WebRTCTransport(AudioQueueMixin):
 
         from easycat._audio_utils import resample
 
-        # Resample to 48 kHz for Opus encoding.
+        # Transport sends have a per-call delivery result and no tail-send
+        # phase. Keep this fallback conversion immediate; normal configured
+        # sessions already perform stateful output alignment in TTSBase.
         if chunk.format.sample_rate != WEBRTC_SAMPLE_RATE:
             pcm_data = resample(chunk.data, chunk.format.sample_rate, WEBRTC_SAMPLE_RATE)
         else:
@@ -387,12 +398,14 @@ class WebRTCTransport(AudioQueueMixin):
         """Discard queued outbound audio (useful during barge-in)."""
         self._outbound.clear()
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
         """Return and clear pending AEC far-end reference frames, oldest first.
 
         Shared AEC reference capability drained by AudioRouter before the
         near-end mic frame is processed, so the far-end reference is always fed
-        to the echo canceller ahead of the corresponding near-end frame.
+        to the echo canceller ahead of the corresponding near-end frame. Each
+        chunk retains the original reference format so AEC can reject a
+        near/far sample-rate mismatch instead of processing mislabeled PCM.
 
         Returns an empty list when the outbound source is not present.
         """
@@ -682,10 +695,11 @@ class WebRTCTransport(AudioQueueMixin):
         Always enqueues a sentinel on exit so that ``receive_audio()`` does not
         block indefinitely if the track ends without a connection-state callback.
         """
-        from easycat._audio_utils import resample, to_mono
+        from easycat._audio_utils import PCM16StreamResampler, to_mono
 
         target_rate = self._config.audio_format.sample_rate
         target_format = self._config.audio_format
+        resampler = PCM16StreamResampler(target_rate)
 
         logger.info("Consuming WebRTC audio track (target %d Hz)", target_rate)
 
@@ -704,12 +718,10 @@ class WebRTCTransport(AudioQueueMixin):
                 if channels > 1:
                     raw = to_mono(raw, channels)
 
-                # Resample to pipeline target rate.
-                if frame_rate != target_rate:
-                    raw = resample(raw, frame_rate, target_rate)
+                raw = resampler.process(raw, frame_rate)
 
                 chunk = AudioChunk(data=raw, format=target_format)
-                if self._is_current_peer_generation(peer_generation):
+                if raw and self._is_current_peer_generation(peer_generation):
                     self._enqueue_chunk(chunk, context="WebRTC")
 
         except StopAsyncIteration:
@@ -726,6 +738,12 @@ class WebRTCTransport(AudioQueueMixin):
                     f"inbound audio track failed: {type(exc).__name__}: {exc}",
                 )
         finally:
+            tail = resampler.finish()
+            if tail and self._is_current_peer_generation(peer_generation):
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=target_format),
+                    context="WebRTC",
+                )
             # Ensure the pipeline unblocks even if on_ended/connectionstatechange
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
             # one stops receive_audio() and extras are cleared on next connection.

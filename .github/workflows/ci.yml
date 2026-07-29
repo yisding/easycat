@@ -26,11 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -47,11 +48,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -78,11 +80,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -100,17 +103,61 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
 
+  minimum-dependencies:
+    name: Minimum Direct Dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Keep this job's nested `uv run pytest` inside the environment resolved
+      # below instead of switching back to the default resolution strategy.
+      UV_NO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+          python-version: "3.12"
+      # Changing the resolution mode makes uv resolve a fresh minimum-direct
+      # lock instead of reusing the committed highest-compatible lock.
+      - run: >-
+          uv sync --resolution lowest-direct --group dev
+          --extra langchain --extra telephony --python 3.12
+      - run: uv run --no-sync --python 3.12 easycat validate quick --show-output
+      # The universal project lock must satisfy unselected extras too, so
+      # LangGraph and OpenAI Agents can raise the effective LangChain/HTTPX
+      # versions. Exercise the downstream package floors explicitly as well.
+      - name: Install exact downstream compatibility floors
+        run: >-
+          uv pip install --python .venv/bin/python
+          "httpx==0.27.0" "websockets==14.0" "langchain-core==1.2.28"
+      - name: Test exact downstream compatibility floors
+        run: >-
+          .venv/bin/python -m pytest -q
+          tests/integrations/agents/test_langchain_bridge_history_store.py
+          tests/integrations/agents/test_langchain_bridge_stream_config.py
+          tests/integrations/agents/test_langchain_bridge_interruption.py
+          tests/integrations/agents/test_langchain_bridge_invoke.py
+          tests/transports/test_websocket_transport.py
+          tests/websocket/test_reconnecting_ws.py
+          tests/stt/test_stt_openai.py
+          tests/tts/test_tts_openai.py
+          tests/server/test_webrtc_routes.py
+
   coverage:
     name: Coverage + guard suite (diff-cover report-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0  # diff-cover needs origin/main history
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -154,11 +201,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -184,11 +232,12 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -211,15 +260,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
       # No project sync: `uv build` resolves the build backend in its own
       # isolated environment and twine runs via uvx.
       - run: uv build
+      - name: Enforce 13 MiB wheel size budget
+        run: python scripts/check_wheel_size.py dist/*.whl
       - run: uvx twine check dist/*

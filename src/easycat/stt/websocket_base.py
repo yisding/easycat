@@ -10,6 +10,7 @@ from typing import Any
 import websockets
 
 from easycat._provider_helpers import ProviderErrorEmitter
+from easycat.errors import EASYCAT_E304
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
 from easycat.stt.base import STTBase
@@ -43,7 +44,10 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         close_timeout: float = 2.0,
         dynamic_event_queue: bool = False,
     ) -> None:
-        super().__init__(expected_sample_rate=expected_sample_rate)
+        super().__init__(
+            expected_sample_rate=expected_sample_rate,
+            allow_end_during_audio_send=True,
+        )
         self._provider_name = provider_name
         self._provider_error_name = provider_error_name
         self._close_timeout = close_timeout
@@ -90,6 +94,7 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             provider_name=self._provider_name,
             connect_fn=connect_fn,
             on_reconnect=on_reconnect or _noop_reconnect,
+            on_disconnect=self._on_websocket_disconnect,
         )
         self._ws = ws
         self._provider_event_bus = event_bus
@@ -100,6 +105,21 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
     async def _send_ws(self, message: str | bytes) -> None:
         if self._ws is not None:
             await self._ws.send(message)
+
+    async def _on_websocket_disconnect(
+        self,
+        exc: websockets.exceptions.ConnectionClosed,
+    ) -> None:
+        """Surface a live provider drop before reconnect policy handles it."""
+        self._emit_provider_error(
+            EASYCAT_E304(
+                provider=self._provider_error_name,
+                detail=str(exc) or "connection closed",
+            )
+        )
+        # Preserve lifecycle order: observers must see the drop before any
+        # reconnect attempt/success/failure events.
+        await self._drain_emit_tasks()
 
     async def _send_json_control(self, payload: dict[str, Any], *, label: str) -> bool:
         if self._ws is None:
@@ -196,8 +216,15 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         finally:
             self._on_receive_loop_end()
             if ws.died_abnormally:
+                from easycat.errors import EASYCAT_E305
+
                 self._emit_provider_error(
-                    ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
+                    EASYCAT_E305(
+                        provider=self._provider_error_name,
+                        attempts=getattr(ws, "reconnect_attempts_exhausted", None) or 0,
+                        reason=getattr(ws, "reconnect_exhaustion_reason", None)
+                        or "reconnect policy",
+                    )
                 )
             # Persistent STT providers keep this receive loop alive while
             # ``start_stream`` replaces the logical per-turn event queue. They

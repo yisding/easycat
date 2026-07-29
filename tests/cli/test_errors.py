@@ -144,14 +144,23 @@ def test_runtime_and_bundle_ranges_are_registered() -> None:
 
 
 def test_runtime_timeout_errors_carry_registered_codes() -> None:
-    """Timeout exceptions expose stable codes that exist in the registry."""
+    """Runtime timeouts are catchable through the public EasyCatError base."""
     from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TTSTimeoutError
 
-    assert STTTimeoutError("stt", 1.0).code == "EASYCAT_E301"
-    assert AgentTimeoutError(1.0).code == "EASYCAT_E302"
-    assert TTSTimeoutError("tts", 1.0).code == "EASYCAT_E303"
-    for err in (STTTimeoutError("stt", 1.0), AgentTimeoutError(1.0), TTSTimeoutError("tts", 1.0)):
+    errors = (
+        STTTimeoutError("stt", 1.0),
+        AgentTimeoutError(1.0),
+        TTSTimeoutError("tts", 1.0),
+    )
+    assert [err.code for err in errors] == [
+        "EASYCAT_E301",
+        "EASYCAT_E302",
+        "EASYCAT_E303",
+    ]
+    for err in errors:
+        assert isinstance(err, EasyCatError)
         assert err.code in REGISTRY
+        assert err.context["timeout"] == 1.0
 
 
 def test_exit_code_mapping() -> None:

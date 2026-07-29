@@ -37,6 +37,7 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
     TransportAudioDelivered,
+    TransportDegraded,
 )
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
@@ -51,6 +52,7 @@ from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
+from easycat.stages.base import audio_capture_allowed
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.vad import VADStage
@@ -134,6 +136,13 @@ class AudioRouter:
     _INGRESS_TASK_NAME = "audio_ingress_pipeline"
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
     _INLINE_SEND_TASK_NAME = "audio_inline_send"
+    _AEC_DEGRADED_EMIT_TASK_NAME = "aec_reference_degraded_emit"
+    # The first-frame fast path preserves an in-progress transport write across
+    # caller cancellation so a frame is never half-submitted. Keep that shield
+    # bounded: a half-open transport must not make barge-in or force-stop
+    # permanently uncancellable.
+    _INLINE_SEND_TIMEOUT_S = 0.5
+    _INLINE_SEND_CANCEL_GRACE_S = 0.1
 
     def __init__(
         self,
@@ -177,6 +186,11 @@ class AudioRouter:
         # and stop re-attempting a feed that will keep failing for the rest
         # of the session, rather than spamming the log per outbound chunk.
         self._aec_reference_failed: bool = False
+        # Latches the observability warning for transports that can only feed
+        # AEC at socket-write time. Explicit server-side AEC remains supported
+        # for these transports, but operators need one durable signal that the
+        # reference is not tied to the remote playout clock.
+        self._aec_reference_degraded_reported: bool = False
 
         # Whether the transport exposes ``drain_aec_reference_frames()`` — a
         # thread-safe queue populated by the output callback at actual playback
@@ -322,6 +336,11 @@ class AudioRouter:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
+        await self._runtime_scope.cancel_and_drain(self._AEC_DEGRADED_EMIT_TASK_NAME)
+        # A cancelled first-frame caller can leave its transport write running
+        # briefly while the transport is being terminated. Keep shutdown
+        # joined to that lifecycle-owned write before reporting outbound idle.
+        await self._runtime_scope.cancel_and_drain(self._INLINE_SEND_TASK_NAME)
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = 2.0) -> None:
@@ -402,42 +421,71 @@ class AudioRouter:
             or not self._outbound_queue.empty()
         ):
             return False
+        if self._transport_send_audio_is_nonblocking and self._transport_reports_audio_delivery:
+            self._claim_outbound_send()
+            try:
+                async with self._outbound_send_lock:
+                    if not self._can_send_first_audio_inline(outbound_task):
+                        return False
+                    await self._send_outbound_chunk(chunk, self._current_turn())
+                return True
+            finally:
+                await self._finish_outbound_send(replayed_chunk=False)
+
         self._claim_outbound_send()
+        turn = self._current_turn()
+        try:
+            send_task = self._runtime_scope.create_task(
+                self._INLINE_SEND_TASK_NAME,
+                self._send_first_audio_inline_owned(chunk, outbound_task, turn),
+            )
+        except BaseException:
+            await self._finish_outbound_send(replayed_chunk=False)
+            raise
+        return await self._await_non_cancellable_send(
+            send_task,
+            timeout=self._INLINE_SEND_TIMEOUT_S,
+        )
+
+    def _can_send_first_audio_inline(self, outbound_task: asyncio.Task[None]) -> bool:
+        """Recheck first-frame eligibility after acquiring the send lock."""
+        return (
+            self._is_running()
+            and self._outbound_task is outbound_task
+            and not outbound_task.done()
+            and self._outbound_queue.empty()
+        )
+
+    async def _send_first_audio_inline_owned(
+        self,
+        chunk: AudioChunk,
+        outbound_task: asyncio.Task[None],
+        turn: TurnContext | None,
+    ) -> bool:
+        """Own the send lock and in-flight count for a cancellable inline write."""
         try:
             async with self._outbound_send_lock:
-                # A contending producer cannot run between the checks and an
-                # immediately available Lock acquisition, but re-check the
-                # lifecycle and queue before bypassing the drain.
-                if (
-                    not self._is_running()
-                    or self._outbound_task is not outbound_task
-                    or outbound_task.done()
-                    or not self._outbound_queue.empty()
-                ):
+                if not self._can_send_first_audio_inline(outbound_task):
                     return False
-                turn = self._current_turn()
-                if (
-                    self._transport_send_audio_is_nonblocking
-                    and self._transport_reports_audio_delivery
-                ):
-                    # This opt-in transport contract guarantees send_audio has
-                    # no suspension point, so cancellation cannot land until
-                    # the transport has accepted or rejected the frame. Keep
-                    # the truly-inline path free of a child-task handoff.
-                    await self._send_outbound_chunk(chunk, turn)
-                else:
-                    send_task = asyncio.create_task(
-                        self._send_outbound_chunk(chunk, turn),
-                        name=self._INLINE_SEND_TASK_NAME,
-                    )
-                    await self._await_non_cancellable_send(send_task)
+                await self._send_outbound_chunk(chunk, turn)
                 return True
         finally:
             await self._finish_outbound_send(replayed_chunk=False)
 
-    @staticmethod
-    async def _await_non_cancellable_send(task: asyncio.Task[None]) -> None:
-        """Delay caller cancellation until an owned transport send completes."""
+    async def _await_non_cancellable_send(
+        self,
+        task: asyncio.Task[bool],
+        *,
+        timeout: float,
+    ) -> bool:
+        """Let a healthy send run normally; bound only caller cancellation.
+
+        Before the caller is cancelled there is no router-imposed send
+        deadline: ordinary transport backpressure remains healthy. Once
+        cancellation arrives, the owned write gets a bounded completion window.
+        A write that ignores cancellation triggers transport termination and
+        remains scope-owned, locked, and in-flight until it actually exits.
+        """
         cancellation: asyncio.CancelledError | None = None
         while not task.done():
             try:
@@ -447,9 +495,39 @@ class AudioRouter:
                 if current is None or not current.cancelling():
                     raise
                 cancellation = cancellation or exc
-        task.result()
-        if cancellation is not None:
-            raise cancellation
+                break
+
+        if cancellation is None:
+            return task.result()
+
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except TimeoutError:
+            task.cancel()
+            done, _ = await asyncio.wait(
+                {task},
+                timeout=self._INLINE_SEND_CANCEL_GRACE_S,
+            )
+            if not done:
+                await self._terminate_stalled_inline_send()
+                done, _ = await asyncio.wait(
+                    {task},
+                    timeout=self._INLINE_SEND_CANCEL_GRACE_S,
+                )
+            if not done:
+                logger.warning("Cancelled inline transport audio send remains lifecycle-owned")
+
+        raise cancellation
+
+    async def _terminate_stalled_inline_send(self) -> None:
+        """Bound transport termination used to unblock a cancelled write."""
+        try:
+            async with asyncio.timeout(self._INLINE_SEND_CANCEL_GRACE_S):
+                await self._transport.disconnect()
+        except TimeoutError:
+            logger.warning("Transport disconnect timed out while cancelling inline audio")
+        except Exception:
+            logger.exception("Transport disconnect failed while cancelling inline audio")
 
     def reset_speech_detection(self) -> None:
         """Reset the auto-turn speech-energy counter.
@@ -463,6 +541,11 @@ class AudioRouter:
     def reset_replay_chunks(self) -> None:
         """Zero the gated-replay pending counter (Session calls this on turn reset)."""
         self._replay_chunks_pending = 0
+
+    def discard_pending_capture_audio(self) -> None:
+        """Discard raw far-end frames queued before capture became allowed."""
+        if self._transport_has_aec_drain:
+            drain_aec_reference_frames(self._transport)
 
     async def gated_replay(self, events: list[Any]) -> None:
         """Replay buffered TTS audio chunks through the outbound queue.
@@ -688,7 +771,14 @@ class AudioRouter:
                 exc_info=True,
             )
             return
-        if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
+        if (
+            self._capture_aec_reference
+            and self._run_ctx.artifact_store is not None
+            and (
+                self._run_ctx.audio_capture_enabled is None
+                or self._run_ctx.audio_capture_enabled()
+            )
+        ):
             await self._maybe_record_aec_reference(chunk, turn)
 
     async def _feed_transport_aec_reference(
@@ -716,12 +806,19 @@ class AudioRouter:
         frames = drain_aec_reference_frames(self._transport)
         if not frames:
             return
-        for ref_data in frames:
+        for reference in frames:
             if self._aec_reference_failed:
                 break
-            await self._feed_reference_or_disable(
-                AudioChunk(data=ref_data, format=mic_chunk.format), turn
+            # Typed reference frames preserve the actual far-end format.
+            # Legacy third-party transports may still return raw bytes from
+            # the original optional hook; retain the prior mic-format fallback
+            # for compatibility, while built-in transports never need to guess.
+            ref_chunk = (
+                reference
+                if isinstance(reference, AudioChunk)
+                else AudioChunk(data=reference, format=mic_chunk.format)
             )
+            await self._feed_reference_or_disable(ref_chunk, turn)
 
     async def _process_chunk(self, chunk: AudioChunk) -> None:
         """Run a single received frame through the stage pipeline.
@@ -730,6 +827,10 @@ class AudioRouter:
         per-chunk error policy (skip + surface) without conflating it
         with fatal transport-iterator conditions.
         """
+        # Decide at ingress so pre-roll and smart-turn buffers cannot later
+        # inherit a newly granted consent decision.
+        audio_capture_allowed(self._run_ctx, chunk)
+
         # Snapshot the active turn once so all stage calls operate on the
         # same context.
         turn = self._current_turn() or self._no_turn
@@ -925,6 +1026,7 @@ class AudioRouter:
         # the shared _feed_reference_or_disable owner.
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
+            await self._report_degraded_aec_reference_once()
             await self._feed_reference_or_disable(chunk, turn)
 
         sent_size = len(chunk.data)
@@ -949,6 +1051,41 @@ class AudioRouter:
         ):
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
+
+    async def _report_degraded_aec_reference_once(self) -> None:
+        """Record that server-side AEC lacks a playback-timed reference.
+
+        Transports without ``drain_aec_reference_frames`` can preserve the
+        explicit AEC feature only by feeding audio at send time. That reference
+        has gaps during silence and, for remote transports, precedes actual
+        playout by an unknown buffer delay. Emit one durable event before the
+        first such feed so bundle readers can distinguish this best-effort mode
+        from playback-clocked AEC.
+        """
+        if self._aec_reference_degraded_reported:
+            return
+        self._aec_reference_degraded_reported = True
+        provider = str(getattr(self._transport, "transport_kind", "unknown"))
+        detail = (
+            "server-side AEC reference is fed at transport send time and has no "
+            "playout-clocked silence frames; prefer endpoint echo cancellation "
+            "or a transport with drain_aec_reference_frames()"
+        )
+        logger.warning("%s AEC reference degraded: %s", provider, detail)
+        event = TransportDegraded(
+            provider=provider,
+            reason="aec_reference_degraded",
+            detail=detail,
+        )
+
+        async def _emit_degraded() -> None:
+            await self._emit(event)
+
+        task: asyncio.Task[None] = self._runtime_scope.create_task(
+            self._AEC_DEGRADED_EMIT_TASK_NAME,
+            _emit_degraded(),
+        )
+        task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def _maybe_record_aec_reference(
         self,

@@ -17,7 +17,7 @@ automation needs that same operator map with command hints.
 | --- | --- | --- | --- |
 | **A — stdlib logging** | `logging.getLogger("easycat")`, controlled by `EASYCAT_LOG_LEVEL` | Human, ad-hoc diagnostics while developing or tailing a process | Lossy. Off by default in library mode. |
 | **B — EventBus** | `easycat.events`, `session.subscribe_event(...)` | Driving application behavior in reaction to session events | Live, in-process. Not a durable record. |
-| **C — ExecutionJournal** | `runtime/`, `session.journal.read()`, `export_debug_bundle()`, the `easycat` CLI | Durable, structured, replayable record of a whole session | Complete single source of truth. PII-bearing by design. |
+| **C — ExecutionJournal** | `runtime/`, `session.journal.read()`, `export_debug_bundle()`, the `easycat` CLI | Structured record of a session | Full mode is durable and replay-complete. Light mode is bounded, omits per-frame spans, and reports any eviction. PII-bearing by design. |
 | **D — OpenTelemetry facade** | `easycat._observability` | Production metrics and traces | PII-scrubbed, low-cardinality. No-op without an SDK. |
 
 ### A — stdlib logging
@@ -54,11 +54,15 @@ learns that the user started speaking, a turn ended, the bot produced audio, etc
   callback lifecycle and call `token.unsubscribe()` during teardown.
 - Event handlers run inline in subscription order. By default, handler
   exceptions are logged, counted on the bus, and do not stop later handlers from
-  running. Use `EventBus(handler_error_policy="raise")` in tests or strict app
+  running. Set `EasyConfig(handler_error_policy="raise")` (or the equivalent
+  `TextSessionConfig` / `create_text_session` option) in tests or strict app
   code when a handler failure should abort dispatch and propagate to the
-  emitter.
-- Configure `EventBus(slow_handler_threshold_s=...)` when you need warnings for
-  callbacks that might stall audio-critical paths.
+  emitter. Direct `EventBus` construction accepts the same option.
+- Sessions created from `EasyConfig` or `TextSessionConfig` warn when a callback
+  takes at least 5 ms, because slow handlers can stall audio-critical paths.
+  Tune this with `slow_handler_threshold_s=...`, or set it to `None` to disable
+  the diagnostic. Direct `EventBus` construction leaves it disabled unless
+  configured explicitly.
 - If you want a durable mirror of what flowed across the bus, that is the
   journal's job (C), which records bus activity (via the session journal sink)
   plus per-stage internal detail the bus never carries.
@@ -69,12 +73,25 @@ The journal (`runtime/`) is the durable, structured, replayable record of a
 session. Read it live with `session.journal.read()`, export a self-contained
 bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
 
-- It is the **single source of truth** for "what actually happened" — complete
-  where logs are lossy.
+- It is the **single source of truth** for "what actually happened." Full mode
+  retains replay-complete stage detail. Light mode keeps turn, event, error,
+  and control history while omitting per-frame Audio/VAD/STT spans and their
+  artifacts.
 - It is **PII-bearing by design**: it records transcripts, agent output, and tool
   arguments so a session can be faithfully replayed and debugged.
+- `journal_redaction="secrets"` (the default) preserves that replay content
+  while removing credentials. Set `journal_redaction="pii"` to irreversibly
+  redact phone numbers, URLs, request IDs, home paths, prompts, transcripts,
+  and provider text at write time. Redacted CLI views and coding-agent context
+  packs apply their own PII policy regardless; raw journals and debug bundles
+  should still be treated as sensitive.
 - It is gated by `debug=` (see orthogonality below): `debug="off"` does not
   journal; `debug="light"`/`debug="full"` do.
+- The light journal is bounded by `journal_capacity` (default `10_000`
+  records). `session.journal.dropped_records`, the bundle manifest's
+  `journal_dropped_records`, and `easycat bundles show` make any eviction
+  explicit; increase the capacity when an unusually long or event-heavy
+  session needs more in-memory history.
 - `record_to="runs"` on `EasyConfig` or `create_text_session(...)` exports a
   timestamped debug bundle on clean shutdown when journaling is enabled.
 - Error records preserve PEP 678 exception notes in `ErrorInfo.notes`. Runtime
@@ -273,9 +290,10 @@ There are three independent knobs, and they control different things:
 - **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`, default
   `"light"`) — controls journal and artifact capture (C).
   Journaling is on by default so sessions are always recorded, but the
-  default `"light"` keeps it in memory — per-frame capture never touches the
-  disk on the live audio loop. Opt into `"full"` for a crash-survivable
-  on-disk journal + artifacts; set `debug="off"` to skip recording entirely.
+  default `"light"` keeps turn/control history in memory and omits per-frame
+  Audio/VAD/STT spans and artifacts. Opt into `"full"` for replay-complete,
+  crash-survivable on-disk stage detail; set `debug="off"` to skip recording
+  entirely.
   Debugger UI launch is an independent opt-in controlled by
   `debugger_autolaunch=True`. `debug=` is **orthogonal to log level**:
   `EASYCAT_LOG_LEVEL` decides how verbose the human console log is. Turning

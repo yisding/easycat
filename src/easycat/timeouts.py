@@ -14,6 +14,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
+from easycat.errors import EasyCatError
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +41,7 @@ def resolve_provider_name(provider: Any, fallback: str) -> str:
 # ── Timeout error types ────────────────────────────────────────────
 
 
-class STTTimeoutError(Exception):
+class STTTimeoutError(EasyCatError):
     """STT provider did not produce a transcript within the timeout.
 
     Carries the stable ``code`` ``EASYCAT_E301`` so journal ``Error``
@@ -51,10 +53,15 @@ class STTTimeoutError(Exception):
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
         self.timeout = timeout
-        super().__init__(f"STT provider '{provider_name}' timed out after {timeout:.1f}s")
+        super().__init__(
+            self.code,
+            f"STT provider '{provider_name}' timed out after {timeout:.1f}s",
+            provider=provider_name,
+            timeout=timeout,
+        )
 
 
-class AgentTimeoutError(Exception):
+class AgentTimeoutError(EasyCatError):
     """Agent did not respond within the timeout.
 
     Carries the stable ``code`` ``EASYCAT_E302`` so journal ``Error``
@@ -65,10 +72,10 @@ class AgentTimeoutError(Exception):
 
     def __init__(self, timeout: float) -> None:
         self.timeout = timeout
-        super().__init__(f"Agent timed out after {timeout:.1f}s")
+        super().__init__(self.code, f"Agent timed out after {timeout:.1f}s", timeout=timeout)
 
 
-class TTSTimeoutError(Exception):
+class TTSTimeoutError(EasyCatError):
     """TTS provider did not produce audio within the timeout.
 
     Carries the stable ``code`` ``EASYCAT_E303`` so journal ``Error``
@@ -80,7 +87,12 @@ class TTSTimeoutError(Exception):
     def __init__(self, provider_name: str, timeout: float) -> None:
         self.provider_name = provider_name
         self.timeout = timeout
-        super().__init__(f"TTS provider '{provider_name}' timed out after {timeout:.1f}s")
+        super().__init__(
+            self.code,
+            f"TTS provider '{provider_name}' timed out after {timeout:.1f}s",
+            provider=provider_name,
+            timeout=timeout,
+        )
 
 
 # ── Timeout configuration ─────────────────────────────────────────

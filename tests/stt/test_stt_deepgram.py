@@ -253,9 +253,10 @@ async def test_deepgram_resamples_mismatched_rate_instead_of_raising():
     await stt.end_stream()
 
     audio_sent = [s for s in ws.sent if isinstance(s, bytes)]
-    assert len(audio_sent) == 1
+    assert audio_sent
     # Resampled 48k -> 16k should be roughly one third the byte count.
-    assert len(audio_sent[0]) < len(pcm_48k)
+    assert sum(map(len, audio_sent)) < len(pcm_48k)
+    assert sum(map(len, audio_sent)) == len(pcm_48k) // 3
 
 
 @pytest.mark.asyncio

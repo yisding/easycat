@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 import pytest
 
-from easycat.events import DTMF, EventBus
+from easycat.events import DTMF, CallAnswered, CallEnded, EventBus
 from easycat.telephony import (
+    TwilioCallSessionIndex,
     TwilioWebhookSignatureError,
+    bearer_token_matches,
     compute_twilio_webhook_signature,
     reconstruct_public_url,
     twilio_app_settings_from_env,
@@ -16,6 +19,12 @@ from easycat.telephony import (
     twilio_public_url_from_request,
     twilio_stream_parameters_from_form,
     validate_twilio_webhook_signature,
+)
+from easycat.telephony import (
+    twiml_redirect as exported_twiml_redirect,
+)
+from easycat.telephony import (
+    twiml_reject as exported_twiml_reject,
 )
 from easycat.telephony.twiml import (
     parse_gather_webhook,
@@ -25,6 +34,8 @@ from easycat.telephony.twiml import (
     twiml_gather,
     twiml_hangup,
     twiml_play_digits,
+    twiml_redirect,
+    twiml_reject,
 )
 
 
@@ -60,6 +71,12 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         params={"CallSid": "CA123", "From": "+15551234567"},
         signature=signature,
     )
+    assert not validate_twilio_webhook_signature(
+        auth_token="token",
+        url="https://voice.example.com/twiml",
+        params={},
+        signature="not-ascii-é",
+    )
     assert twilio_stream_parameters_from_form({"From": "+15551234567"}) == {
         "Direction": "inbound",
         "From": "+15551234567",
@@ -68,6 +85,8 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         "https://voice.example.com/twiml"
     )
     assert issubclass(TwilioWebhookSignatureError, ValueError)
+    assert exported_twiml_redirect("/overflow").startswith("<?xml")
+    assert exported_twiml_reject().startswith("<?xml")
 
 
 def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
@@ -82,6 +101,10 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_CALL_API_TOKEN": "call-token",
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
+            "TWILIO_DRAIN_TIMEOUT_S": "45",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S": "7.5",
+            "TWILIO_PUBLIC_TWIML_URL": "https://voice.example.com/prefix/twiml",
+            "TWILIO_MAX_SESSIONS": "12",
         }
     )
 
@@ -91,6 +114,10 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.outbound_calling_enabled is True
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
+    assert settings.drain_timeout_s == 45.0
+    assert settings.force_shutdown_timeout_s == 7.5
+    assert settings.public_twiml_url == "https://voice.example.com/prefix/twiml"
+    assert settings.max_sessions == 12
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"
@@ -111,6 +138,56 @@ def test_twilio_app_settings_stream_url_override_and_missing_error() -> None:
 
     with pytest.raises(RuntimeError, match="TWILIO_STREAM_URL is required"):
         twilio_app_settings_from_env(environ={"TWILIO_STREAM_URL": "   "})
+
+
+def test_twilio_app_settings_can_require_auth_and_validate_session_limit() -> None:
+    with pytest.raises(RuntimeError, match="TWILIO_AUTH_TOKEN is required"):
+        twilio_app_settings_from_env(
+            stream_url="wss://voice.example.com/stream",
+            require_auth_token=True,
+            environ={},
+        )
+
+    for value in ("0", "-1", "many"):
+        with pytest.raises(RuntimeError, match="TWILIO_MAX_SESSIONS"):
+            twilio_app_settings_from_env(
+                stream_url="wss://voice.example.com/stream",
+                environ={"TWILIO_MAX_SESSIONS": value},
+            )
+
+    for name in ("TWILIO_DRAIN_TIMEOUT_S", "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S"):
+        for value in ("-0.1", "later", "nan", "inf"):
+            with pytest.raises(RuntimeError, match=name):
+                twilio_app_settings_from_env(
+                    stream_url="wss://voice.example.com/stream",
+                    environ={name: value},
+                )
+
+
+@pytest.mark.asyncio
+async def test_twilio_call_session_index_tracks_and_unsubscribes() -> None:
+    bus = EventBus()
+    session = SimpleNamespace(event_bus=bus)
+    index = TwilioCallSessionIndex()
+    cleanup = index.track(session)
+
+    await bus.emit(CallAnswered(call_sid="CA123"))
+    assert index.get("CA123") is session
+    await bus.emit(CallEnded(call_sid="CA123"))
+    assert index.get("CA123") is None
+
+    cleanup()
+    await bus.emit(CallAnswered(call_sid="CA-LATE"))
+    assert index.get("CA-LATE") is None
+
+
+def test_bearer_token_matches_is_constant_time_safe_for_non_ascii() -> None:
+    assert bearer_token_matches("Bearer secret", "secret")
+    assert bearer_token_matches("bearer secret", "secret")
+    assert not bearer_token_matches("Bearer wrong", "secret")
+    assert not bearer_token_matches("Basic secret", "secret")
+    assert not bearer_token_matches("Bearer secrét", "secret")
+    assert not bearer_token_matches("Bearer secret", "secrét")
 
 
 def test_twilio_app_settings_treats_whitespace_env_values_as_missing() -> None:
@@ -258,13 +335,29 @@ def test_twilio_stream_parameters_from_form_defaults_and_copies_caller_fields() 
             ("Direction", "outbound-api"),
             ("From", "+15551234567"),
             ("To", "+15557654321"),
-            ("CallerName", ""),
+            ("CallerId", "+15550001111"),
+            ("ForwardedFrom", "+15559990000"),
+            ("CallerName", "Ada Lovelace"),
+            ("FromCity", "SEATTLE"),
+            ("FromState", "WA"),
+            ("FromZip", "98101"),
+            ("FromCountry", "US"),
             ("Ignored", "value"),
-        ]
+            ("X-Carrier", "pstn"),
+        ],
+        extra_fields=("X-Carrier",),
     ) == {
         "Direction": "outbound-api",
         "From": "+15551234567",
         "To": "+15557654321",
+        "CallerId": "+15550001111",
+        "ForwardedFrom": "+15559990000",
+        "CallerName": "Ada Lovelace",
+        "FromCity": "SEATTLE",
+        "FromState": "WA",
+        "FromZip": "98101",
+        "FromCountry": "US",
+        "X-Carrier": "pstn",
     }
 
 
@@ -451,6 +544,55 @@ class TestTwimlHangup:
         assert "<Hangup/>" in result
         assert "<Response>" in result
         assert result.startswith('<?xml version="1.0"')
+
+
+class TestTwimlReject:
+    """Tests for twiml_reject."""
+
+    def test_default_reject_reason(self) -> None:
+        result = twiml_reject()
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": "rejected"}
+
+    def test_busy_reject_reason(self) -> None:
+        result = twiml_reject("busy")
+        reject = ET.fromstring(result).find("Reject")
+        assert reject is not None
+        assert reject.attrib == {"reason": "busy"}
+
+    @pytest.mark.parametrize("reason", ["", "temporary", "Busy", 'busy" x="1'])
+    def test_rejects_unsupported_reason(self, reason: str) -> None:
+        with pytest.raises(ValueError, match="reason must be 'rejected' or 'busy'"):
+            twiml_reject(reason)  # type: ignore[arg-type]
+
+
+class TestTwimlRedirect:
+    """Tests for twiml_redirect."""
+
+    def test_redirect_url(self) -> None:
+        result = twiml_redirect("https://voice.example.com/overflow?x=1&y=2")
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.text == "https://voice.example.com/overflow?x=1&y=2"
+        assert redirect.attrib == {}
+
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    def test_redirect_method(self, method: str) -> None:
+        result = twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
+        redirect = ET.fromstring(result).find("Redirect")
+        assert redirect is not None
+        assert redirect.attrib == {"method": method}
+
+    @pytest.mark.parametrize("url", ["", " ", "\n\t"])
+    def test_rejects_blank_url(self, url: str) -> None:
+        with pytest.raises(ValueError, match="url must be non-empty"):
+            twiml_redirect(url)
+
+    @pytest.mark.parametrize("method", ["", "get", "PUT", 'GET" bad="1'])
+    def test_rejects_unsupported_method(self, method: str) -> None:
+        with pytest.raises(ValueError, match="method must be 'GET' or 'POST'"):
+            twiml_redirect("/overflow", method=method)  # type: ignore[arg-type]
 
 
 # ── Finding 1: DTMF charset validation shared across both output paths ──

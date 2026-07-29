@@ -48,7 +48,10 @@ class MemoryTransport(AudioQueueMixin):
     transport_kind = "memory"  # appears as TransportDegraded.provider
 
     def __init__(self) -> None:
-        self._init_audio_queue(max_pending_chunks=256)
+        self._init_audio_queue(
+            max_pending_chunks=256,
+            max_pending_bytes=4 * 1024 * 1024,
+        )
         self.sent: list[AudioChunk] = []
 
     async def connect(self) -> None:
@@ -76,7 +79,12 @@ class MemoryTransport(AudioQueueMixin):
 ```
 
 `receive_audio()`, `is_connected`, and `wait_for_client()` come from the
-mixin. For a transport that hosts its own WebSocket server, subclass
+mixin. Both queue limits are enforced independently: `max_pending_chunks`
+bounds ordinary small-frame latency, while `max_pending_bytes` prevents a few
+large frames from retaining disproportionate memory. Either overflow drops the
+new frame and emits `TransportDegraded("inbound_queue_full")`.
+
+For a transport that hosts its own WebSocket server, subclass
 `ServerTransportBase` instead and implement `_handle_connection(ws)` — see
 `src/easycat/transports/websocket.py` for the canonical subclass.
 
@@ -92,15 +100,22 @@ session = create_session(EasyConfig(transport=MemoryTransport(), agent=my_agent)
 structurally, so any object with the audio surface above is accepted. See
 `examples/custom_transport.py` for a runnable wrapper-style variant.
 
+To emit `TransportDegraded` or other provider-scoped events on the session
+bus, expose a synchronous `set_event_bus(event_bus)` method. Session calls it
+before `connect()`. `AudioQueueMixin` already implements this hook and preserves
+an explicitly configured bus, so subclasses such as `MemoryTransport` need no
+additional wiring. Private `_event_bus` attachment remains a legacy fallback,
+not an extension contract.
+
 ## Verifying conformance
 
 ```python
-from easycat import Transport
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.testing import TransportContractSuite
 
 
-def test_memory_transport_conforms_to_protocol() -> None:
-    assert isinstance(MemoryTransport(), Transport)
+class TestMemoryTransport(TransportContractSuite):
+    provider_factory = MemoryTransport
 
 
 async def test_memory_transport_round_trips_audio() -> None:
@@ -112,7 +127,10 @@ async def test_memory_transport_round_trips_audio() -> None:
     assert len(received) == 1
 ```
 
-The in-tree behavioral contract lives in
+The suite verifies connection/send/disconnect semantics, terminating inbound
+iteration, and idempotent playback clearing. `isinstance(transport,
+Transport)` checks member names only and is not a behavioral conformance
+test. The in-tree use of the same installable suite lives in
 [`tests/contracts/test_transport_contracts.py`](../../tests/contracts/test_transport_contracts.py).
 
 ## Notes

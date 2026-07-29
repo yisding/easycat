@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
 from easycat.smart_turn import SmartTurnConfig, SmartTurnONNX, SmartTurnResult
 
 _WORKER_EVENT_TIMEOUT = 2.0
@@ -425,6 +425,66 @@ def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
     assert len(audio) == 8 * 16000
     assert audio[0] == 2 / 32768.0
     assert audio[-1] == 9 / 32768.0
+
+
+def test_chunks_to_float32_16k_batches_same_rate_resampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default 400-frame window should cross the filtered resampler once."""
+
+    from array import array
+    from types import SimpleNamespace
+
+    resample_calls = 0
+
+    class FakeArray(list[float]):
+        def astype(self, _dtype):
+            return self
+
+        def __mul__(self, factor: float):
+            return FakeArray(value * factor for value in self)
+
+        def __truediv__(self, divisor: float):
+            return FakeArray(value / divisor for value in self)
+
+    def frombuffer(data: bytes, *, dtype):
+        del dtype
+        samples = array("h")
+        samples.frombytes(data)
+        return FakeArray(float(value) for value in samples)
+
+    def filtered_resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
+        nonlocal resample_calls
+        assert from_rate == 24_000
+        assert to_rate == 16_000
+        resample_calls += 1
+        return array("h", [0] * (len(data) // 3)).tobytes()
+
+    fake_np = SimpleNamespace(
+        float32=float,
+        int16=int,
+        concatenate=lambda arrays: FakeArray(
+            value for array_values in arrays for value in array_values
+        ),
+        frombuffer=frombuffer,
+        zeros=lambda size, dtype: FakeArray([0.0] * size),
+    )
+    monkeypatch.setattr("easycat.smart_turn.resample", filtered_resample)
+
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    provider._np = fake_np
+    chunks = [
+        AudioChunk(
+            data=array("h", [0] * 480).tobytes(),
+            format=PCM16_MONO_24K,
+        )
+        for _ in range(400)
+    ]
+
+    audio = provider._chunks_to_float32_16k(chunks)
+
+    assert len(audio) == 8 * 16000
+    assert resample_calls == 1
 
 
 @pytest.mark.asyncio

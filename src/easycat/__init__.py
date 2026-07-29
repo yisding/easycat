@@ -61,8 +61,10 @@ if TYPE_CHECKING:
     from easycat.debug.export import export_debug_bundle
     from easycat.errors import EasyCatError, ErrorEntry
     from easycat.events import (
+        DTMF,
         AgentDelta,
         AgentFinal,
+        AgentRequestStarted,
         AudioIn,
         AudioOut,
         BotStartedSpeaking,
@@ -70,21 +72,43 @@ if TYPE_CHECKING:
         CallAnswered,
         CallEnded,
         CallFailed,
+        CallInitiated,
+        CallRinging,
+        CallScreening,
+        CallStateChanged,
+        DTMFAggregated,
         Error,
         ErrorStage,
         Event,
         EventBus,
         Interruption,
+        IVRAction,
+        PlaybackMarkAck,
+        ReconnectAttempt,
+        ReconnectFailure,
+        ReconnectSuccess,
+        ScreeningResponse,
+        ScreeningTimedOut,
+        SessionActionCompleted,
+        SessionActionFailed,
+        SessionActionRequested,
+        SessionActionStarted,
         STTFinal,
         STTPartial,
         SupervisorListenerAttached,
         SupervisorListenerDetached,
+        ToolCallDelta,
+        ToolCallResult,
+        ToolCallStarted,
+        TransportAudioDelivered,
+        TransportDegraded,
         TTSAudio,
         TTSMarkers,
         TurnEnded,
         TurnStarted,
         VADStartSpeaking,
         VADStopSpeaking,
+        VoicemailDetected,
     )
     from easycat.helpers import (
         attach_runtime_feedback,
@@ -102,6 +126,7 @@ if TYPE_CHECKING:
     from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
     from easycat.providers import (
         EchoCanceller,
+        EventBusBindable,
         NoiseReducer,
         STTProvider,
         Transport,
@@ -148,7 +173,12 @@ if TYPE_CHECKING:
         register_tts_provider,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
-    from easycat.vad import VADConfig, create_vad
+    from easycat.vad import (
+        VADConfig,
+        available_vad_providers,
+        create_vad,
+        register_vad_provider,
+    )
     from easycat.voice_app import VoiceApp
 
 

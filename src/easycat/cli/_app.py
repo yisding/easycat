@@ -19,9 +19,6 @@ from easycat.cli._errors import handle_easycat_error
 from easycat.cli._guard_commands import (
     DOCS_ONBOARDING_GUARD_COMMANDS as _DOCS_ONBOARDING_GUARD_COMMANDS,
 )
-from easycat.cli._guard_commands import (
-    DOCS_ONBOARDING_RAW_GUARD_COMMANDS as _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-)
 from easycat.cli._output import (
     emit_command_error,
     emit_json,
@@ -231,7 +228,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
-            "uv sync --extra quickstart --group dev",
+            "uv sync --extra quickstart --extra webrtc --group dev",
             "uv run easycat doctor",
             "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
@@ -260,6 +257,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat doctor --json",
             "easycat doctor --env-file .env --json",
             "easycat docs",
+            "easycat docs --verbose",
             "easycat docs --audience learners",
             "easycat docs --audience learners --json",
             "easycat docs --audience app-builders",
@@ -280,6 +278,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Choose the maintained guide for your current task.",
         "commands": (
             "easycat docs",
+            "easycat docs --verbose",
             "easycat docs --audience learners",
             "easycat docs --audience app-builders",
             "easycat docs --audience operators",
@@ -551,7 +550,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --group dev",
             "uv run python docs/using-easycat/10-telephony/main.py",
-            "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+            "uv sync "
+            "--extra openai --extra telephony --extra telephony-fastapi "
+            "--extra openai-agents --group dev",
             "uv run easycat doctor --env-file .env --json",
             (
                 "uv run --env-file .env uvicorn examples.twilio_app:create_app "
@@ -640,7 +641,6 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat replay PATH --json",
             "uv run pytest tests/install/test_install_guidance.py",
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
-            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
             "uv run easycat validate contracts --json",
@@ -670,7 +670,6 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat bundles export PATH --output DIR --json",
             "uv run easycat replay PATH --json",
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
-            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
             "uv run easycat validate contracts --json",
@@ -731,6 +730,19 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Journal records reference",
+        "path": "docs/reference/journal-records.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Look up stable built-in journal record names, kinds, and data-key contracts."
+        ),
+        "commands": (
+            "uv run easycat explain journal",
+            "uv run easycat docs --audience app-builders",
+        ),
+    },
+    {
         "label": "EasyConfig reference",
         "path": "docs/reference/easyconfig.md",
         "audience": "app builders",
@@ -778,7 +790,6 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat explain json-schema",
             "uv run pytest tests/test_public_api.py",
             "just guard-docs",
-            _DOCS_ONBOARDING_RAW_GUARD_COMMANDS[0],
         ),
     },
     {
@@ -826,7 +837,6 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
-            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat docs --audience contributors",
             "uv run easycat docs --audience contributors --json",
             "uv run pytest",
@@ -957,7 +967,6 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
-            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate socket",
             "uv run easycat validate stress",
@@ -1106,6 +1115,29 @@ Available filters: {available_filters}
 """
 
 
+def _format_docs_index(entries: list[_DocsEntry]) -> str:
+    """Render a compact discovery index without route command expansions."""
+    available_audiences = ", ".join(_available_docs_audiences())
+    available_filters = ", ".join(_available_docs_audience_filters())
+    route_labels = "\n".join(
+        f"  [cyan]{escape(entry['label'])}[/]  [dim]{escape(entry['audience'])}[/]"
+        for entry in entries
+    )
+    return f"""[bold]EasyCat documentation[/]
+
+Choose a focused view: easycat docs --audience learners
+Show every route with descriptions and commands: easycat docs --verbose
+Machine-readable routes and command hints: easycat docs --json
+
+Available audiences: {available_audiences}
+Available filters: {available_filters}
+{_DOCS_AUDIENCE_ALIAS_NOTE}
+
+[bold]Route labels[/]
+{route_labels}
+"""
+
+
 def _print_journey_menu() -> None:
     """Render the top-level menu on bare ``easycat`` invocation."""
     stdout_console.print(_JOURNEY_MENU)
@@ -1127,6 +1159,11 @@ def docs_command(
             "Multi-word labels also accept hyphens or underscores; operators and "
             "maintainers include compound labels."
         ),
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        help="Expand every route with its path, description, URL, and command hints.",
     ),
 ) -> None:
     """Show docs for learning, maintenance, validation, and operations."""
@@ -1164,6 +1201,9 @@ def docs_command(
                 audience_alias_note=_DOCS_AUDIENCE_ALIAS_NOTE,
             )
         )
+        return
+    if audience is None and not verbose:
+        stdout_console.print(_format_docs_index(filtered_entries), soft_wrap=True)
         return
     stdout_console.print(
         _format_docs_menu(filtered_entries, audience_filter=audience), soft_wrap=True

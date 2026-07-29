@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import select
 import struct
 from unittest.mock import MagicMock
 
@@ -29,6 +31,115 @@ def test_silero_backend_candidates_respect_override(monkeypatch: pytest.MonkeyPa
 def test_silero_onnx_model_path_uses_bundled_asset():
     model_path = vad_silero_module._silero_onnx_model_path()
     assert model_path.endswith("src/easycat/models/silero_vad.onnx")
+
+
+def test_silero_onnx_session_is_cached_while_recurrent_state_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    numpy = pytest.importorskip("numpy")
+
+    class _SessionOptions:
+        inter_op_num_threads = 0
+        intra_op_num_threads = 0
+
+    class _FakeOnnxRuntime:
+        SessionOptions = _SessionOptions
+
+        def __init__(self) -> None:
+            self.sessions: list[object] = []
+
+        def get_available_providers(self) -> list[str]:
+            return ["CPUExecutionProvider"]
+
+        def InferenceSession(self, *_args, **_kwargs):  # noqa: N802
+            session = object()
+            self.sessions.append(session)
+            return session
+
+    runtime = _FakeOnnxRuntime()
+    monkeypatch.setattr(
+        vad_silero_module,
+        "require_module",
+        lambda name, **_kwargs: numpy if name == "numpy" else runtime,
+    )
+    monkeypatch.setattr(vad_silero_module, "_ONNX_SESSION_CACHE", {})
+
+    first = vad_silero_module._SileroOnnxModel("model.onnx")
+    second = vad_silero_module._SileroOnnxModel("model.onnx")
+
+    assert len(runtime.sessions) == 1
+    assert first._session is second._session
+    assert first._state is not second._state
+    first.close()
+    assert second._session is runtime.sessions[0]
+    entry = next(iter(vad_silero_module._ONNX_SESSION_CACHE.values()))
+    assert entry.owners == 1
+    second.close()
+    assert vad_silero_module._ONNX_SESSION_CACHE == {}
+
+
+def test_silero_onnx_cache_releases_failed_model_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BrokenNumpy:
+        float32 = object()
+
+        @staticmethod
+        def zeros(*_args, **_kwargs):
+            raise RuntimeError("state allocation failed")
+
+    class _SessionOptions:
+        inter_op_num_threads = 0
+        intra_op_num_threads = 0
+
+    class _FakeOnnxRuntime:
+        SessionOptions = _SessionOptions
+
+        @staticmethod
+        def get_available_providers() -> list[str]:
+            return ["CPUExecutionProvider"]
+
+        @staticmethod
+        def InferenceSession(*_args, **_kwargs):  # noqa: N802
+            return object()
+
+    monkeypatch.setattr(
+        vad_silero_module,
+        "require_module",
+        lambda name, **_kwargs: _BrokenNumpy if name == "numpy" else _FakeOnnxRuntime,
+    )
+    monkeypatch.setattr(vad_silero_module, "_ONNX_SESSION_CACHE", {})
+
+    with pytest.raises(RuntimeError, match="state allocation failed"):
+        vad_silero_module._SileroOnnxModel("model.onnx")
+
+    assert vad_silero_module._ONNX_SESSION_CACHE == {}
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_silero_cache_lock_is_reset_after_fork() -> None:
+    read_fd, write_fd = os.pipe()
+    vad_silero_module._ONNX_SESSION_CACHE_LOCK.acquire()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            with vad_silero_module._ONNX_SESSION_CACHE_LOCK:
+                os.write(write_fd, b"ok")
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    vad_silero_module._ONNX_SESSION_CACHE_LOCK.release()
+    try:
+        ready, _, _ = select.select([read_fd], [], [], 2.0)
+        assert ready and os.read(read_fd, 2) == b"ok"
+    finally:
+        os.close(read_fd)
+        waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+        if waited_pid == 0:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
 
 
 def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.MonkeyPatch):
@@ -105,6 +216,59 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
 
     assert any(isinstance(e, VADStartSpeaking) for e in events)
     assert vad._backend == "onnx"
+
+
+@pytest.mark.asyncio
+async def test_silero_burst_debounce_uses_consumed_audio_time(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A buffered second of speech must trigger without wall-clock sleeps."""
+    try:
+        import numpy  # noqa: F401
+    except (ImportError, RecursionError):
+        pytest.skip("numpy not importable")
+
+    class _SpeechModel:
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            assert len(samples) == 512
+            assert sample_rate == 16000
+            return 0.9
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _SpeechModel()
+        self._backend = "onnx"
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    vad.configure(min_speech_duration_ms=250, min_silence_duration_ms=150)
+    # 32 x 32 ms inference frames are delivered in one buffered chunk and
+    # processed far faster than realtime.
+    chunk = _make_chunk(1000, n_samples=512 * 32)
+
+    events = [event async for event in vad.process(chunk)]
+
+    assert [type(event) for event in events] == [VADStartSpeaking]
+    assert vad._audio_time_s == pytest.approx(1.024)
+
+
+def test_vad_reset_restarts_audio_position_clock(monkeypatch: pytest.MonkeyPatch):
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = MagicMock()
+        self._backend = "onnx"
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+    vad = SileroVAD()
+    vad._advance_audio_time(0.5)
+
+    vad.reset()
+
+    assert vad._audio_time_s == 0.0
 
 
 @pytest.mark.asyncio

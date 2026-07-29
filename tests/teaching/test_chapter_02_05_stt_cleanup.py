@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 import pytest
 
+from tests.teaching import _script_runner as script_runner
 from tests.teaching._source_guards import assert_sources_match
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +56,7 @@ class _FakeDetector:
 
 
 def test_chapter_4_closes_stt_on_normal_and_cancelled_turns() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER_4 / "stt_cleanup_probe.py")],
         cwd=ROOT,
         capture_output=True,
