@@ -147,11 +147,11 @@ Processor order is significant. This lesson first replaces names, then finds
 a phone-number span and separates its digits. The `minimum_units=7` guard
 prevents short numbers elsewhere in a reply from being paced accidentally.
 
-`PauseProcessor` defaults to SSML breaks. The default OpenAI TTS path accepts
-plain text, so EasyCat would strip unsupported SSML tags before synthesis.
-This lesson selects `style="ellipsis"` explicitly, preserving a plain-text
-pacing hint. When you choose another TTS provider, inspect its input policy and
-prefer native SSML only when the provider supports it.
+`PauseProcessor` defaults to an ellipsis cue that remains plain text through
+every bundled TTS path. This lesson selects `style="ellipsis"` explicitly to
+make that policy visible. Exact `pause_ms` timing requires `style="ssml"` and a
+provider whose input policy advertises native SSML; unsupported SSML tags are
+stripped before synthesis.
 
 Continue with [the exercises](./EXERCISES.md) to trace each boundary and add a
 tool without giving it control over the session.

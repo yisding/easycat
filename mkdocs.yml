@@ -74,9 +74,51 @@ plugins:
 hooks:
   - .mkdocs/hooks.py
 
+validation:
+  nav:
+    omitted_files: warn
+
 nav:
   - Home: README.md
   - Learn:
+      - Feature ladder:
+          - Overview: using-easycat/README.md
+          - Chapter 0 — Your First VoiceApp:
+              - using-easycat/00-first-voice-app/README.md
+              - Exercises: using-easycat/00-first-voice-app/EXERCISES.md
+          - Chapter 1 — Run It Anywhere:
+              - using-easycat/01-runtime-modes/README.md
+              - Exercises: using-easycat/01-runtime-modes/EXERCISES.md
+          - Chapter 2 — Pick Providers and Voices:
+              - using-easycat/02-providers-and-voices/README.md
+              - Exercises: using-easycat/02-providers-and-voices/EXERCISES.md
+          - Chapter 3 — Shape the Conversation:
+              - using-easycat/03-conversation-controls/README.md
+              - Exercises: using-easycat/03-conversation-controls/EXERCISES.md
+          - Chapter 4 — Add Tools Without Losing Control:
+              - using-easycat/04-tools-actions/README.md
+              - Exercises: using-easycat/04-tools-actions/EXERCISES.md
+          - Chapter 5 — Bring Your Agent:
+              - using-easycat/05-agent-bridges/README.md
+              - Exercises: using-easycat/05-agent-bridges/EXERCISES.md
+          - Chapter 6 — Control a Session:
+              - using-easycat/06-session-control/README.md
+              - Exercises: using-easycat/06-session-control/EXERCISES.md
+          - Chapter 7 — See What Happened:
+              - using-easycat/07-observability/README.md
+              - Exercises: using-easycat/07-observability/EXERCISES.md
+          - Chapter 8 — Test the Experience:
+              - using-easycat/08-testing-evals/README.md
+              - Exercises: using-easycat/08-testing-evals/EXERCISES.md
+          - Chapter 9 — Serve Many Callers:
+              - using-easycat/09-multi-caller/README.md
+              - Exercises: using-easycat/09-multi-caller/EXERCISES.md
+          - Chapter 10 — Answer the Phone:
+              - using-easycat/10-telephony/README.md
+              - Exercises: using-easycat/10-telephony/EXERCISES.md
+          - Chapter 11 — Ship and Operate:
+              - using-easycat/11-production-ops/README.md
+              - Exercises: using-easycat/11-production-ops/EXERCISES.md
       - Teaching ladder: teaching/README.md
       - Progress worksheet: teaching/PROGRESS.md
       - Build — assemble the pipeline:
@@ -150,4 +192,7 @@ nav:
       - Latency: latency.md
       - Validation workflow: validation.md
       - Observability: observability.md
-      - Deployment — Docker: deployment/docker.md
+      - Browser playground: browser-playground.md
+      - Deployment:
+          - Docker: deployment/docker.md
+          - Production servers: deployment/production-servers.md

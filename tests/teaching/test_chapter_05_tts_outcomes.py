@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "05-blocking-agent"
 
 
 def test_tts_outcome_probe_exercises_three_distinct_causes() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "tts_outcome_probe.py")],
         cwd=ROOT,
         check=True,

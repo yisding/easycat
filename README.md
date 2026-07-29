@@ -62,14 +62,14 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
-EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart]'`
+EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
 a `[tool.uv.sources]` block; for a hand-written `pyproject.toml`, add:
 
 ```toml
 [project]
-dependencies = ["easycat[quickstart]"]
+dependencies = ["easycat[quickstart,webrtc]"]
 
 [tool.uv.sources]
 easycat = { path = "/path/to/easycat", editable = true }
@@ -79,7 +79,7 @@ For this repository, four commands go from clone to a talking bot. Keys live
 in a project `.env` — the same convention `easycat init` scaffolds:
 
 ```bash
-uv sync --extra quickstart --group dev
+uv sync --extra quickstart --extra webrtc --group dev
 echo 'OPENAI_API_KEY=your-api-key' > .env
 uv run easycat doctor --env-file .env
 uv run --env-file .env python examples/openai_agents_voice.py
@@ -132,19 +132,24 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, numpy, onnxruntime, and LiveKit AEC3 echo
-cancellation. It does not include TEN VAD; install that optional extra
-separately only if you accept its non-permissive license. Silero VAD runs on
-its bundled ONNX model via `onnxruntime` (already in `quickstart`) — no torch
-required. If you want a leaner install with Silero, add extras individually:
+SDK, NumPy, onnxruntime, and LiveKit AEC3 echo cancellation. SoXR is a core
+dependency because every transport and provider can cross a sample-rate
+boundary. RNNoise is
+opt-in because noise reduction defaults off and its Python binding pulls a
+large multimedia/plotting dependency chain; add the `rnnoise` extra only when
+you enable that backend. `quickstart` also does not include TEN VAD; install
+that optional extra separately only if you accept its non-permissive license.
+Silero VAD runs on its bundled ONNX model via `onnxruntime` (already in
+`quickstart`) — no torch required. If you want a leaner install with Silero,
+add extras individually:
 
 ```bash
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad --extra aec --group dev
+uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
 ```
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + numpy (LocalTransport and local audio buffers): `uv sync --extra local --group dev`
+- sounddevice + NumPy (LocalTransport and local audio): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
@@ -156,7 +161,7 @@ frameworks, and debugging/audio-processing features:
 - LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents --group dev`
 - LiveKit AEC3 echo cancellation: `uv sync --extra aec --group dev`
 - aiohttp debugger UI: `uv sync --extra debugger --group dev`
-- numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
+- NumPy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad --group dev`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad --group dev` — runs the bundled ONNX model (no torch required)
 - numpy + onnxruntime + kaldi-native-fbank (FunASR VAD): `uv sync --extra funasr-vad --group dev`
@@ -170,6 +175,13 @@ frameworks, and debugging/audio-processing features:
   or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
+
+Every EasyCat install includes SoXR for filtered, native-speed sample-rate
+conversion. `easycat doctor` reports the active backend; the dependency-free
+filtered resampler remains a runtime fallback if the native backend fails.
+Continuous transport, provider, VAD, noise-reduction, and TTS paths retain
+filter history and fractional phase across chunks, so packet boundaries do
+not become audible sample-rate-conversion boundaries.
 
 Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
 socket per voice session by default. EasyCat calls the provider's `warmup()`
@@ -517,7 +529,8 @@ config = EasyConfig(
             pattern=r"\+?\d[\d\s().-]{5,}\d",
             unit_pattern=r"\d",
             minimum_units=7,
-            pause_ms=140,
+            style="ellipsis",
+            ellipsis_count=1,
         ),
     ],
 )
@@ -532,7 +545,7 @@ from easycat import EasyConfig, create_session, default_pronunciation_processors
 config = EasyConfig(
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
-        phone_pause_ms=140,
+        phone_ellipsis_count=1,
     ),
 )
 session = create_session(config)
@@ -548,17 +561,23 @@ PauseProcessor(
     pattern=r"ticket\s+#?\d+",
     # pause between matched digits
     unit_pattern=r"\d",
-    pause_ms=180,
     minimum_units=2,
-    # for style="ellipsis": 1 => "...", 2 => "... ..."
+    # ellipsis is the provider-compatible default:
+    style="ellipsis",
+    # 1 => "...", 2 => "... ..."
     ellipsis_count=1,
 )
 ```
 
 Notes:
 - `strip_markdown=True` still works and is automatically composed with processors.
-- Providers that do not support SSML automatically fall back to plain text.
-- Pause length is adjustable via `pause_ms` for SSML and `ellipsis_count` for ellipsis style.
+- The default ellipsis style reaches every bundled TTS provider as a plain-text
+  pacing cue; the provider decides its exact duration.
+- Exact `pause_ms` timing requires `style="ssml"` and a provider with native
+  SSML support. Every bundled provider currently strips unsupported SSML break
+  tags, retaining spaced digits but losing exact timing.
+- `default_pronunciation_processors(..., phone_pause_style="ssml",
+  phone_pause_ms=180)` opts the convenience stack into that native-SSML path.
 - For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`;
   expose `input_policy` with `TTSInputPolicy.native_ssml()` only when the backend
   accepts SSML unchanged.
@@ -588,6 +607,13 @@ This keeps the pipeline (VAD → STT → agent → TTS) identical while letting 
 swap in open-source models for fully local operation. Provider instances are
 accepted directly with `vad=`, `noise_reduction=`, and `echo_cancellation=`
 when you have custom audio-processing stages.
+
+Reusable local packages can also register STT, TTS, VAD, noise-reduction, and
+echo-cancellation configs without an `env_var`. That enables shortcuts such as
+`stt="local-whisper/base"`, `tts="local-piper/en_US"`, and `vad="energy"`,
+plus planning, scaffold extras, readiness probes, and installed-package entry
+point discovery without a dummy credential; see the
+[provider extending guides](docs/extending/).
 
 ## Inspecting conversation flow
 

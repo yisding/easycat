@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from easycat._turn_context import TurnContext
+from easycat.cancel import CancelToken
 
 if TYPE_CHECKING:
     from easycat.integrations.agents.base import ExternalAgentBridge
@@ -64,6 +65,13 @@ class _SessionTurnHandle:
     @property
     def no_turn(self) -> TurnContext:
         return self._session._no_turn
+
+    def begin(
+        self,
+        turn_id: str,
+        cancel_token: CancelToken | None = None,
+    ) -> TurnContext:
+        return self._session.begin_turn(turn_id, cancel_token)
 
     def set(self, turn: TurnContext | None) -> None:
         self._session._turn = turn
@@ -123,6 +131,7 @@ class SessionWiringContext:
 
     # ── Lifecycle verbs ──────────────────────────────────────────
     cancel_turn: Callable[..., Awaitable[None]]
+    begin_barge_in: Callable[[], Awaitable[None]]
     stop: Callable[[], Awaitable[None]]
 
 
@@ -181,6 +190,7 @@ def build_wiring(session: Session) -> SessionWiringContext:
         clear_turn=_clear_turn,
         reset_turn_state=session._reset_turn_state,
         cancel_turn=session.cancel_turn,
+        begin_barge_in=session._begin_barge_in,
         stop=lambda: session.stop(),
     )
 

@@ -171,6 +171,11 @@ class Stage(Protocol):
 # ── Shared capture helpers ───────────────────────────────────────
 
 
+def captures_verbose_stage_io(ctx: RunContext) -> bool:
+    """Whether per-frame stage spans and replay artifacts should be retained."""
+    return ctx.journal is not None and ctx.journal_detail == "full"
+
+
 def audio_capture_allowed(ctx: RunContext, audio: Any = None) -> bool:
     """Return and, where possible, stamp the capture decision for audio."""
     stamped = getattr(audio, "_easycat_capture_allowed", None)

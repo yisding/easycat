@@ -183,7 +183,7 @@ class TestBlock:
         # The chunk must not have landed in the closed queue.
         assert q.qsize() == 1
 
-    async def test_only_one_woken_producer_claims_available_slot(self, monkeypatch):
+    async def test_woken_producer_that_loses_slot_waits_for_next_one(self, monkeypatch):
         drops: list[tuple[str, str, int, int]] = []
         q = BoundedAudioQueue(
             max_size=1,
@@ -213,12 +213,19 @@ class TestBlock:
         await asyncio.wait_for(both_waiting.wait(), timeout=0.5)
 
         await q.get()
+        done, pending = await asyncio.wait(producers, return_when=asyncio.FIRST_COMPLETED)
+        assert len(done) == 1
+        assert len(pending) == 1
+
+        # The producer that lost the first slot remains blocked within its
+        # original timeout budget and claims the next available slot.
+        await q.get()
         results = await asyncio.gather(*producers)
 
-        assert sorted(results) == [False, True]
+        assert results == [True, True]
         assert q.qsize() == 1
-        assert q.drops == 1
-        assert drops == [("race", "block_lost_race", 1, 1)]
+        assert q.drops == 0
+        assert drops == []
 
 
 # ── Flush / stale audio (Task 8.7) ────────────────────────────────

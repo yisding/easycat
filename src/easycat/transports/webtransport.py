@@ -93,9 +93,9 @@ import logging
 import struct
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
@@ -197,13 +197,14 @@ _DEGRADED_REJECTED_STREAM_FLOOD = "rejected_stream_flood"
 _DEGRADED_OUTBOUND_WRITER_CRASHED = "outbound_writer_crashed"
 _DEGRADED_BARGE_IN_RESET_FAILED = "barge_in_reset_failed"
 # Outbound backpressure relies on reading aioquic's private per-stream send
-# buffer (``_quic`` / ``_streams`` / ``sender._buffer``).  If a future aioquic
-# release renames any of these, the probe can no longer measure buffered bytes
-# and the gate silently degrades to a no-op — re-exposing the unbounded-memory
-# failure ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent.  Emitting this
-# (once per session) makes that regression visible in the journal instead of
-# silent.
+# buffer (``_quic`` / ``_streams`` / ``sender._buffer``). Server startup
+# preflights that exact path and refuses to bind when it is incompatible. This
+# degraded event remains as defense in depth for directly-constructed sessions
+# and unexpected runtime mutation.
 _DEGRADED_OUTBOUND_BACKPRESSURE_BLIND = "outbound_backpressure_blind"
+_AIOQUIC_BACKPRESSURE_ACCESS_PATH = (
+    "QuicConnectionProtocol._quic -> QuicConnection._streams -> QuicStream.sender._buffer"
+)
 
 # Signature of the per-session degraded-event emitter injected by
 # :class:`WebTransportConnectionTransport`.  ``fatal`` marks conditions that
@@ -213,6 +214,47 @@ _DegradedEmitter = Callable[..., None]
 # Type alias for the user-supplied per-session handler. Module-private — not
 # part of the public surface.
 _SessionHandler = Callable[["WebTransportConnectionTransport"], Awaitable[None]]
+
+
+class _AioquicBackpressureCompatibilityError(RuntimeError):
+    """Installed aioquic cannot support the bounded WebTransport writer."""
+
+
+def _read_aioquic_send_buffer(
+    quic_protocol: object,
+    stream_id: int,
+) -> tuple[Any | None, str | None]:
+    """Resolve aioquic's private per-stream send buffer.
+
+    The second tuple item is an incompatibility reason. A missing stream is a
+    legitimate lifecycle state and returns ``(None, None)``.
+    """
+    quic = getattr(quic_protocol, "_quic", None)
+    if quic is None:
+        return None, "QuicConnectionProtocol._quic missing"
+    streams = getattr(quic, "_streams", None)
+    if not isinstance(streams, dict):
+        return None, "QuicConnection._streams missing"
+    stream = streams.get(stream_id)
+    if stream is None:
+        return None, None
+    sender = getattr(stream, "sender", None)
+    raw_buffer = getattr(sender, "_buffer", None) if sender is not None else None
+    if raw_buffer is None:
+        return None, "QuicStream.sender._buffer missing"
+    try:
+        len(raw_buffer)
+    except TypeError:
+        return None, "QuicStream.sender._buffer is not sized"
+    return raw_buffer, None
+
+
+def _raise_aioquic_backpressure_incompatible(reason: str) -> NoReturn:
+    raise _AioquicBackpressureCompatibilityError(
+        "Installed aioquic is incompatible with EasyCat's bounded WebTransport "
+        f"writer: {reason}. Required access path: {_AIOQUIC_BACKPRESSURE_ACCESS_PATH}. "
+        "Install a supported aioquic version or upgrade EasyCat before serving traffic."
+    )
 
 
 def _noop_degraded(reason: str, detail: str = "", *, fatal: bool = False) -> None:
@@ -386,6 +428,7 @@ class _WebTransportSession:
         # reset when that stream ends so a re-opened one re-reads its header.
         self._inbound_rate: int | None = None
         self._inbound_rate_hdr = bytearray()
+        self._inbound_resampler = PCM16StreamResampler(target_sample_rate)
         # Sample rate of the currently-open server→client audio stream, or
         # None when no audio stream is open.  A change opens a fresh stream
         # (see ``_outbound_writer`` / ``_end_audio_stream``).
@@ -431,6 +474,7 @@ class _WebTransportSession:
             except asyncio.CancelledError:
                 pass
         self._writer_task = None
+        self._inbound_resampler.reset()
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
         if stream_id in self._rejected_stream_ids:
@@ -461,6 +505,14 @@ class _WebTransportSession:
             self._pending_tags.pop(stream_id, None)
             self._rejected_stream_ids.discard(stream_id)
             if stream_id == self._inbound_audio_stream_id:
+                tail = self._inbound_resampler.finish()
+                if tail:
+                    _enqueue_inbound_chunk(
+                        self._in_queue,
+                        AudioChunk(data=tail, format=self._audio_format),
+                        emit_degraded=self._emit_degraded,
+                        context="WebTransport",
+                    )
                 self._inbound_audio_stream_id = None
                 # A re-opened audio stream is a fresh, self-describing
                 # stream; force its inline rate header to be re-read.
@@ -608,15 +660,17 @@ class _WebTransportSession:
             if not pcm:
                 return
             data = pcm
-        chunk = AudioChunk(data=data, format=self._inbound_format)
-        if chunk.format.sample_rate != self._target_rate:
-            chunk = resample_chunk(chunk, self._target_rate)
-        _enqueue_inbound_chunk(
-            self._in_queue,
-            chunk,
-            emit_degraded=self._emit_degraded,
-            context="WebTransport",
+        converted = self._inbound_resampler.process(
+            data,
+            self._inbound_format.sample_rate,
         )
+        if converted:
+            _enqueue_inbound_chunk(
+                self._in_queue,
+                AudioChunk(data=converted, format=self._audio_format),
+                emit_degraded=self._emit_degraded,
+                context="WebTransport",
+            )
 
     def _handle_control_bytes(self, data: bytes) -> None:
         for msg in self._control_codec.feed(data):
@@ -763,36 +817,28 @@ class _WebTransportSession:
         because the writer is parked here, not suspended mid-send.  While we
         wait, ``_out_queue`` fills and ``send_audio`` starts returning False
         — i.e. TTS is dropped under sustained backpressure, which is the
-        documented behaviour.  ``aioquic``'s private ``_streams`` /
-        ``sender._buffer`` are read defensively (``getattr``); there is no
-        public accessor for per-stream buffered bytes.  If any of those private
-        accessors is missing (a future aioquic rename), the probe can't measure
-        the buffer and the gate would silently no-op, so we emit
-        ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND`` once to make that regression
-        observable rather than a silent unbounded-memory hazard.
+        documented behaviour. There is no public aioquic accessor for
+        per-stream buffered bytes, so server startup preflights the private
+        ``_quic`` / ``_streams`` / ``sender._buffer`` path before binding. The
+        defensive checks here still emit
+        ``_DEGRADED_OUTBOUND_BACKPRESSURE_BLIND`` for directly-constructed
+        sessions or unexpected runtime mutation.
         """
-        quic = getattr(self._quic_protocol, "_quic", None)
-        if quic is None:
-            self._report_backpressure_blind("QuicConnectionProtocol._quic missing")
-            return
         while not self._on_close.is_set():
             sid = self._outbound_audio_stream_id
             if sid is None:
                 # No outbound audio stream open yet — a legitimate idle state,
                 # not an aioquic rename, so don't flag the probe as blind.
                 return
-            streams = getattr(quic, "_streams", None)
-            if not isinstance(streams, dict):
-                self._report_backpressure_blind("QuicConnection._streams missing")
+            raw_buffer, incompatibility = _read_aioquic_send_buffer(
+                self._quic_protocol,
+                sid,
+            )
+            if incompatibility is not None:
+                self._report_backpressure_blind(incompatibility)
                 return
-            stream = streams.get(sid)
-            if stream is None:
-                # Stream not yet registered or already finished — legitimate.
-                return
-            sender = getattr(stream, "sender", None)
-            raw_buffer = getattr(sender, "_buffer", None) if sender is not None else None
             if raw_buffer is None:
-                self._report_backpressure_blind("QuicStream.sender._buffer missing")
+                # Stream not yet registered or already finished — legitimate.
                 return
             if len(raw_buffer) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
                 return
@@ -801,11 +847,10 @@ class _WebTransportSession:
     def _report_backpressure_blind(self, reason: str) -> None:
         """Emit the backpressure-blind degraded signal at most once per session.
 
-        Called when an aioquic private accessor the outbound backpressure gate
-        depends on is missing (most likely an upstream rename).  When that
-        happens the gate can no longer measure buffered bytes and silently
-        degrades to a no-op, re-exposing the unbounded-memory failure
-        ``_OUTBOUND_SEND_BUFFER_HIGH_WATER`` exists to prevent — so surface it.
+        Server startup rejects known-incompatible aioquic versions before
+        binding. This runtime signal is defense in depth for custom
+        integrations that construct sessions directly or for an accessor that
+        disappears unexpectedly after startup.
         """
         if self._backpressure_blind_reported:
             return
@@ -1096,6 +1141,44 @@ def _protocol_factory(
     return factory
 
 
+def _preflight_aioquic_backpressure_api() -> None:
+    """Fail startup when aioquic no longer exposes the bounded-writer probe.
+
+    The probe uses a disposable client-side ``QuicConnection`` to create one
+    real stream, then resolves the exact private access path used by live
+    WebTransport sessions. No socket is opened and no traffic is sent.
+    """
+    configuration_module = require_module(
+        "aioquic.quic.configuration",
+        extra="webtransport",
+        purpose="WebTransport transport",
+    )
+    connection_module = require_module(
+        "aioquic.quic.connection",
+        extra="webtransport",
+        purpose="WebTransport transport",
+    )
+    try:
+        configuration = configuration_module.QuicConfiguration(is_client=True)
+        quic = connection_module.QuicConnection(configuration=configuration)
+        protocol = _get_protocol_class()(quic)
+        stream_id = quic.get_next_available_stream_id()
+        quic.send_stream_data(stream_id, b"\0")
+        raw_buffer, incompatibility = _read_aioquic_send_buffer(protocol, stream_id)
+        if incompatibility is not None:
+            _raise_aioquic_backpressure_incompatible(incompatibility)
+        if raw_buffer is None:
+            _raise_aioquic_backpressure_incompatible(
+                "probe stream missing after QuicConnection.send_stream_data"
+            )
+    except _AioquicBackpressureCompatibilityError:
+        raise
+    except Exception as exc:
+        _raise_aioquic_backpressure_incompatible(
+            f"compatibility probe raised {type(exc).__name__}"
+        )
+
+
 # ── Per-session transport ──────────────────────────────────────────
 
 
@@ -1379,6 +1462,7 @@ class WebTransportServer:
         if self._started:
             return
         quic_config = _build_quic_configuration(self._config.certfile, self._config.keyfile)
+        _preflight_aioquic_backpressure_api()
 
         factory = _protocol_factory(
             accept_path=self._config.path,

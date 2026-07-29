@@ -60,6 +60,9 @@ class RemoteResponsesAPIBridge:
         HTTP request timeout in seconds.
     metadata:
         Optional metadata dict to include in every request.
+    reasoning_effort:
+        Optional Responses API reasoning effort. Leave unset to preserve the
+        selected model's default; latency-sensitive callers can pass ``"none"``.
     """
 
     COMMITTABLE_BOUNDARIES: ClassVar[Mapping[UnitKind | str, CommitRule]] = {
@@ -74,12 +77,14 @@ class RemoteResponsesAPIBridge:
         api_key: str | None = None,
         timeout: float = 120.0,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key or os.environ.get("EASYCAT_REMOTE_AGENT_API_KEY", "")
         self._timeout = timeout
         self._metadata = metadata or {}
+        self._reasoning_effort = reasoning_effort
 
         self._client = httpx.AsyncClient(timeout=timeout)
         self._client_closed = False
@@ -478,6 +483,8 @@ class RemoteResponsesAPIBridge:
             "input": input_items,
             "stream": True,
         }
+        if self._reasoning_effort is not None:
+            body["reasoning"] = {"effort": self._reasoning_effort}
 
         if self._last_completed_response_id:
             body["previous_response_id"] = self._last_completed_response_id
