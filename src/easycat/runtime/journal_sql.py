@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import heapq
 import itertools
 import json
@@ -171,18 +172,23 @@ def _sweep_crashed_journals_if_due(root: Path, *, skip: Path) -> None:
 
 
 class _SqliteBatchCommitCoordinator:
-    """Run elapsed-time SQLite batch commits on one shared daemon thread.
+    """Schedule elapsed-time SQLite batch commits with bounded isolation.
 
-    A coordinator avoids both a thread per live session and a fresh
-    ``threading.Timer`` for every 100 ms batch. Heap entries carry a journal
-    generation, so stale deadlines become cheap no-ops after a count/turn/
-    lifecycle boundary commits the transaction first.
+    One coordinator maintains the deadline heap while a small worker pool runs
+    due commits. A stalled filesystem operation can occupy one worker without
+    delaying every other journal. Heap entries carry a journal generation, so
+    stale deadlines become cheap no-ops after a count/turn/lifecycle boundary
+    commits the transaction first.
     """
 
     _condition = threading.Condition()
     _deadlines: list[tuple[float, int, weakref.ReferenceType[Any], int]] = []
     _counter = itertools.count()
     _thread: threading.Thread | None = None
+    _executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=4,
+        thread_name_prefix="easycat-sqlite-journal-commit",
+    )
 
     @classmethod
     def schedule(cls, journal: SqliteJournal, deadline: float, generation: int) -> None:
@@ -217,7 +223,7 @@ class _SqliteBatchCommitCoordinator:
                     break
             journal = journal_ref()
             if journal is not None:
-                journal._commit_scheduled_batch(generation)
+                cls._executor.submit(journal._commit_scheduled_batch, generation)
 
 
 class _SqlJournalBase:

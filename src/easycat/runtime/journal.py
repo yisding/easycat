@@ -183,7 +183,25 @@ async def append_journal_record_async(
         "output_ref": output_ref,
     }
     if bool(getattr(journal, "writes_block", False)):
-        return await asyncio.to_thread(journal.append, **kwargs)
+        worker = asyncio.create_task(asyncio.to_thread(journal.append, **kwargs))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Cancelling an asyncio wrapper cannot stop a synchronous worker.
+            # Keep ownership until the append is finished so teardown cannot
+            # close the backend while an untracked write is still in flight.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                worker.result()
+            except BaseException:
+                # Cancellation remains the caller-visible outcome; retrieving
+                # the result prevents a detached worker exception warning.
+                pass
+            raise
     return journal.append(**kwargs)
 
 

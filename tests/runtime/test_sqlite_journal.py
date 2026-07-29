@@ -577,6 +577,72 @@ class TestSqliteJournalBatching:
         finally:
             journal.close()
 
+    async def test_cancelled_async_append_waits_for_worker_completion(self, tmp_path):
+        journal = SqliteJournal("cancelled-off-loop", data_dir=tmp_path)
+        loop = asyncio.get_running_loop()
+        append_started = asyncio.Event()
+        release_append = threading.Event()
+        original = journal._do_append
+
+        def _blocked_append(*args, **kwargs):
+            loop.call_soon_threadsafe(append_started.set)
+            release_append.wait(timeout=1)
+            return original(*args, **kwargs)
+
+        journal._do_append = _blocked_append
+        task = asyncio.create_task(
+            append_journal_record_async(
+                journal,
+                kind=JournalRecordKind.EVENT,
+                name="stage_start",
+                session_id="cancelled-off-loop",
+            )
+        )
+        try:
+            await asyncio.wait_for(append_started.wait(), timeout=0.2)
+
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+
+            release_append.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=0.2)
+            assert journal.latest_sequence == 1
+        finally:
+            release_append.set()
+            if not task.done():
+                await asyncio.gather(task, return_exceptions=True)
+            journal.close()
+
+    def test_stalled_scheduled_commit_does_not_block_other_journals(self, tmp_path):
+        first = SqliteJournal("stalled-commit", data_dir=tmp_path)
+        second = SqliteJournal("independent-commit", data_dir=tmp_path)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_committed = threading.Event()
+
+        def _stalled_commit(_generation: int) -> None:
+            first_started.set()
+            release_first.wait(timeout=1)
+
+        def _record_second_commit(_generation: int) -> None:
+            second_committed.set()
+
+        first._commit_scheduled_batch = _stalled_commit
+        second._commit_scheduled_batch = _record_second_commit
+        try:
+            deadline = time.monotonic()
+            journal_sql_module._SqliteBatchCommitCoordinator.schedule(first, deadline, 1)
+            journal_sql_module._SqliteBatchCommitCoordinator.schedule(second, deadline, 1)
+
+            assert first_started.wait(timeout=0.2)
+            assert second_committed.wait(timeout=0.2)
+        finally:
+            release_first.set()
+            first.close()
+            second.close()
+
 
 class TestCrashRecovery:
     def test_unclean_shutdown_detected(self, tmp_path):
