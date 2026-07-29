@@ -141,12 +141,16 @@ async def test_drain_does_not_await_the_current_error_handler_task():
     probe = _ConfigProbe(_Config())
     current = asyncio.current_task()
     assert current is not None
+    sibling = asyncio.create_task(asyncio.Event().wait())
     probe._emit_tasks.add(current)
+    probe._emit_tasks.add(sibling)
     try:
         async with asyncio.timeout(0.1):
             await probe._drain_emit_tasks()
     finally:
         probe._emit_tasks.discard(current)
+        sibling.cancel()
+        await asyncio.gather(sibling, return_exceptions=True)
 
 
 def test_get_package_version_returns_unknown_for_missing_package():

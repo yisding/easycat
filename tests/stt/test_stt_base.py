@@ -162,6 +162,18 @@ async def test_base_end_stream_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_base_close_ends_an_active_stream():
+    stt = EchoSTT()
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+
+    await stt.close()
+
+    assert stt._running is False
+    assert [event.text async for event in stt.events()] == ["test transcript"]
+
+
+@pytest.mark.asyncio
 async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
     class PausingWebSocketSTT(WebSocketSTTBase):
         def __init__(self) -> None:
