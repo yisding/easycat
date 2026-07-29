@@ -75,6 +75,12 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   artifacts.
 - It is **PII-bearing by design**: it records transcripts, agent output, and tool
   arguments so a session can be faithfully replayed and debugged.
+- `journal_redaction="secrets"` (the default) preserves that replay content
+  while removing credentials. Set `journal_redaction="pii"` to irreversibly
+  redact phone numbers, URLs, request IDs, home paths, prompts, transcripts,
+  and provider text at write time. Redacted CLI views and coding-agent context
+  packs apply their own PII policy regardless; raw journals and debug bundles
+  should still be treated as sensitive.
 - It is gated by `debug=` (see orthogonality below): `debug="off"` does not
   journal; `debug="light"`/`debug="full"` do.
 - The light journal is bounded by `journal_capacity` (default `10_000`

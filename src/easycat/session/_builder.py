@@ -122,6 +122,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         artifact_store=session._artifact_store,
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
+        redaction=cfg.journal_redaction,
     )
     journal_sink.subscribe()
     warmup = WarmupRunner(

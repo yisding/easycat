@@ -57,6 +57,19 @@ def test_easycat_config_validates_journal_capacity(capacity):
         )
 
 
+def test_easycat_config_defaults_journal_redaction_to_secrets():
+    config = EasyConfig(openai_api_key="test-key")
+    assert config.journal_redaction == "secrets"
+
+
+def test_easycat_config_validates_journal_redaction():
+    with pytest.raises(ValueError, match="Invalid journal_redaction"):
+        EasyConfig(
+            openai_api_key="test-key",
+            journal_redaction="everything",  # type: ignore[arg-type]
+        )
+
+
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.

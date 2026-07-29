@@ -99,10 +99,24 @@ class TestSqliteJournalBasics:
         record = journal.read()[0]
         assert record.data == {
             "api_key": REDACTED_SECRET,
-            "text": f"phone {REDACTED_PHONE}",
+            "text": "phone +1 415 555 1212",
         }
         assert record.error is not None
         assert record.error.message == f"Authorization: {REDACTED_SECRET}"
+
+    def test_append_can_apply_pii_write_filter(self, tmp_path):
+        journal = SqliteJournal("pii-session", data_dir=tmp_path, redaction="pii")
+        try:
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="sensitive",
+                session_id="pii-session",
+                data={"text": "phone +1 415 555 1212"},
+            )
+
+            assert journal.read()[0].data["text"] == f"phone {REDACTED_PHONE}"
+        finally:
+            journal.close()
 
     def test_monotonic_sequence(self, journal):
         seqs = []

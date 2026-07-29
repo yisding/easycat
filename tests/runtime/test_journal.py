@@ -40,6 +40,10 @@ class TestInMemoryRingBuffer:
         with pytest.raises(ValueError, match="capacity must be a positive integer"):
             InMemoryRingBuffer(capacity=capacity)  # type: ignore[arg-type]
 
+    def test_rejects_unknown_redaction_policy(self):
+        with pytest.raises(ValueError, match="Unknown redaction policy"):
+            InMemoryRingBuffer(redaction="everything")  # type: ignore[arg-type]
+
     def test_append_and_read(self):
         j = InMemoryRingBuffer(capacity=100)
         seq = j.append(
@@ -74,10 +78,21 @@ class TestInMemoryRingBuffer:
         record = j.read()[0]
         assert record.data == {
             "api_key": REDACTED_SECRET,
-            "text": f"phone {REDACTED_PHONE}",
+            "text": "phone +1 415 555 1212",
         }
         assert record.error is not None
         assert record.error.message == f"Authorization: {REDACTED_SECRET}"
+
+    def test_append_can_apply_pii_write_filter(self):
+        j = InMemoryRingBuffer(capacity=100, redaction="pii")
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="sensitive",
+            session_id="s1",
+            data={"text": "phone +1 415 555 1212"},
+        )
+
+        assert j.read()[0].data["text"] == f"phone {REDACTED_PHONE}"
 
     def test_monotonic_sequence(self):
         j = InMemoryRingBuffer(capacity=1000)
