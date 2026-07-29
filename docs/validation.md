@@ -50,6 +50,14 @@ the fast dev loop (`just test-fast`, `just cov`, and
 still run them. Some named guard lanes also own behavioral CLI and runtime
 tests, so `uv run pytest -m guard` is useful for the prose overlay but is not a
 replacement for the relevant named guard command above.
+
+Tests marked `integration_external` provision SDKs, binaries, or services and
+are excluded from bare `pytest`, `just test`, and `just check`. Run that lane
+explicitly with `uv run pytest -m integration_external`.
+Tests marked `integration_live` are also excluded from the xdist-backed
+`just test` and `just check` recipes; run their provider lane explicitly and
+serially so session-scoped paid fixtures are not duplicated across workers.
+
 Each run writes an isolated report under
 `.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
 logs, and updates `.easycat/validation/latest.json` after the report is

@@ -18,6 +18,7 @@ from easycat.stages.base import (
     StageStateSnapshot,
     audio_capture_allowed,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -47,7 +48,7 @@ class TTSStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = journal_ctx(ctx, self._journal)
-        capture_enabled = ctx.journal is not None or ctx.artifact_store is not None
+        capture_enabled = captures_verbose_stage_io(ctx)
         started = time.perf_counter()
         state_before = self.snapshot_state() if capture_enabled else None
         start_sequence = None

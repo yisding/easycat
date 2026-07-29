@@ -96,6 +96,32 @@ def test_validate_quick_cli_json_uses_standard_stdout_envelope(
     assert payload["validation"]["kind"] == "validation_run"
 
 
+@pytest.mark.parametrize("json_output", [False, True])
+def test_validate_quick_rejects_non_source_checkout(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    json_output: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("EASYCAT_VALIDATION_PYTEST_COMMAND", raising=False)
+    monkeypatch.delenv("EASYCAT_VALIDATION_TEST_PATHS", raising=False)
+    monkeypatch.delenv("EASYCAT_VALIDATION_TEST_ROOT", raising=False)
+    args = ["validate", "quick", *(["--json"] if json_output else [])]
+
+    result = cli.invoke(app, args)
+
+    assert result.exit_code == 2
+    if json_output:
+        payload = json.loads(result.stdout)
+        assert payload["command"] == "validate quick"
+        assert payload["status"] == "error"
+        assert payload["exit_code"] == 2
+        assert "require the EasyCat source checkout" in payload["message"]
+    else:
+        assert "require the EasyCat source checkout" in result.stderr
+
+
 def test_validate_contracts_cli_json_uses_standard_stdout_envelope(
     cli: CliRunner,
     tmp_path: Path,
