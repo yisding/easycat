@@ -31,9 +31,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Hashable, Iterable
 from functools import partial
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+
+if TYPE_CHECKING:
+    from easycat.session import Session
 
 KeyT = TypeVar("KeyT", bound=Hashable)
+ConnectionT = TypeVar("ConnectionT")
+SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +94,7 @@ async def cancel_handler_tasks(
         await _safe_await(asyncio.gather(*pending, return_exceptions=True), timeout_s=timeout_s)
 
 
-class WebSocketSessionRuntime:
+class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
     """Own one raw-WebSocket server's live session and drain bookkeeping."""
 
     def __init__(
@@ -97,10 +102,13 @@ class WebSocketSessionRuntime:
         *,
         manager: Any,
         max_sessions: int,
-        session_factory: Callable[[object], object | Awaitable[object | None]],
+        session_factory: Callable[
+            [ConnectionT],
+            SessionT | None | Awaitable[SessionT | None],
+        ],
         runtime_feedback: bool = False,
         capacity_reason: str = "Server is at the configured session limit",
-        on_session: Callable[[object], Callable[[], None] | None] | None = None,
+        on_session: Callable[[SessionT], Callable[[], None] | None] | None = None,
     ) -> None:
         self.manager = manager
         self.gate: CapacityGate[int] = CapacityGate(max_sessions)
@@ -108,11 +116,11 @@ class WebSocketSessionRuntime:
         self._runtime_feedback = runtime_feedback
         self._capacity_reason = capacity_reason
         self._on_session = on_session
-        self._sessions: dict[int, object] = {}
-        self._connections: dict[int, object] = {}
+        self._sessions: dict[int, SessionT] = {}
+        self._connections: dict[int, ConnectionT] = {}
         self._handler_tasks: set[asyncio.Task[object]] = set()
 
-    async def handle(self, connection: object) -> None:
+    async def handle(self, connection: ConnectionT) -> None:
         """Build and run one session, deferring teardown while draining."""
         task = asyncio.current_task()
         if task is not None:
@@ -127,7 +135,7 @@ class WebSocketSessionRuntime:
             if task is not None:
                 self._handler_tasks.discard(task)
 
-    async def _run_connection(self, connection: object) -> None:
+    async def _run_connection(self, connection: ConnectionT) -> None:
         key = id(connection)
         cleanup: Callable[[], None] | None = None
         try:
@@ -145,7 +153,7 @@ class WebSocketSessionRuntime:
             if self._runtime_feedback:
                 from easycat.helpers import attach_runtime_feedback
 
-                attach_runtime_feedback(session)
+                attach_runtime_feedback(cast("Session", session))
             await self.manager.add(key, session)
             if self.gate.is_draining:
                 # Shutdown began in the final scheduling window of startup.
@@ -188,6 +196,7 @@ class WebSocketSessionRuntime:
             force_after=True,
             force_timeout_s=max(force_timeout_s, 0.0),
         )
+        assert force_deadline is not None
         await close_websocket_connections(
             self._connections.values(),
             timeout_s=_remaining_timeout(force_deadline),
@@ -209,7 +218,7 @@ class WebSocketSessionRuntime:
         self._sessions.clear()
         self._connections.clear()
 
-    def _active_session_pairs(self) -> list[tuple[int, object]]:
+    def _active_session_pairs(self) -> list[tuple[int, SessionT]]:
         return [
             (key, self._sessions[key]) for key in self.gate.active_keys() if key in self._sessions
         ]
@@ -463,6 +472,14 @@ def _deadline_after(timeout_s: float | None) -> float | None:
     if timeout_s is None:
         return None
     return asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+
+
+@overload
+def _remaining_timeout(deadline: float) -> float: ...
+
+
+@overload
+def _remaining_timeout(deadline: None) -> None: ...
 
 
 def _remaining_timeout(deadline: float | None) -> float | None:

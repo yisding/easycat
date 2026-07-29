@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
 
-from easycat._provider_registry import sensitive_api_domains
+from easycat._provider_domains import sensitive_api_domains
 
 REDACTION_VERSION = 1
 
@@ -73,14 +73,6 @@ _URL_QUERY_SECRET_RE = re.compile(
     r"[^&=#\s]*(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|"
     r"password|signature|credential)[^&=#\s]*|key|sig"
     r")=)[^&#\s]+"
-)
-# Provider API domains come from the STT/TTS provider catalogs, so a
-# newly registered provider's URLs are flagged without touching this file.
-_SENSITIVE_URL_RE = re.compile(
-    r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
-    + "|".join(re.escape(domain) for domain in sensitive_api_domains())
-    + r")[^\s\"')\]}]*",
-    re.IGNORECASE,
 )
 _SECRET_RE = re.compile(r"\b(?:sk|sess|key|tok)-[A-Za-z0-9_-]{12,}\b")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
@@ -234,7 +226,7 @@ def redact_value(
 
 def contains_unredacted_sensitive_text(value: str) -> bool:
     """Return True when contract artifacts still contain sensitive patterns."""
-    if any(pattern.search(value) for pattern in (_SENSITIVE_URL_RE, _SECRET_RE, _JWT_RE)):
+    if any(pattern.search(value) for pattern in (_sensitive_url_re(), _SECRET_RE, _JWT_RE)):
         return True
     for pattern in (_HEADER_SECRET_RE, _KEY_VALUE_SECRET_RE, _REQUEST_ID_RE):
         for match in pattern.finditer(value):
@@ -242,6 +234,22 @@ def contains_unredacted_sensitive_text(value: str) -> bool:
                 continue
             return True
     return False
+
+
+@functools.lru_cache(maxsize=32)
+def _compile_sensitive_url_re(domains: tuple[str, ...]) -> re.Pattern[str]:
+    alternatives = "|".join(re.escape(domain) for domain in domains)
+    if not alternatives:
+        return re.compile(r"(?!x)x")
+    return re.compile(
+        r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:" + alternatives + r")[^\s\"')\]}]*",
+        re.IGNORECASE,
+    )
+
+
+def _sensitive_url_re() -> re.Pattern[str]:
+    """Compile against the current domain snapshot, including plugin registrations."""
+    return _compile_sensitive_url_re(sensitive_api_domains())
 
 
 def redact_command(value: Any, *, policy: RedactionPolicy = "pii") -> Any:
