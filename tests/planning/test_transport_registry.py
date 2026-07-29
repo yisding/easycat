@@ -125,12 +125,26 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
     # ClassVar is False but ``EasyConfig.browser`` forces AEC on). This catches a
     # silent drift if a preset OR the mirror changes.
     from easycat.project.manifest import ProjectManifest
-    from easycat.project.schema import ProjectSection, ServerSection, VoiceProfile
+    from easycat.project.schema import (
+        ProjectSection,
+        ServerSection,
+        VoiceProfile,
+        parse_auth_reference,
+    )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-registry-test")
+    monkeypatch.setenv("TWILIO_STREAM_TOKEN_SECRET", "twilio-registry-test")
 
     for shortcut, backend in TRANSPORT_BACKENDS.items():
-        profile = VoiceProfile(name="default", transport=shortcut)
+        token = (
+            parse_auth_reference(
+                "bearer-env:TWILIO_STREAM_TOKEN_SECRET",
+                field_name="voice.default.token",
+            )
+            if shortcut == "twilio"
+            else None
+        )
+        profile = VoiceProfile(name="default", transport=shortcut, token=token)
         manifest = ProjectManifest(
             project=ProjectSection(), server=ServerSection(), profiles={"default": profile}
         )

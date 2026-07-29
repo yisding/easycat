@@ -166,13 +166,20 @@ class ProjectManifest:
         if preset == "browser":
             return EasyConfig.browser(**kwargs)
         if preset == "phone":
-            if spec.token is not None:
-                from easycat.transports.twilio_media import TwilioTransportConfig
-
-                token = spec.token.resolve(dict(os.environ))
-                kwargs["transport"] = TwilioTransportConfig(
-                    stream_token_validator=lambda candidate: compare_digest(candidate, token)
+            if spec.token is None:
+                raise EASYCAT_E602(
+                    path=str(self.source_path or "easycat.toml"),
+                    problem=(
+                        f"phone profile {profile!r} requires a token reference; "
+                        "set token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'"
+                    ),
                 )
+            from easycat.transports.twilio_media import TwilioTransportConfig
+
+            token = spec.token.resolve(dict(os.environ))
+            kwargs["transport"] = TwilioTransportConfig(
+                stream_token_validator=lambda candidate: compare_digest(candidate, token)
+            )
             return EasyConfig.phone(**kwargs)
         if preset == "mic":
             return EasyConfig.mic(**kwargs)
