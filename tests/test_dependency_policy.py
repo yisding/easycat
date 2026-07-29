@@ -94,16 +94,20 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     minimum_job = workflow[workflow.index("  minimum-dependencies:") :]
     minimum_job = minimum_job[: minimum_job.index("\n  coverage:")]
-    assert "uv sync --resolution lowest-direct --group dev" in minimum_job
+    assert "uv sync --resolution lowest-direct --upgrade --group dev" in minimum_job
     assert "--extra langchain --extra telephony --python 3.12" in minimum_job
     assert 'UV_NO_SYNC: "1"' in minimum_job
     assert "uv run --no-sync --python 3.12 easycat validate quick --show-output" in minimum_job
     for floor in (
+        '"aiohttp==3.13.3"',
         '"httpx==0.27.0"',
-        '"websockets==14.0"',
         '"langchain-core==1.2.28"',
+        '"rich==13.8.0"',
+        '"typer==0.26.0"',
+        '"websockets==14.0"',
     ):
         assert floor in minimum_job
+    assert "Assert exact direct dependency floors" in minimum_job
     assert "tests/integrations/agents/test_langchain_bridge_invoke.py" in minimum_job
     assert "tests/server/test_webrtc_routes.py" in minimum_job
 

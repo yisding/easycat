@@ -123,7 +123,7 @@ jobs:
       # Changing the resolution mode makes uv resolve a fresh minimum-direct
       # lock instead of reusing the committed highest-compatible lock.
       - run: >-
-          uv sync --resolution lowest-direct --group dev
+          uv sync --resolution lowest-direct --upgrade --group dev
           --extra langchain --extra telephony --python 3.12
       - run: uv run --no-sync --python 3.12 easycat validate quick --show-output
       # The universal project lock must satisfy unselected extras too, so
@@ -132,7 +132,16 @@ jobs:
       - name: Install exact downstream compatibility floors
         run: >-
           uv pip install --python .venv/bin/python
-          "httpx==0.27.0" "websockets==14.0" "langchain-core==1.2.28"
+          "aiohttp==3.13.3" "httpx==0.27.0" "langchain-core==1.2.28"
+          "rich==13.8.0" "typer==0.26.0" "websockets==14.0"
+      - name: Assert exact direct dependency floors
+        run: >-
+          .venv/bin/python -c
+          'from importlib.metadata import version;
+          expected={"aiohttp":"3.13.3","httpx":"0.27.0","langchain-core":"1.2.28",
+          "rich":"13.8.0","typer":"0.26.0","websockets":"14.0"};
+          actual={name:version(name) for name in expected};
+          assert actual == expected, actual'
       - name: Test exact downstream compatibility floors
         run: >-
           .venv/bin/python -m pytest -q
