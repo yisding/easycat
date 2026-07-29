@@ -68,6 +68,25 @@ run(EasyConfig.mic(stt=FixedSTT(), agent=my_agent))
 
 See `examples/custom_stt_provider.py` for a runnable wrapper-style variant.
 
+### Receiving the session EventBus
+
+If an injected provider emits provider-scoped errors or lifecycle events,
+implement the public synchronous attachment hook:
+
+```python
+from easycat import EventBus
+
+
+def set_event_bus(self, event_bus: EventBus) -> None:
+    if self._event_bus is None:  # preserve a bus explicitly supplied by the app
+        self._event_bus = event_bus
+```
+
+Session calls `set_event_bus()` before provider work starts. This is the
+instance-injection contract; the provider may store its config as `config`,
+`_settings`, or anything else. Private `_config` / `_event_bus` probing remains
+only for compatibility with older providers.
+
 ## Verifying conformance
 
 ```python
@@ -120,11 +139,12 @@ register_stt_provider(
 ```
 
 `YourSTT` must accept a `YourSTTConfig` instance as its constructor argument —
-the same contract built-in providers follow. To receive the session
-`EventBus`, declare `event_bus: EventBus | None = None` on `YourSTTConfig`; the
-factory injects the bus into that optional config field before constructing the
-provider. Credentialed providers declare `env_var=...` and need an `api_key`
-field; local/self-hosted providers omit both.
+the same contract built-in providers follow. A config that declares
+`event_bus: EventBus | None = None` receives the session bus before provider
+construction; no provider is required to consume it. Live instances use
+`set_event_bus()` as described above. Credentialed providers declare
+`env_var=...` and need an `api_key` field; local/self-hosted providers omit
+both.
 For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).

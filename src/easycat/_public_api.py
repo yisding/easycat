@@ -114,6 +114,7 @@ _register(
 _register(
     "easycat.providers",
     "EchoCanceller",
+    "EventBusBindable",
     "NoiseReducer",
     "STTProvider",
     "Transport",

@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
     from easycat.providers import (
         EchoCanceller,
+        EventBusBindable,
         NoiseReducer,
         STTProvider,
         Transport,

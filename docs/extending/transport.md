@@ -92,6 +92,13 @@ session = create_session(EasyConfig(transport=MemoryTransport(), agent=my_agent)
 structurally, so any object with the audio surface above is accepted. See
 `examples/custom_transport.py` for a runnable wrapper-style variant.
 
+To emit `TransportDegraded` or other provider-scoped events on the session
+bus, expose a synchronous `set_event_bus(event_bus)` method. Session calls it
+before `connect()`. `AudioQueueMixin` already implements this hook and preserves
+an explicitly configured bus, so subclasses such as `MemoryTransport` need no
+additional wiring. Private `_event_bus` attachment remains a legacy fallback,
+not an extension contract.
+
 ## Verifying conformance
 
 ```python

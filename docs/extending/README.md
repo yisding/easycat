@@ -39,6 +39,12 @@ run(
 shortcut string or config dataclass: `stt=`, `tts=`, `vad=`,
 `noise_reduction=`, `echo_cancellation=`, `transport=`, and `agent=`.
 
+An instance that emits provider-scoped events implements synchronous
+`set_event_bus(event_bus)`. Session calls that public hook for every audio
+stage before work starts; providers no longer need to expose a guessed private
+attribute name. Registered config dataclasses can instead declare an optional
+`event_bus` field, which session construction fills when unset.
+
 Reusable STT, TTS, VAD, noise-reducer, and echo-canceller packages can register
 a provider/config pair. Registration adds shortcut parsing, planner metadata,
 readiness probes, and lazy package discovery while preserving direct injection:

@@ -63,6 +63,24 @@ run(EasyConfig.mic(tts=SilenceTTS(), agent=my_agent))
 
 See `examples/custom_tts_provider.py` for a runnable wrapper-style variant.
 
+### Receiving the session EventBus
+
+An injected TTS provider that reports provider-scoped errors or lifecycle
+events implements the public synchronous hook:
+
+```python
+from easycat import EventBus
+
+
+def set_event_bus(self, event_bus: EventBus) -> None:
+    if self._event_bus is None:
+        self._event_bus = event_bus
+```
+
+Session calls it before synthesis starts. This contract is independent of how
+the provider stores its config; private `_config` / `_event_bus` probing remains
+only as a compatibility fallback.
+
 ## Verifying conformance
 
 ```python
@@ -109,11 +127,12 @@ register_tts_provider(
 ```
 
 `YourTTS` must accept a `YourTTSConfig` instance as its constructor argument —
-the same contract built-in providers follow. To receive the session
-`EventBus`, declare `event_bus: EventBus | None = None` on `YourTTSConfig`; the
-factory injects the bus into that optional config field before constructing the
-provider. Credentialed providers declare `env_var=...` and need an `api_key`
-field; local/self-hosted providers omit both.
+the same contract built-in providers follow. A config that declares
+`event_bus: EventBus | None = None` receives the session bus before provider
+construction; no provider is required to consume it. Live instances use
+`set_event_bus()` as described above. Credentialed providers declare
+`env_var=...` and need an `api_key` field; local/self-hosted providers omit
+both.
 For the `"yours/voice-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
 something else, e.g. ElevenLabs' `model_id`).
