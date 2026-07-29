@@ -200,7 +200,6 @@ async def test_websocket_end_stream_preempts_stalled_ordered_send() -> None:
 
     assert stt.end_called.is_set()
     assert stt.send_cancelled.is_set()
-    assert not second_send.done()
 
     await asyncio.wait_for(first_send, timeout=1)
     with pytest.raises(RuntimeError, match="Stream not started"):

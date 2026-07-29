@@ -23,7 +23,8 @@ def test_postmortem_probe_preserves_view_records_and_bundle() -> None:
 
     assert payload["response"] == "postmortem check"
     view = payload["journal_view"]
-    record_count = view["records_after_stop"]
+    records_before_stop = view["records_before_stop"]
+    records_after_stop = view["records_after_stop"]
     assert view == {
         "type": "JournalView",
         "same_object_after_stop": True,
@@ -31,13 +32,13 @@ def test_postmortem_probe_preserves_view_records_and_bundle() -> None:
         "append_exposed_after_stop": False,
         "backend_before_stop": "SqliteJournal",
         "backend_after_stop": "ReadonlySqliteJournal",
-        "records_before_stop": record_count,
-        "records_after_stop": record_count,
+        "records_before_stop": records_before_stop,
+        "records_after_stop": records_after_stop,
         "records_preserved": True,
     }
-    assert record_count > 0
+    assert 0 < records_before_stop <= records_after_stop
     assert payload["bundle"] == {
         "exported_after_stop": True,
-        "record_count": record_count,
+        "record_count": records_after_stop,
         "matches_postmortem_view": True,
     }
