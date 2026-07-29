@@ -273,9 +273,12 @@ For public Twilio deployments:
 journal per session under `EasyConfig.data_dir` when set, otherwise
 `EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
-for the exact durability guarantees and storage layout. That promise only
-holds if the resolved data directory is a **persistent** path: a container
-without a volume mounted there, or a process directory that gets wiped on redeploy,
+for the exact durability guarantees and storage layout. Records are committed
+in bounded batches (100 ms / 100 records, plus every turn boundary), and the
+SQLite WAL is auto-checkpointed during long calls; persistent journal work is
+offloaded from the live audio loop. That promise only holds if the resolved
+data directory is a **persistent** path: a container without a
+volume mounted there, or a process directory that gets wiped on redeploy,
 silently discards every journal. The Docker-specific version of this guidance
 — including the image's `VOLUME` declaration and named-volume compose
 config — lives in
