@@ -37,6 +37,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -63,6 +64,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -88,6 +90,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -111,6 +114,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -174,6 +178,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -192,11 +197,12 @@ jobs:
         # attacker-controllable input.
         run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
       # The unused requires_extra pytest marker was dropped (it marked zero
-      # tests). Extras coverage relies on the import smoke above plus the
-      # offline contract tests below, whose importorskip gates now run for
-      # real with this cell's SDK installed.
-      - name: Offline contract tests with the real SDK present
-        run: uv run --no-sync --python 3.12 pytest tests/contracts -q -m "not integration_live"
+      # tests). Extras coverage relies on the import smoke above, the offline
+      # contract tests, and the SDK-gated bridge tests. The latter live under
+      # tests/integrations/agents and execute for real in the matching extras
+      # cell while self-skipping in unrelated cells.
+      - name: Offline contracts and SDK-gated bridge tests
+        run: uv run --no-sync --python 3.12 pytest tests/contracts tests/integrations/agents -q -m "not integration_live"
 
   live-canaries:
     name: Live Provider Canaries
@@ -216,6 +222,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -260,6 +267,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"

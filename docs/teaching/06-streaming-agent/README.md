@@ -128,7 +128,7 @@
  from easycat.vad.factory import create_vad
 
  PREROLL_FRAMES = 15
- MODEL = "gpt-4o-mini"
+ MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch05-blocking-{int(time.time())}"
 +SESSION_ID = f"ch06-streaming-{int(time.time())}"
@@ -140,7 +140,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -76,50 +82,120 @@
+@@ -76,51 +82,121 @@
                  self._preroll.append(chunk)
 
 
@@ -187,6 +187,7 @@
 +    """
 +    stream = await client.chat.completions.create(
          model=MODEL,
+         reasoning_effort="none",
          messages=[
              {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
              {"role": "user", "content": user_text},
@@ -298,7 +299,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -130,53 +206,20 @@
+@@ -131,53 +207,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -364,7 +365,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -185,13 +228,10 @@
+@@ -186,13 +229,10 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -380,7 +381,7 @@
          },
      )
      if total_gap is None:
-@@ -207,7 +247,7 @@
+@@ -208,7 +248,7 @@
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
@@ -389,7 +390,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -220,11 +260,11 @@
+@@ -221,11 +261,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -403,7 +404,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -260,10 +300,15 @@
+@@ -261,10 +301,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
@@ -492,6 +493,7 @@ async def stream_sentences_to_tts(
     """
     stream = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
             {"role": "user", "content": user_text},
@@ -706,9 +708,10 @@ the complete reply has been synthesized and handed to the transport.
 Neither value is acoustic playback time — measuring that needs a
 loopback, as chapter 5 explains.
 
-On a typical 3-sentence reply with `gpt-4o-mini`, expect
-first-audio to drop from ~3000 ms (blocking) to ~800-1200 ms
-(streaming) — roughly 3×.
+Measure this on your own provider, model tier, prompt, and region.
+Streaming should move first accepted audio earlier than the blocking
+version because it no longer waits for the complete reply, but the
+millisecond delta and ratio are workload-specific.
 
 ## Sidebar — speech-friendly output
 
@@ -766,8 +769,8 @@ the final arrived.
 
 ## Try breaking it
 
-Add `MODEL = "gpt-4o"` (bigger, slower). Re-run, then decompose each
-bundle:
+Change `MODEL` from latency-first `gpt-5.6-luna` to quality-first
+`gpt-5.6-sol`. Re-run, then decompose each bundle:
 
 ```bash
 uv run python docs/teaching/06-streaming-agent/measure_start.py PATH

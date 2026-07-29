@@ -447,8 +447,17 @@ class STTCommitter:
         await self._runtime_scope.cancel_and_drain(self.FINAL_CLOSE_TASK_NAME)
         self._pause_commit_task = None
         self._segment_commit_task = None
+        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
         try:
-            await self._stt_getter().end_stream()
+            if timeout:
+                await asyncio.wait_for(self._stt_getter().end_stream(), timeout=timeout)
+            else:
+                await self._stt_getter().end_stream()
+        except TimeoutError:
+            provider = self._stt_getter()
+            name = resolve_provider_name(provider, "stt")
+            err = STTTimeoutError(name, timeout or 0.0)
+            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
         except Exception:
             logger.debug("STT end_stream during cancel raised", exc_info=True)
         self._active = False

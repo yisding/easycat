@@ -31,8 +31,10 @@ if TYPE_CHECKING:
 __all__ = ["speak", "transcribe_file"]
 
 
-def _resolve_api_key(provider: str, api_key: str | None, *, catalog: ProviderCatalog) -> str:
-    """Resolve an API key from the factory catalog's env-var mapping.
+def _resolve_api_key(
+    provider: str, api_key: str | None, *, catalog: ProviderCatalog
+) -> str | None:
+    """Resolve an API key from the factory catalog's optional env-var mapping.
 
     Validates ``provider`` against the catalog (raising the shared
     fuzzy-matched EASYCAT_E104 on an unknown name) and reads the key from
@@ -44,6 +46,8 @@ def _resolve_api_key(provider: str, api_key: str | None, *, catalog: ProviderCat
     if api_key:
         return api_key
     env_var = catalog.env_vars[name]
+    if env_var is None:
+        return None
     resolved = os.getenv(env_var, "")
     if not resolved:
         raise RuntimeError(

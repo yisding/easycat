@@ -49,6 +49,14 @@ updates:
           - "*"
         update-types:
           - "major"
+  # Keep immutable Docker base-image digests current without making builds
+  # depend on whatever a mutable tag happens to resolve to on that day.
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
   # Docs toolchain (requirements-docs.txt, hash-pinned). Best-effort: if the
   # first PR cannot regenerate `--require-hashes` cleanly, drop this block.
   - package-ecosystem: "pip"

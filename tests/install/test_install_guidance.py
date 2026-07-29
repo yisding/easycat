@@ -153,10 +153,10 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "local",
         "openai",
         "openai-agents",
-        "rnnoise",
         "silero-vad",
         "smart-turn",
     }.issubset(bundled_extras)
+    assert "rnnoise" not in bundled_extras
 
     redundant: list[str] = []
     extra_pattern = "|".join(re.escape(extra) for extra in bundled_extras)
@@ -172,6 +172,17 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "Guidance should not re-add extras that `quickstart` already bundles: "
         + "; ".join(redundant)
     )
+
+
+def test_rnnoise_demos_install_the_opt_in_extra() -> None:
+    command = "uv sync --extra quickstart --extra rnnoise --group dev"
+    for relative_path in (
+        "examples/noise_reduction_backends.py",
+        "examples/README.md",
+        "docs/teaching/10-cleaning-signal/README.md",
+    ):
+        guidance = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert command in guidance, f"{relative_path} must install the RNNoise extra"
 
 
 def test_silero_guidance_uses_bundled_onnx_not_torch() -> None:

@@ -13,7 +13,7 @@
 #   docker build --build-arg EXTRAS="--extra openai-agents --extra silero-vad --extra rnnoise --extra deepgram --extra elevenlabs" ...
 
 # ── builder: resolve the virtualenv with uv ──────────────────────────────────
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS builder
 WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -28,7 +28,7 @@ COPY src ./src
 RUN uv sync --frozen --no-dev ${EXTRAS}
 
 # ── runtime: slim Python base + the ready-made venv ──────────────────────────
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba AS runtime
 WORKDIR /app
 
 # ca-certificates: TLS to OpenAI/Deepgram/etc.
