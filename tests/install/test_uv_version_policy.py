@@ -18,8 +18,8 @@ def test_local_uv_requirement_accepts_compatible_patch_releases() -> None:
     requirement = pyproject["tool"]["uv"]["required-version"]
     specifier = SpecifierSet(requirement)
 
-    assert requirement == ">=0.11.29,<0.12"
-    assert Version("0.11.29") in specifier
+    assert requirement == ">=0.11.0,<0.12.0"
+    assert Version("0.11.0") in specifier
     assert Version("0.11.30") in specifier
     assert Version("0.12.0") not in specifier
 
