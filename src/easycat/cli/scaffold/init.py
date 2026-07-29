@@ -189,7 +189,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
             "TRUST_PROXY_HEADERS",
         ),
         description="Phone-call voice agent with a Twilio WebSocket server.",
-        base_extras=("openai-agents", "telephony"),
+        base_extras=("openai-agents", "telephony", "telephony-fastapi"),
         run_command=(
             "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
         ),

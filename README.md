@@ -165,7 +165,9 @@ frameworks, and debugging/audio-processing features:
   PortAudio runtime above): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
-- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- Twilio SDK + aiohttp (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- FastAPI + uvicorn telephony server layer: `uv sync --extra telephony-fastapi --group dev`
+- Complete Twilio FastAPI reference app and scaffold: `uv sync --extra telephony --extra telephony-fastapi --group dev`
 - OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
 - PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
 - PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
