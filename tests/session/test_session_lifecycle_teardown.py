@@ -494,6 +494,39 @@ async def test_runtime_barge_in_returns_after_cutoff_before_slow_handlers_finish
 
 
 @pytest.mark.asyncio
+async def test_graceful_stop_drains_barge_in_cleanup_before_provider_teardown():
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+    session._turn = TurnContext("stop-during-barge-in", CancelToken())
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+    handler_finished = asyncio.Event()
+
+    async def slow_handler(_event: Interruption) -> None:
+        handler_started.set()
+        await handler_release.wait()
+        assert not transport.disconnected
+        handler_finished.set()
+
+    session.event_bus.subscribe(Interruption, slow_handler)
+    assert await session._cancel.for_barge_in() is True
+    await asyncio.wait_for(handler_started.wait(), timeout=0.25)
+
+    stopping = asyncio.create_task(session.stop())
+    await asyncio.sleep(0)
+    assert not stopping.done()
+    assert not transport.disconnected
+
+    handler_release.set()
+    await asyncio.wait_for(stopping, timeout=1)
+
+    assert handler_finished.is_set()
+    assert transport.disconnected
+    assert not session._runtime_scope.tasks("barge_in_cleanup")
+
+
+@pytest.mark.asyncio
 async def test_vad_barge_in_starts_successor_while_old_notifications_drain():
     session = Session(_full_config())
     old_turn = TurnContext("old-turn", CancelToken())

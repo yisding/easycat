@@ -283,6 +283,17 @@ def test_default_budgets_cover_required_stages() -> None:
     assert by_stage["interruption_cutoff_ms"].percentile == "p95"
 
 
+def test_live_benchmark_populates_interruption_cutoff_stage() -> None:
+    from tests.e2e.test_plan_7_latency_benchmark import (
+        StageBreakdown,
+        _latency_stage_durations,
+    )
+
+    stages = _latency_stage_durations(StageBreakdown(interruption_cutoff=125.0))
+
+    assert stages.interruption_cutoff_ms == 125.0
+
+
 def test_evaluate_budgets_returns_empty_when_all_pass() -> None:
     percentiles = {
         "overall": {
