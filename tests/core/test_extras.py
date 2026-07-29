@@ -87,3 +87,26 @@ def test_require_module_os_error_wrapped(monkeypatch) -> None:
 
     # Avoid leaking the fake module into sys.modules for other tests.
     sys.modules.pop(mod_name, None)
+
+
+def test_sounddevice_load_error_names_portaudio_system_package(monkeypatch) -> None:
+    def raise_portaudio_error(_name: str) -> None:
+        raise OSError("PortAudio library not found")
+
+    monkeypatch.setattr(
+        "easycat._extras.importlib.util.find_spec",
+        lambda name: types.SimpleNamespace(name=name),
+    )
+    monkeypatch.setattr(
+        "easycat._extras.importlib.import_module",
+        raise_portaudio_error,
+    )
+
+    with pytest.raises(ImportError) as exc_info:
+        require_module("sounddevice", extra="local", purpose="LocalTransport audio I/O")
+
+    message = str(exc_info.value)
+    assert "PortAudio library not found" in message
+    assert "sudo apt-get install libportaudio2" in message
+    assert "brew install portaudio" in message
+    assert "uv add 'easycat[local]'" not in message

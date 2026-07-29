@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+import logging
+from pathlib import Path
 
 import pytest
 import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
@@ -18,10 +26,149 @@ from .conftest import make_chunk
 _make_chunk = make_chunk
 
 
+class _ClosingReadyWebSocket:
+    async def send(self, _message: str | bytes) -> None:
+        raise websockets.exceptions.ConnectionClosed(None, None)
+
+
+class _BlockingReadyWebSocket:
+    def __init__(self) -> None:
+        self.send_started = asyncio.Event()
+        self.closed = False
+
+    async def send(self, _message: str | bytes) -> None:
+        self.send_started.set()
+        await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FailingReadyWebSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def send(self, _message: str | bytes) -> None:
+        raise RuntimeError("ready send failed")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_repository_websocket_servers_set_message_size_limit():
+    """Every shipped WebSocket listener must bound decoded message size."""
+    repository_root = Path(__file__).resolve().parents[2]
+    server_calls: list[tuple[Path, int]] = []
+    missing_limit: list[tuple[Path, int]] = []
+
+    for root in (repository_root / "src", repository_root / "examples"):
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            if "websockets.serve(" not in source:
+                continue
+            tree = ast.parse(source, filename=str(path))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "serve"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "websockets"
+                ):
+                    continue
+                server_calls.append((path, node.lineno))
+                if not any(keyword.arg == "max_size" for keyword in node.keywords):
+                    missing_limit.append((path, node.lineno))
+
+    assert server_calls
+    assert missing_limit == []
+
+
 def test_websocket_transport_config_defaults_to_loopback():
     config = WebSocketTransportConfig()
 
     assert config.host == "127.0.0.1"
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "_receive_loop",
+        "_handle_control_message",
+        "send_audio",
+        "clear_audio",
+        "_send_client_event",
+    ],
+)
+def test_websocket_transports_share_wire_protocol_methods(method_name: str):
+    assert getattr(WebSocketTransport, method_name) is getattr(
+        WebSocketConnectionTransport,
+        method_name,
+    )
+
+
+def test_connection_transport_handles_start_and_stop_control_messages(
+    caplog: pytest.LogCaptureFixture,
+):
+    transport = WebSocketConnectionTransport(object())  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.DEBUG, logger="easycat.transports.websocket"):
+        transport._handle_control_message('{"type":"start"}')
+        transport._handle_control_message('{"type":"stop"}')
+
+    assert "Client sent start signal" in caplog.messages
+    assert "Client sent stop signal" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_ready_disconnect_is_not_raised():
+    transport = WebSocketConnectionTransport(_ClosingReadyWebSocket())  # type: ignore[arg-type]
+
+    await transport.connect()
+
+    assert transport.is_connected is False
+    assert transport._ws is None
+    assert transport._receive_task is None
+    assert transport._in_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_connect_cancellation_keeps_socket_for_disconnect():
+    ws = _BlockingReadyWebSocket()
+    transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+
+    connect_task = asyncio.create_task(transport.connect())
+    await ws.send_started.wait()
+    connect_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await connect_task
+
+    assert transport.is_connected is False
+    assert transport._ws is ws
+    await transport.disconnect()
+    assert ws.closed is True
+    assert transport._ws is None
+
+
+@pytest.mark.asyncio
+async def test_connection_transport_ready_error_keeps_socket_for_disconnect():
+    ws = _FailingReadyWebSocket()
+    transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="ready send failed"):
+        await transport.connect()
+
+    assert transport.is_connected is False
+    assert transport._ws is ws
+    await transport.disconnect()
+    assert ws.closed is True
+    assert transport._ws is None
+
+
+def test_websocket_transports_leave_server_side_aec_off_by_default():
+    assert WebSocketTransportConfig.default_echo_cancellation_enabled is False
+    assert WebSocketTransport.default_echo_cancellation_enabled is False
+    assert WebSocketConnectionTransport.default_echo_cancellation_enabled is False
 
 
 @pytest.mark.asyncio
@@ -44,7 +191,12 @@ async def test_server_websocket_transports_disable_compression(monkeypatch: pyte
     transport = WebSocketTransport(WebSocketTransportConfig())
     await transport.connect()
     try:
-        assert calls == [{"compression": None}]
+        assert calls == [
+            {
+                "compression": None,
+                "max_size": MAX_WEBSOCKET_MESSAGE_BYTES,
+            }
+        ]
     finally:
         await transport.disconnect()
 
@@ -77,6 +229,23 @@ class TestWebSocketTransport(_UsesPytestTcpPortFactory):
             async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
                 ready = await ws.recv()
                 assert json.loads(ready)["type"] == "ready"
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_server_rejects_message_over_wire_size_limit(self):
+        port = self._unused_port()
+        transport = WebSocketTransport(WebSocketTransportConfig(host="127.0.0.1", port=port))
+        await transport.connect()
+
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                await ws.recv()  # ready
+                await ws.send(bytes(MAX_WEBSOCKET_MESSAGE_BYTES + 1))
+                with pytest.raises(websockets.exceptions.ConnectionClosedError) as exc_info:
+                    await ws.recv()
+                assert exc_info.value.rcvd is not None
+                assert exc_info.value.rcvd.code == 1009
         finally:
             await transport.disconnect()
 

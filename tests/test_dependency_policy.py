@@ -89,6 +89,34 @@ def test_telephony_library_extra_excludes_reference_server_dependencies() -> Non
     assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
 
 
+def test_declared_dependency_floors_are_compatibility_tested() -> None:
+    project = _pyproject()["project"]
+    extras = project["optional-dependencies"]
+
+    assert _requirement(project["dependencies"], "httpx") == "httpx>=0.27"
+    assert _requirement(project["dependencies"], "rich") == "rich>=13.8"
+    assert _requirement(project["dependencies"], "typer") == "typer>=0.26"
+    assert _requirement(project["dependencies"], "websockets") == "websockets>=14.0,<17"
+    assert _requirement(extras["langchain"], "langchain-core") == "langchain-core>=1.2.28"
+    assert _requirement(extras["telephony"], "aiohttp") == "aiohttp>=3.13.3"
+
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    minimum_job = workflow[workflow.index("  minimum-dependencies:") :]
+    minimum_job = minimum_job[: minimum_job.index("\n  coverage:")]
+    assert "uv sync --resolution lowest-direct --group dev" in minimum_job
+    assert "--extra langchain --extra telephony --python 3.12" in minimum_job
+    assert 'UV_NO_SYNC: "1"' in minimum_job
+    assert "uv run --no-sync --python 3.12 easycat validate quick --show-output" in minimum_job
+    for floor in (
+        '"httpx==0.27.0"',
+        '"websockets==14.0"',
+        '"langchain-core==1.2.28"',
+    ):
+        assert floor in minimum_job
+    assert "tests/integrations/agents/test_langchain_bridge_invoke.py" in minimum_job
+    assert "tests/server/test_webrtc_routes.py" in minimum_job
+
+
 def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
     extras = _pyproject()["project"]["optional-dependencies"]
     quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}
