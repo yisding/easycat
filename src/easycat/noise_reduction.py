@@ -13,9 +13,9 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
-from easycat.audio_format import PCM16_MONO_48K, AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 
 if TYPE_CHECKING:
     import numpy as np
@@ -107,6 +107,9 @@ class RNNoiseReducer:
         # backends, we accumulate whole frames here and defer the sub-frame
         # remainder to the next call.
         self._buffer_48k: bytes = b""
+        self._stream_rate: int | None = None
+        self._input_resampler = PCM16StreamResampler(48_000)
+        self._output_resampler: PCM16StreamResampler | None = None
         self._load_rnnoise()
 
     def _load_rnnoise(self) -> None:
@@ -139,16 +142,31 @@ class RNNoiseReducer:
         to drain a trailing partial frame at end-of-stream.
         """
         original_rate = chunk.format.sample_rate
+        if self._stream_rate != original_rate:
+            # One reducer stream has one output format. If an upstream device
+            # changes rates, start a clean RNNoise/resampler segment instead
+            # of concatenating old-rate frame remainders with the new format.
+            self._input_resampler.reset()
+            self._buffer_48k = b""
+            self._output_resampler = PCM16StreamResampler(original_rate)
+            self._stream_rate = original_rate
 
         # Step 1: Resample to 48 kHz if needed, then accumulate.
-        chunk_48k = resample_chunk(chunk, 48000)
-        self._buffer_48k += chunk_48k.data
+        self._buffer_48k += self._input_resampler.process(
+            chunk.data,
+            original_rate,
+        )
 
         cleaned_48k = self._process_buffered_frames(flush=False)
 
         # Step 2: Resample the cleaned 48 kHz audio back to the input rate.
-        cleaned = AudioChunk(data=cleaned_48k, format=PCM16_MONO_48K, timestamp=chunk.timestamp)
-        return resample_chunk(cleaned, original_rate)
+        assert self._output_resampler is not None
+        cleaned = self._output_resampler.process(cleaned_48k, 48_000)
+        return AudioChunk(
+            data=cleaned,
+            format=AudioFormat(sample_rate=original_rate, channels=1, sample_width=2),
+            timestamp=chunk.timestamp,
+        )
 
     def _process_buffered_frames(self, *, flush: bool) -> bytes:
         """Run buffered 48 kHz PCM16 through RNNoise, whole frames only.
@@ -182,15 +200,30 @@ class RNNoiseReducer:
     def flush(self) -> AudioChunk:
         """Drain any buffered trailing audio, zero-padding the final frame.
 
-        Returns the cleaned tail at 48 kHz (empty data when nothing is
-        buffered).  Call at end-of-stream so a final partial frame is not
-        silently dropped.
+        Returns the cleaned tail at the source stream's sample rate (empty
+        data when nothing is buffered). Call at end-of-stream so neither a
+        partial RNNoise frame nor delayed resampler output is silently dropped.
         """
+        output_rate = self._stream_rate or 48_000
+        self._buffer_48k += self._input_resampler.finish()
         cleaned_48k = self._process_buffered_frames(flush=True)
-        return AudioChunk(data=cleaned_48k, format=PCM16_MONO_48K)
+        if self._output_resampler is not None:
+            cleaned = self._output_resampler.process(cleaned_48k, 48_000)
+            cleaned += self._output_resampler.finish()
+        else:
+            cleaned = cleaned_48k
+        self._stream_rate = None
+        return AudioChunk(
+            data=cleaned,
+            format=AudioFormat(sample_rate=output_rate, channels=1, sample_width=2),
+        )
 
     def close(self) -> None:
         """Release RNNoise state."""
+        self._input_resampler.reset()
+        if self._output_resampler is not None:
+            self._output_resampler.reset()
+        self._stream_rate = None
         self._buffer_48k = b""
         if self._state and self._rnnoise:
             try:

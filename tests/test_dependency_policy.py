@@ -80,6 +80,12 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_every_install_ships_high_quality_resampling() -> None:
+    dependencies = _pyproject()["project"]["dependencies"]
+
+    assert _requirement(dependencies, "soxr") == "soxr>=1.0.0"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

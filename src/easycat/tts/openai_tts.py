@@ -119,6 +119,27 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
         except Exception as exc:
             logger.debug("OpenAI TTS warmup skipped: %s", exc)
 
+    @staticmethod
+    async def _raise_for_streaming_status(response: httpx.Response) -> None:
+        if not response.is_success:
+            # A streamed non-2xx response has an unread body; read it now,
+            # while the stream is still open, so the except handler can
+            # touch exc.response.text without raising ResponseNotRead.
+            await response.aread()
+        response.raise_for_status()
+
+    async def _iter_response_audio(self, response: httpx.Response) -> AsyncIterator[TTSEvent]:
+        async for chunk in _iter_low_latency_pcm_chunks(
+            response.aiter_bytes(), should_stop=lambda: self._cancelled
+        ):
+            if self._cancelled:
+                break
+            if not chunk:
+                continue
+            event = self._make_audio_event(chunk, _OPENAI_PCM_FORMAT)
+            if event is not None:
+                yield event
+
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using OpenAI Audio API with streaming response.
 
@@ -146,24 +167,17 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
                 json=request_body,
             ) as response:
                 self._response = response
-                if not response.is_success:
-                    # A streamed non-2xx response has an unread body; read it now,
-                    # while the stream is still open, so the except handler can
-                    # touch exc.response.text without raising ResponseNotRead.
-                    await response.aread()
-                response.raise_for_status()
+                await self._raise_for_streaming_status(response)
 
                 # Read at the response's native cadence so httpx does not hold
                 # the first audio until a full 100 ms / 4800-byte block has
                 # accumulated.  The local rechunker releases 20 ms first and
                 # preserves the former 100 ms steady-state frame size.
-                async for chunk in _iter_low_latency_pcm_chunks(
-                    response.aiter_bytes(), should_stop=lambda: self._cancelled
-                ):
-                    if self._cancelled:
-                        break
-                    if chunk:
-                        yield self._make_audio_event(chunk, _OPENAI_PCM_FORMAT)
+                async for event in self._iter_response_audio(response):
+                    yield event
+            tail = self._finish_audio_event()
+            if tail is not None:
+                yield tail
 
         except httpx.HTTPStatusError as exc:
             logger.error(

@@ -9,7 +9,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import resample_chunk, to_mono_chunk
+from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -86,6 +86,7 @@ class FunASROnnxVAD(_VADBase):
         self._numpy: Any = None
         self._model: Any = None
         self._param_dict: dict[str, Any] = {"in_cache": []}
+        self._audio_resampler = PCM16StreamResampler(_FUNASR_SAMPLE_RATE)
         self._initialize()
 
     def _initialize(self) -> None:
@@ -153,10 +154,10 @@ class FunASROnnxVAD(_VADBase):
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
 
-        if chunk.format.sample_rate != _FUNASR_SAMPLE_RATE:
-            chunk = resample_chunk(chunk, _FUNASR_SAMPLE_RATE)
-
-        self._buffer += chunk.data
+        self._buffer += self._audio_resampler.process(
+            chunk.data,
+            chunk.format.sample_rate,
+        )
         frame_bytes = self._chunk_samples * 2
 
         while len(self._buffer) >= frame_bytes:
@@ -198,6 +199,7 @@ class FunASROnnxVAD(_VADBase):
     def reset(self) -> None:
         """Reset adapter state and FunASR streaming caches."""
         super().reset()
+        self._audio_resampler.reset()
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
@@ -208,6 +210,9 @@ class FunASROnnxVAD(_VADBase):
     def close(self) -> None:
         """Release the FunASR ONNX model handle and streaming caches."""
         super().close()
+        audio_resampler = getattr(self, "_audio_resampler", None)
+        if audio_resampler is not None:
+            audio_resampler.reset()
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}

@@ -23,7 +23,7 @@ from typing import Any, ClassVar
 import websockets
 from websockets.asyncio.server import ServerConnection
 
-from easycat._audio_utils import resample_chunk
+from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
@@ -172,30 +172,39 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
         if ws is None:
             return
         target_rate = self._config.audio_format.sample_rate
+        resampler = PCM16StreamResampler(target_rate)
         try:
             async for message in ws:
-                self._route_inbound_message(message, target_rate)
+                self._route_inbound_message(message, resampler)
         except websockets.exceptions.ConnectionClosed as exc:
             if not manage_lifecycle:
                 raise
             self._note_client_disconnected(exc)
         finally:
+            tail = resampler.finish()
+            if tail:
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=self._config.audio_format),
+                    context="WebSocket",
+                )
             if manage_lifecycle:
                 self._finish_websocket(ws)
 
-    def _route_inbound_message(self, message: str | bytes, target_rate: int) -> None:
+    def _route_inbound_message(
+        self,
+        message: str | bytes,
+        resampler: PCM16StreamResampler,
+    ) -> None:
         if isinstance(message, bytes):
             if not message:
                 logger.debug("Dropping empty WebSocket audio frame")
                 return
-            chunk = AudioChunk(data=message, format=self._audio_format)
-            if chunk.format.sample_rate != target_rate:
-                # Hot path: each inbound binary frame is resampled when the
-                # client rate differs from the pipeline rate. Frames are
-                # normally ~20 ms; cache the chosen backend in
-                # ``_audio_utils`` if throughput becomes a concern.
-                chunk = resample_chunk(chunk, target_rate)
-            self._enqueue_chunk(chunk, context="WebSocket")
+            data = resampler.process(message, self._audio_format.sample_rate)
+            if data:
+                self._enqueue_chunk(
+                    AudioChunk(data=data, format=self._config.audio_format),
+                    context="WebSocket",
+                )
         else:
             self._handle_control_message(message)
 

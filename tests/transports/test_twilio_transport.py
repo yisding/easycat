@@ -1123,7 +1123,8 @@ class TestTwilioStreamLifecycleRaces:
         assert transport._in_queue.empty()
         assert ended == []
 
-        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1154,7 +1155,8 @@ class TestTwilioStreamLifecycleRaces:
         assert transport._in_queue.empty()
         assert ended == []
 
-        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1287,7 +1289,8 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
             # Create some mulaw audio (160 samples = 20ms at 8kHz).
             pcm_silence = bytes(320)  # 160 samples * 2 bytes
             mulaw_data = pcm16_to_mulaw(pcm_silence, source_rate=8000)
-            await ws.send(_twilio_media_msg(mulaw_data))
+            for _ in range(4):
+                await ws.send(_twilio_media_msg(mulaw_data))
 
             await asyncio.wait_for(collect_task, timeout=2.0)
 
@@ -1322,9 +1325,10 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         )
         assert transport._in_queue.empty()
 
-        await transport._handle_message(
-            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
-        )
+        for _ in range(4):
+            await transport._handle_message(
+                _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+            )
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
@@ -1359,9 +1363,10 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         )
         assert transport._in_queue.empty()
 
-        await transport._handle_message(
-            _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
-        )
+        for _ in range(4):
+            await transport._handle_message(
+                _twilio_media_msg_with_track(mulaw_data, stream_sid="STREAM1", track="inbound")
+            )
         chunk = transport._in_queue.get_nowait()
         assert chunk is not None
         assert chunk.format.sample_rate == 16000
