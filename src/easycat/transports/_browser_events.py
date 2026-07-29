@@ -210,14 +210,17 @@ class BrowserEventForwarder:
 
     async def _writer_loop(self) -> None:
         while True:
-            payload = await self._send_queue.get()
+            try:
+                payload = self._send_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
             try:
                 await self._send_payload(payload)
             finally:
                 self._send_queue.task_done()
 
     async def _send_payload(self, payload: dict[str, Any]) -> None:
-        task = asyncio.create_task(self._send_json(payload))
+        task = asyncio.create_task(self._call_send_json(payload))
         self._send_tasks.add(task)
         task.add_done_callback(self._send_done)
         try:
@@ -238,6 +241,9 @@ class BrowserEventForwarder:
             raise
         except Exception:
             logger.debug("Dropping browser event %s: send failed", payload.get("type"))
+
+    async def _call_send_json(self, payload: dict[str, Any]) -> None:
+        await self._send_json(payload)
 
     def _send_done(self, task: asyncio.Task[None]) -> None:
         self._send_tasks.discard(task)
