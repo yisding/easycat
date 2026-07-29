@@ -28,7 +28,8 @@ from easycat.debug.bundle import (
 )
 from easycat.debug.export import export_debug_bundle
 from easycat.debug.testing import load_bundle
-from easycat.runtime.artifacts import FilesystemArtifactStore
+from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
+from easycat.runtime.journal_memory import InMemoryRingBuffer
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind, TimingInfo
 from easycat.runtime.replay import (
     REPLAY_IGNORE_FIELDS,
@@ -568,6 +569,89 @@ class TestBundleExport:
         assert len(lines) == 2_505
         assert json.loads(lines[0])["sequence"] == 1
         assert json.loads(lines[-1])["sequence"] == 2_505
+
+    def test_export_snapshots_bounded_journal_before_paging(self, tmp_path, monkeypatch):
+        import easycat.debug.export as export_module
+
+        journal = InMemoryRingBuffer(capacity=2)
+        for name in ("first", "second"):
+            journal.append(JournalRecordKind.EVENT, name, "sess")
+        original_snapshot = journal.snapshot
+
+        def _snapshot_then_evict():
+            frozen = original_snapshot()
+            journal.append(JournalRecordKind.EVENT, "third", "sess")
+            journal.append(JournalRecordKind.EVENT, "fourth", "sess")
+            return frozen
+
+        monkeypatch.setattr(journal, "snapshot", _snapshot_then_evict)
+        monkeypatch.setattr(export_module, "_JOURNAL_PAGE_SIZE", 1)
+        path = tmp_path / "bounded-snapshot.zip"
+
+        export_debug_bundle(_FakeSession(debug="full", journal=journal), path)
+
+        with zipfile.ZipFile(path) as zf:
+            records = [json.loads(line) for line in zf.read("journal.ndjson").splitlines()]
+        assert [record["name"] for record in records] == ["first", "second"]
+
+    def test_export_rejects_sequence_gap_from_unsnapshotted_paged_journal(
+        self, tmp_path, monkeypatch
+    ):
+        import easycat.debug.export as export_module
+
+        class _EvictingPagedJournal:
+            latest_sequence = 2
+
+            def __init__(self):
+                self.calls = 0
+
+            def read(self, start=0, limit=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return [{"sequence": 1, "kind": "event", "name": "first"}]
+                return [{"sequence": 3, "kind": "event", "name": "third"}]
+
+        monkeypatch.setattr(export_module, "_JOURNAL_PAGE_SIZE", 1)
+        path = tmp_path / "gapped.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(
+                _FakeSession(debug="full", journal=_EvictingPagedJournal()),
+                path,
+            )
+
+        assert exc_info.value.reason_code == "JOURNAL_CHANGED_DURING_EXPORT"
+        assert not path.exists()
+
+    def test_export_snapshots_memory_artifacts_before_streaming(self, tmp_path):
+        store = InMemoryArtifactStore()
+        first_ref = store.put(b"first")
+        second_ref = store.put(b"second")
+        replacement_ref: str | None = None
+
+        class _MutatingJournal:
+            def read(self, start=0, limit=None):
+                nonlocal replacement_ref
+                store.delete(second_ref)
+                replacement_ref = store.put(b"replacement")
+                return []
+
+        path = tmp_path / "memory-artifact-snapshot.zip"
+        export_debug_bundle(
+            _FakeSession(
+                debug="full",
+                journal=_MutatingJournal(),
+                artifact_store=store,
+            ),
+            path,
+        )
+
+        assert replacement_ref is not None
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+            assert f"artifacts/{first_ref}.bin" in names
+            assert f"artifacts/{second_ref}.bin" in names
+            assert f"artifacts/{replacement_ref}.bin" not in names
 
     def test_export_streams_sharded_files_without_path_read_bytes(self, tmp_path, monkeypatch):
         payload = b"streamed-artifact" * 100

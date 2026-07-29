@@ -89,6 +89,7 @@ def export_debug_bundle(
 
     try:
         manifest = _capture_manifest(session)
+        journal = _snapshot_journal(journal)
         _write_bundle_archive(
             path,
             manifest=manifest,
@@ -144,6 +145,7 @@ def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
         page = _read_journal_page(journal, cursor, supports_paging=supports_paging)
         if not page:
             return
+        _validate_page_continuity(page, cursor)
 
         last_sequence: int | None = None
         for record in page:
@@ -162,6 +164,37 @@ def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
         cursor = last_sequence + 1
         if snapshot_end is not None and cursor > snapshot_end:
             return
+
+
+def _validate_page_continuity(page: list[object], cursor: int) -> None:
+    """Reject a page whose first sequence jumped past the requested cursor."""
+    if cursor <= 0:
+        return
+    for record in page:
+        sequence = _serialized_sequence(record_to_dict(record))
+        if sequence is None:
+            continue
+        if sequence > cursor:
+            raise BundleValidationError(
+                "Journal records were evicted during export",
+                reason_code="JOURNAL_CHANGED_DURING_EXPORT",
+            )
+        return
+
+
+def _snapshot_journal(journal: _JournalReader | None) -> _JournalReader | None:
+    """Freeze a bounded in-memory journal before its records can be evicted."""
+    if journal is None:
+        return None
+    candidates = (journal, getattr(journal, "_journal", None))
+    for candidate in candidates:
+        snapshot = getattr(candidate, "snapshot", None)
+        if not callable(snapshot):
+            continue
+        frozen = snapshot()
+        if isinstance(frozen, _JournalReader):
+            return frozen
+    return journal
 
 
 def _journal_snapshot_end(journal: _JournalReader) -> int | None:
@@ -214,10 +247,22 @@ def _iter_artifacts(session: object) -> Iterator[_ArtifactSource]:
     if artifact_store is None:
         return
     if isinstance(artifact_store, _MemoryArtifactStore):
-        yield from _iter_memory_artifacts(artifact_store._store)
+        yield from _iter_memory_artifacts(_snapshot_memory_artifacts(artifact_store))
         return
     if isinstance(artifact_store, _FilesystemArtifactStore):
         yield from _iter_filesystem_artifacts(artifact_store._dir)
+
+
+def _snapshot_memory_artifacts(
+    artifact_store: _MemoryArtifactStore,
+) -> dict[str, bytes | str]:
+    """Copy an in-memory store under its lock when it exposes one."""
+    store = artifact_store._store
+    lock = getattr(artifact_store, "_lock", None)
+    if lock is None:
+        return dict(store)
+    with lock:
+        return dict(store)
 
 
 def _iter_memory_artifacts(store: Mapping[str, bytes | str]) -> Iterator[_ArtifactSource]:
