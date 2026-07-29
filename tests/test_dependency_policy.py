@@ -89,6 +89,12 @@ def test_telephony_library_extra_excludes_reference_server_dependencies() -> Non
     assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
 
 
+def test_every_install_ships_high_quality_resampling() -> None:
+    dependencies = _pyproject()["project"]["dependencies"]
+
+    assert _requirement(dependencies, "soxr") == "soxr>=1.0.0"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

@@ -113,6 +113,7 @@ class EasyConfigError(ValueError):
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
+_VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
 _SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
@@ -148,10 +149,25 @@ def _validate_capture_audio(policy: bool | Callable[[], bool]) -> None:
         raise ValueError("capture_audio predicate must be synchronous")
 
 
+def _validate_journal_capacity(capacity: int) -> None:
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
+        raise ValueError("journal_capacity must be a positive integer")
+
+
+def _validate_journal_redaction(policy: str) -> None:
+    if policy not in _VALID_JOURNAL_REDACTION:
+        raise ValueError(
+            f"Invalid journal_redaction={policy!r}. "
+            f"Must be one of {sorted(_VALID_JOURNAL_REDACTION)}."
+        )
+
+
 def _validate_common(
     *,
     debug: str,
     journal_backend: str,
+    journal_capacity: int,
+    journal_redaction: str,
     journal_retention: str,
     mcp_servers: list[str] | None = None,
     session_id: str | None = None,
@@ -167,6 +183,8 @@ def _validate_common(
             f"Invalid journal_backend={journal_backend!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
         )
+    _validate_journal_capacity(journal_capacity)
+    _validate_journal_redaction(journal_redaction)
     if journal_retention not in _VALID_JOURNAL_RETENTION:
         raise ValueError(
             f"Invalid journal_retention={journal_retention!r}. "
@@ -498,6 +516,8 @@ class _AgentSessionConfig:
     mcp_servers: list[str] | None = None
     debug: Literal["off", "light", "full"] = "light"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_capacity: int = 10_000
+    journal_redaction: Literal["secrets", "pii"] = "secrets"
     journal_retention: Literal["archive", "delete"] = "archive"
     warmup: bool = True
     debugger_autolaunch: bool = False
@@ -529,7 +549,9 @@ class EasyConfig(_AgentSessionConfig):
         data_dir: Optional root for this session's journals and artifacts.
             When unset, the runtime falls back to ``EASYCAT_DATA_DIR`` or
             ``.easycat``.
-        debug / journal_backend / journal_retention: Debug-journal settings.
+        debug / journal_backend / journal_capacity / journal_redaction /
+        journal_retention:
+            Debug-journal settings.
         greeting / dnc_list / caller_id_exposure: Conversation and telephony
             policies.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -573,6 +595,8 @@ class EasyConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
+            journal_redaction=self.journal_redaction,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
             session_id=self.session_id,
@@ -796,6 +820,8 @@ class TextSessionConfig(_AgentSessionConfig):
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
+            journal_redaction=self.journal_redaction,
             journal_retention=self.journal_retention,
             mcp_servers=self.mcp_servers,
             session_id=self.session_id,
@@ -813,6 +839,8 @@ class TextSessionConfig(_AgentSessionConfig):
         session_id: str | None = None,
         debug: Literal["off", "light", "full"] = "light",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+        journal_capacity: int = 10_000,
+        journal_redaction: Literal["secrets", "pii"] = "secrets",
         journal_retention: Literal["archive", "delete"] = "archive",
         warmup: bool | None = None,
         wrap_agent: bool = True,
@@ -841,6 +869,8 @@ class TextSessionConfig(_AgentSessionConfig):
                 "session_id": (session_id, None),
                 "debug": (debug, "light"),
                 "journal_backend": (journal_backend, "sqlite"),
+                "journal_capacity": (journal_capacity, 10_000),
+                "journal_redaction": (journal_redaction, "secrets"),
                 "journal_retention": (journal_retention, "archive"),
                 "warmup": (warmup, None),
                 "wrap_agent": (wrap_agent, True),
@@ -866,6 +896,8 @@ class TextSessionConfig(_AgentSessionConfig):
             session_id=session_id,
             debug=debug,
             journal_backend=journal_backend,
+            journal_capacity=journal_capacity,
+            journal_redaction=journal_redaction,
             journal_retention=journal_retention,
             warmup=True if warmup is None else warmup,
             wrap_agent=wrap_agent,

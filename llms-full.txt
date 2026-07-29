@@ -52,7 +52,7 @@ uv sync --extra debugger --group dev
 Commands:
 
 ```bash
-uv sync --extra quickstart --group dev
+uv sync --extra quickstart --extra webrtc --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env

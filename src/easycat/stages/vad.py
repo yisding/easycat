@@ -18,6 +18,7 @@ from easycat.stages.base import (
     StageStateSnapshot,
     audio_capture_allowed,
     audio_format_fields,
+    captures_verbose_stage_io,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -72,12 +73,17 @@ class VADStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
+        capture_detail = captures_verbose_stage_io(ctx)
         data_bytes = getattr(input, "data", None) if not isinstance(input, bytes) else input
         capture_allowed = audio_capture_allowed(ctx, input)
-        input_ref = await put_artifact_async(
-            ctx,
-            data_bytes,
-            capture_allowed=capture_allowed,
+        input_ref = (
+            await put_artifact_async(
+                ctx,
+                data_bytes,
+                capture_allowed=capture_allowed,
+            )
+            if capture_detail
+            else None
         )
         # VAD backends decode the raw byte stream as flat int16 mono (frame
         # boundaries are computed as samples*2). Interleaved multi-channel
@@ -87,19 +93,23 @@ class VADStage:
         if isinstance(input, AudioChunk) and input.format.channels > 1:
             input = to_mono_chunk(input)
             set_audio_capture_allowed(input, capture_allowed)
-        start_extra = {
-            "audio_bytes": len(data_bytes) if isinstance(data_bytes, (bytes, bytearray)) else 0,
-        }
-        start_extra.update(audio_format_fields(input))
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-            input_ref=input_ref,
-            data_extra=start_extra,
-        )
+        start_sequence: int | None = None
+        if capture_detail:
+            start_extra = {
+                "audio_bytes": len(data_bytes)
+                if isinstance(data_bytes, (bytes, bytearray))
+                else 0,
+            }
+            start_extra.update(audio_format_fields(input))
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+                input_ref=input_ref,
+                data_extra=start_extra,
+            )
         try:
             with observability.span(
                 "easycat.vad.detect",
@@ -137,19 +147,20 @@ class VADStage:
             )
         if events:
             self._last_decision = type(events[-1]).__name__
-        state_after = self.snapshot_state()
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            data_extra={
-                "events": [_serialize_event(e) for e in events],
-                "elapsed_ms": (time.perf_counter() - started) * 1000,
-            },
-        )
+        if capture_detail:
+            state_after = self.snapshot_state()
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+                data_extra={
+                    "events": [_serialize_event(e) for e in events],
+                    "elapsed_ms": (time.perf_counter() - started) * 1000,
+                },
+            )
         return result
 
     def snapshot_state(self) -> StageStateSnapshot:

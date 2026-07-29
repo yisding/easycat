@@ -1,8 +1,8 @@
 """Config, environment, and journal safety defaults.
 
 Hard-coded allowlists keep obvious credentials out of generated config and
-environment metadata. The journal write filter also scrubs secret-looking
-fields and sensitive substrings, but it deliberately preserves normal
+environment metadata. The journal write filter always scrubs secrets and can
+optionally scrub PII, while its default deliberately preserves normal
 transcript, agent-output, and tool-result text so replay remains useful.
 Journal records and exported bundles therefore remain sensitive.
 """
@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from easycat.runtime.records import ErrorInfo, JournalRecord
-from easycat.validation.redaction import redact_text, redact_value
+from easycat.validation.redaction import RedactionPolicy, redact_text, redact_value
 
 # ── Config field allowlist ────────────────────────────────────────
 
@@ -49,6 +49,8 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "on_agent_failure",
         # Journal config (safe to report)
         "journal_backend",
+        "journal_capacity",
+        "journal_redaction",
         "journal_retention",
     }
 )
@@ -348,17 +350,22 @@ def safe_env_snapshot() -> dict[str, str]:
 # ── Write filter hook ─────────────────────────────────────────────
 
 
-def apply_write_filter(record: JournalRecord) -> JournalRecord:
+def apply_write_filter(
+    record: JournalRecord,
+    *,
+    redaction: RedactionPolicy = "secrets",
+) -> JournalRecord:
     """Journal write-filter hook.
 
-    Scrubs secret-looking keyed values plus obvious sensitive substrings from
-    record data and error payloads. Normal ``data["text"]`` stays intact for
-    replay/debuggability, so this is not a full privacy redaction boundary.
+    The default ``"secrets"`` policy scrubs credentials while preserving
+    replay-relevant customer content. ``"pii"`` additionally removes phone
+    numbers, URLs, request IDs, home paths, and unsafe text fields. Neither
+    mode makes a raw journal safe to share without export-time redaction.
     """
-    redacted_data = redact_value(record.data)
+    redacted_data = redact_value(record.data, policy=redaction)
     if not isinstance(redacted_data, dict):
         redacted_data = {}
-    redacted_error = _redact_error(record.error)
+    redacted_error = _redact_error(record.error, redaction=redaction)
     if (
         not record.name.startswith("app.")
         and redacted_data == record.data
@@ -370,17 +377,23 @@ def apply_write_filter(record: JournalRecord) -> JournalRecord:
     return replace(record, data=redacted_data, error=redacted_error)
 
 
-def _redact_error(error: ErrorInfo | None) -> ErrorInfo | None:
+def _redact_error(
+    error: ErrorInfo | None,
+    *,
+    redaction: RedactionPolicy,
+) -> ErrorInfo | None:
     if error is None:
         return None
     redacted = ErrorInfo(
-        type=redact_text(error.type),
-        message=redact_text(error.message),
-        traceback=redact_text(error.traceback) if error.traceback is not None else None,
-        notes=redact_text(error.notes) if error.notes is not None else None,
+        type=redact_text(error.type, policy=redaction),
+        message=redact_text(error.message, policy=redaction),
+        traceback=(
+            redact_text(error.traceback, policy=redaction) if error.traceback is not None else None
+        ),
+        notes=(redact_text(error.notes, policy=redaction) if error.notes is not None else None),
         children=tuple(
             child
-            for child in (_redact_error(child) for child in error.children)
+            for child in (_redact_error(child, redaction=redaction) for child in error.children)
             if child is not None
         ),
     )
