@@ -26,6 +26,7 @@ from websockets.asyncio.server import ServerConnection
 from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
+from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 _MIN_NEGOTIATED_SAMPLE_RATE = 8000
@@ -55,12 +56,16 @@ def _valid_config_sample_rate(value: object) -> int | None:
 class WebSocketTransportConfig:
     """Configuration for :class:`WebSocketTransport`."""
 
-    default_echo_cancellation_enabled: ClassVar[bool] = True
+    # The server sees socket-write time, not the browser's playout clock, so it
+    # cannot supply the continuous render reference AEC3 requires. Browser
+    # clients should use getUserMedia({audio: {echoCancellation: true}}).
+    default_echo_cancellation_enabled: ClassVar[bool] = False
 
     host: str = "127.0.0.1"
     port: int = 8765
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
+    max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
 
 @dataclass(frozen=True)
@@ -116,7 +121,7 @@ class WebSocketTransport(ServerTransportBase):
     """
 
     transport_kind = "websocket"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
     _transport_name = "WebSocket"
 
     def __init__(self, config: WebSocketTransportConfig | None = None) -> None:
@@ -125,6 +130,7 @@ class WebSocketTransport(ServerTransportBase):
             host=self._config.host,
             port=self._config.port,
             max_pending_chunks=self._config.max_pending_chunks,
+            max_pending_bytes=self._config.max_pending_bytes,
         )
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
@@ -313,7 +319,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
     """
 
     transport_kind = "websocket"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,
@@ -325,7 +331,10 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
         self._receive_task: asyncio.Task[None] | None = None
-        self._init_audio_queue(self._config.max_pending_chunks)
+        self._init_audio_queue(
+            self._config.max_pending_chunks,
+            self._config.max_pending_bytes,
+        )
 
     @property
     def audio_format(self) -> AudioFormat:

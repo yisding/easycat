@@ -30,7 +30,35 @@ from easycat.transports import (
     TwilioTransportConfig,
     twilio_websocket_signature_process_request,
 )
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
+
+
+def _public_twilio_url(
+    request: Request,
+    *,
+    configured_url: str,
+    trust_proxy: bool,
+) -> str:
+    if configured_url:
+        return configured_url
+    raw_path = request.scope.get("raw_path", b"/twiml").decode("ascii")
+    query = request.scope.get("query_string", b"").decode("ascii")
+    path = f"{raw_path}?{query}" if query else raw_path
+    return reconstruct_public_url(
+        request.headers,
+        path,
+        trust_proxy=trust_proxy,
+        default_scheme=request.url.scheme,
+    )
+
+
+def _stream_parameters(form: dict[str, str]) -> dict[str, str]:
+    parameters: dict[str, str] = {"Direction": form.get("Direction") or "inbound"}
+    for name in ("From", "To", "CallerName", "FromCity", "FromState", "FromZip", "FromCountry"):
+        if form.get(name):
+            parameters[name] = form[name]
+    return parameters
 
 
 def create_app() -> FastAPI:
@@ -92,6 +120,7 @@ def create_app() -> FastAPI:
             port,
             process_request=process_request,
             compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )
         try:
             yield
@@ -104,25 +133,16 @@ def create_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
 
-    def public_twilio_url(request: Request) -> str:
-        if public_twiml_url:
-            return public_twiml_url
-        raw_path = request.scope.get("raw_path", b"/twiml").decode("ascii")
-        query = request.scope.get("query_string", b"").decode("ascii")
-        path = f"{raw_path}?{query}" if query else raw_path
-        return reconstruct_public_url(
-            request.headers,
-            path,
-            trust_proxy=trust_proxy_headers,
-            default_scheme=request.url.scheme,
-        )
-
     async def signed_twilio_form(request: Request) -> list[tuple[str, str]]:
         body = (await request.body()).decode()
         form_items = parse_qsl(body, keep_blank_values=True)
         if not validate_twilio_webhook_signature(
             auth_token=twilio_auth_token,
-            url=public_twilio_url(request),
+            url=_public_twilio_url(
+                request,
+                configured_url=public_twiml_url,
+                trust_proxy=trust_proxy_headers,
+            ),
             params=form_items,
             signature=request.headers.get("x-twilio-signature"),
         ):
@@ -136,24 +156,17 @@ def create_app() -> FastAPI:
         call_sid = form.get("CallSid", "").strip()
         if not call_sid:
             raise HTTPException(status_code=400, detail="Twilio webhook is missing CallSid")
-        parameters: dict[str, str] = {"Direction": form.get("Direction") or "inbound"}
-        for name in (
-            "From",
-            "To",
-            "CallerName",
-            "FromCity",
-            "FromState",
-            "FromZip",
-            "FromCountry",
-        ):
-            if form.get(name):
-                parameters[name] = form[name]
+        parameters = _stream_parameters(form)
         xml = twiml_connect_stream(
             stream_url,
             parameters=parameters,
             stream_token=stream_tokens.issue(
                 idempotency_key=twilio_webhook_idempotency_key(
-                    url=public_twilio_url(request),
+                    url=_public_twilio_url(
+                        request,
+                        configured_url=public_twiml_url,
+                        trust_proxy=trust_proxy_headers,
+                    ),
                     params=form_items,
                     signature=request.headers.get("x-twilio-signature"),
                 ),

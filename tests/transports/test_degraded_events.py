@@ -54,8 +54,11 @@ def _bus_with_collector() -> tuple[EventBus, list[TransportDegraded]]:
 class _MixinHarness(AudioQueueMixin):
     transport_kind = "harness"
 
-    def __init__(self, max_pending: int) -> None:
-        self._init_audio_queue(max_pending)
+    def __init__(self, max_pending: int, max_pending_bytes: int | None = None) -> None:
+        if max_pending_bytes is None:
+            self._init_audio_queue(max_pending)
+        else:
+            self._init_audio_queue(max_pending, max_pending_bytes)
 
 
 class TestSharedEmitSeam:
@@ -71,6 +74,60 @@ class TestSharedEmitSeam:
         assert received[0].provider == "harness"  # from transport_kind
         assert received[0].fatal is False
         assert "Harness" in received[0].detail
+
+    @pytest.mark.asyncio
+    async def test_enqueue_chunk_byte_limit_drops_before_count_limit(self) -> None:
+        h = _MixinHarness(max_pending=10, max_pending_bytes=5)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        first = make_chunk(n_bytes=4)
+        h._enqueue_chunk(first, context="Harness")
+        h._enqueue_chunk(make_chunk(n_bytes=2), context="Harness")
+        await _drain_scheduled_emits()
+
+        assert h._in_queue.qsize() == 1
+        assert h._in_queue.pending_bytes == 4
+        assert [e.reason for e in received] == [_DEGRADED_INBOUND_QUEUE_FULL]
+
+        assert await h._in_queue.get() is first
+        assert h._in_queue.pending_bytes == 0
+
+        h._enqueue_chunk(make_chunk(n_bytes=2), context="Harness")
+        assert h._in_queue.qsize() == 1
+        assert h._in_queue.pending_bytes == 2
+
+    @pytest.mark.asyncio
+    async def test_single_chunk_larger_than_byte_limit_is_dropped(self) -> None:
+        h = _MixinHarness(max_pending=10, max_pending_bytes=5)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        h._enqueue_chunk(make_chunk(n_bytes=6), context="Harness")
+        await _drain_scheduled_emits()
+
+        assert h._in_queue.empty()
+        assert h._in_queue.pending_bytes == 0
+        assert [e.reason for e in received] == [_DEGRADED_INBOUND_QUEUE_FULL]
+
+    @pytest.mark.parametrize(
+        ("max_pending", "max_pending_bytes"),
+        [
+            (0, 1),
+            (-1, 1),
+            (True, 1),
+            (1, 0),
+            (1, -1),
+            (1, True),
+        ],
+    )
+    def test_audio_queue_limits_must_be_positive_integers(
+        self,
+        max_pending: int,
+        max_pending_bytes: int,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be an integer >= 1"):
+            _MixinHarness(max_pending, max_pending_bytes)
 
     @pytest.mark.asyncio
     async def test_no_bus_is_silent_noop(self) -> None:

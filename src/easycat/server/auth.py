@@ -1,22 +1,22 @@
-"""Unified auth layer for :class:`VoiceServer` — shared by WebSocket and WebRTC.
+"""Unified auth layer shared by the WebSocket, WebRTC, and WebTransport servers.
 
-This module is the SINGLE owner of the auth policy that both transport paths
-reconcile to in M5:
+This module is the single owner of the auth policy shared by the three server
+request shapes:
 
 * :class:`AuthPolicy` (Protocol) / :class:`AuthResult` / :class:`NoAuth` /
   :class:`BearerTokenAuth` — the policy types.
 * :func:`enforce_bind_guard` — the structured non-loopback-requires-token guard.
   Binding a non-loopback host with no token RAISES :class:`ValueError` unless
   ``unsafe_allow_no_auth=True`` (the ONLY escape hatch). This is the property
-  that CLOSES the previously-unauthenticated ``0.0.0.0`` WebSocket voice
-  endpoint: the same guard now applies to BOTH WebSocket and WebRTC.
+  that closes unauthenticated public binds across the general-purpose
+  WebSocket, WebRTC, and WebTransport server surfaces.
 
 Design notes (deliberate divergences from the plan sketch):
 
 * :meth:`AuthPolicy.authorize` is **synchronous**, NOT ``async``. The auth
-  checks it unifies — the WebSocket handshake guard and
-  ``WebRTCTransport._request_authorized`` — are both sync and run in sync
-  contexts (``process_request`` hooks / sync handler guards). Making
+  checks it unifies — the WebSocket handshake guard, WebRTC signaling guard,
+  and WebTransport CONNECT guard — are sync and run in sync contexts
+  (``process_request`` hooks / sync handler guards). Making
   ``authorize`` async would force an ``await`` into those paths for no benefit
   and would require an event loop where none exists today. The adapters
   (:func:`from_aiohttp_request` / :func:`from_websocket`) likewise do NOT
@@ -51,11 +51,11 @@ AuthReason = Literal["allowed", "missing", "invalid"]
 class RequestLike(Protocol):
     """The minimal request shape the auth layer reads.
 
-    It abstracts the two transport request shapes (an aiohttp request with
-    ``.headers`` / ``.query`` and a raw-websocket ``Headers`` + ``path``) down
-    to the only two credential-bearing fields. Concrete adapters build a frozen
-    :class:`_Request` from each shape so nothing carries the raw request object
-    into anything that might be echoed.
+    It abstracts the three server request shapes (aiohttp ``.headers`` /
+    ``.query``, raw-WebSocket ``Headers`` + ``path``, and aioquic HTTP/3 header
+    tuples) down to the only two credential-bearing fields. Concrete adapters
+    build a frozen :class:`_Request` from each shape so nothing carries the raw
+    request object into anything that might be echoed.
     """
 
     @property
@@ -95,6 +95,16 @@ def from_aiohttp_request(request: object) -> _Request:
     return _Request(authorization_header=auth, query_token=token)
 
 
+def _query_token_from_path(path: str) -> str | None:
+    from urllib.parse import parse_qs, urlsplit
+
+    try:
+        query = urlsplit(path).query
+    except ValueError:
+        return None
+    return parse_qs(query).get("token", [None])[0]
+
+
 def from_websocket(headers: Any, path: str) -> _Request:
     """Adapt a raw-websocket request (``Headers`` + handshake ``path``).
 
@@ -102,11 +112,31 @@ def from_websocket(headers: Any, path: str) -> _Request:
     ``websockets`` ``Headers`` mapping and the handshake ``path`` carrying the
     query string (e.g. ``/voice?token=...``).
     """
-    from urllib.parse import parse_qs, urlsplit
-
     auth = headers.get("Authorization") if headers is not None else None
-    token = parse_qs(urlsplit(path).query).get("token", [None])[0]
-    return _Request(authorization_header=auth, query_token=token)
+    return _Request(
+        authorization_header=auth,
+        query_token=_query_token_from_path(path),
+    )
+
+
+def from_h3_headers(headers: list[tuple[bytes, bytes]], path: str) -> _Request:
+    """Adapt HTTP/3 CONNECT headers from aioquic.
+
+    HTTP/3 field names are lowercase bytes. Decode the authorization value with
+    latin-1 so every byte maps deterministically; :class:`BearerTokenAuth`
+    rejects non-ASCII credentials cleanly rather than raising. The full
+    ``:path`` is retained for the explicit ``?token=`` opt-in needed by browser
+    WebTransport clients, whose constructor cannot set arbitrary headers.
+    """
+    authorization: str | None = None
+    for name, value in headers:
+        if name.lower() == b"authorization":
+            authorization = value.decode("latin-1")
+            break
+    return _Request(
+        authorization_header=authorization,
+        query_token=_query_token_from_path(path),
+    )
 
 
 @dataclass(frozen=True)
@@ -157,9 +187,9 @@ class BearerTokenAuth:
 
     Accepts ``Authorization: Bearer <token>`` always, and a ``?token=`` query
     value ONLY when ``allow_query_token=True`` (default OFF — a deliberate
-    breaking change for the browser WS client, which cannot set handshake
-    headers; document the loopback/dev opt-in). Comparison is constant-time via
-    :func:`hmac.compare_digest`.
+    breaking change for browser WebSocket and WebTransport clients, which
+    cannot set handshake headers; document the loopback/dev opt-in). Comparison
+    is constant-time via :func:`hmac.compare_digest`.
     """
 
     token: str
@@ -236,9 +266,9 @@ def enforce_bind_guard(
     Binding a NON-loopback host with NO token RAISES :class:`ValueError` unless
     ``unsafe_allow_no_auth=True`` (the only escape hatch). A loopback bind, a
     bind with a token-bearing policy, or an explicit ``unsafe_allow_no_auth``
-    all pass. Both the WebSocket and WebRTC serve helpers call this so the
-    behavior — and the ``0.0.0.0`` gap it closes — is identical across
-    transports.
+    all pass. The WebSocket, WebRTC, and WebTransport server helpers call this
+    so the behavior — and the ``0.0.0.0`` gap it closes — is identical across
+    those general-purpose transport servers.
 
     The escape hatch is honored from BOTH the ``unsafe_allow_no_auth``
     PARAMETER and the same-named field on the policy object (so an

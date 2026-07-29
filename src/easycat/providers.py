@@ -322,9 +322,10 @@ class Transport(VersionedProvider, Protocol):
     #   barge-in; transports without outbound buffering omit it entirely.
     # - ``pending_playout_ms() -> float`` — milliseconds of audio still queued
     #   for local speaker playout, so ``await_drain`` waits for real playout.
-    # - ``drain_aec_reference_frames() -> list[bytes]`` — far-end (speaker)
-    #   reference frames captured at playback time and fed to the echo canceller
-    #   before the matching near-end mic frame (LocalTransport + WebRTC).
+    # - ``drain_aec_reference_frames() -> list[AudioChunk]`` — typed far-end
+    #   (speaker) reference frames captured at playback time and fed to the echo
+    #   canceller before the matching near-end mic frame (LocalTransport +
+    #   WebRTC). The runtime still accepts legacy raw-byte frames.
     # - ``send_playback_mark(...)`` — see :class:`PlaybackAcknowledgements`.
     # - ``send_audio_is_nonblocking: bool`` — opt in only when every
     #   ``send_audio`` path completes without suspending. AudioRouter combines

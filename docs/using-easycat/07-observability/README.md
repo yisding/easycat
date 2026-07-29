@@ -127,7 +127,10 @@ Replay has two independent safety choices:
 
 Keep tools denied until you have reviewed the bundle and the replay target.
 Use `stub` when a tool-bearing run should continue without its external
-effect. Treat `allow` as explicitly side-effecting. You can also restrict a
+effect. `allow` passes recorded tool frames; the CLI has no application tool
+registry and therefore does not invoke external tools. Library callers can
+supply a tool executor to `RunBundle.replay(...)`, in which case executed
+calls are explicitly reported as side-effecting. You can also restrict a
 replay with `--turn`, `--stage`, or committable sequence bounds.
 
 ## Diff two runs
