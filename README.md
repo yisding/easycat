@@ -62,6 +62,18 @@ stderr is redirected.
 
 Python 3.11+ is required.
 
+Local microphone/speaker modes also need the PortAudio runtime. Install it
+before the Python extra on Linux or macOS:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install -y libportaudio2
+
+# macOS
+brew install portaudio
+```
+
 EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
 will work only after launch. Until then, an application should depend on a
 local checkout — scaffolds from `easycat init` wire this automatically with
@@ -149,7 +161,8 @@ uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice + NumPy (LocalTransport and local audio): `uv sync --extra local --group dev`
+- sounddevice + NumPy (LocalTransport and local audio buffers; requires the
+  PortAudio runtime above): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
