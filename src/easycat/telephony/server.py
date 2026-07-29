@@ -41,7 +41,10 @@ from easycat.server.transports import WebSocketSessionRuntime
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 if TYPE_CHECKING:
+    from websockets.asyncio.server import ServerConnection
+
     from easycat.config import EasyConfig
+    from easycat.session import Session
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +254,7 @@ async def serve_twilio_voice_app(
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(config.stream_token_secret)
 
-    async def build_session(ws: object) -> object | None:
+    async def build_session(ws: ServerConnection) -> Session | None:
         transport = TwilioConnectionTransport(
             ws,
             config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),
@@ -264,7 +267,7 @@ async def serve_twilio_voice_app(
             await transport.disconnect()
             raise
 
-    runtime = WebSocketSessionRuntime(
+    runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=config.max_sessions,
         session_factory=build_session,

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
 from typing import Any
 
+from easycat._provider_domains import register_sensitive_api_domains
+
 logger = logging.getLogger("easycat")
 
 ProviderCapabilityResolver = Callable[[Any, str | None], frozenset[str]]
@@ -65,6 +67,9 @@ class ProviderCatalog:
     _discovered: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
+        register_sensitive_api_domains(
+            domain for spec in self.specs.values() for domain in spec.api_domains
+        )
         providers = {
             name: (spec.provider_cls, spec.config_cls) for name, spec in self.specs.items()
         }
@@ -144,6 +149,7 @@ class ProviderCatalog:
         self.capabilities[normalized] = frozenset(capabilities)
         self.capability_resolvers[normalized] = capability_resolver
         self.config_to_provider[config_cls] = provider_cls
+        register_sensitive_api_domains(api_domains)
 
     def discover(self) -> None:
         """Load entry-point registration callbacks once, logging failures."""
