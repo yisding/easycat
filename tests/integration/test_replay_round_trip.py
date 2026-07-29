@@ -21,9 +21,7 @@ from typing import Any
 
 import pytest
 
-from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.cancel import CancelToken
 from easycat.debug.bundle import RunBundle
 from easycat.debug.export import export_debug_bundle
 from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
@@ -120,7 +118,7 @@ def _build_session() -> tuple[Session, InMemoryRingBuffer, InMemoryArtifactStore
             enable_vad=False,
         )
     )
-    session._turn = TurnContext("turn-rt", CancelToken())
+    session.begin_turn("turn-rt")
     return session, journal, artifact_store
 
 

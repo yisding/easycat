@@ -3,7 +3,7 @@
   * ``PhoneticReplacementProcessor`` rewrites hard-to-pronounce names
     (``Siobhan`` → ``shi-vawn``).
   * ``PauseProcessor`` inserts pauses between digits in phone numbers
-    (SSML breaks for providers that support it; ellipsis fallback otherwise).
+    using provider-neutral ellipsis cues.
 
 Once running, ask: "What's Siobhan's number?"
 
@@ -25,7 +25,7 @@ except ImportError as exc:
 
 from easycat import EasyConfig, PauseProcessor, PhoneticReplacementProcessor, run
 
-# default_pronunciation_processors(name_pronunciations=..., phone_pause_ms=...)
+# default_pronunciation_processors(name_pronunciations=..., phone_ellipsis_count=1)
 # bundles the two below into one call.
 run(
     EasyConfig.mic(
@@ -43,7 +43,6 @@ run(
                 pattern=r"\+?\d[\d\s().-]{5,}\d",
                 unit_pattern=r"\d",
                 minimum_units=7,
-                pause_ms=140,
             ),
         ],
     )

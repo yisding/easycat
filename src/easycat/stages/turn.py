@@ -14,6 +14,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    audio_input_capture_allowed,
     journal_append_control_signal,
     journal_append_event,
     journal_ctx,
@@ -52,7 +53,11 @@ class TurnStage:
         result_attr = "pass"
         state_before = self.snapshot_state()
         audio_bytes = _concat_chunks(input)
-        input_ref = await put_artifact_async(ctx, audio_bytes)
+        input_ref = await put_artifact_async(
+            ctx,
+            audio_bytes,
+            capture_allowed=audio_input_capture_allowed(ctx, input),
+        )
         start_sequence = journal_append_event(
             ctx,
             stage=self.name,

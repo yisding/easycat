@@ -36,10 +36,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from hmac import compare_digest
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from easycat._net import is_loopback_host
+from easycat._net import constant_time_strings_equal, is_loopback_host
 
 # The shipped CLI auth env var. Standardize on ``EASYCAT_SERVE_TOKEN`` (NOT
 # ``EASYCAT_SERVER_TOKEN`` — one letter apart, a silent-rename hazard).
@@ -226,11 +225,7 @@ class BearerTokenAuth:
         WebRTC routes are try-less, so an unguarded ``TypeError`` would
         propagate as a 500 DoS / confusing diagnostic instead of a clean 401.
         """
-        return (
-            credential.isascii()
-            and self.token.isascii()
-            and compare_digest(credential, self.token)
-        )
+        return constant_time_strings_equal(credential, self.token)
 
 
 def bearer_auth_from_env(

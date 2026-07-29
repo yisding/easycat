@@ -602,6 +602,41 @@ async def test_cancel_cancels_pending_current_task() -> None:
     assert tts.cancelled == 1
 
 
+@pytest.mark.asyncio
+async def test_detached_cancel_drains_only_captured_turn_task() -> None:
+    tts = _RecordingTTS()
+    scheduler, _ = _build_scheduler(tts=tts)
+    old_started = asyncio.Event()
+    old_cancelled = asyncio.Event()
+    hold_old = asyncio.Event()
+    hold_successor = asyncio.Event()
+
+    async def _old_turn() -> None:
+        old_started.set()
+        try:
+            await hold_old.wait()
+        except asyncio.CancelledError:
+            old_cancelled.set()
+            raise
+
+    old_task = asyncio.create_task(_old_turn())
+    scheduler.active_turn_task = old_task
+    await old_started.wait()
+
+    captured = scheduler.request_turn_cancel()
+    successor_task = asyncio.create_task(hold_successor.wait())
+    scheduler.active_turn_task = successor_task
+    await scheduler.finish_turn_cancel(captured)
+
+    assert old_cancelled.is_set()
+    assert not successor_task.done()
+    assert tts.cancelled == 1
+
+    successor_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await successor_task
+
+
 # ── Tests: turn finalization ────────────────────────────────
 
 

@@ -1,7 +1,7 @@
 """Voice workflow with two PydanticAI specialists — local mic to speaker."""
 
-from pydantic_ai import Agent
 from easycat import EasyConfig, run
+from pydantic_ai import Agent
 
 PROMPT = "$AGENT_INSTRUCTIONS"
 TECH_TERMS = ("audio", "browser", "setup", "install")

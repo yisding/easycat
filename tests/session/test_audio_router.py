@@ -454,6 +454,92 @@ async def test_inline_send_defers_caller_cancellation_until_transport_finishes()
 
 
 @pytest.mark.asyncio
+async def test_inline_send_keeps_stubborn_transport_owned_until_it_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    transport_cancelled = asyncio.Event()
+    transport_disconnected = asyncio.Event()
+    release = asyncio.Event()
+
+    class _WedgedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            _ = chunk
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                transport_cancelled.set()
+                await release.wait()
+            return True
+
+        async def disconnect(self) -> None:
+            transport_disconnected.set()
+
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_TIMEOUT_S", 0.02)
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_CANCEL_GRACE_S", 0.02)
+    router, state = _make_router(transport=_WedgedTransport())
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    inline.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert transport_cancelled.is_set()
+    assert transport_disconnected.is_set()
+    assert router._outbound_in_flight == 1
+    assert router._outbound_send_lock.locked()
+    assert not router._outbound_idle.is_set()
+    assert state["runtime_scope"].tasks("audio_inline_send")
+
+    release.set()
+    await state["runtime_scope"].drain("audio_inline_send")
+    assert router._outbound_in_flight == 0
+    assert not router._outbound_send_lock.locked()
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_inline_send_has_no_router_deadline_without_caller_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BackpressuredTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            _ = chunk
+            started.set()
+            await release.wait()
+            return True
+
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_TIMEOUT_S", 0.02)
+    router, state = _make_router(transport=_BackpressuredTransport())
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0.04)
+
+    assert not inline.done()
+    assert router._outbound_in_flight == 1
+
+    release.set()
+    assert await asyncio.wait_for(inline, timeout=1) is True
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
 async def test_inline_send_keeps_turn_when_shield_task_starts_late(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

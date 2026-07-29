@@ -19,7 +19,7 @@
 
 ## 1. Isolate which knob buys you what
 
-**Task.** Change `MODEL = "gpt-4o-mini"` to `"gpt-4o"`. Re-run.
+**Task.** Change `MODEL = "gpt-5.6-luna"` to `"gpt-5.6-sol"`. Re-run.
 For each bundle, run:
 
 ```bash
@@ -39,8 +39,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-A slower model primarily grows `stt_final_to_first_token_ms`:
-   that is provider/model startup before the first non-empty delta.
+A different model tier primarily changes
+   `stt_final_to_first_token_ms`: that is provider/model startup
+   before the first non-empty delta. Record the direction and size
+   instead of assuming either is universal.
 
 </details>
 

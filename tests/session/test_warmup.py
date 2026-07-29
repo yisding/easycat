@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from easycat.runtime.records import JournalRecordKind
-from easycat.session._warmup import WarmupRunner
+from easycat.session._warmup import AudioResamplingWarmup, WarmupRunner
 
 
 class _JournalSink:
@@ -73,6 +73,27 @@ class _BlockingWarmup:
         if len(self._started) == 2:
             self._all_started.set()
         await self._release.wait()
+
+
+@pytest.mark.asyncio
+async def test_audio_resampling_warmup_resolves_backend_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    event_loop_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    def resolve() -> str:
+        worker_threads.append(threading.get_ident())
+        return "soxr"
+
+    monkeypatch.setattr("easycat.session._warmup.resample_backend", resolve)
+
+    await AudioResamplingWarmup().warmup()
+
+    assert worker_threads
+    assert worker_threads[0] != event_loop_thread
 
 
 @pytest.mark.asyncio

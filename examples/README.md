@@ -43,8 +43,9 @@ takes `--json` (`uv run easycat validate quick --json`,
 emit the run or saved report inside the standard CLI envelope.
 
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
-RNNoise, NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. It does not
-install every framework/provider variant. Install cells are repo-local commands that start with EasyCat extras,
+NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. RNNoise is opt-in
+through the `rnnoise` extra. It does not install every framework/provider
+variant. Install cells are repo-local commands that start with EasyCat extras,
 such as `uv sync --extra quickstart --group dev`; anything after a semicolon is
 an additional third-party package to install in the same environment with
 `uv pip install`.
@@ -106,7 +107,7 @@ an additional third-party package to install in the same environment with
 | [webrtc_server.py](webrtc_server.py) | Multi-client WebRTC voice chat with bundled browser client. | `uv run python examples/webrtc_server.py` | `uv sync --extra openai --extra openai-agents --extra webrtc --group dev` | `OPENAI_API_KEY`; optional `TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `WEBRTC_EXPOSE_ICE_CREDENTIALS`, `WEBRTC_SIGNALING_TOKEN`, `WEBRTC_MAX_SESSIONS`, `SIGNALING_HOST`, `SIGNALING_PORT` |
 | [webrtc_observability_server.py](webrtc_observability_server.py) | WebRTC plus debugger UI in one browser page. | `uv run python examples/webrtc_observability_server.py` | `uv sync --extra openai --extra openai-agents --extra webrtc --extra debugger --group dev` | `OPENAI_API_KEY`; optional `TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `WEBRTC_EXPOSE_ICE_CREDENTIALS`, `WEBRTC_SIGNALING_TOKEN`, `SIGNALING_HOST`, `SIGNALING_PORT`, `DASHBOARD_HOST`, `DASHBOARD_PORT` |
 | [webtransport_server.py](webtransport_server.py) | Multi-client WebTransport server. | `uv run python examples/webtransport_server.py --cert cert.pem --key key.pem` | `uv sync --extra openai --extra openai-agents --extra webtransport --group dev` | `OPENAI_API_KEY`; optional `EASYCAT_SERVE_TOKEN`; local TLS cert/key files |
-| [twilio_app.py](twilio_app.py) | Lower-level FastAPI Twilio Media Streams reference (outbound calls, status callbacks, SMS); the reusable two-listener helper now lives in `easycat.telephony.server`. | `uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0` | `uv sync --extra openai --extra telephony --extra openai-agents --group dev` | `OPENAI_API_KEY`, `TWILIO_STREAM_URL`; optional `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VOICE_FROM`, `TWILIO_TWIML_URL`, `TWILIO_STATUS_CALLBACK_URL`, `TWILIO_CALL_API_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_STREAM_TOKEN_SECRET` |
+| [twilio_app.py](twilio_app.py) | Lower-level FastAPI Twilio Media Streams reference (outbound calls, status callbacks, SMS); the reusable two-listener helper now lives in `easycat.telephony.server`. | `uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0` | `uv sync --extra openai --extra telephony --extra openai-agents --group dev` | `OPENAI_API_KEY`, `TWILIO_STREAM_URL`, `TWILIO_AUTH_TOKEN`; optional `TWILIO_ACCOUNT_SID`, `TWILIO_VOICE_FROM`, `TWILIO_TWIML_URL`, `TWILIO_STATUS_CALLBACK_URL`, `TWILIO_CALL_API_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_STREAM_TOKEN_SECRET`, `TWILIO_MAX_SESSIONS` |
 
 Support files:
 
@@ -134,7 +135,7 @@ Support files:
 | [push_to_talk.py](push_to_talk.py) | Manually call `start_turn()` / `end_turn()` instead of VAD. | `uv run python examples/push_to_talk.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [smart_turn_demo.py](smart_turn_demo.py) | ONNX endpoint classifier for faster turn completion. | `uv run python examples/smart_turn_demo.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [vad_backends.py](vad_backends.py) | Pin VAD backend (`silero`, `funasr`, `ten`, `krisp`, or `auto`). | `uv run python examples/vad_backends.py --backend silero` | `uv sync --extra quickstart --group dev`; `--extra funasr-vad`, `--extra ten-vad`, or `uv pip install krisp_audio` for those backends | `OPENAI_API_KEY` |
-| [noise_reduction_backends.py](noise_reduction_backends.py) | Pin noise-reduction backend (`rnnoise`, `krisp`, or `auto`). | `uv run python examples/noise_reduction_backends.py --backend rnnoise` | `uv sync --extra quickstart --group dev`; `uv pip install krisp_audio` for Krisp | `OPENAI_API_KEY` |
+| [noise_reduction_backends.py](noise_reduction_backends.py) | Pin noise-reduction backend (`rnnoise`, `krisp`, or `auto`). | `uv run python examples/noise_reduction_backends.py --backend rnnoise` | `uv sync --extra quickstart --extra rnnoise --group dev`; `uv pip install krisp_audio` for Krisp | `OPENAI_API_KEY` |
 | [echo_cancellation.py](echo_cancellation.py) | Enable LiveKit AEC3 on local mic/speaker. | `uv run python examples/echo_cancellation.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [output_processors.py](output_processors.py) | Pre-TTS pronunciation and pacing processors. | `uv run python examples/output_processors.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 

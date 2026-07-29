@@ -59,10 +59,12 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- For the live pipeline: `uv sync --extra quickstart --extra deepgram --group dev`.
-- For offline replay only: `uv sync --extra quickstart --group dev`. The
-  checked-in WAV pairs need no microphone or API keys.
-- RNNoise is included in `quickstart`; Krisp requires its own SDK.
+- For the live pipeline:
+  `uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev`.
+- For offline replay with `--nr on`:
+  `uv sync --extra quickstart --extra rnnoise --group dev`. The checked-in WAV
+  pairs need no microphone or API keys.
+- RNNoise uses the opt-in `rnnoise` extra; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 - Running this chapter makes live provider calls that may incur charges.
@@ -145,8 +147,9 @@ hearing.
 +transport accepts a complete TTS chunk.
  
  Dependencies:
-     uv sync --extra quickstart --extra deepgram --group dev
-+    RNNoise is included in quickstart; Krisp requires its own SDK.
+-    uv sync --extra quickstart --extra deepgram --group dev
++    uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
++    RNNoise uses its opt-in extra; Krisp requires its own SDK.
 +    For real AEC:  uv sync --extra aec --group dev
 +    Missing selected backends fall back to passthrough — the
 +    journal tells you which backend is live.
@@ -191,7 +194,7 @@ hearing.
  from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
 @@ -60,62 +78,23 @@
- MODEL = "gpt-4o-mini"
+ MODEL = "gpt-5.6-luna"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch09c-estimate-{int(time.time())}"
@@ -268,7 +271,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -144,13 +123,33 @@
+@@ -144,16 +123,32 @@
                  self._preroll.append(chunk)
  
  
@@ -293,20 +296,19 @@ hearing.
  
  
 -async def run_agent(client, history, sentence_queue, cancel: CancelToken):
--    stream = await client.chat.completions.create(model=MODEL, messages=history, stream=True)
 +async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
-+    stream = await client.chat.completions.create(
-+        model=MODEL,
+     stream = await client.chat.completions.create(
+         model=MODEL,
+         reasoning_effort="none",
+-        messages=history,
 +        messages=[
 +            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
 +            {"role": "user", "content": user_text},
 +        ],
-+        stream=True,
-+    )
+         stream=True,
+     )
      buffer = ""
-     async for chunk in stream:
-         if cancel.is_cancelled:
-@@ -171,49 +170,38 @@
+@@ -176,49 +171,38 @@
      await sentence_queue.put(None)
  
  
@@ -367,7 +369,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -239,7 +227,7 @@
+@@ -244,7 +228,7 @@
          await close_if_supported(stt)
  
  
@@ -376,7 +378,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -250,35 +238,35 @@
+@@ -255,35 +239,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -425,7 +427,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -286,54 +274,20 @@
+@@ -291,54 +275,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -486,7 +488,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -351,41 +305,34 @@
+@@ -356,41 +306,34 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -540,7 +542,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -400,6 +347,32 @@
+@@ -405,6 +348,32 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -573,7 +575,7 @@ hearing.
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
          detector = MiniTurnDetector(vad)
-@@ -411,19 +384,22 @@
+@@ -416,19 +385,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  
@@ -725,7 +727,7 @@ flowchart LR
 
   ```python
   await transport.send_audio(event.audio)
-  aec.feed_reference(event.audio)   # ← only AEC needs this
+  aec.feed_reference(event.audio)  # ← only AEC needs this
   ```
 
 The `NR → AEC → VAD` stage itself is one short coroutine; the
@@ -778,6 +780,7 @@ Every run writes an `audio.config` record with the live backends:
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
+
 for b in Path("docs/teaching/10-cleaning-signal/runs/").glob("*.bundle"):
     bundle = load_bundle(b)
     for r in bundle.records():

@@ -1,14 +1,15 @@
 # $PROJECT_NAME
 
-External EasyCat provider package — a Protocol-conforming `EnergyVAD`
-provider with a config dataclass, a conformance test, and a live mic demo
-that injects the provider through `EasyConfig`.
+External EasyCat provider package — a Protocol-conforming, name-registrable
+`EnergyVAD` provider with a config dataclass, a conformance test, and a live
+mic demo that selects the provider through `EasyConfig`.
 
 EasyCat providers are duck-typed: `custom_vad.py` implements the
-`VADProvider` Protocol structurally, so this package needs no EasyCat
-registry entry and no base class. The same recipe works for STT, TTS, and
-transport providers — see the extending guides under `docs/extending/` in
-the EasyCat repository.
+`VADProvider` Protocol structurally, with no base class. Its `register()`
+function makes `vad="energy"` available to `EasyConfig`, `easycat.toml`,
+and the provider planner. The `easycat.vad_providers` entry point in
+`pyproject.toml` performs that registration automatically once this package
+is installed.
 
 ## Install
 
@@ -87,8 +88,9 @@ re-run the check.
   conformance test. The extending guides in the EasyCat repository walk
   through each surface.
 - **Publish the package:** rename `custom_vad.py` to your package name,
-  fill in `pyproject.toml` metadata, and ship it; applications inject it
-  with `EasyConfig.mic(vad=YourProvider())`.
+  update the `easycat.vad_providers` entry point and `pyproject.toml`
+  metadata, and ship it; applications select it with
+  `EasyConfig.mic(vad="your-provider")` or inject a live instance directly.
 - **Debug a session:** pass `debug="light", record_to=".easycat/runs"` to
   `EasyConfig.mic(...)` in `agent.py`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect

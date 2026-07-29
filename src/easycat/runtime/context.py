@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +20,9 @@ class RunContext:
     ``journal`` and ``artifact_store`` are typed as ``Any`` to avoid
     circular imports with the runtime package; at runtime they are
     ``ExecutionJournal | None`` and ``ArtifactStore | None``.
+    ``journal_detail`` controls whether frame-oriented stages retain verbose
+    replay spans/artifacts (``"full"``) or only higher-level events and errors
+    (``"light"``).
     """
 
     run_id: str
@@ -27,10 +31,19 @@ class RunContext:
     journal: Any = None  # ExecutionJournal | None
     artifact_store: Any = None  # ArtifactStore | None
     config_snapshot: dict[str, Any] = field(default_factory=dict)
+    # Appended for positional compatibility with older RunContext calls.
+    audio_capture_enabled: Callable[[], bool] | None = None
+    audio_capture_epoch: Callable[[], int] | None = None
+    journal_detail: Literal["off", "light", "full"] = "full"
 
     def __post_init__(self) -> None:
         if self.runtime_mode not in ("chained_pipeline", "text_session"):
             raise ValueError(
                 f"Unsupported runtime_mode: {self.runtime_mode!r}. "
                 "Must be 'chained_pipeline' or 'text_session'."
+            )
+        if self.journal_detail not in ("off", "light", "full"):
+            raise ValueError(
+                f"Unsupported journal_detail: {self.journal_detail!r}. "
+                "Must be 'off', 'light', or 'full'."
             )
