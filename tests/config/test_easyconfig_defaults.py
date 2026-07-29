@@ -16,6 +16,7 @@ from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
+from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
@@ -305,20 +306,39 @@ def test_easycat_config_preserves_explicit_tts_playback_when_auto_align_disabled
     assert config.tts.audio_format == PCM16_MONO_24K
 
 
-def test_easycat_config_echo_cancellation_defaults_for_local_and_websocket():
+def test_easycat_config_echo_cancellation_defaults_on_for_local_only():
     local = EasyConfig(openai_api_key="test-key", transport=LocalTransportConfig())
-    websocket = EasyConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
 
     assert local.echo_cancellation == EchoCancellationConfig(enabled=True)
-    assert websocket.echo_cancellation == EchoCancellationConfig(enabled=True)
 
 
-def test_easycat_config_echo_cancellation_defaults_off_for_other_transports():
+def test_easycat_config_echo_cancellation_defaults_off_without_playback_timed_reference():
+    websocket = EasyConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
+    webtransport = EasyConfig(
+        openai_api_key="test-key",
+        transport=WebTransportTransportConfig(),
+    )
     twilio = EasyConfig(openai_api_key="test-key", transport=TwilioTransportConfig())
     webrtc = EasyConfig(openai_api_key="test-key", transport=WebRTCTransportConfig())
 
+    assert websocket.echo_cancellation == EchoCancellationConfig(enabled=False)
+    assert webtransport.echo_cancellation == EchoCancellationConfig(enabled=False)
     assert twilio.echo_cancellation == EchoCancellationConfig(enabled=False)
     assert webrtc.echo_cancellation == EchoCancellationConfig(enabled=False)
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [WebSocketTransportConfig(), WebTransportTransportConfig()],
+)
+def test_remote_browser_transports_preserve_explicit_server_aec_opt_in(transport):
+    config = EasyConfig(
+        openai_api_key="test-key",
+        transport=transport,
+        enable_echo_cancellation=True,
+    )
+
+    assert config.echo_cancellation == EchoCancellationConfig(enabled=True)
 
 
 def test_easycat_config_echo_cancellation_respects_explicit_override():

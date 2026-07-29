@@ -402,7 +402,7 @@ class LocalTransport(AudioQueueMixin):
         # full chunk), matching the docstring so the drop metric stays honest.
         return not truncated
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
         """Return all pending AEC far-end reference frames, draining the queue.
 
         This is the shared AEC reference capability used by both the local and
@@ -414,7 +414,7 @@ class LocalTransport(AudioQueueMixin):
         before AudioStage.execute() so the AEC far-end reference is always fed
         before the corresponding near-end mic frame is processed.
 
-        Frames are returned oldest-first.
+        Frames are returned oldest-first with the transport's playout format.
 
         Thread-safe: the output callback pushes to this queue from the
         sounddevice audio thread while this method is called from the asyncio
@@ -425,10 +425,15 @@ class LocalTransport(AudioQueueMixin):
         session without AEC never pays the per-frame push cost.
         """
         self._aec_reference_enabled = True
-        frames: list[bytes] = []
+        frames: list[AudioChunk] = []
         while True:
             try:
-                frames.append(self._aec_ref_queue.get_nowait())
+                frames.append(
+                    AudioChunk(
+                        data=self._aec_ref_queue.get_nowait(),
+                        format=self._audio_format,
+                    )
+                )
             except thread_queue.Empty:
                 break
         return frames
