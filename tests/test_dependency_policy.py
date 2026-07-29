@@ -80,6 +80,15 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_telephony_library_extra_excludes_reference_server_dependencies() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    telephony = {Requirement(dep).name for dep in extras["telephony"]}
+    fastapi_server = {Requirement(dep).name for dep in extras["telephony-fastapi"]}
+
+    assert telephony == {"aiohttp", "phonenumberslite", "twilio"}
+    assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
+
+
 def test_declared_dependency_floors_are_compatibility_tested() -> None:
     project = _pyproject()["project"]
     extras = project["optional-dependencies"]

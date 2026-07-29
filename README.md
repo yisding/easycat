@@ -165,7 +165,9 @@ frameworks, and debugging/audio-processing features:
   PortAudio runtime above): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
-- FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- Twilio SDK + aiohttp (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
+- FastAPI + uvicorn telephony server layer: `uv sync --extra telephony-fastapi --group dev`
+- Complete Twilio FastAPI reference app and scaffold: `uv sync --extra telephony --extra telephony-fastapi --group dev`
 - OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
 - PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
 - PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
@@ -188,6 +190,14 @@ frameworks, and debugging/audio-processing features:
   or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
+
+For a broad downstream evaluation install, run
+`uv add 'easycat[all,pydantic-ai]'` for stable PydanticAI v1 or
+`uv add 'easycat[all,pydantic-ai-v2]'` for stable v2. In this repository, use
+`uv sync --extra all --extra pydantic-ai --group dev` or
+`uv sync --extra all --extra pydantic-ai-v2 --group dev`, respectively. The
+`all` extra deliberately omits `ten-vad` because of its non-permissive license
+and omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2` extras.
 
 Every EasyCat install includes SoXR for filtered, native-speed sample-rate
 conversion. `easycat doctor` reports the active backend; the dependency-free
@@ -878,6 +888,7 @@ CORS headers by default; if you host the browser UI elsewhere, pass explicit
 ## Repo layout
 - src/easycat: library code
 - tests: unit/integration tests (some are skipped without API keys)
+- [CHANGELOG.md](CHANGELOG.md): release notes and the current unreleased changes
 
 ## Factory APIs
 

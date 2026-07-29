@@ -363,3 +363,26 @@ use the matching raw command from
   (e.g. `stt: normalize partial transcript events`).
 - Secrets stay in environment variables; never commit keys or un-redacted
   cassettes.
+
+## Preparing a release
+
+`pyproject.toml` is the package-version source of truth. Before creating a
+release candidate:
+
+1. Move completed entries from `Unreleased` into a versioned section in
+   [CHANGELOG.md](CHANGELOG.md), and set the same version in `pyproject.toml`.
+2. Regenerate and verify the lock with `uv lock` and `uv lock --check`.
+3. Run `just check` and `uv run easycat validate release`. The release lane
+   builds both distributions, checks their metadata, installs the wheel outside
+   the source tree, and runs its configured gates through that installation.
+4. Before the first production publish, reserve the `easycat` project name and
+   configure pending Trusted Publishers on PyPI and TestPyPI. Manually dispatch
+   `.github/workflows/release-validation.yml` until it is green, then rehearse
+   an RC such as `0.1.0rc1` against TestPyPI. Do not use the production index as
+   the first workflow test.
+5. Create an annotated tag whose name is exactly `v` plus the project version
+   (for example, version `0.1.0rc1` uses tag `v0.1.0rc1`). The release
+   validation workflow rejects a mismatched tag before building.
+
+The tag-triggered workflow publishes through OIDC and the reviewer-gated
+`pypi` environment. It must not be changed to use a long-lived upload token.

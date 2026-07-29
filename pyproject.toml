@@ -54,6 +54,10 @@ easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.18.3"]
+# Compatibility schedule: retain the PydanticAI v1 extra through 2027-07-31.
+# In the next breaking EasyCat release after that date, ``pydantic-ai`` can
+# move to the supported 2.x range, the transitional ``pydantic-ai-v2`` alias
+# can be removed, and the [tool.uv].conflicts entry below can be collapsed.
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.15.0,<3.0.0"]
 # Security floor: 1.2.28 includes the LangChain prompt-validation fixes from
@@ -75,10 +79,15 @@ telephony = [
     # 3.13.3 fixes the request parsing and resource-exhaustion advisories
     # published for every aiohttp release through 3.13.2.
     "aiohttp>=3.13.3",
-    "fastapi>=0.140.0",
     "phonenumberslite>=9.0.35",
-    "python-multipart>=0.0.29",
     "twilio>=9.0.0",
+]
+# The bundled lower-level reference app and twilio-phone scaffold use FastAPI
+# and uvicorn; the reusable telephony library itself does not. FastAPI form
+# handling also requires python-multipart for Twilio webhook endpoints.
+telephony-fastapi = [
+    "fastapi>=0.140.0",
+    "python-multipart>=0.0.29",
     "uvicorn>=0.51.0",
 ]
 aec = ["livekit>=1.1.13"]
