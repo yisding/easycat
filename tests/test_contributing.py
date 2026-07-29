@@ -75,6 +75,12 @@ def test_current_code_status_uses_live_inventory_commands() -> None:
     assert re.search(r"contains \d+ tracked", status) is None
     assert (REPO_ROOT / "LICENSE").is_file()
     assert "A root `LICENSE` remains active release-bar work" not in status
+    implemented, active_gaps = status.split("## Still Active Gaps", 1)
+    assert (
+        "A root BSD-2-Clause `LICENSE` and PEP 639 package metadata are in place."
+        in implemented
+    )
+    assert "PEP 639 package metadata" not in active_gaps
 
 
 def _development_loop_rows() -> list[dict[str, str]]:
