@@ -59,6 +59,15 @@ Webhook signature validation and the stream token solve different problems.
 The signature authenticates Twilio's HTTP request. The one-time token prevents
 an arbitrary WebSocket client from bypassing the webhook and attaching to the
 media listener. The checkpoint proves a token succeeds once and replay fails.
+For multi-tenant or shared-worker media listeners, `stream_token_validator` can
+accept a `StreamTokenContext` parameter instead of a raw token string; EasyCat
+passes the token, `CallSid`, `StreamSid`, and stream custom parameters, and any
+mapping returned by the validator is merged into `session.call_identity.custom_fields`.
+An explicit `StreamTokenContext` annotation opts in regardless of the parameter
+name (including aliases of that type). Every other case — other explicit
+annotations and unannotated parameters — retains the raw-token contract,
+whatever the parameter is named. The reserved stream-token parameter is
+stripped from returned claims and never lands in `custom_fields`.
 
 ## Validate the public URL Twilio signed
 
@@ -163,8 +172,9 @@ helpers, which validate or escape values.
 
 - Provider AMD (`AnsweredBy`) is one signal for human versus machine.
 - `VoicemailDetector` observes audio timing/transcripts as another signal.
-- `CallScreeningDetector` recognizes iOS, Android, carrier, and third-party
-  screening prompts and can provide a bounded response.
+- `CallScreeningDetector` is for outbound calls: it recognizes iOS, Android,
+  carrier, and third-party screening prompts that intercept a call EasyCat
+  placed, then can provide a bounded response.
 - `IVRNavigator` recognizes menu prompts and asks an injected agent callback
   for a validated `dtmf`, `speak`, `wait`, or `hangup` decision.
 
@@ -177,6 +187,11 @@ call forever.
 `IVRNavigator` enforces maximum menu depth, prompt/agent timeouts, retry bounds,
 and a DTMF whitelist. The callback result is untrusted even when produced by
 your model. EasyCat parses it into a constrained decision before acting.
+
+Inbound spam or routing policy belongs in your `/twiml` webhook, before a media
+stream token is minted. Use `twiml_reject()` to decline an inbound call or
+`twiml_redirect()` to hand it to another TwiML URL without opening an EasyCat
+session.
 
 ## Call control stays provider-neutral at the session boundary
 

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 
-from custom_vad import EnergyVAD, EnergyVADConfig
-
 from easycat import PCM16_MONO_16K, AudioChunk, VADProvider, VADStartSpeaking, VADStopSpeaking
+
+from custom_vad import EnergyVAD, EnergyVADConfig
 
 LOUD = AudioChunk(data=b"\xe8\x03" * 160, format=PCM16_MONO_16K)  # 1000-amplitude PCM16
 QUIET = AudioChunk(data=b"\x00\x00" * 160, format=PCM16_MONO_16K)

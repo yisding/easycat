@@ -9,14 +9,17 @@ sentence boundaries for low-latency playback.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import logging
+import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from re import sub
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -70,6 +73,8 @@ from easycat.runtime.capabilities import (
     is_passthrough_provider,
 )
 from easycat.runtime.journal import JournalView
+from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
+from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
@@ -116,6 +121,68 @@ def _recording_filename_session_id(session_id: str) -> str:
     return safe or "session"
 
 
+def _validate_application_record_name(name: str) -> None:
+    if not isinstance(name, str):
+        raise ValueError("Application journal record name must be a string")
+    if name in BUILTIN_JOURNAL_RECORD_CONTRACTS:
+        raise ValueError(f"Journal record name {name!r} is reserved by EasyCat")
+    if not name.startswith("app.") or not name.removeprefix("app.").strip():
+        raise ValueError("Application journal record names must use the 'app.<name>' namespace")
+
+
+def _application_record_tags(tags: object) -> frozenset[str]:
+    if isinstance(tags, (str, bytes)) or tags is None:
+        raise ValueError("Application journal record tags must be an iterable of strings")
+    try:
+        frozen = frozenset(cast(Iterable[object], tags))
+    except TypeError as exc:
+        raise ValueError("Application journal record tags must be an iterable of strings") from exc
+    for tag in frozen:
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("Application journal record tags must be non-empty strings")
+        if "," in tag:
+            raise ValueError("Application journal record tags must not contain commas")
+    return cast(frozenset[str], frozen)
+
+
+def _application_record_data(data: object) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError("Application journal record data must be a dictionary")
+    active: set[int] = set()
+
+    def _snapshot(value: Any, path: str) -> Any:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"Application journal record {path} must be finite")
+            return value
+        if isinstance(value, (dict, list)):
+            identity = id(value)
+            if identity in active:
+                raise ValueError(f"Application journal record {path} contains a cycle")
+            active.add(identity)
+            try:
+                if isinstance(value, dict):
+                    snapshot: dict[str, Any] = {}
+                    for key, item in value.items():
+                        if not isinstance(key, str):
+                            raise ValueError(
+                                f"Application journal record {path} keys must be strings"
+                            )
+                        snapshot[key] = _snapshot(item, f"{path}.{key}")
+                    return snapshot
+                return [_snapshot(item, f"{path}[{index}]") for index, item in enumerate(value)]
+            finally:
+                active.remove(identity)
+        raise ValueError(f"Application journal record {path} must contain only JSON-native values")
+
+    return _snapshot(data, "data")
+
+
+_APPLICATION_TURN_ID_OMITTED = object()
+
+
 _HelperT = TypeVar("_HelperT")
 
 
@@ -149,6 +216,7 @@ class Session:
     # hook. Declared (not assigned) so ``getattr(..., default)`` probes keep
     # their runtime behavior.
     _easycat_config: Any
+    _data_dir: str | Path | None
     _emergency_export_unregister: Callable[[], None]
 
     def __init__(self, config: SessionConfig | None = None) -> None:
@@ -203,6 +271,11 @@ class Session:
         self._enable_vad = cfg.enable_vad
         self._auto_turn_from_stt_final = cfg.auto_turn_from_stt_final
         self._audio_gate = cfg.audio_gate
+        self._audio_capture_policy = cfg.capture_audio
+        self._audio_capture_override: bool | None = None
+        self._audio_capture_policy_failed = False
+        self._last_audio_capture_enabled: bool | None = None
+        self._audio_capture_epoch = 0
 
         # ── Turn manager (single source of truth for turn state) ──
         self._turn_manager = cfg.turn_manager or TurnManager(
@@ -263,6 +336,8 @@ class Session:
         self._start_lock = asyncio.Lock()
         self._closed = False
         self._stopping = False
+        self._stop_task: asyncio.Task[Any] | None = None
+        self._force_stop_requested = asyncio.Event()
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -542,6 +617,67 @@ class Session:
         """Whether the classification gate is currently buffering TTS audio."""
         return self._audio_gate is not None and self._audio_gate()
 
+    def _is_audio_capture_enabled(self) -> bool:
+        policy = self._audio_capture_policy
+        if isinstance(policy, bool):
+            decision = self._audio_capture_override
+            if decision is None:
+                decision = policy
+            return self._observe_audio_capture_decision(decision)
+        decision = self._evaluate_audio_capture_predicate(policy)
+        # A callable is the consent ceiling: a runtime pause can disable
+        # capture, but resuming cannot override a predicate that was revoked.
+        if self._audio_capture_override is False:
+            decision = False
+        return self._observe_audio_capture_decision(decision)
+
+    def _evaluate_audio_capture_predicate(self, policy: Callable[[], bool]) -> bool:
+        try:
+            decision = policy()
+        except Exception:
+            if not self._audio_capture_policy_failed:
+                self._audio_capture_policy_failed = True
+                logger.warning(
+                    "capture_audio predicate failed; audio artifact capture is disabled",
+                    exc_info=True,
+                )
+            return False
+        if isinstance(decision, bool):
+            return decision
+        if inspect.isawaitable(decision):
+            close = getattr(decision, "close", None)
+            if callable(close):
+                close()
+        if not self._audio_capture_policy_failed:
+            self._audio_capture_policy_failed = True
+            logger.warning(
+                "capture_audio predicate returned %s instead of bool; "
+                "audio artifact capture is disabled",
+                type(decision).__name__,
+            )
+        return False
+
+    def _observe_audio_capture_decision(self, enabled: bool) -> bool:
+        if not enabled and self._last_audio_capture_enabled is True:
+            self._audio_capture_epoch += 1
+        if enabled and self._last_audio_capture_enabled is False:
+            self._turn_manager.discard_buffered_audio()
+            audio_router = getattr(self, "_audio_router", None)
+            if audio_router is not None:
+                audio_router.discard_pending_capture_audio()
+        self._last_audio_capture_enabled = enabled
+        return enabled
+
+    def _audio_capture_epoch_value(self) -> int:
+        return self._audio_capture_epoch
+
+    def set_audio_capture_enabled(self, enabled: bool | None) -> None:
+        """Pause/resume audio capture, or clear the runtime override with ``None``."""
+        if enabled is not None and not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool or None")
+        self._audio_capture_override = enabled
+        self._is_audio_capture_enabled()
+
     # ── Properties ─────────────────────────────────────────────
 
     def subscribe_event(self, event_type: type, handler: EventHandler) -> EventSubscription:
@@ -618,7 +754,11 @@ class Session:
             (STTFinal, user_transcript, lambda cb: lambda e: cb(e.text)),
             (AgentDelta, agent_delta, lambda cb: lambda e: cb(e.text)),
             (AgentFinal, agent_response, lambda cb: lambda e: cb(e.text)),
-            (ToolCallStarted, tool_started, lambda cb: lambda e: cb(e.tool_name, e.call_id)),
+            (
+                ToolCallStarted,
+                tool_started,
+                lambda cb: lambda e: cb(e.tool_name, e.call_id),
+            ),
             (ToolCallResult, tool_result, lambda cb: lambda e: cb(e.call_id, e.result)),
             (TurnStarted, turn_started, lambda cb: lambda _e: cb()),
             (TurnEnded, turn_ended, lambda cb: lambda _e: cb()),
@@ -689,9 +829,13 @@ class Session:
         self._record_to_exported = True
         try:
             record_to.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
             safe_session_id = _recording_filename_session_id(self.session_id)
-            path = record_to / f"{safe_session_id}-{stamp}.zip"
+            session_digest = hashlib.blake2s(
+                self.session_id.encode("utf-8", errors="surrogatepass"),
+                digest_size=4,
+            ).hexdigest()
+            path = record_to / f"{safe_session_id}-{session_digest}-{stamp}.zip"
             self.export_debug_bundle(str(path))
             logger.info("Recorded debug bundle to %s", path)
         except Exception:
@@ -861,6 +1005,41 @@ class Session:
         """
         return self._journal_view
 
+    def record(
+        self,
+        name: str,
+        *,
+        data: dict[str, Any],
+        turn_id: str | None = _APPLICATION_TURN_ID_OMITTED,  # type: ignore[assignment]
+        tags: object = frozenset(),
+    ) -> None:
+        """Append an application event to the live session journal.
+
+        Application names must use the ``app.`` namespace and cannot collide
+        with EasyCat's built-in record vocabulary. Writes use the same
+        redaction filter as runtime records. The read surface remains available
+        separately through :attr:`journal`.
+        """
+        if self._closed or self._stopping:
+            raise RuntimeError("Session is stopping or has been stopped")
+        _validate_application_record_name(name)
+        snapshot = _application_record_data(data)
+        frozen_tags = _application_record_tags(tags)
+        inherit_turn_id = turn_id is _APPLICATION_TURN_ID_OMITTED
+        if not inherit_turn_id and turn_id is not None:
+            if not isinstance(turn_id, str) or not turn_id.strip():
+                raise ValueError("Application journal record turn_id must be non-empty or None")
+        sequence = self._journal_sink.append_record(
+            name=name,
+            kind=JournalRecordKind.EVENT,
+            turn_id=None if inherit_turn_id else turn_id,
+            data=snapshot,
+            tags=frozen_tags,
+            inherit_turn_id=inherit_turn_id,
+        )
+        if sequence is not None and sequence < 0:
+            raise RuntimeError("Application journal record could not be written")
+
     @property
     def cancel_token(self) -> CancelToken | None:
         return self._turn.cancel_token if self._turn else None
@@ -992,6 +1171,11 @@ class Session:
             # None of these hooks need the transport connected.
             await self._warmup.run(select=lambda name: name != "transport")
 
+            # Telephony helpers subscribe to lifecycle events emitted while a
+            # preflighted transport applies its deferred start frame.
+            for helper in self.telephony.helpers:
+                helper.start()
+
             await self.transport.connect()
             transport_connected = True
 
@@ -1028,9 +1212,6 @@ class Session:
                     )
                     checker.start()
                     self._health_checkers.append(checker)
-
-            for helper in self.telephony.helpers:
-                helper.start()
 
             self._is_running = True
             self._mark_observability_active()
@@ -1107,14 +1288,43 @@ class Session:
             self._record_debug_bundle()
             return
         if self._stopping:
+            if force:
+                self._force_stop_requested.set()
+                await self._turn_runner.cancel_application_prompt()
+            stop_task = self._stop_task
+            if stop_task is not None and stop_task is not asyncio.current_task():
+                await asyncio.shield(stop_task)
             return
         self._stopping = True
+        self._stop_task = asyncio.current_task()
+        self._force_stop_requested.clear()
         self._is_running = False
         current_task = asyncio.current_task()
 
         try:
+            prompt_task = self._turn_runner.active_application_prompt
+            prompt_is_current = prompt_task is current_task
+            if (
+                not force
+                and prompt_task is not None
+                and not prompt_is_current
+                and not prompt_task.done()
+            ):
+                # Application prompts are confirmed turn work. Graceful stop
+                # lets them finish unless a concurrent forced stop escalates.
+                force_waiter = asyncio.create_task(self._force_stop_requested.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        {prompt_task, force_waiter},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    force = force_waiter in done
+                finally:
+                    force_waiter.cancel()
+                    await asyncio.gather(force_waiter, return_exceptions=True)
+
             turn = self._turn
-            if turn:
+            if turn and not prompt_is_current:
                 turn.cancel_token.cancel()
 
             # Cancel any in-flight text turn so it doesn't emit events
@@ -1129,6 +1339,8 @@ class Session:
                     await text_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            if force and not prompt_is_current:
+                await self._turn_runner.cancel_application_prompt()
 
             # Speculative plain-agent work is not part of the confirmed turn
             # task yet. Drain it explicitly before either teardown path can
@@ -1237,6 +1449,8 @@ class Session:
             # Clear the stopping flag FIRST so it is always reset even if a
             # later teardown step (observability / log-context reset) raises.
             self._stopping = False
+            self._stop_task = None
+            self._force_stop_requested.clear()
             self._mark_observability_inactive()
             self._reset_session_log_context()
             self._record_debug_bundle()
@@ -1279,6 +1493,10 @@ class Session:
         turn = self._turn
         if turn:
             turn.cancel_token.cancel()
+        prompt_token = self._turn_runner.application_prompt_cancel_token
+        if prompt_token is not None:
+            prompt_token.cancel()
+        prompt_cleanup = asyncio.create_task(self._turn_runner.cancel_application_prompt())
 
         # Stamp the barge-in initiation time so the cutoff-latency histogram
         # can measure the elapsed wall time until playback is actually cleared
@@ -1300,6 +1518,7 @@ class Session:
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
+        await prompt_cleanup
 
         # Playback is cleared at this point; record the barge-in -> cutoff
         # latency so OTel consumers can track how long the caller kept hearing
@@ -1341,6 +1560,7 @@ class Session:
         turn = self._turn
         if turn:
             turn.cancel_token.cancel()
+        await self._turn_runner.cancel_application_prompt()
 
         await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
@@ -1481,6 +1701,44 @@ class Session:
                 )
 
     # ── Text mode ──────────────────────────────────────────────
+
+    async def prompt_agent(
+        self,
+        text: str,
+        *,
+        role: Literal["system", "user"] = "system",
+        speak: bool = True,
+    ) -> str:
+        """Run an application-initiated agent turn and optionally speak it."""
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a non-empty string")
+        if role not in ("system", "user"):
+            raise ValueError("role must be 'system' or 'user'")
+        if not isinstance(speak, bool):
+            raise TypeError("speak must be a bool")
+        if self._closed:
+            raise RuntimeError("Session has been stopped")
+        if self._stopping:
+            raise RuntimeError("Session is stopping")
+        if speak and self._runtime_mode == "text_session":
+            raise RuntimeError("speak=True is unavailable in text_session mode")
+        if speak and not self._is_running:
+            raise RuntimeError("Session must be started before speak=True")
+        if self._turn is not None or self._turn_manager.state != TurnManagerState.IDLE:
+            await self.cancel_turn()
+        if self._stopping:
+            raise RuntimeError("Session is stopping")
+        self._mark_observability_active()
+        try:
+            with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
+                return await self._turn_runner.prompt_agent(
+                    text.strip(),
+                    role=role,
+                    speak=speak,
+                    admit=lambda: not self._closed and not self._stopping,
+                )
+        finally:
+            self._mark_observability_inactive()
 
     async def send_text(self, text: str) -> str:
         """Send text input and return the agent response.

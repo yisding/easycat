@@ -120,7 +120,7 @@ class JournalSink(Protocol):
         name: str,
         turn_id: str | None = ...,
         data: dict[str, Any] | None = ...,
-    ) -> None:
+    ) -> int | None:
         """Append a journal record."""
         ...
 
