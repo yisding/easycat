@@ -26,18 +26,48 @@ from easycat.runtime._private_files import chmod_private_file, mkdir_private
 logger = logging.getLogger(__name__)
 
 
-def _process_birth_identity(pid: int) -> str | None:
-    """Return a boot-scoped process start identity where the OS exposes one."""
+def _boot_id() -> str | None:
+    """Return Linux's stable identifier for the current boot, when available."""
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    return boot_id if boot_id and ":" not in boot_id else None
+
+
+def _process_start_token(pid: int) -> str | None:
+    """Return Linux's stable start-time token for *pid*, when available.
+
+    ``/proc/<pid>/stat`` field 22 is the process start time in clock ticks
+    since boot. Pairing it with the PID distinguishes the original journal
+    owner from a later process that inherited the same numeric PID.
+    """
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-        fields_after_comm = stat[stat.rfind(")") + 2 :].split()
-        start_ticks = fields_after_comm[19]
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    except (IndexError, OSError):
+    except (OSError, UnicodeError):
         return None
-    if not boot_id or not start_ticks:
+    # Field 2 (``comm``) is parenthesized and may itself contain spaces or
+    # parentheses. Split after its final ")" so the remainder starts at
+    # field 3; field 22 is therefore index 19.
+    closing_paren = stat.rfind(")")
+    if closing_paren < 0:
         return None
-    return f"{boot_id}:{start_ticks}"
+    fields = stat[closing_paren + 1 :].split()
+    if len(fields) <= 19:
+        return None
+    token = fields[19]
+    return token if token.isdecimal() else None
+
+
+def _process_birth_identity(pid: int) -> str | None:
+    """Return a boot-scoped process start identity where the OS exposes one."""
+    start_token = _process_start_token(pid)
+    if start_token is None:
+        return None
+    boot_id = _boot_id()
+    if boot_id is None:
+        return None
+    return f"{boot_id}:{start_token}"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -109,9 +139,11 @@ def _crashed_state(db_path: Path) -> str:
     between turns holds **no** write lock and a read-only reader does not
     block on a writer:
 
-    1. A ``live_pid`` marker (written on journal open, cleared on clean
-       close).  If that PID is still running, the journal is live -> skip.
-       This catches the idle-but-live window a lock probe would miss.
+    1. A ``live_pid`` owner marker (written on journal open, cleared on
+       clean close). On Linux it pairs the PID with the process start token
+       and boot ID, so PID reuse within or across boots does not create a
+       false owner. A matching owner catches the idle-but-live window a lock
+       probe would miss.
     2. A ``BEGIN IMMEDIATE`` write-lock probe on a would-be crash, as a
        backstop for an actively-writing session: if the lock is held, skip.
     """
@@ -199,9 +231,10 @@ def is_journal_live(db_path: Path) -> bool:
     decided two complementary ways, both required because an idle WAL journal
     between turns holds **no** write lock yet is still owned:
 
-    1. A ``live_pid`` marker (written on journal open, cleared on clean
-       close).  If that PID names a running process, the journal is live.
-       This catches the idle-but-live window a lock probe alone would miss.
+    1. A ``live_pid`` owner marker (written on journal open, cleared on
+       clean close). On Linux the PID and process start token must both
+       match. This catches idle live journals without confusing them with
+       crashed journals whose numeric PID was later reused.
     2. A ``BEGIN IMMEDIATE`` write-lock probe as a backstop for an
        actively-writing session whose ``live_pid`` marker might be stale
        (PID reuse): if the lock cannot be taken, treat the journal as live.
@@ -212,9 +245,10 @@ def is_journal_live(db_path: Path) -> bool:
 
     Classification is **read-only first** (it never opens a cleanly-closed or
     foreign journal for writing, which would checkpoint and rewrite its WAL
-    sidecar).  Only a journal that lacks both a clean-close marker and a live
-    PID gets the final ``BEGIN IMMEDIATE`` write-lock probe — the same gate
-    the crash sweep uses — so a kept-but-idle valid journal is never mutated.
+    sidecar). Only a journal that lacks both a clean-close marker and a
+    matching owner identity gets the final ``BEGIN IMMEDIATE`` write-lock
+    probe — the same gate the crash sweep uses — so a kept-but-idle valid
+    journal is never mutated.
     """
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -238,8 +272,8 @@ def is_journal_live(db_path: Path) -> bool:
     finally:
         conn.close()
 
-    # No live-PID marker and no clean-close marker: an actively-writing
-    # session may hold the lock with a stale/absent marker.  Backstop with a
+    # No matching owner marker and no clean-close marker: an actively-writing
+    # session may hold the lock with a stale/absent marker. Backstop with a
     # write-lock probe (only reached for would-be-crashed files, so the WAL
     # rewrite a write connection causes is harmless).
     try:

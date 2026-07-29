@@ -41,7 +41,7 @@ from easycat.runtime._private_files import (
 )
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
-    _pid_alive,
+    _has_live_pid,
     _process_birth_identity,
     sweep_crashed_journals,
 )
@@ -477,7 +477,7 @@ class SqliteJournal(_SqlJournalBase):
                     live_pid = int(row[0])
                 except (TypeError, ValueError):
                     live_pid = 0
-                if live_pid != os.getpid() and _pid_alive(live_pid):
+                if live_pid != os.getpid() and _has_live_pid(self._conn):
                     raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
             _LIVE_SQLITE_JOURNALS[key] = self
 
@@ -497,12 +497,11 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
 
         # Stamp our PID and process-birth identity as liveness markers
-        # (committed so a separate
-        # crash-sweep connection can read it).  An idle WAL journal between
-        # turns holds no write lock, so the orphan sweep cannot tell "live
-        # but idle" from "crashed" by lock alone; the PID lets it skip a
-        # journal whose owning process is still running. The birth identity
-        # distinguishes that process from a later process that reuses its PID.
+        # (committed so a separate crash-sweep connection can read them).
+        # An idle WAL journal between turns holds no write lock, so the
+        # orphan sweep cannot tell "live but idle" from "crashed" by lock
+        # alone. The birth identity distinguishes this process from a later
+        # process that reuses its PID, even after a reboot.
         self._conn.execute(
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
             (str(os.getpid()),),
