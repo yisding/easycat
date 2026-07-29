@@ -35,6 +35,7 @@ class _AsyncOnlyGraph(_MockCompiledGraph):
         super().__init__([_model_stream("partial answer")], state=state)
         self.async_get_calls = 0
         self.async_update_calls: list[dict[str, Any]] = []
+        self.async_update_configs: list[dict[str, Any]] = []
         self.async_history_calls = 0
         self.sync_calls: list[str] = []
 
@@ -57,6 +58,7 @@ class _AsyncOnlyGraph(_MockCompiledGraph):
     async def aupdate_state(
         self, config: dict[str, Any], values: dict[str, Any]
     ) -> dict[str, Any]:
+        self.async_update_configs.append(config)
         self.async_update_calls.append(values)
         for new_msg in values.get("messages", []):
             new_id = getattr(new_msg, "id", None)
@@ -99,6 +101,46 @@ async def test_async_only_graph_uses_async_state_apis_and_flushes_queued_rewrite
     note_content = note.get("content") if isinstance(note, dict) else note.content
     assert note_content == "[user interrupted]"
     assert graph.sync_calls == []
+
+
+@pytest.mark.asyncio
+async def test_aclose_flushes_final_rewrite_and_interruption_note() -> None:
+    graph = _AsyncOnlyGraph()
+    bridge = LangGraphBridge(graph)
+    async for _ in bridge.invoke(AgentTurnInput.from_text("one"), _recorder()):
+        pass
+
+    bridge.apply_interruption("partial", CancellationMode.IMMEDIATE_STOP)
+    bridge.append_interruption_note("[user interrupted]")
+
+    await bridge.aclose()
+
+    assert len(graph.async_update_calls) == 2
+    assert graph._state.values["messages"][-2].content == "partial..."
+    note = graph._state.values["messages"][-1]
+    note_content = note.get("content") if isinstance(note, dict) else note.content
+    assert note_content == "[user interrupted]"
+    assert bridge._pending_state_mutations == []
+
+
+@pytest.mark.asyncio
+async def test_reset_preserves_pending_write_for_original_thread() -> None:
+    graph = _AsyncOnlyGraph()
+    bridge = LangGraphBridge(graph)
+    async for _ in bridge.invoke(AgentTurnInput.from_text("one"), _recorder()):
+        pass
+    original_thread_id = bridge._thread_id
+
+    bridge.replace_last_assistant_text("normalized")
+    bridge.reset()
+    assert bridge._thread_id != original_thread_id
+
+    await bridge.aclose()
+
+    flushed_config = graph.async_update_configs[-1]["configurable"]
+    assert flushed_config["thread_id"] == original_thread_id
+    assert graph._state.values["messages"][-1].content == "normalized"
+    assert bridge._last_checkpoint_id is None
 
 
 class _ThreadTrackingGraph(_MockCompiledGraph):

@@ -23,7 +23,7 @@ Interruption patches the last AI message via LangGraph's native
 by message ``id``, we re-send the edited message under the same id so
 it replaces instead of appending. State access is async-first; synchronous
 savers run in worker threads, while the bridge's synchronous history hooks
-stage their writes for an async flush before the next turn.
+stage their writes for an async flush before the next turn or bridge close.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from easycat.integrations.agents._langchain_events import (
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
+    NULL_RECORDER,
     AgentBridgeEvent,
     AgentRecorder,
     AgentTurnInput,
@@ -128,6 +129,7 @@ class _LangGraphTurnAccumulator:
 class _PendingStateMutation:
     kind: str
     payload: Any
+    config: dict[str, Any]
 
 
 class LangGraphBridge:
@@ -787,7 +789,9 @@ class LangGraphBridge:
         self._resume_checkpoint_id = None
         self._last_output = None
         self._last_state_snapshot = None
-        self._pending_state_mutations.clear()
+        # Pending async writes retain the old thread's captured config and must
+        # survive reset. The next invoke or aclose flushes them to that original
+        # thread before the bridge can be discarded.
         self._checkpoint_baseline_needs_seed = False
         # New thread → no prior checkpoint, so the next turn's trail
         # starts from scratch instead of stopping at a stale baseline.
@@ -803,11 +807,15 @@ class LangGraphBridge:
         if self._async_state_surface:
             state = self._last_state_snapshot
             if state is None:
-                self._pending_state_mutations.append(_PendingStateMutation("rewrite", text))
+                self._pending_state_mutations.append(
+                    _PendingStateMutation("rewrite", text, self._config())
+                )
                 return
             update = self._rewrite_update_for_state(state, text)
             if update is not None:
-                self._pending_state_mutations.append(_PendingStateMutation("state_update", update))
+                self._pending_state_mutations.append(
+                    _PendingStateMutation("state_update", update, self._config())
+                )
         else:
             self._rewrite_last_ai_message(text)
 
@@ -819,7 +827,9 @@ class LangGraphBridge:
         if not self._messages_key_uses_add_messages():
             return
         if self._async_state_surface:
-            self._pending_state_mutations.append(_PendingStateMutation("append_note", note))
+            self._pending_state_mutations.append(
+                _PendingStateMutation("append_note", note, self._config())
+            )
             return
         try:
             from langchain_core.messages import SystemMessage
@@ -842,6 +852,10 @@ class LangGraphBridge:
                 logger.debug("Failed to append interruption note via update_state", exc_info=True)
         except Exception:
             logger.debug("Failed to append interruption note to LangGraph", exc_info=True)
+
+    async def aclose(self) -> None:
+        """Persist staged history mutations before bridge teardown."""
+        await self._flush_pending_state_mutations(NULL_RECORDER)
 
     # ── Internal ─────────────────────────────────────────────────
 
@@ -917,8 +931,9 @@ class LangGraphBridge:
         for index, mutation in enumerate(pending):
             try:
                 if mutation.kind == "rewrite":
-                    state = await self._get_state(self._config())
-                    self._last_state_snapshot = state
+                    state = await self._get_state(mutation.config)
+                    if _config_thread_id(mutation.config) == self._thread_id:
+                        self._last_state_snapshot = state
                     update = self._rewrite_update_for_state(state, str(mutation.payload))
                     if update is None:
                         continue
@@ -929,9 +944,10 @@ class LangGraphBridge:
                 else:
                     update = mutation.payload
 
-                updated = await self._update_state(self._config(), update)
+                updated = await self._update_state(mutation.config, update)
                 try:
-                    await self._advance_checkpoint_baseline_async(updated)
+                    if _config_thread_id(mutation.config) == self._thread_id:
+                        await self._advance_checkpoint_baseline_async(updated)
                 except Exception as exc:
                     # The state write already succeeded. Do not retry it (an
                     # append would duplicate); only the trail baseline is
@@ -1673,6 +1689,15 @@ def _bound_config(graph: Any) -> dict[str, Any]:
     if configurable:
         merged["configurable"] = configurable
     return merged
+
+
+def _config_thread_id(config: dict[str, Any]) -> str | None:
+    """Return the thread id captured in a pending mutation's config."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    thread_id = configurable.get("thread_id")
+    return str(thread_id) if thread_id else None
 
 
 def _bound_checkpoint_id(graph: Any) -> str | None:
