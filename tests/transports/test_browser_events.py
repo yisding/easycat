@@ -38,6 +38,10 @@ class _Sink:
         return [p for p in self.payloads if p["type"] == message_type]
 
 
+async def _drain(forwarder: BrowserEventForwarder) -> None:
+    await asyncio.wait_for(forwarder._send_queue.join(), timeout=0.2)
+
+
 @pytest.fixture
 def bus() -> EventBus:
     return EventBus(handler_error_policy="raise")
@@ -58,6 +62,7 @@ class TestBrowserEventForwarder:
         await bus.emit(AgentDelta(text="Hi! ", turn_id="t1"))
         await bus.emit(AgentFinal(text="Hi! How can I help?", turn_id="t1"))
         await bus.emit(Interruption(turn_id="t1"))
+        await _drain(forwarder)
 
         types = [p["type"] for p in sink.payloads]
         assert types == [
@@ -82,6 +87,7 @@ class TestBrowserEventForwarder:
 
         await bus.emit(STTFinal(text="hi", turn_id="t1", timestamp=100.0))
         await bus.emit(BotStartedSpeaking(turn_id="t1", timestamp=100.42))
+        await _drain(forwarder)
 
         (latency,) = sink.of_type("turn_latency")
         assert latency["turn_id"] == "t1"
@@ -96,6 +102,7 @@ class TestBrowserEventForwarder:
         await bus.emit(STTFinal(text="hi", turn_id="t1", timestamp=10.0))
         # Correlation ids can differ across hops; the readout should still fire.
         await bus.emit(BotStartedSpeaking(turn_id="other", timestamp=10.25))
+        await _drain(forwarder)
 
         (latency,) = sink.of_type("turn_latency")
         assert latency["ms"] == pytest.approx(250.0, abs=0.5)
@@ -115,6 +122,7 @@ class TestBrowserEventForwarder:
         await bus.emit(STTFinal(text="hi", turn_id="t1", timestamp=1.0))
         await bus.emit(BotStartedSpeaking(turn_id="t1", timestamp=1.2))
         await bus.emit(BotStartedSpeaking(turn_id="t1", timestamp=1.9))
+        await _drain(forwarder)
 
         assert len(sink.of_type("turn_latency")) == 1
         forwarder.close()
@@ -125,6 +133,7 @@ class TestBrowserEventForwarder:
 
         # Must not raise even with handler_error_policy="raise".
         await bus.emit(STTPartial(text="hi", turn_id="t1"))
+        await _drain(forwarder)
 
         assert sink.payloads == []
         forwarder.close()
@@ -152,10 +161,43 @@ class TestBrowserEventForwarder:
             timeout=0.2,
         )
 
-        assert send_started.is_set()
+        await asyncio.wait_for(send_started.wait(), timeout=0.2)
         assert later_handler_ran.is_set()
         await asyncio.wait_for(send_cancelled.wait(), timeout=0.2)
         subscription.unsubscribe()
+        forwarder.close()
+
+    async def test_timeout_does_not_wait_for_cancellation_resistant_sender(self, bus: EventBus):
+        first_cancelled = asyncio.Event()
+        release_first = asyncio.Event()
+        second_sent = asyncio.Event()
+        attempts = 0
+
+        async def cancellation_resistant_send(_payload: dict[str, Any]) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    first_cancelled.set()
+                    await release_first.wait()
+            else:
+                second_sent.set()
+
+        forwarder = BrowserEventForwarder(
+            bus,
+            cancellation_resistant_send,
+            send_timeout_s=0.01,
+        )
+        await bus.emit(STTPartial(text="one", turn_id="t1"))
+        await asyncio.wait_for(first_cancelled.wait(), timeout=0.2)
+
+        await bus.emit(STTPartial(text="two", turn_id="t1"))
+        await asyncio.wait_for(second_sent.wait(), timeout=0.2)
+
+        release_first.set()
+        await asyncio.sleep(0)
         forwarder.close()
 
     @pytest.mark.parametrize("timeout_s", [0, -1, float("nan"), float("inf")])

@@ -108,6 +108,7 @@ class BrowserEventForwarder:
         self._send_timeout_s = send_timeout_s
         self._send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_pending_events)
         self._writer_task: asyncio.Task[None] | None = None
+        self._send_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         # turn_id -> monotonic timestamp of the final user transcript.
         self._stt_final_at: dict[str | None, float] = {}
@@ -137,6 +138,9 @@ class BrowserEventForwarder:
                 self._send_queue.task_done()
         if self._writer_task is not None and not self._writer_task.done():
             self._writer_task.cancel()
+        for task in self._send_tasks:
+            if not task.done():
+                task.cancel()
 
     # ── Event handlers ────────────────────────────────────────────
 
@@ -213,19 +217,38 @@ class BrowserEventForwarder:
                 self._send_queue.task_done()
 
     async def _send_payload(self, payload: dict[str, Any]) -> None:
+        task = asyncio.create_task(self._send_json(payload))
+        self._send_tasks.add(task)
+        task.add_done_callback(self._send_done)
         try:
-            await asyncio.wait_for(
-                self._send_json(payload),
-                timeout=self._send_timeout_s,
-            )
+            # Shielding is deliberate: wait_for cancels only the shield at the
+            # deadline and therefore returns without waiting for a sender that
+            # suppresses cancellation. The detached task is cancelled below
+            # and its callback retrieves any eventual exception.
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._send_timeout_s)
         except TimeoutError:
+            task.cancel()
             logger.debug(
                 "Dropping browser event %s: send exceeded %.3fs",
                 payload.get("type"),
                 self._send_timeout_s,
             )
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
         except Exception:
             logger.debug("Dropping browser event %s: send failed", payload.get("type"))
+
+    def _send_done(self, task: asyncio.Task[None]) -> None:
+        self._send_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # _send_payload logs failures while it owns the task. This callback
+            # also retrieves exceptions from detached, timed-out sends.
+            pass
 
     def _writer_done(self, task: asyncio.Task[None]) -> None:
         if self._writer_task is task:
