@@ -280,7 +280,8 @@ def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None
     cli_index = readme.index("## CLI")
 
     assert quickstart_index < install_index < chooser_index < cli_index
-    assert "uv add 'easycat[quickstart]'" in readme
+    assert "uv add 'easycat[quickstart,webrtc]'" in readme
+    assert 'dependencies = ["easycat[quickstart,webrtc]"]' in readme
     assert "uv run easycat doctor" in readme
     assert "uv run python examples/openai_agents_voice.py" in readme
     assert "uv run easycat doctor --env-file .env" in readme

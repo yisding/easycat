@@ -231,7 +231,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
-            "uv sync --extra quickstart --group dev",
+            "uv sync --extra quickstart --extra webrtc --group dev",
             "uv run easycat doctor",
             "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
