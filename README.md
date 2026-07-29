@@ -745,7 +745,7 @@ session = create_session(config)
 ```
 
 The `pydantic-ai` extra targets stable PydanticAI v1. The
-`pydantic-ai-v2` extra installs `pydantic-ai>=2.5.1,<3.0.0` for apps that
+`pydantic-ai-v2` extra installs `pydantic-ai>=2.15.0,<3.0.0` for apps that
 have moved to the stable v2 release.
 
 ### Workflows (recommended for multi-step voice apps)
