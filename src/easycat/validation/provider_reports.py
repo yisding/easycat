@@ -32,7 +32,6 @@ class ProviderSurfaceSpec:
     adapter: str
     protocol: str
     mode: str
-    model_api_version: str
     required_extra: str
     credential_env_var: str
     contract_status: str = "pass"
@@ -71,13 +70,42 @@ def _registry_env_var(surface: Surface, provider: str) -> str:
     return env_vars[provider]
 
 
+def _default_model_api_version(surface: Surface, provider: str) -> str:
+    """Resolve the model identifier from the registered config's real default."""
+    if surface not in {"stt", "tts"}:
+        raise ValueError(f"No provider config registry for surface {surface!r}")
+
+    from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
+    from easycat.tts.factory import _PROVIDER_TO_CONFIG as _TTS_REGISTRY
+
+    registry = _STT_REGISTRY if surface == "stt" else _TTS_REGISTRY
+    config_cls = registry[provider][1]
+    config = config_cls()
+    resolved_model = getattr(config, "resolved_model", None)
+    if resolved_model is not None:
+        return str(resolved_model)
+    model_field = getattr(config_cls, "MODEL_FIELD", "model")
+    model = getattr(config, model_field, None)
+    if model is None:
+        raise ValueError(
+            f"{provider}/{surface} config {config_cls.__name__} has no resolved default model"
+        )
+    return str(model)
+
+
+def _model_api_version(spec: ProviderSurfaceSpec) -> str:
+    if spec.surface in {"stt", "tts"}:
+        return _default_model_api_version(spec.surface, spec.provider)
+    return spec.provider
+
+
 # Validation-only provider surface metadata. The ``adapter`` and
-# ``credential_env_var`` of every STT/TTS row are derived from the central
-# STT/TTS registries (``stt/factory.py``/``tts/factory.py``) so they never
-# drift. The remaining fields (protocol/mode/model_api_version/required_extra/
-# pytest target/default voices/contract+schema status) and the entire
-# ``agent_bridge`` row have no registry source and are intentionally held
-# here as validation-only metadata.
+# ``credential_env_var`` of every STT/TTS row and the model identifier emitted
+# in reports are derived from the central STT/TTS registries
+# (``stt/factory.py``/``tts/factory.py``) so they never drift. The remaining
+# fields (protocol/mode/required_extra/pytest target/default voices/
+# contract+schema status) and the entire ``agent_bridge`` row have no registry
+# source and are intentionally held here as validation-only metadata.
 LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
     ProviderSurfaceSpec(
         provider="openai",
@@ -85,7 +113,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("stt", "openai"),
         protocol="http",
         mode="batch",
-        model_api_version="whisper-1",
         required_extra="openai",
         credential_env_var=_registry_env_var("stt", "openai"),
         schema_status="unchanged",
@@ -97,7 +124,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("stt", "openai-realtime"),
         protocol="websocket",
         mode="realtime",
-        model_api_version="gpt-realtime-whisper",
         required_extra="openai",
         credential_env_var=_registry_env_var("stt", "openai-realtime"),
         schema_status="unchanged",
@@ -111,7 +137,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("stt", "deepgram"),
         protocol="websocket",
         mode="realtime",
-        model_api_version="nova-3",
         required_extra="deepgram",
         credential_env_var=_registry_env_var("stt", "deepgram"),
         live_pytest_target="tests/stt/test_stt_deepgram.py::test_live_deepgram_stt",
@@ -122,7 +147,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("stt", "elevenlabs"),
         protocol="http/websocket",
         mode="batch+realtime",
-        model_api_version="scribe_v2_realtime",
         required_extra="elevenlabs",
         credential_env_var=_registry_env_var("stt", "elevenlabs"),
         live_pytest_target="tests/stt/test_stt_elevenlabs.py::test_live_elevenlabs_stt_realtime",
@@ -133,7 +157,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("stt", "cartesia"),
         protocol="websocket",
         mode="realtime",
-        model_api_version="ink-2",
         required_extra="cartesia",
         credential_env_var=_registry_env_var("stt", "cartesia"),
         live_pytest_target="tests/stt/test_stt_cartesia.py::test_live_cartesia_stt",
@@ -144,7 +167,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("tts", "openai"),
         protocol="http",
         mode="streaming",
-        model_api_version="gpt-4o-mini-tts",
         required_extra="openai",
         credential_env_var=_registry_env_var("tts", "openai"),
         live_pytest_target="tests/tts/test_tts_openai.py::TestOpenAITTS::test_live_openai_tts",
@@ -156,7 +178,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("tts", "deepgram"),
         protocol="websocket",
         mode="streaming",
-        model_api_version="aura-2",
         required_extra="deepgram",
         credential_env_var=_registry_env_var("tts", "deepgram"),
         live_pytest_target=(
@@ -169,7 +190,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("tts", "elevenlabs"),
         protocol="http/websocket",
         mode="streaming",
-        model_api_version="eleven_v3",
         required_extra="elevenlabs",
         credential_env_var=_registry_env_var("tts", "elevenlabs"),
         live_pytest_target=(
@@ -183,7 +203,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter=_registry_adapter("tts", "cartesia"),
         protocol="websocket",
         mode="streaming",
-        model_api_version="sonic-2",
         required_extra="cartesia",
         credential_env_var=_registry_env_var("tts", "cartesia"),
         live_pytest_target="tests/tts/test_tts_cartesia.py::TestCartesiaTTS::test_live_cartesia_tts",
@@ -197,7 +216,6 @@ LIVE_PROVIDER_SURFACES: tuple[ProviderSurfaceSpec, ...] = (
         adapter="easycat.integrations.agents.openai_agents.OpenAIAgentsBridge",
         protocol="python-sdk",
         mode="streaming",
-        model_api_version="openai-agents",
         required_extra="openai-agents",
         credential_env_var="OPENAI_API_KEY",
         live_pytest_target=(
@@ -241,6 +259,7 @@ def build_provider_capability_report(
     failure_class: str | None = None,
     latency: Mapping[str, Any] | None = None,
 ) -> ProviderCapabilityReport:
+    model_api_version = _model_api_version(spec)
     return ProviderCapabilityReport(
         provider=spec.provider,
         surface=spec.surface,
@@ -251,7 +270,7 @@ def build_provider_capability_report(
         required_extra=spec.required_extra,
         credential_env_var=spec.credential_env_var,
         credential_env_var_present=credential_present,
-        api_version=spec.model_api_version,
+        api_version=model_api_version,
         # Not provider-specific today: every live surface pins its model via
         # the model id (``api_version``) rather than a version header.
         api_version_header_behavior="provider_default",
@@ -260,7 +279,7 @@ def build_provider_capability_report(
         schema_status=spec.schema_status,
         status=_capability_status(live_status, failure_class),
         live_checked_at=live_checked_at,
-        models=(ProviderIdentifier(spec.model_api_version, safe=True),),
+        models=(ProviderIdentifier(model_api_version, safe=True),),
         voices=_spec_voices(spec),
         latency=latency,
         failure_class=failure_class,
