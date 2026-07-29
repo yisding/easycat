@@ -202,9 +202,9 @@ source-exclude = [
 
 [tool.uv]
 # Local contributors may use compatible patch releases. CI reads the exact
-# tool pin from .uv-version so lock generation remains reproducible; --locked
-# independently rejects dependency drift. Review both deliberately before a
-# uv minor-version upgrade.
+# tool pin from each setup-uv step so lock generation remains reproducible;
+# --locked independently rejects dependency drift. Review both deliberately
+# before a uv minor-version upgrade.
 required-version = ">=0.11.0,<0.12.0"
 conflicts = [
     [
