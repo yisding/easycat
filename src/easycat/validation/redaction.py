@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import functools
+import importlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
-
-from easycat._provider_registry import sensitive_api_domains
 
 REDACTION_VERSION = 1
 
@@ -74,14 +73,6 @@ _URL_QUERY_SECRET_RE = re.compile(
     r"password|signature|credential)[^&=#\s]*|key|sig"
     r")=)[^&#\s]+"
 )
-# Provider API domains come from the STT/TTS provider catalogs, so a
-# newly registered provider's URLs are flagged without touching this file.
-_SENSITIVE_URL_RE = re.compile(
-    r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
-    + "|".join(re.escape(domain) for domain in sensitive_api_domains())
-    + r")[^\s\"')\]}]*",
-    re.IGNORECASE,
-)
 _SECRET_RE = re.compile(r"\b(?:sk|sess|key|tok)-[A-Za-z0-9_-]{12,}\b")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _HEADER_SECRET_RE = re.compile(
@@ -114,6 +105,33 @@ def _redacted_home_path(match: re.Match[str]) -> str:
 def _redacted_url_secret(match: re.Match[str]) -> str:
     suffix = match.group(2) if match.lastindex == 2 else ""
     return f"{match.group(1)}{REDACTED_SECRET}{suffix}"
+
+
+@functools.lru_cache(maxsize=16)
+def _compile_sensitive_url_re(domains: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(
+        r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
+        + "|".join(re.escape(domain) for domain in domains)
+        + r")[^\s\"')\]}]*",
+        re.IGNORECASE,
+    )
+
+
+def _sensitive_url_re() -> re.Pattern[str]:
+    """Load provider-domain aggregation only when artifact validation needs it.
+
+    Provider factories depend on the lightweight redaction helpers through
+    config repr rendering. Importing the cross-family registry eagerly here
+    would therefore make each provider family depend on every other family.
+    The runtime lookup preserves the registry as the metadata source of truth
+    without introducing that static import cycle.
+    """
+    registry = importlib.import_module("easycat._provider_registry")
+    sensitive_api_domains = cast(
+        Callable[[], tuple[str, ...]],
+        registry.sensitive_api_domains,
+    )
+    return _compile_sensitive_url_re(sensitive_api_domains())
 
 
 _TextReplacement = str | Callable[[re.Match[str]], str]
@@ -234,7 +252,7 @@ def redact_value(
 
 def contains_unredacted_sensitive_text(value: str) -> bool:
     """Return True when contract artifacts still contain sensitive patterns."""
-    if any(pattern.search(value) for pattern in (_SENSITIVE_URL_RE, _SECRET_RE, _JWT_RE)):
+    if any(pattern.search(value) for pattern in (_sensitive_url_re(), _SECRET_RE, _JWT_RE)):
         return True
     for pattern in (_HEADER_SECRET_RE, _KEY_VALUE_SECRET_RE, _REQUEST_ID_RE):
         for match in pattern.finditer(value):
