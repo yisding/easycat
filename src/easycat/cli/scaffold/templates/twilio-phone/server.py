@@ -8,8 +8,13 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl
 
 import websockets
+from agent import make_agent
+from fastapi import FastAPI, HTTPException, Request, Response
+from websockets.asyncio.server import ServerConnection
+
 from easycat import (
     EasyConfig,
+    Session,
     SessionManager,
     TelephonyConfig,
     TwilioConnectionTransport,
@@ -29,9 +34,6 @@ from easycat.transports import (
 )
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.twilio_media import twiml_connect_stream
-from fastapi import FastAPI, HTTPException, Request, Response
-
-from agent import make_agent
 
 
 def _public_twilio_url(
@@ -78,7 +80,7 @@ def create_app() -> FastAPI:
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(os.getenv("TWILIO_STREAM_TOKEN_SECRET") or None)
 
-    async def build_session(ws: object) -> object | None:
+    async def build_session(ws: ServerConnection) -> Session | None:
         transport = TwilioConnectionTransport(
             ws,
             config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume_start),

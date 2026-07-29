@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import os
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
@@ -63,6 +64,13 @@ class ProviderCatalog:
     capability_resolvers: dict[str, ProviderCapabilityResolver | None] = field(init=False)
     config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
+    _discovery_owner: int | None = field(init=False, default=None, repr=False, compare=False)
+    _discovery_lock: threading.RLock = field(
+        init=False,
+        default_factory=threading.RLock,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         providers = {
@@ -149,19 +157,32 @@ class ProviderCatalog:
         """Load entry-point registration callbacks once, logging failures."""
         if self._discovered or not self.entry_point_group:
             return
-        object.__setattr__(self, "_discovered", True)
-        for entry_point in importlib.metadata.entry_points(group=self.entry_point_group):
+        with self._discovery_lock:
+            if self._discovered:
+                return
+            owner = threading.get_ident()
+            if self._discovery_owner == owner:
+                return
+            object.__setattr__(self, "_discovery_owner", owner)
             try:
-                register = entry_point.load()
-                register()
-            except Exception:
-                logger.warning(
-                    "Failed to load %s provider entry point %r from group %r",
-                    self.kind,
-                    entry_point.name,
-                    self.entry_point_group,
-                    exc_info=True,
-                )
+                for entry_point in importlib.metadata.entry_points(group=self.entry_point_group):
+                    try:
+                        register = entry_point.load()
+                        register()
+                    except Exception:
+                        logger.warning(
+                            "Failed to load %s provider entry point %r from group %r",
+                            self.kind,
+                            entry_point.name,
+                            self.entry_point_group,
+                            exc_info=True,
+                        )
+            finally:
+                # Completion is published only after every registration
+                # callback finishes, so the lock-free fast path cannot observe
+                # partially populated catalog dictionaries.
+                object.__setattr__(self, "_discovery_owner", None)
+                object.__setattr__(self, "_discovered", True)
 
     def available_names(self) -> list[str]:
         """Return every registered provider name, sorted."""

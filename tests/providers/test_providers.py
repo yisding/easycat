@@ -2,6 +2,8 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from threading import Event as ThreadEvent
+from threading import Thread
 
 import pytest
 
@@ -268,3 +270,81 @@ def test_provider_catalog_injects_or_preserves_event_bus():
 
     assert created.config.event_bus is injected
     assert preserved.config.event_bus is existing
+
+
+def test_provider_catalog_discovery_is_atomic_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callback_started = ThreadEvent()
+    release_callback = ThreadEvent()
+    second_started = ThreadEvent()
+    second_finished = ThreadEvent()
+    results: list[tuple[str, ...]] = []
+    errors: list[BaseException] = []
+
+    catalog = ProviderCatalog(
+        specs={},
+        kind="Test",
+        entry_point_group="easycat.test_providers",
+    )
+
+    class _EntryPoint:
+        name = "slow"
+
+        def load(self):
+            def register() -> None:
+                callback_started.set()
+                if not release_callback.wait(timeout=2):
+                    raise RuntimeError("test entry-point callback was not released")
+                catalog.register(
+                    "plugin",
+                    _CatalogProvider,
+                    _CatalogConfig,
+                    api_domains=("api.plugin.test",),
+                )
+
+            return register
+
+    monkeypatch.setattr(
+        "importlib.metadata.entry_points",
+        lambda *, group: [_EntryPoint()] if group == catalog.entry_point_group else [],
+    )
+
+    def discover(
+        *,
+        started: ThreadEvent | None = None,
+        finished: ThreadEvent | None = None,
+    ) -> None:
+        if started is not None:
+            started.set()
+        try:
+            catalog.discover()
+            results.append(
+                tuple(domain for domains in catalog.api_domains.values() for domain in domains)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            if finished is not None:
+                finished.set()
+
+    first = Thread(target=discover)
+    second = Thread(
+        target=discover,
+        kwargs={"started": second_started, "finished": second_finished},
+    )
+    first.start()
+    assert callback_started.wait(timeout=1)
+    second.start()
+    assert second_started.wait(timeout=1)
+    assert not second_finished.wait(timeout=0.1)
+
+    release_callback.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert results == [("api.plugin.test",), ("api.plugin.test",)]
+    assert catalog.api_domains["plugin"] == ("api.plugin.test",)

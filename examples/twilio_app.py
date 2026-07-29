@@ -28,10 +28,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import websockets
+from websockets.asyncio.server import ServerConnection
 
 from easycat import (
     EasyConfig,
     EventBus,
+    Session,
     SessionManager,
     TelephonyConfig,
     TwilioConnectionTransport,
@@ -72,7 +74,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     outbound_bus = EventBus()
     outbound_manager = settings.start_outbound_manager(outbound_bus)
 
-    async def build_session(ws: object) -> object | None:
+    async def build_session(ws: ServerConnection) -> Session | None:
         from agents import Agent  # type: ignore[import-untyped]
 
         transport = TwilioConnectionTransport(
