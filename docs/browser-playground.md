@@ -46,6 +46,15 @@ Both browser transports speak the same JSON event vocabulary; the
 implementation lives in `src/easycat/transports/_browser_events.py` and is
 guarded by `uv run pytest tests/transports/test_webrtc_auth_browser_playground.py`.
 
+The maintained WebSocket and WebTransport clients request browser-native echo
+cancellation through `getUserMedia`. Server-side AEC is off by default for
+those transports because socket/datagram write time is not the browser's
+playout clock and cannot provide a continuous, silence-filled far-end
+reference. You can still opt in with `enable_echo_cancellation=True` for a
+custom endpoint, but that best-effort path records
+`aec_reference_degraded` in the session journal. WebRTC can pace its outbound
+reference and retains its transport-aware AEC behavior.
+
 ### WebSocket transport
 
 Inbound (client → server):
@@ -64,6 +73,8 @@ Outbound (server → client):
   - `{"type": "ready"}` — sent once when the connection is accepted.
   - `{"type": "audio_format", "sample_rate": 24000}` — sent before audio
     whenever the outbound sample rate changes.
+  - `{"type": "clear"}` — stop and discard bot audio already scheduled by
+    the client (sent on barge-in and explicit playback cancellation).
   - Session event messages (below).
 
 ### WebRTC transport

@@ -422,10 +422,12 @@ async def test_openai_realtime_skips_commit_on_short_tail():
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert commit_msgs == [], "provider should not send a commit it knows will fail"
-    # State preserved: the server still has those bytes buffered, so a
-    # subsequent append + commit must count them toward the 100 ms floor.
-    assert stt._audio_pending_commit is True
+    # State is preserved across both server-emitted bytes and any converter
+    # tail, so a subsequent append + commit still counts all retained audio
+    # toward the 100 ms floor.
+    assert stt._audio_pending_commit is (bytes_after_first > 0)
     assert stt._bytes_since_last_commit == bytes_after_first
+    assert bytes_after_first + stt._audio_resampler.pending_output_bytes > 0
     await stt.end_stream()
 
 

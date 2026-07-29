@@ -38,7 +38,6 @@ GUARD_FILES = {
     "tests/observability/test_docs.py",
     "tests/test_markdown_links.py",
     "tests/test_llms_txt.py",
-    "tests/test_command_hints.py",
     "tests/test_regen_guard_commands.py",
     "tests/test_contributing.py",
     # Teaching prose/generated-block scanners; the rest of tests/teaching is
@@ -49,7 +48,6 @@ GUARD_FILES = {
 }
 # Behavioral modules that live in a guard dir but must stay in the fast loop.
 GUARD_EXEMPT = {
-    "tests/docs/test_command_hint_validator.py",
     "tests/examples/test_example_imports.py",
     "tests/examples/test_script_execution.py",
     "tests/examples/test_deploy_and_browser_docs.py",

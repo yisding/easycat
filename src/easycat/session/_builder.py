@@ -41,7 +41,7 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_runner import TurnRunner
-from easycat.session._warmup import WarmupRunner
+from easycat.session._warmup import AudioResamplingWarmup, WarmupRunner
 from easycat.session._wiring import _SessionTurnHandle, build_wiring
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
@@ -134,6 +134,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
             ("vad", session.vad),
             ("noise_reducer", session.noise_reducer),
             ("echo_canceller", session.echo_canceller),
+            ("audio_resampling", AudioResamplingWarmup()),
             ("transport", session.transport),
             ("agent", session.agent),
             ("turn_detector", session._turn_manager.endpoint_detector),
@@ -144,8 +145,9 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
     # synthesizer (producer) and the AudioRouter (drain consumer); built
     # once here and handed to both.  Outbound speech must NOT use
     # DROP_OLDEST — dropping the earliest unsent bot audio makes the
-    # listener hear the utterance jump forward; DROP_NEWEST trims only the
-    # tail when the transport falls behind.  Callers wanting real
+    # listener hear the utterance jump forward. DROP_NEWEST preserves all
+    # audio already accepted into the queue, though sustained backpressure can
+    # create gaps wherever later chunks are rejected. Callers wanting real
     # backpressure inject a BLOCK-policy queue via
     # ``SessionConfig.outbound_queue``.
     outbound_queue = cfg.outbound_queue or BoundedAudioQueue(

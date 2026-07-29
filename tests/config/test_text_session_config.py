@@ -84,6 +84,39 @@ def test_create_text_session_forwards_journal_redaction():
         session._journal.close()
 
 
+def test_text_session_config_defaults_event_dispatch_diagnostics():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+
+    assert config.slow_handler_threshold_s == 0.005
+    assert config.handler_error_policy == "continue"
+
+
+def test_text_session_config_rejects_invalid_event_dispatch_settings():
+    from easycat.config import TextSessionConfig
+
+    with pytest.raises(ValueError, match="slow_handler_threshold_s must be non-negative"):
+        TextSessionConfig(agent=_DummyAgent(), slow_handler_threshold_s=-0.001)
+    with pytest.raises(ValueError, match="Invalid handler_error_policy"):
+        TextSessionConfig(
+            agent=_DummyAgent(),
+            handler_error_policy="strict",  # type: ignore[arg-type]
+        )
+
+
+def test_create_text_session_forwards_event_dispatch_config():
+    session = create_text_session(
+        agent=_DummyAgent(),
+        debug="off",
+        slow_handler_threshold_s=0.125,
+        handler_error_policy="raise",
+    )
+
+    assert session.event_bus.slow_handler_threshold_s == 0.125
+    assert session.event_bus.handler_error_policy == "raise"
+
+
 def test_create_text_session_defaults_build_memory_journal(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):

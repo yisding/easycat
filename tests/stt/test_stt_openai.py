@@ -419,12 +419,26 @@ async def test_openai_stt_sends_auth_header():
 
 @pytest.mark.asyncio
 async def test_openai_stt_raises_on_api_error():
+    from easycat.events import Error, ErrorStage, EventBus
+
     error_response = _MockStreamingResponse(lines=["data: error"], status_code=500)
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock(return_value=_MockStreamContext(error_response))
     mock_client.aclose = AsyncMock()
+    bus = EventBus()
+    errors: list[Error] = []
 
-    config = OpenAISTTConfig(api_key="test-key", max_retries=1, http_client=mock_client)
+    async def capture_error(event: Error) -> None:
+        errors.append(event)
+
+    bus.subscribe(Error, capture_error)
+
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_retries=1,
+        http_client=mock_client,
+        event_bus=bus,
+    )
     stt = OpenAISTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -436,6 +450,17 @@ async def test_openai_stt_raises_on_api_error():
 
     with pytest.raises(httpx.HTTPStatusError):
         await stt.end_stream()
+    await stt.close()
+
+    assert len(errors) == 1
+    assert errors[0].provider == "openai"
+    assert errors[0].stage is ErrorStage.STT
+    assert "http_status=500" in getattr(errors[0].exception, "__notes__", ())
+
+    assert len(errors) == 1
+    assert errors[0].provider == "openai"
+    assert errors[0].stage is ErrorStage.STT
+    assert "http_status=500" in getattr(errors[0].exception, "__notes__", ())
 
 
 @pytest.mark.asyncio

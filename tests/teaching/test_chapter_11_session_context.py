@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "11-journal"
@@ -24,7 +25,7 @@ def load_investigator():
 
 
 def test_session_context_probe_recovers_ghost_interruption_configuration() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "session_context_probe.py")],
         cwd=ROOT,
         check=True,
@@ -76,7 +77,7 @@ def test_context_join_does_not_mix_unscoped_records_from_other_sessions() -> Non
 
 
 def test_cli_requires_turn_and_reports_context_coverage() -> None:
-    invalid = subprocess.run(
+    invalid = script_runner.run(
         [sys.executable, str(INVESTIGATE), str(BUNDLE), "--include-session-context"],
         cwd=ROOT,
         capture_output=True,
@@ -85,7 +86,7 @@ def test_cli_requires_turn_and_reports_context_coverage() -> None:
     assert invalid.returncode == 2
     assert "--include-session-context requires --turn" in invalid.stderr
 
-    completed = subprocess.run(
+    completed = script_runner.run(
         [
             sys.executable,
             str(INVESTIGATE),

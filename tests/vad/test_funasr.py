@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -13,6 +16,34 @@ from easycat.vad import (
 )
 from easycat.vad import funasr as vad_funasr_module
 from tests.vad._helpers import _assert_extra_hint, _make_chunk
+
+
+def test_funasr_state_anomalies_use_logger_not_stdout(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    numpy_stub = ModuleType("numpy")
+    numpy_stub.ndarray = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "numpy", numpy_stub)
+    monkeypatch.delitem(
+        sys.modules,
+        "easycat.vad._funasr_runtime.e2e_vad",
+        raising=False,
+    )
+
+    from easycat.vad._funasr_runtime.e2e_vad import E2EVadModel
+
+    model = E2EVadModel({})
+    model.confirmed_start_frame = 12
+
+    with caplog.at_level(logging.WARNING):
+        model.OnVoiceStart(13, fake_result=True)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert "FunASR VAD start frame was not reset: confirmed_start_frame=12" in caplog.text
 
 
 def test_funasr_vad_fails_without_runtime_dependency(monkeypatch: pytest.MonkeyPatch):
@@ -220,6 +251,7 @@ async def test_funasr_vad_inference_errors_are_not_silenced(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
     """FunASR VAD should resample telephony audio to 16 kHz before inference."""
+    model_calls = 0
 
     class _FakeWaveform:
         def astype(self, _dtype: object) -> _FakeWaveform:
@@ -239,6 +271,8 @@ async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
 
     class _FakeModel:
         def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+            nonlocal model_calls
+            model_calls += 1
             param_dict.setdefault("in_cache", [])
             return []
 
@@ -247,18 +281,18 @@ async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
         self._model = _FakeModel()
         self._param_dict = {"in_cache": []}
 
-    def _resample_chunk(chunk: AudioChunk, sample_rate: int) -> AudioChunk:
-        assert chunk.format == PCM16_MONO_8K
-        assert sample_rate == 16000
-        return _make_chunk(0)
-
     monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
-    monkeypatch.setattr(vad_funasr_module, "resample_chunk", _resample_chunk)
 
     vad = FunASROnnxVAD(chunk_size_ms=32)
     chunk_8k = AudioChunk(data=bytes(256 * 2), format=PCM16_MONO_8K)
-    events = [event async for event in vad.process(chunk_8k)]
+    events = []
+    for _ in range(4):
+        events += [event async for event in vad.process(chunk_8k)]
+
     assert events == []
+    assert vad._audio_resampler.source_rate == 8000
+    assert model_calls >= 1
+    assert len(vad._buffer) < vad._chunk_samples * 2
 
 
 def test_funasr_vad_configure_updates_model_silence(monkeypatch: pytest.MonkeyPatch):

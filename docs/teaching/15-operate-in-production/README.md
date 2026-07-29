@@ -152,11 +152,11 @@
 -if TYPE_CHECKING:
 -    from openai import AsyncOpenAI
 -
--MODEL = "gpt-4o-mini"
+-MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -76,185 +51,96 @@
+@@ -76,188 +51,96 @@
      )
 
 
@@ -189,7 +189,7 @@
 -        MarkdownStripProcessor(),
 -        *default_pronunciation_processors(
 -            name_pronunciations={"easycat": "ee zee cat"},
--            phone_pause_ms=120,
+-            phone_ellipsis_count=1,
 -        ),
 -    ]
 -
@@ -245,7 +245,10 @@
 -            return
 -
 -        stream = await self._client.chat.completions.create(
--            model=MODEL, messages=self._history, stream=True
+-            model=MODEL,
+-            reasoning_effort="none",
+-            messages=self._history,
+-            stream=True,
 -        )
 -        full = ""
 -        try:
@@ -711,9 +714,9 @@ Run easycat explain json-schema for CLI JSON.
 - **`uv run easycat inspect <path>`** — friendly alias for
   `uv run easycat bundles show <path>` for bundles and SQLite journals.
 - **`uv run easycat replay <path>`** — replay a debug bundle or SQLite
-  journal from the shell. It defaults to artifact fidelity and denies live
-  tool side effects unless you choose `--tool-policy stub` or
-  `--tool-policy allow`.
+  journal from the shell. It defaults to artifact fidelity and denies
+  recorded tool frames unless you choose `--tool-policy stub` or
+  `--tool-policy allow`; the CLI itself never invokes external tools.
 - **`uv run easycat latency <path>`** — summarise critical-path latency
   percentiles (p50/p95/p99) for a bundle or SQLite journal, splitting the
   pipeline dispatch wait from the model's first-token time so you can tell a

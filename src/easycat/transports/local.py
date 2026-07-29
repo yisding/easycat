@@ -24,12 +24,6 @@ logger = logging.getLogger(__name__)
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
 
-# Output jitter-buffer pre-roll: silence is emitted until this many frames have
-# accumulated in ``_out_queue`` so a small burst of late chunks does not
-# underrun the speaker callback. Kept deliberately small (~60ms at 20ms frames)
-# so it smooths jitter without adding audible latency to the bot's first word.
-_OUTPUT_PREROLL_FRAMES = 3
-
 
 @dataclass
 class _QueuedOutputChunk:
@@ -58,6 +52,28 @@ class LocalTransportConfig:
     # partial-fit drop in ``send_audio`` instead of being hidden behind a giant
     # buffer.
     max_pending_out_chunks: int = 500
+    # Output jitter-buffer pre-roll: silence is emitted until this many frames
+    # have accumulated so a small burst of late TTS chunks does not underrun
+    # the speaker callback. Three frames is at most ~60 ms at the default frame
+    # size and often only one callback period when a TTS chunk contains several
+    # frames. Set to 0 to disable the pre-roll.
+    output_preroll_frames: int = 3
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.output_preroll_frames, int)
+            or isinstance(self.output_preroll_frames, bool)
+            or self.output_preroll_frames < 0
+        ):
+            raise ValueError("output_preroll_frames must be a non-negative integer")
+        if (
+            self.max_pending_out_chunks > 0
+            and self.output_preroll_frames > self.max_pending_out_chunks
+        ):
+            raise ValueError(
+                "output_preroll_frames cannot exceed max_pending_out_chunks "
+                "when the output queue is bounded"
+            )
 
 
 class LocalTransport(AudioQueueMixin):
@@ -116,9 +132,10 @@ class LocalTransport(AudioQueueMixin):
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Output jitter buffer: the callback emits silence until ``_out_queue``
-        # has built up ``_OUTPUT_PREROLL_FRAMES`` of pre-roll, then drains one
-        # frame per callback. Reset to ``False`` on every connect / barge-in so
-        # each utterance re-primes.
+        # has built up the configured number of pre-roll frames, then drains
+        # one frame per callback. Reset to ``False`` on connect and barge-in;
+        # ordinary transient underruns stay primed so a streaming utterance
+        # does not repeatedly pay the pre-roll delay.
         self._primed: bool = False
 
         self._input_stream: Any = None
@@ -255,10 +272,10 @@ class LocalTransport(AudioQueueMixin):
         frame_bytes = self._frame_samples * self._audio_format.frame_size
 
         # Jitter-buffer pre-roll: emit silence until enough frames have queued,
-        # then drain one frame per callback. Re-primes after every
-        # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
+        # then drain one frame per callback. Re-primes after ``clear_audio()``
+        # and ``connect()``, but not after an ordinary queue underrun.
         if not self._primed:
-            if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
+            if self._out_queue.qsize() < self._config.output_preroll_frames:
                 outdata[:] = 0
                 if self._aec_reference_enabled:
                     self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
@@ -402,7 +419,7 @@ class LocalTransport(AudioQueueMixin):
         # full chunk), matching the docstring so the drop metric stays honest.
         return not truncated
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
         """Return all pending AEC far-end reference frames, draining the queue.
 
         This is the shared AEC reference capability used by both the local and
@@ -414,7 +431,7 @@ class LocalTransport(AudioQueueMixin):
         before AudioStage.execute() so the AEC far-end reference is always fed
         before the corresponding near-end mic frame is processed.
 
-        Frames are returned oldest-first.
+        Frames are returned oldest-first with the transport's playout format.
 
         Thread-safe: the output callback pushes to this queue from the
         sounddevice audio thread while this method is called from the asyncio
@@ -425,10 +442,15 @@ class LocalTransport(AudioQueueMixin):
         session without AEC never pays the per-frame push cost.
         """
         self._aec_reference_enabled = True
-        frames: list[bytes] = []
+        frames: list[AudioChunk] = []
         while True:
             try:
-                frames.append(self._aec_ref_queue.get_nowait())
+                frames.append(
+                    AudioChunk(
+                        data=self._aec_ref_queue.get_nowait(),
+                        format=self._audio_format,
+                    )
+                )
             except thread_queue.Empty:
                 break
         return frames

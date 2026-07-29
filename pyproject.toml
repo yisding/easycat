@@ -100,8 +100,6 @@ quickstart = [
     "sounddevice>=0.4.6",
     "openai>=2.44.0",
     "openai-agents>=0.18.3",
-    "pyrnnoise>=0.3.0",
-    "requests>=2.33.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.28.0",
     "livekit>=1.1.13",
@@ -202,6 +200,10 @@ source-exclude = [
 ]
 
 [tool.uv]
+# Local contributors may use compatible patch releases. CI reads the exact
+# tool pin from each setup-uv step so lock generation remains reproducible;
+# --locked independently rejects dependency drift. Review both deliberately
+# before a uv minor-version upgrade.
 required-version = ">=0.11.0,<0.12.0"
 conflicts = [
     [
@@ -239,7 +241,20 @@ extend-exclude = ["src/easycat/cli/scaffold/templates"]
 # new code out of the >10-complexity territory the M4 refactor cleaned up in
 # the streaming/bridge hot spots.  Existing offenders are enumerated in
 # per-file-ignores below — shrink that list, never grow it.
-select = ["E", "F", "I", "W", "UP", "C901", "PLR0912", "PLR0915", "ASYNC", "B", "RUF006"]
+select = [
+    "E",
+    "F",
+    "I",
+    "W",
+    "UP",
+    "C901",
+    "PLR0912",
+    "PLR0915",
+    "ASYNC",
+    "B",
+    "RUF006",
+    "T201",
+]
 # ASYNC109 (explicit async timeout params) is deliberate public API here (incl.
 # timeouts.py) — permanent.
 ignore = ["ASYNC109"]
@@ -251,6 +266,21 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# Executable teaching material, examples, maintenance scripts, benchmarks,
+# and tests intentionally write human-facing output.
+"docs/**/*.py" = ["T201"]
+"examples/**/*.py" = ["T201"]
+"perf/**/*.py" = ["T201"]
+"scripts/**/*.py" = ["T201"]
+"tests/**/*.py" = ["T201"]
+# These production entry points intentionally own terminal output. Library
+# modules outside this list must route diagnostics through logging.
+"src/easycat/cli/__init__.py" = ["T201"]
+"src/easycat/helpers.py" = ["T201"]
+"src/easycat/server/webrtc_routes.py" = ["T201"]
+"src/easycat/server/websocket.py" = ["T201"]
+"src/easycat/server/webtransport.py" = ["T201"]
+"src/easycat/validation/runner.py" = ["T201"]
 # ── Complexity-lint grandfather list (M4) ─────────────────────────
 # Pre-existing C901/PLR0912/PLR0915 offenders at the time the rules were
 # enabled.  Fix a file → delete its line.  Do not add new entries.
@@ -518,17 +548,6 @@ modules = [
     "easycat.tts",
     "easycat.vad",
 ]
-ignore_imports = [
-    # The STT and TTS factories share one central provider-metadata catalog
-    # (_provider_catalog.py). That catalog imports both factories LAZILY
-    # (function-local, inside stt_tts_catalogs()) purely to aggregate metadata
-    # and dodge a module-load cycle — the provider families never reach into
-    # each other directly. Ignore these two shared-catalog edges so the contract
-    # enforces the real invariant: no DIRECT cross-family imports.
-    "easycat._provider_catalog -> easycat.stt.factory",
-    "easycat._provider_catalog -> easycat.tts.factory",
-]
-
 # The WebRTC transport is a leaf: server / cli / debugger must not DIRECTLY
 # depend on it. `allow_indirect_imports` scopes the contract to direct imports,
 # so legitimate lower-layer coupling (config wiring transports) does not red the
