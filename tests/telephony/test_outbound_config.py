@@ -273,14 +273,51 @@ class TestTelephonyConfigExtension:
             for helper in helpers:
                 helper.stop()
 
-    @pytest.mark.asyncio
-    async def test_shared_dnc_list_is_wired_to_outbound_manager(
+    def test_shared_dnc_list_is_wired_to_outbound_manager(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class _Manager:
             def __init__(self, *_args, **_kwargs) -> None:
                 self.dnc_list = None
-                self.hangups: list[str] = []
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            async def hangup_owned_call(self, _call_sid: str) -> None:
+                pass
+
+        monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
+
+        dnc = DNCList()
+        helpers = _create_telephony_helpers(
+            EventBus(),
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+15559876543",
+                    twilio_account_sid="AC123",
+                    twilio_auth_token="secret",
+                ),
+            ),
+            dnc_list=dnc,
+        ).helpers
+
+        manager = next(helper for helper in helpers if isinstance(helper, _Manager))
+        assert manager.dnc_list is dnc
+
+    @pytest.mark.asyncio
+    async def test_max_duration_hangup_is_wired_to_outbound_manager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        hangups: list[str] = []
+        hung_up = asyncio.Event()
+
+        class _Manager:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.dnc_list = None
 
             def start(self) -> None:
                 pass
@@ -289,11 +326,11 @@ class TestTelephonyConfigExtension:
                 pass
 
             async def hangup_owned_call(self, call_sid: str) -> None:
-                self.hangups.append(call_sid)
+                hangups.append(call_sid)
+                hung_up.set()
 
         monkeypatch.setattr("easycat.config._factory.OutboundCallManager", _Manager)
 
-        dnc = DNCList()
         bus = EventBus()
         result = _create_telephony_helpers(
             bus,
@@ -306,16 +343,13 @@ class TestTelephonyConfigExtension:
                     max_call_duration_s=0.01,
                 ),
             ),
-            dnc_list=dnc,
         )
 
-        manager = next(helper for helper in result.helpers if isinstance(helper, _Manager))
-        assert manager.dnc_list is dnc
         result.state_machine.start()
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
-            await asyncio.sleep(0.05)
-            assert manager.hangups == ["CA1"]
+            await asyncio.wait_for(hung_up.wait(), timeout=0.2)
+            assert hangups == ["CA1"]
         finally:
             result.state_machine.stop()
 

@@ -563,55 +563,10 @@ class TestOutboundCallManagerStatusTracking:
         manager.start()
 
         await bus.emit(CallAnswered(call_sid="CA-INBOUND"))
+        await manager.hangup_owned_call("CA-INBOUND")
         await bus.emit(CallEnded(call_sid="CA-INBOUND", disposition="max_duration"))
 
         manager._client.calls.assert_not_called()
-        assert manager.state == OutboundCallManagerState.IDLE
-        assert manager.active_call_sid is None
-
-    @pytest.mark.asyncio
-    async def test_max_duration_event_hangs_up_matching_twilio_call(self) -> None:
-        bus = EventBus()
-        manager = self._make_manager(bus)
-        call_resource = MagicMock()
-        manager._client.calls.return_value = call_resource
-        manager.start()
-        manager._owned_call_sids.add("CA1")
-        await bus.emit(CallAnswered(call_sid="CA1"))
-
-        await bus.emit(CallEnded(call_sid="CA1", disposition="max_duration"))
-
-        manager._client.calls.assert_called_once_with("CA1")
-        call_resource.update.assert_called_once_with(status="completed")
-        assert manager.state == OutboundCallManagerState.IDLE
-        assert manager.active_call_sid is None
-
-    @pytest.mark.asyncio
-    async def test_max_duration_event_ignores_different_active_call(self) -> None:
-        bus = EventBus()
-        manager = self._make_manager(bus)
-        manager.start()
-        manager._owned_call_sids.add("CA1")
-        await bus.emit(CallAnswered(call_sid="CA1"))
-
-        await bus.emit(CallEnded(call_sid="CA2", disposition="max_duration"))
-
-        manager._client.calls.assert_not_called()
-        assert manager.state == OutboundCallManagerState.ACTIVE
-        assert manager.active_call_sid == "CA1"
-
-    @pytest.mark.asyncio
-    async def test_max_duration_rest_failure_still_clears_active_call(self) -> None:
-        bus = EventBus(handler_error_policy="raise")
-        manager = self._make_manager(bus)
-        manager._client.calls.return_value.update.side_effect = RuntimeError("Twilio unavailable")
-        manager.start()
-        manager._owned_call_sids.add("CA1")
-        await bus.emit(CallAnswered(call_sid="CA1"))
-
-        with pytest.raises(RuntimeError, match="Twilio unavailable"):
-            await bus.emit(CallEnded(call_sid="CA1", disposition="max_duration"))
-
         assert manager.state == OutboundCallManagerState.IDLE
         assert manager.active_call_sid is None
 

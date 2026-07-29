@@ -484,6 +484,37 @@ class TestOutboundCallStateMachine:
             sm.stop()
 
     @pytest.mark.asyncio
+    async def test_max_duration_hangup_precedes_terminal_transition_handlers(self) -> None:
+        bus = EventBus()
+        hangup_started = asyncio.Event()
+        terminal_handler_started = asyncio.Event()
+        release_terminal_handler = asyncio.Event()
+
+        async def hangup(_call_sid: str) -> None:
+            hangup_started.set()
+
+        async def slow_terminal_handler(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.ENDED:
+                terminal_handler_started.set()
+                await release_terminal_handler.wait()
+
+        bus.subscribe(CallStateChanged, slow_terminal_handler)
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            max_call_duration_s=0.01,
+        )
+        sm.set_max_duration_hangup(hangup)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await asyncio.wait_for(terminal_handler_started.wait(), timeout=0.2)
+            assert hangup_started.is_set()
+        finally:
+            release_terminal_handler.set()
+            sm.stop()
+
+    @pytest.mark.asyncio
     async def test_max_call_duration_timer_cancelled_on_call_end(self) -> None:
         bus = EventBus()
         sm = OutboundCallStateMachine(bus, classification_timeout_s=60, max_call_duration_s=60)
