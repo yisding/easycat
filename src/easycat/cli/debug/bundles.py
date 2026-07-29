@@ -203,6 +203,15 @@ def _build_issue_summary(bundle: RunBundle) -> dict[str, Any]:
     return build_issues(list(bundle.records()), artifact_resolver=bundle.artifact_blobs.get)
 
 
+def _add_journal_rows(table: Table, summary: Mapping[str, Any]) -> None:
+    table.add_row("records", str(summary["records"]))
+    dropped_records = int(summary["journal_dropped_records"])
+    table.add_row(
+        "journal_dropped",
+        f"[red]{dropped_records}[/]" if dropped_records else "0",
+    )
+
+
 def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool = False) -> None:
     """Load and render the bundle or SQLite journal summary used by all aliases."""
     bundle = _load_bundle_or_journal(
@@ -233,7 +242,7 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
     table.add_column()
     table.add_row("session_id", escape(str(summary["session_id"])) or "[dim](unknown)[/]")
     table.add_row("format_version", str(bundle.format_version))
-    table.add_row("records", str(summary["records"]))
+    _add_journal_rows(table, summary)
     table.add_row("turns", str(summary["turn_count"]))
     duration = summary["duration_ms"]
     table.add_row(
