@@ -61,8 +61,9 @@
 - [Chapter 9](../09-interruption/)
 - For the live pipeline:
   `uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev`.
-- For offline replay only: `uv sync --extra quickstart --group dev`. The
-  checked-in WAV pairs need no microphone or API keys.
+- For offline replay with `--nr on`:
+  `uv sync --extra quickstart --extra rnnoise --group dev`. The checked-in WAV
+  pairs need no microphone or API keys.
 - RNNoise uses the opt-in `rnnoise` extra; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
