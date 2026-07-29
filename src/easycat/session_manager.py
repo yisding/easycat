@@ -211,13 +211,14 @@ class SessionManager(Generic[TKey]):
 
 async def _await_owned_stop(task: asyncio.Task[None]) -> bool:
     """Shield a manager-owned stop and distinguish child from caller cancellation."""
+    current = asyncio.current_task()
+    cancellation_requests = current.cancelling() if current is not None else 0
     try:
         await asyncio.shield(task)
     except asyncio.CancelledError:
+        if current is not None and current.cancelling() > cancellation_requests:
+            raise
         if task.cancelled():
             return False
-        current = asyncio.current_task()
-        if current is not None and current.cancelling():
-            raise
         return False
     return True

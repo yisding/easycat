@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import easycat.transports.webtransport as webtransport_module
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.providers import Transport
 from easycat.transports.webtransport import (
     WebTransportConnectionTransport,
@@ -29,6 +29,26 @@ class TestWebTransportConnectionTransport:
     def test_outbound_queue_bound_must_be_a_positive_integer(self, value: object) -> None:
         with pytest.raises(ValueError, match="outbound_max_pending"):
             WebTransportTransportConfig(outbound_max_pending=value)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5])
+    def test_session_cap_must_be_a_positive_integer(self, value: object) -> None:
+        with pytest.raises(ValueError, match="max_concurrent_sessions"):
+            WebTransportTransportConfig(max_concurrent_sessions=value)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "audio_format",
+        [
+            AudioFormat(sample_rate=16_000, channels=1, sample_width=1),
+            AudioFormat(sample_rate=16_000, channels=2, sample_width=2),
+            AudioFormat(sample_rate=16_000, channels=1, sample_width=2, encoding="mulaw"),
+        ],
+    )
+    def test_wire_audio_format_must_be_mono_pcm16(self, audio_format: AudioFormat) -> None:
+        with pytest.raises(ValueError, match="audio_format must be mono PCM16"):
+            WebTransportTransportConfig(audio_format=audio_format)
+
+    def test_default_wire_audio_format_remains_valid(self) -> None:
+        assert WebTransportTransportConfig().audio_format == PCM16_MONO_16K
 
     def test_satisfies_transport_protocol(self) -> None:
         assert isinstance(_build_connection_transport(), Transport)

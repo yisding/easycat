@@ -646,6 +646,75 @@ class TestMultiContextWSManager:
         with pytest.raises(RuntimeError, match="is closed"):
             await mgr.open_context()
 
+    async def test_aclose_waits_for_admitted_send_before_context_and_socket_teardown(self):
+        ws = FakeMultiContextWS()
+        send_entered = asyncio.Event()
+        release_send = asyncio.Event()
+
+        async def blocked_send(_frame: str) -> None:
+            send_entered.set()
+            await release_send.wait()
+
+        ws.send = AsyncMock(side_effect=blocked_send)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+
+        sending = asyncio.create_task(mgr.send(ctx, ["request"]))
+        await send_entered.wait()
+        closing = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+
+        assert mgr._closed is True
+        assert not sending.done()
+        assert not closing.done()
+        assert ctx.done.is_set() is False
+        assert ws.closed is False
+
+        release_send.set()
+        with pytest.raises(RuntimeError, match="is closing"):
+            await sending
+        await closing
+
+        assert ws.closed
+        assert ctx.done.is_set()
+        assert ctx.pending_frames is None
+        assert ctx.context_id not in mgr._contexts
+
+    async def test_send_queued_before_aclose_rechecks_admission_inside_send_lock(self):
+        ws = FakeMultiContextWS()
+        first_send_entered = asyncio.Event()
+        release_first_send = asyncio.Event()
+
+        async def blocked_first_send(_frame: str) -> None:
+            first_send_entered.set()
+            await release_first_send.wait()
+
+        ws.send = AsyncMock(side_effect=blocked_first_send)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+
+        admitted = asyncio.create_task(mgr.send(ctx, ["first"]))
+        await first_send_entered.wait()
+        queued = asyncio.create_task(mgr.send(ctx, ["second"]))
+        await asyncio.sleep(0)
+        closing = asyncio.create_task(mgr.aclose())
+        await asyncio.sleep(0)
+
+        assert mgr._closed is True
+        assert not admitted.done()
+        assert not queued.done()
+        assert not closing.done()
+
+        release_first_send.set()
+        outcomes = await asyncio.gather(admitted, queued, return_exceptions=True)
+        await closing
+
+        assert all(isinstance(outcome, RuntimeError) for outcome in outcomes)
+        assert all("is closing" in str(outcome) for outcome in outcomes)
+        assert ws.send.await_count == 1
+        assert ctx.pending_frames is None
+        assert ctx.done.is_set()
+
     async def test_aclose_always_failing_socket_remains_retry_owned(self):
         ws = FakeMultiContextWS()
         ws.close = AsyncMock(side_effect=RuntimeError("socket close always fails"))  # type: ignore[method-assign]

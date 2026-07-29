@@ -289,10 +289,11 @@ class RuntimeScope:
         for task in tasks:
             if task is current:
                 continue
+            cancellation_requests = current.cancelling() if current is not None else 0
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError as exc:
-                if current is not None and current.cancelling():
+                if current is not None and current.cancelling() > cancellation_requests:
                     raise
                 if not cancel and pending is None:
                     pending = exc

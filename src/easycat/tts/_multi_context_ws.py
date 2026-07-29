@@ -185,6 +185,7 @@ class MultiContextWSManager:
         # so the reader's exit does NOT surface a spurious error on contexts —
         # only an unexpected socket death does.
         self._closing = False
+        self._fallback_close_waiters = 0
 
     # ── public surface ────────────────────────────────────────────
 
@@ -227,10 +228,12 @@ class MultiContextWSManager:
 
     async def send(self, ctx: _Context, frames: list[str]) -> None:
         """Send the caller's frames and arm replay only on success."""
-        await self._send_frames(frames)
-        # Arm replay only after a successful send so a reconnect during the
-        # initial send window does not replay-before-send.
-        ctx.pending_frames = list(frames)
+        async with self._send_lock:
+            await self._send_frames_unlocked(frames, ctx=ctx)
+            # Keep replay arming in the same ownership section as the writes.
+            # close cannot finish/remove this context between the last frame
+            # and this assignment.
+            ctx.pending_frames = list(frames)
 
     async def cancel_context(self, ctx: _Context) -> None:
         """Cancel one context best-effort, keeping the socket open.
@@ -346,7 +349,7 @@ class MultiContextWSManager:
             ):
                 continue
             with contextlib.suppress(Exception):
-                await self._send_frames(pending_frames)
+                await self._send_frames(pending_frames, ctx=ctx)
 
     # ── internals ─────────────────────────────────────────────────
 
@@ -386,29 +389,32 @@ class MultiContextWSManager:
     async def _aclose_transaction(self) -> None:
         """Run one physical close transaction after any connect owner settles."""
         async with self._connect_lock:
-            ws = self._pending_socket_close
-            if ws is None:
-                ws = self._ws
-            close_frames: list[str] = []
-            if self._pending_socket_close is None and self._ws is not None:
-                with contextlib.suppress(Exception):
-                    close_frames = self._adapter.socket_close_frames()
-            if close_frames:
-                with contextlib.suppress(Exception):
-                    await self._send_frames(close_frames)
-            # Snapshot the handle before cancelling the reader, whose
-            # ``finally`` nulls ``self._ws``.
-            await self._cancel_background_tasks()
-            self._ws = None
-            try:
-                if ws is not None:
-                    await self._close_owned_socket(ws)
-            finally:
-                # Drain contexts even when physical close failed. They no
-                # longer own the retained socket cleanup.
-                for ctx in list(self._contexts.values()):
-                    self._finish_context(ctx)
-                self._contexts.clear()
+            # Lock order is always connect -> send. This joins an admitted
+            # frame write before contexts or the exact socket are released.
+            async with self._send_lock:
+                ws = self._pending_socket_close
+                if ws is None:
+                    ws = self._ws
+                close_frames: list[str] = []
+                if self._pending_socket_close is None and self._ws is not None:
+                    with contextlib.suppress(Exception):
+                        close_frames = self._adapter.socket_close_frames()
+                if close_frames:
+                    with contextlib.suppress(Exception):
+                        await self._send_frames_unlocked(close_frames, allow_closing=True)
+                # Snapshot the handle before cancelling the reader, whose
+                # ``finally`` nulls ``self._ws``.
+                await self._cancel_background_tasks()
+                self._ws = None
+                try:
+                    if ws is not None:
+                        await self._close_owned_socket(ws)
+                finally:
+                    # Drain contexts even when physical close failed. They no
+                    # longer own the retained socket cleanup.
+                    for ctx in list(self._contexts.values()):
+                        self._finish_context(ctx)
+                    self._contexts.clear()
 
     def _close_task_done(self, task: asyncio.Task[None]) -> None:
         """Release/reap the shared task so a later call can retry failure."""
@@ -470,13 +476,41 @@ class MultiContextWSManager:
                 "retry close() or connect() after cleanup recovers"
             ) from exc
 
-    async def _send_frames(self, frames: list[str]) -> None:
+    def _require_send_admission(self, ctx: _Context | None = None) -> None:
+        if self._closed or self._closing:
+            raise RuntimeError("MultiContextWSManager is closing")
+        if ctx is not None and (
+            ctx.cancelled or ctx.done.is_set() or self._contexts.get(ctx.context_id) is not ctx
+        ):
+            raise RuntimeError("MultiContextWSManager context is not active")
+
+    async def _send_frames(
+        self,
+        frames: list[str],
+        *,
+        ctx: _Context | None = None,
+    ) -> None:
         async with self._send_lock:
-            ws = self._ws
-            if ws is None:
-                raise RuntimeError("MultiContextWSManager socket is not connected")
-            for frame in frames:
-                await ws.send(frame)
+            await self._send_frames_unlocked(frames, ctx=ctx)
+
+    async def _send_frames_unlocked(
+        self,
+        frames: list[str],
+        *,
+        ctx: _Context | None = None,
+        allow_closing: bool = False,
+    ) -> None:
+        if not allow_closing:
+            self._require_send_admission(ctx)
+        ws = self._ws
+        if ws is None:
+            raise RuntimeError("MultiContextWSManager socket is not connected")
+        for frame in frames:
+            await ws.send(frame)
+            if not allow_closing:
+                # Permanent close flips admission synchronously while an
+                # already-admitted write may be suspended in provider I/O.
+                self._require_send_admission(ctx)
 
     async def _reader_loop(self) -> None:
         """Single demux reader: route every frame to its owning context."""
@@ -592,27 +626,28 @@ class MultiContextWSManager:
         Used by the cancel fallback: the next ``open_context`` lazily
         reconnects a fresh socket.
         """
-        async with self._connect_lock:
-            # Permanent close owns every remaining resource once admission is
-            # closed. If it won the transition lock, do not independently
-            # retry or double-close its exact socket from a cancel fallback.
-            if self._closed:
-                return
-            await self._retry_pending_socket_close()
-            ws = self._ws
-            # Mark this as a deliberate teardown so the reader's finally does
-            # not surface a spurious connection-death error on still-live
-            # contexts; reset afterwards since the manager stays reusable (the
-            # awaited task cancel guarantees the reader's finally has run).
-            self._closing = True
-            try:
-                await self._cancel_background_tasks()
-            finally:
-                if not self._closed:
-                    self._closing = False
-            self._ws = None
-            if ws is not None:
-                await self._close_owned_socket(ws)
+        self._fallback_close_waiters += 1
+        self._closing = True
+        try:
+            async with self._connect_lock:
+                # Permanent close owns every remaining resource once admission
+                # is closed. Do not retry or double-close its exact socket.
+                if self._closed:
+                    return
+                # Preserve the global connect -> send lock order.
+                async with self._send_lock:
+                    await self._retry_pending_socket_close()
+                    ws = self._ws
+                    # The reader's deliberate cancellation must not surface a
+                    # spurious connection-death error on live contexts.
+                    await self._cancel_background_tasks()
+                    self._ws = None
+                    if ws is not None:
+                        await self._close_owned_socket(ws)
+        finally:
+            self._fallback_close_waiters -= 1
+            if self._fallback_close_waiters == 0 and not self._closed:
+                self._closing = False
 
     async def _cancel_background_tasks(self) -> None:
         task = self._reader_task
