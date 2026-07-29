@@ -34,7 +34,7 @@ class DeepgramSTTConfig:
        fail-fasts on an empty key.
     """
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "nova-2"
     language: str = "en"
     encoding: str = "linear16"

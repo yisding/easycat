@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator, Iterator
 from importlib.metadata import version
 from pathlib import Path
@@ -171,7 +170,8 @@ class FunASROnnxVAD(_VADBase):
             except Exception as exc:
                 raise RuntimeError(f"FunASR ONNX VAD inference failed: {exc}") from exc
 
-            yield_events = self._evaluate_funasr_segments(segments, time.monotonic())
+            audio_time_s = self._advance_audio_time(self._chunk_size_ms / 1000.0)
+            yield_events = self._evaluate_funasr_segments(segments, audio_time_s)
             for event in yield_events:
                 yield event
 

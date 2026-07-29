@@ -160,8 +160,8 @@ review. Complete each phase gate before starting the next group of chapters.
   OpenAI, NumPy, and ONNX Runtime. Chapters 3-10 use Deepgram
   streaming STT by default, so run
   `uv sync --extra quickstart --extra deepgram --group dev` for
-  those chapters. Chapter 10 gets RNNoise from `quickstart`; add
-  `--extra aec` for real echo cancellation. Chapter 13's
+  those chapters. Chapter 10 additionally needs `--extra rnnoise`;
+  add `--extra aec` for real echo cancellation. Chapter 13's
   `deepgram-eleven` provider mix additionally needs `--extra
   deepgram --extra elevenlabs`; its WebRTC and Twilio transport
   variants need `--extra webrtc` and `--extra telephony`,

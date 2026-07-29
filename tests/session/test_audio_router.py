@@ -9,7 +9,7 @@ import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._turn_context import TurnContext
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AudioIn,
@@ -18,6 +18,7 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
     TransportAudioDelivered,
+    TransportDegraded,
     TTSAudio,
 )
 from easycat.runtime import InMemoryRingBuffer
@@ -1134,12 +1135,12 @@ class _DrainRefTransport(_FakeTransport):
 
     reports_audio_delivery = True
 
-    def __init__(self, ref_frames: list[bytes]) -> None:
+    def __init__(self, ref_frames: list[AudioChunk | bytes]) -> None:
         super().__init__()
         self._ref_frames = ref_frames
         self.drain_calls = 0
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
+    def drain_aec_reference_frames(self) -> list[AudioChunk | bytes]:
         self.drain_calls += 1
         if self.drain_calls > 1:
             return []
@@ -1217,6 +1218,87 @@ async def test_drain_path_journals_reference_and_feeds_before_near_end():
     # the first frame of the window via _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES).
     ref_records = [r for r in journal.read() if r.name == AEC_REFERENCE_FRAME_NAME]
     assert len(ref_records) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_path_preserves_reference_format_instead_of_using_mic_format():
+    """A typed WebRTC reference must reach AEC with its true far-end rate.
+
+    Advanced configurations can intentionally disable TTS/transport alignment.
+    Preserving 24 kHz here lets LiveKitAEC's existing 24 kHz-vs-16 kHz guard
+    reject the mismatch instead of processing mislabeled PCM.
+    """
+    reference = AudioChunk(data=b"\x01\x02" * 240, format=PCM16_MONO_24K)
+    transport = _DrainRefTransport([reference])
+    router, _ = _make_router(transport=transport, enable_aec=True)
+    fed: list[AudioChunk] = []
+    router._echo_canceller.feed_reference = fed.append
+
+    await router._process_chunk(_make_chunk())
+
+    assert fed == [reference]
+    assert fed[0].format == PCM16_MONO_24K
+
+
+@pytest.mark.asyncio
+async def test_send_time_aec_reference_reports_degradation_once_to_journal():
+    """Explicit AEC on a no-drain transport remains available but observable."""
+
+    class _WebSocketLikeTransport(_FakeTransport):
+        transport_kind = "websocket"
+
+    journal = InMemoryRingBuffer(capacity=64)
+    router, state = _make_router(
+        transport=_WebSocketLikeTransport(),
+        enable_aec=True,
+        journal=journal,
+    )
+    router._journal_sink.subscribe()
+
+    await router._handle_audio_delivery(_make_chunk(byte_value=3), None)
+    await router._handle_audio_delivery(_make_chunk(byte_value=4), None)
+    await state["runtime_scope"].drain("aec_reference_degraded_emit")
+
+    degraded = [event for event in state["emitted"] if isinstance(event, TransportDegraded)]
+    assert len(degraded) == 1
+    assert degraded[0].provider == "websocket"
+    assert degraded[0].reason == "aec_reference_degraded"
+    records = [record for record in journal.read() if record.name == "transport_degraded"]
+    assert len(records) == 1
+    assert records[0].data["reason"] == "aec_reference_degraded"
+
+
+@pytest.mark.asyncio
+async def test_slow_degraded_handler_does_not_stall_audio_delivery() -> None:
+    class _WebSocketLikeTransport(_FakeTransport):
+        transport_kind = "websocket"
+
+    turn = TurnContext(turn_id="delivery", cancel_token=CancelToken())
+    router, state = _make_router(
+        transport=_WebSocketLikeTransport(),
+        enable_aec=True,
+        current_turn=turn,
+    )
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+
+    async def slow_handler(_event: TransportDegraded) -> None:
+        handler_started.set()
+        await handler_release.wait()
+
+    state["bus"].subscribe(TransportDegraded, slow_handler)
+
+    await asyncio.wait_for(
+        router._handle_audio_delivery(_make_chunk(byte_value=3), turn),
+        timeout=0.1,
+    )
+    await asyncio.wait_for(handler_started.wait(), timeout=0.1)
+
+    assert turn.audio_bytes_sent > 0
+    assert state["runtime_scope"].tasks("aec_reference_degraded_emit")
+
+    handler_release.set()
+    await state["runtime_scope"].drain("aec_reference_degraded_emit")
 
 
 @pytest.mark.asyncio

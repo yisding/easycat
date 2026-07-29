@@ -65,6 +65,11 @@ class _VADBase:
         self._speech_start_time: float | None = None
         self._silence_start_time: float | None = None
         self._speech_confirmed: bool = False
+        # VAD debounce is measured against consumed audio, not processing
+        # wall-clock time. Buffered transports and replay can deliver many
+        # frames in one event-loop tick; a monotonic clock would make those
+        # frames appear to have zero duration and suppress speech/stop events.
+        self._audio_time_s: float = 0.0
 
     def configure(
         self,
@@ -83,7 +88,12 @@ class _VADBase:
         # Sensitivity maps inversely to threshold: higher sensitivity = lower threshold
         self._threshold = 1.0 - sensitivity
 
-    def _evaluate_speech(self, speech_prob: float, now: float) -> Iterator[Event]:
+    def _advance_audio_time(self, frame_duration_s: float) -> float:
+        """Advance and return the deterministic position of consumed audio."""
+        self._audio_time_s += frame_duration_s
+        return self._audio_time_s
+
+    def _evaluate_speech(self, speech_prob: float, audio_time_s: float) -> Iterator[Event]:
         """Evaluate a single speech probability against the state machine.
 
         Yields VADStartSpeaking / VADStopSpeaking events as appropriate.
@@ -93,11 +103,12 @@ class _VADBase:
             self._silence_start_time = None
             if not self._is_speaking:
                 if self._speech_start_time is None:
-                    self._speech_start_time = now
+                    self._speech_start_time = audio_time_s
                 if (
                     self._speech_start_time is not None
                     and not self._speech_confirmed
-                    and (now - self._speech_start_time) * 1000 >= self._min_speech_duration_ms
+                    and (audio_time_s - self._speech_start_time) * 1000
+                    >= self._min_speech_duration_ms
                 ):
                     self._is_speaking = True
                     self._speech_confirmed = True
@@ -108,13 +119,14 @@ class _VADBase:
             self._speech_confirmed = False
             if self._is_speaking:
                 if self._silence_start_time is None:
-                    self._silence_start_time = now
+                    self._silence_start_time = audio_time_s
                 # Mirror the speech-side structure: fall through to the elapsed
                 # check so that with min_silence_duration_ms=0 the stop event can
                 # fire on the first silent frame, matching the speech path.
                 if (
                     self._silence_start_time is not None
-                    and (now - self._silence_start_time) * 1000 >= self._min_silence_duration_ms
+                    and (audio_time_s - self._silence_start_time) * 1000
+                    >= self._min_silence_duration_ms
                 ):
                     self._is_speaking = False
                     self._silence_start_time = None
@@ -126,6 +138,7 @@ class _VADBase:
         self._speech_start_time = None
         self._silence_start_time = None
         self._speech_confirmed = False
+        self._audio_time_s = 0.0
 
     def close(self) -> None:
         """Release any native model/session handle held by the backend.

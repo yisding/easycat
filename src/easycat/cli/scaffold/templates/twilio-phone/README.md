@@ -65,8 +65,10 @@ Set your Twilio voice webhook to `https://<public-host>/twiml`. Call the number
 and ask to leave a message to see the `take_message` tool fire. Use
 `TWILIO_MAX_SESSIONS` to cap concurrent provider-backed calls for your
 deployment and `TWILIO_START_TIMEOUT_S` to bound unauthenticated sockets that
-never send a Twilio start frame. Set `TWILIO_PUBLIC_TWIML_URL` to the exact
-public webhook URL when a proxy rewrites the request path, host, or port.
+never send a Twilio start frame. `TWILIO_DRAIN_TIMEOUT_S` controls the graceful
+shutdown window, and `TWILIO_FORCE_SHUTDOWN_TIMEOUT_S` bounds forced cleanup.
+Set `TWILIO_PUBLIC_TWIML_URL` to the exact public webhook URL when a proxy
+rewrites the request path, host, or port.
 
 Ctrl-C to quit.
 

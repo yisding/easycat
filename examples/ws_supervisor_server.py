@@ -54,6 +54,7 @@ from easycat.supervisor import (
     serve_supervisor_websocket,
     supervisor_auth_token_from_env,
 )
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +141,17 @@ async def main() -> None:
             expected_token=supervisor_token,
         )
 
-    caller_server = await websockets.serve(handle_caller, settings.caller_host, CALLER_WS_PORT)
+    caller_server = await websockets.serve(
+        handle_caller,
+        settings.caller_host,
+        CALLER_WS_PORT,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+    )
     supervisor_server = await websockets.serve(
         handle_supervisor,
         settings.supervisor_host,
         SUPERVISOR_WS_PORT,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
     )
 
     print(f"Caller UI:     http://localhost:{HTTP_PORT}/ws_browser_client.html")

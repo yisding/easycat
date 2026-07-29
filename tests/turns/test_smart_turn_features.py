@@ -125,4 +125,10 @@ def test_whisper_feature_extractor_matches_transformers_reference() -> None:
     assert actual.shape == (1, 80, 800)
     assert actual.dtype == np.float32
     assert np.isfinite(actual).all()
-    assert digest == "22f9490892ec2009dba6649ec4ddf727d7b4fcf0282cf4d582ba1817ac901d5f"
+    # NumPy's supported floor and current release produce two equivalent,
+    # quantized FFT results. Keep full-tensor coverage for both dependency
+    # lanes instead of making the compatibility job depend on one FFT build.
+    assert digest in {
+        "22f9490892ec2009dba6649ec4ddf727d7b4fcf0282cf4d582ba1817ac901d5f",
+        "b8bc50559c9052ddb9d4bf3c7f2b7893c2e7b2251812ee7c87cec6bbe00ec967",
+    }

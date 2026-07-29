@@ -31,6 +31,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from easycat._audio_utils import resample_backend
+from easycat._extras import PORTAUDIO_INSTALL_FIX
 from easycat._provider_registry import credential_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
@@ -307,12 +308,13 @@ def check_microphone() -> CheckResult:
     Only meaningful when the ``local`` extra's ``sounddevice`` dep is
     present — server-side deployments (WebRTC, Twilio, WebSocket) don't
     need a local mic so a missing ``sounddevice`` is a skip, not a
-    failure.  When sounddevice is installed but reports no default
-    input, surface ``EASYCAT_E206`` with the platform-specific fix
-    pointing the user at OS-level permissions.
+    failure. A present Python package that cannot load the PortAudio
+    runtime is a failed local setup (``EASYCAT_E209``). When
+    sounddevice reports no default input, surface ``EASYCAT_E206``
+    with the platform-specific permissions fix.
     """
     try:
-        import sounddevice as sd  # type: ignore[import-untyped]
+        sd = importlib.import_module("sounddevice")
     except ImportError:
         return CheckResult(
             name="microphone",
@@ -322,8 +324,10 @@ def check_microphone() -> CheckResult:
     except OSError as exc:
         return CheckResult(
             name="microphone",
-            status="skip",
-            detail=f"sounddevice unavailable: {type(exc).__name__}",
+            status="fail",
+            detail=f"sounddevice could not load PortAudio: {exc}",
+            code="EASYCAT_E209",
+            fix=PORTAUDIO_INSTALL_FIX,
         )
     try:
         # ``sd.default.device`` is a two-tuple ``(input, output)`` when

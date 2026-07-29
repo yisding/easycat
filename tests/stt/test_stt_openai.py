@@ -457,6 +457,11 @@ async def test_openai_stt_raises_on_api_error():
     assert errors[0].stage is ErrorStage.STT
     assert "http_status=500" in getattr(errors[0].exception, "__notes__", ())
 
+    assert len(errors) == 1
+    assert errors[0].provider == "openai"
+    assert errors[0].stage is ErrorStage.STT
+    assert "http_status=500" in getattr(errors[0].exception, "__notes__", ())
+
 
 @pytest.mark.asyncio
 async def test_openai_stt_max_retries_zero_still_sends_one_request():

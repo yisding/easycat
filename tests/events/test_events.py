@@ -1,13 +1,18 @@
 import asyncio
 import functools
+import inspect
 import logging
 
 import pytest
 
+import easycat
+import easycat.events as events_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
+    ALL_EVENTS,
     DTMF,
     TELEPHONY_EVENTS,
+    TRANSPORT_EVENTS,
     AgentDelta,
     AgentFinal,
     AgentRequestStarted,
@@ -35,6 +40,8 @@ from easycat.events import (
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TransportAudioDelivered,
+    TransportDegraded,
     TTSAudio,
     TTSEvent,
     TTSEventType,
@@ -196,26 +203,28 @@ def test_telephony_events_include_helper_payloads():
     assert CallStateChanged in TELEPHONY_EVENTS
 
 
-def test_top_level_exports_include_curated_call_lifecycle_events():
-    import easycat
+def test_all_events_contains_every_concrete_event_type():
+    concrete_event_types = {
+        value
+        for value in vars(events_module).values()
+        if inspect.isclass(value)
+        and value.__module__ == events_module.__name__
+        and value is not Event
+        and issubclass(value, Event)
+    }
 
-    # Top-level surface only re-exports the lifecycle events an app
-    # subscribes to. Detailed telephony events stay reachable via the
-    # ``easycat.events`` submodule (asserted below).
-    assert easycat.CallAnswered.__name__ == "CallAnswered"
-    assert easycat.CallFailed.__name__ == "CallFailed"
-    assert easycat.CallEnded.__name__ == "CallEnded"
+    assert set(ALL_EVENTS) == concrete_event_types
+    assert len(ALL_EVENTS) == len(set(ALL_EVENTS))
 
-    from easycat import events as ev
 
-    assert ev.CallInitiated.__name__ == "CallInitiated"
-    assert ev.CallRinging.__name__ == "CallRinging"
-    assert ev.CallScreening.__name__ == "CallScreening"
-    assert ev.ScreeningTimedOut.__name__ == "ScreeningTimedOut"
-    assert ev.CallStateChanged is CallStateChanged
-    assert ev.ScreeningResponse is ScreeningResponse
-    assert ev.IVRAction is IVRAction
-    assert ev.TELEPHONY_EVENTS is TELEPHONY_EVENTS
+def test_transport_events_are_in_the_public_event_catalog():
+    assert TRANSPORT_EVENTS == (TransportAudioDelivered, TransportDegraded)
+    assert all(event_type in ALL_EVENTS for event_type in TRANSPORT_EVENTS)
+
+
+def test_top_level_exports_include_every_public_event():
+    for event_type in ALL_EVENTS:
+        assert getattr(easycat, event_type.__name__) is event_type
 
 
 def test_error_event():
@@ -497,6 +506,11 @@ async def test_eventbus_handler_error_does_not_stop_others():
 def test_eventbus_rejects_unknown_handler_error_policy():
     with pytest.raises(ValueError, match="handler_error_policy"):
         EventBus(handler_error_policy="strict")  # type: ignore[arg-type]
+
+
+def test_eventbus_rejects_negative_slow_handler_threshold():
+    with pytest.raises(ValueError, match="slow_handler_threshold_s"):
+        EventBus(slow_handler_threshold_s=-0.001)
 
 
 @pytest.mark.asyncio
