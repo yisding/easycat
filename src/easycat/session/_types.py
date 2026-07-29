@@ -248,3 +248,4 @@ class SessionConfig:
 
     # Keep appended for positional compatibility with older SessionConfig calls.
     capture_audio: bool | Callable[[], bool] = True
+    journal_redaction: Literal["secrets", "pii"] = "secrets"

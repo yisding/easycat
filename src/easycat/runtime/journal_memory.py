@@ -22,6 +22,7 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
+from easycat.validation.redaction import RedactionPolicy, validate_redaction_policy
 
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import InMemoryArtifactStore
@@ -43,9 +44,12 @@ class InMemoryRingBuffer:
         self,
         capacity: int = 10_000,
         artifact_store: InMemoryArtifactStore | None = None,
+        *,
+        redaction: RedactionPolicy = "secrets",
     ) -> None:
         if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
             raise ValueError("capacity must be a positive integer")
+        self._redaction = validate_redaction_policy(redaction)
         self._capacity = capacity
         self._buf: collections.deque[JournalRecord] = collections.deque(maxlen=capacity)
         self._lock = threading.Lock()
@@ -204,6 +208,7 @@ class InMemoryRingBuffer:
                 input_ref=input_ref,
                 output_ref=output_ref,
                 tags=tags,
+                redaction=self._redaction,
             )
             self._buf.append(record)
 
