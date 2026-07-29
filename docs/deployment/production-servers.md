@@ -64,10 +64,10 @@ should authenticate with `Authorization: Bearer <token>`.
 >
 > The bundled WebRTC client sends `Authorization: Bearer` and is **not** affected.
 
-## Unified auth model (`VoiceServer`)
+## Unified auth model
 
-`VoiceServer` (the `easycat.server` process layer) applies one auth policy to
-**both** the WebSocket and WebRTC paths via `easycat.server.auth`:
+The `easycat.server.auth` policy layer is shared by `VoiceServer`'s WebSocket
+and WebRTC paths and by the standalone WebTransport server:
 
 - `NoAuth` — open access (loopback/dev).
 - `BearerTokenAuth(token=..., allow_query_token=False)` — constant-time
@@ -85,12 +85,13 @@ server = VoiceServer.from_app(
 server.run()
 ```
 
-**Non-loopback binds require a token.** Binding a non-loopback host
-(e.g. `0.0.0.0`) with no token **raises `ValueError` at `start()`** — this is the
-single structured guard applied to every transport, and it closes a previously
-unauthenticated `0.0.0.0` WebSocket voice endpoint. The **only** escape hatch is
-the structured `unsafe_allow_no_auth=True` field (on the auth policy and mirrored
-on `VoiceServerConfig`); never bypass it with prose-only config.
+**Non-loopback binds require a token.** `VoiceServer`, the standalone
+WebSocket/WebRTC helpers, and `WebTransportServer` all raise `ValueError` at
+`start()` when binding a non-loopback host (for example `0.0.0.0`) without a
+token. The **only** escape hatch is the structured
+`unsafe_allow_no_auth=True` field. Twilio uses its own required webhook and
+media-handshake signature validation because provider callbacks must be
+public; local microphone transports do not bind a network listener.
 
 ### Binding a typed principal
 
@@ -238,6 +239,17 @@ Use `run_webtransport_config_server()` when the client needs HTTP/3 + QUIC
 streaming semantics and your ingress can support UDP/443 end to end. Keep
 WebTransport behind the optional `webtransport` extra and deploy it only where
 certificate, HTTP/3, QUIC, and load-balancer support are explicit.
+
+`WebTransportTransportConfig` defaults to `host="127.0.0.1"`. For a public
+bind, set `auth_token` (the example reads `EASYCAT_SERVE_TOKEN`); the HTTP/3
+CONNECT is rejected with `401` before a session is created unless it carries
+`Authorization: Bearer <token>`. Browser WebTransport cannot set arbitrary
+CONNECT headers, so browser deployments must explicitly set
+`allow_query_token=True` and connect to
+`https://host/easycat?token=<token>`. Query-token auth is off by default, and
+token-bearing URLs must be treated as secrets. Use
+`unsafe_allow_no_auth=True` only for a deliberately unauthenticated public
+endpoint.
 
 EasyCat bounds stalled-client memory by inspecting aioquic's per-stream send
 buffer. Because aioquic doesn't expose that value publicly, server startup
