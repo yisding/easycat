@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import runpy
 from pathlib import Path
+
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from tests.examples._examples_helpers import (
     REPO_ROOT,
@@ -461,6 +465,36 @@ def test_docker_base_images_are_digest_pinned_and_tracked_by_dependabot() -> Non
     assert 'directory: "/docker"' in docker_updates
     assert 'interval: "weekly"' in docker_updates
     assert "default-days: 7" in docker_updates
+
+
+def test_docker_builder_and_runtime_use_the_same_python_minor() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    stages = {
+        stage: version
+        for version, stage in re.findall(
+            r"^FROM python:(\d+\.\d+)-\S+ AS (builder|runtime)$",
+            dockerfile,
+            re.MULTILINE,
+        )
+    }
+
+    assert stages["builder"] == stages["runtime"]
+
+
+def test_docker_builder_pins_a_supported_uv_binary() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    match = re.search(
+        r"^COPY --from=ghcr\.io/astral-sh/uv:(\d+\.\d+\.\d+)@sha256:([0-9a-f]{64}) "
+        r"/uv /uvx /bin/$",
+        dockerfile,
+        re.MULTILINE,
+    )
+    required = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"][
+        "uv"
+    ]["required-version"]
+
+    assert match is not None
+    assert Version(match.group(1)) in SpecifierSet(required)
 
 
 def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> None:
