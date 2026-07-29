@@ -332,7 +332,12 @@ class PydanticAIBridge:
             return
 
         try:
-            from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+            from pydantic_ai.messages import (
+                ModelRequest,
+                ModelResponse,
+                TextPart,
+                UserPromptPart,
+            )
         except ImportError:
             return
 
@@ -342,9 +347,12 @@ class PydanticAIBridge:
             if isinstance(msg, ModelRequest) and any(
                 isinstance(part, UserPromptPart) for part in msg.parts
             ):
-                # The current turn has a user request but no committed
-                # response. Do not walk across that boundary and rewrite the
-                # previous turn's fully delivered assistant text.
+                # PydanticAI may expose the current user request before it
+                # commits a streaming ModelResponse. Preserve what was heard
+                # as this turn's response rather than walking across the user
+                # boundary and rewriting the previous completed turn.
+                if replacement:
+                    history.append(ModelResponse(parts=[TextPart(content=replacement)]))
                 break
             if isinstance(msg, ModelResponse):
                 text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
@@ -544,8 +552,14 @@ class PydanticAIBridge:
                                     continue
                                 yield mapped
 
-                self._set_history_for_key(history_key, await _run_new_messages(agent_run))
-                self._last_output = await _run_output(agent_run)
+            except GeneratorExit:
+                # Do not inject GeneratorExit into PydanticAI's Agent.iter
+                # context: v1 records it as a node failure and re-raises it
+                # during __aexit__. Snapshot the partial turn, then consume the
+                # normal async-generator close signal here so the SDK context
+                # exits cleanly.
+                await self._commit_interrupted_agent_run(history_key, agent_run)
+                return
             except BaseException:
                 # A hard task cancel or consumer ``aclose()`` can unwind at the
                 # suspended yield above before normal fall-through commits this
@@ -555,6 +569,8 @@ class PydanticAIBridge:
                 # than the previous completed assistant response.
                 await self._commit_interrupted_agent_run(history_key, agent_run)
                 raise
+            else:
+                await self._commit_agent_run(history_key, agent_run)
             finally:
                 await record_usage_from_result(
                     recorder,
@@ -586,11 +602,14 @@ class PydanticAIBridge:
                         yield AgentBridgeEvent(kind="text_delta", text=delta)
                     accumulated = full_text
 
-                self._set_history_for_key(history_key, await _run_new_messages(result))
-                self._last_output = await _run_output(result)
+            except GeneratorExit:
+                await self._commit_interrupted_agent_run(history_key, result)
+                return
             except BaseException:
                 await self._commit_interrupted_agent_run(history_key, result)
                 raise
+            else:
+                await self._commit_agent_run(history_key, result)
             finally:
                 await record_usage_from_result(
                     recorder,
@@ -602,8 +621,7 @@ class PydanticAIBridge:
     async def _commit_interrupted_agent_run(self, history_key: str, run: Any) -> None:
         """Best-effort history snapshot while cancellation is already active."""
         try:
-            self._set_history_for_key(history_key, await _run_new_messages(run))
-            self._last_output = await _run_output(run)
+            await self._commit_agent_run(history_key, run)
         except (asyncio.CancelledError, Exception):
             # Never replace the cancellation/GeneratorExit with a secondary
             # SDK snapshot failure. The user-boundary guard below still keeps
@@ -612,6 +630,13 @@ class PydanticAIBridge:
                 "Failed to snapshot interrupted PydanticAI run history",
                 exc_info=True,
             )
+
+    async def _commit_agent_run(self, history_key: str, run: Any) -> None:
+        """Append the SDK's current-turn messages to bridge-owned history."""
+        new_messages = await _run_new_messages(run)
+        history = self._history_for_key(history_key)
+        self._set_history_for_key(history_key, [*history, *new_messages])
+        self._last_output = await _run_output(run)
 
     def _runtime_toolsets(self) -> list[Any] | None:
         if self._toolsets is not None:

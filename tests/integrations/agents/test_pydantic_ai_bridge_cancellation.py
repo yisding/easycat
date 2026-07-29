@@ -187,8 +187,9 @@ async def test_aclose_commits_current_turn_before_interruption_rewrite(
     current_response = pydantic_messages.ModelResponse(
         parts=[pydantic_messages.TextPart("partial")]
     )
-    committed = [prior_user, prior_response, current_user, current_response]
-    bridge = PydanticAIBridge(agent=agent_cls(committed))
+    current_messages = [current_user, current_response]
+    committed = [prior_user, prior_response, *current_messages]
+    bridge = PydanticAIBridge(agent=agent_cls(current_messages))
     bridge._set_history_for_key("session-1", [prior_user, prior_response])
     recorder = _recorder()
 
@@ -208,7 +209,119 @@ async def test_aclose_commits_current_turn_before_interruption_rewrite(
     assert bridge._history_for_key("session-1") == committed
 
 
-def test_interruption_and_postprocessing_stop_at_current_user_boundary(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_cls", [_IterAgent, _RunStreamAgent])
+async def test_completed_run_appends_sdk_new_messages_to_existing_history(
+    pydantic_messages: SimpleNamespace,
+    agent_cls: type[_IterAgent] | type[_RunStreamAgent],
+) -> None:
+    prior_user = pydantic_messages.ModelRequest(
+        parts=[pydantic_messages.UserPromptPart("previous")]
+    )
+    prior_response = pydantic_messages.ModelResponse(
+        parts=[pydantic_messages.TextPart("previous complete")]
+    )
+    current_user = pydantic_messages.ModelRequest(
+        parts=[pydantic_messages.UserPromptPart("current")]
+    )
+    current_response = pydantic_messages.ModelResponse(
+        parts=[pydantic_messages.TextPart("current complete")]
+    )
+    bridge = PydanticAIBridge(agent=agent_cls([current_user, current_response]))
+    bridge._set_history_for_key("session-1", [prior_user, prior_response])
+
+    events = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("current"),
+            _recorder(),
+        )
+    ]
+
+    assert events[-1].kind == "done"
+    assert bridge._history_for_key("session-1") == [
+        prior_user,
+        prior_response,
+        current_user,
+        current_response,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_new_messages_extend_prior_history() -> None:
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+    from pydantic_ai.models.test import TestModel
+
+    prior_user = ModelRequest(parts=[UserPromptPart(content="previous")])
+    prior_response = ModelResponse(parts=[TextPart(content="previous complete")])
+    bridge = PydanticAIBridge(agent=Agent(TestModel(custom_output_text="current complete")))
+    bridge._set_history_for_key("session-1", [prior_user, prior_response])
+
+    events = [
+        event
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("current"),
+            _recorder(),
+        )
+    ]
+
+    history = bridge._history_for_key("session-1")
+    assert events[-1].kind == "done"
+    assert history[:2] == [prior_user, prior_response]
+    assert any(
+        isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, UserPromptPart) and part.content == "current"
+            for part in message.parts
+        )
+        for message in history[2:]
+    )
+    assert any(
+        isinstance(message, ModelResponse)
+        and any(
+            isinstance(part, TextPart) and part.content == "current complete"
+            for part in message.parts
+        )
+        for message in history[2:]
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_aclose_preserves_prior_turn_and_commits_current_turn() -> None:
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+    from pydantic_ai.models.test import TestModel
+
+    prior_user = ModelRequest(parts=[UserPromptPart(content="previous")])
+    prior_response = ModelResponse(parts=[TextPart(content="previous complete")])
+    bridge = PydanticAIBridge(agent=Agent(TestModel(custom_output_text="current full")))
+    bridge._set_history_for_key("session-1", [prior_user, prior_response])
+
+    stream = bridge.invoke(AgentTurnInput.from_text("current"), _recorder())
+    first = await anext(stream)
+    assert first.kind == "text_delta"
+    await stream.aclose()
+
+    bridge.apply_interruption(
+        "heard",
+        CancellationMode.IMMEDIATE_STOP,
+        recorder=_recorder(),
+    )
+
+    history = bridge._history_for_key("session-1")
+    assert history[:2] == [prior_user, prior_response]
+    assert prior_response.parts[0].content == "previous complete"
+    current_response = next(
+        message for message in reversed(history) if isinstance(message, ModelResponse)
+    )
+    current_text = next(part for part in current_response.parts if isinstance(part, TextPart))
+    assert current_text.content == "heard..."
+
+
+def test_interruption_synthesizes_response_at_current_user_boundary(
     pydantic_messages: SimpleNamespace,
 ) -> None:
     prior_response = pydantic_messages.ModelResponse(
@@ -224,3 +337,6 @@ def test_interruption_and_postprocessing_stop_at_current_user_boundary(
     bridge.replace_last_assistant_text("also wrong")
 
     assert prior_response.parts[0].content == "previous complete"
+    current_response = bridge._message_history[-1]
+    assert isinstance(current_response, pydantic_messages.ModelResponse)
+    assert current_response.parts[0].content == "also wrong"
