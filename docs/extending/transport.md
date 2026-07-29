@@ -48,7 +48,10 @@ class MemoryTransport(AudioQueueMixin):
     transport_kind = "memory"  # appears as TransportDegraded.provider
 
     def __init__(self) -> None:
-        self._init_audio_queue(max_pending_chunks=256)
+        self._init_audio_queue(
+            max_pending_chunks=256,
+            max_pending_bytes=4 * 1024 * 1024,
+        )
         self.sent: list[AudioChunk] = []
 
     async def connect(self) -> None:
@@ -76,7 +79,12 @@ class MemoryTransport(AudioQueueMixin):
 ```
 
 `receive_audio()`, `is_connected`, and `wait_for_client()` come from the
-mixin. For a transport that hosts its own WebSocket server, subclass
+mixin. Both queue limits are enforced independently: `max_pending_chunks`
+bounds ordinary small-frame latency, while `max_pending_bytes` prevents a few
+large frames from retaining disproportionate memory. Either overflow drops the
+new frame and emits `TransportDegraded("inbound_queue_full")`.
+
+For a transport that hosts its own WebSocket server, subclass
 `ServerTransportBase` instead and implement `_handle_connection(ws)` — see
 `src/easycat/transports/websocket.py` for the canonical subclass.
 

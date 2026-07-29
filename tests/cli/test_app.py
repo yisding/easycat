@@ -226,31 +226,29 @@ def test_journey_menu(cli: CliRunner) -> None:
 
 
 def test_docs_command(cli: CliRunner) -> None:
-    """Smoke check for the human-readable ``docs`` menu.
-
-    Per-entry content (label/path/audience/description/commands) is covered
-    generically by ``test_docs_command_renders_every_route_entry`` below,
-    which derives its expectations from ``_docs_entries()`` instead of
-    hand-typed literals.
-    """
+    """Bare ``docs`` is a compact route-label and audience index."""
     result = cli.invoke(app, ["docs"])
     normalized = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
-    assert "Commands:" in result.stdout
-    assert "Machine-readable routes, audiences, and command hints: easycat docs --json" in (
-        result.stdout
-    )
+    assert "Route labels" in result.stdout
+    assert "Commands:" not in result.stdout
+    assert "easycat docs --verbose" in result.stdout
+    assert "Machine-readable routes and command hints: easycat docs --json" in result.stdout
     assert "Available audiences:" in normalized
     assert "Available filters:" in normalized
     assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
-    assert _DOCS_COMMAND_NOTE in result.stdout
-    # Wrap-guard: long paths must not be hard-wrapped mid-word by Rich.
-    assert "DURABILITY.\nmd" not in result.stdout
+    assert _DOCS_COMMAND_NOTE not in result.stdout
+    assert len(result.stdout.splitlines()) < 80
+    for entry in _docs_entries():
+        assert entry["label"] in result.stdout
+        assert entry["path"] not in result.stdout
+    assert "uv run " not in result.stdout
+    assert "just guard-" not in result.stdout
 
 
 def test_docs_command_renders_every_route_entry(cli: CliRunner) -> None:
-    result = cli.invoke(app, ["docs"])
+    result = cli.invoke(app, ["docs", "--verbose"])
     normalized_stdout = re.sub(r"\s+", " ", result.stdout)
     missing: list[str] = []
 
@@ -305,6 +303,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "--json" in result.stdout
     assert "--audience" in result.stdout
+    assert "--verbose" in result.stdout
     assert "learners app builders coding agents contributors operators or maintainers" in (
         help_text
     )

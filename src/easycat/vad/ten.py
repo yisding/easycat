@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator
 from importlib.metadata import version
 from typing import Any
@@ -86,8 +85,8 @@ class TenVAD(_VADBase):
 
             frame = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16).copy()
             speech_prob, _ = self._ten_vad.process(frame)
-            now = time.monotonic()
-            for event in self._evaluate_speech(float(speech_prob), now):
+            audio_time_s = self._advance_audio_time(self._hop_size / _TEN_SAMPLE_RATE)
+            for event in self._evaluate_speech(float(speech_prob), audio_time_s):
                 yield event
 
     def reset(self) -> None:

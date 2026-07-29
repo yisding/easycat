@@ -233,12 +233,15 @@ and redact before attaching them to issues or sending them to third parties.
 For a production process:
 
 1. mark draining and fail readiness;
-2. stop accepting WebSocket, WebRTC, HTTP, and telephony work;
-3. ask active sessions to `stop()` gracefully;
+2. stop accepting new WebSocket, WebRTC, HTTP, and telephony work without
+   severing established media WebSockets;
+3. ask active sessions to `stop()` gracefully while their media connections
+   remain live;
 4. after `drain_timeout_s`, call `stop(force=True)` for stragglers;
 5. bound the forced phase with `force_shutdown_timeout_s`;
-6. finalize/flush journals and provider clients;
-7. let the process exit before the orchestrator sends an uncatchable kill.
+6. close any media WebSocket that survived session teardown;
+7. finalize/flush journals and provider clients;
+8. let the process exit before the orchestrator sends an uncatchable kill.
 
 The orchestrator termination grace period must exceed listener shutdown plus
 both EasyCat windows and scheduling margin. If it is shorter, the clean-close

@@ -33,9 +33,12 @@ from easycat._public_api import LAZY_EXPORTS
 logging.getLogger("easycat").addHandler(logging.NullHandler())
 
 _LAZY_ATTR = LAZY_EXPORTS
+_VERSION_ATTR = "__version__"
 
 
 if TYPE_CHECKING:
+    __version__: str
+
     from easycat._logging import set_easycat_log_level
     from easycat.audio_format import (
         PCM16_MONO_8K,
@@ -58,8 +61,10 @@ if TYPE_CHECKING:
     from easycat.debug.export import export_debug_bundle
     from easycat.errors import EasyCatError, ErrorEntry
     from easycat.events import (
+        DTMF,
         AgentDelta,
         AgentFinal,
+        AgentRequestStarted,
         AudioIn,
         AudioOut,
         BotStartedSpeaking,
@@ -67,21 +72,43 @@ if TYPE_CHECKING:
         CallAnswered,
         CallEnded,
         CallFailed,
+        CallInitiated,
+        CallRinging,
+        CallScreening,
+        CallStateChanged,
+        DTMFAggregated,
         Error,
         ErrorStage,
         Event,
         EventBus,
         Interruption,
+        IVRAction,
+        PlaybackMarkAck,
+        ReconnectAttempt,
+        ReconnectFailure,
+        ReconnectSuccess,
+        ScreeningResponse,
+        ScreeningTimedOut,
+        SessionActionCompleted,
+        SessionActionFailed,
+        SessionActionRequested,
+        SessionActionStarted,
         STTFinal,
         STTPartial,
         SupervisorListenerAttached,
         SupervisorListenerDetached,
+        ToolCallDelta,
+        ToolCallResult,
+        ToolCallStarted,
+        TransportAudioDelivered,
+        TransportDegraded,
         TTSAudio,
         TTSMarkers,
         TurnEnded,
         TurnStarted,
         VADStartSpeaking,
         VADStopSpeaking,
+        VoicemailDetected,
     )
     from easycat.helpers import (
         attach_runtime_feedback,
@@ -157,6 +184,18 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str):  # PEP 562
     """Lazy re-export dispatcher. Runs once per attribute per session."""
+    if name == _VERSION_ATTR:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            value = version("easycat")
+        except PackageNotFoundError:
+            # A source checkout imported without installation has no package
+            # metadata. Published wheels and normal editable installs always do.
+            value = "0+unknown"
+        globals()[name] = value
+        return value
+
     try:
         module_path, attr = _LAZY_ATTR[name]
     except KeyError:
@@ -168,7 +207,7 @@ def __getattr__(name: str):  # PEP 562
 
 
 def __dir__() -> list[str]:
-    return sorted(set(list(globals()) + list(_LAZY_ATTR)))
+    return sorted(set(list(globals()) + list(_LAZY_ATTR) + [_VERSION_ATTR]))
 
 
 __all__ = sorted(_LAZY_ATTR)

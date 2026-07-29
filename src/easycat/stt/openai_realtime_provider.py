@@ -63,7 +63,7 @@ class OpenAIRealtimeSTTConfig:
        fail-fasts on an empty key.
     """
 
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     model: str = "gpt-realtime-whisper"
     # Transcription-only Realtime WebSocket sessions connect with
     # ``intent=transcription``.  Set this to a realtime voice model (for

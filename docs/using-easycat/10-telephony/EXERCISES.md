@@ -85,7 +85,7 @@ Explain which checks must be atomic when several workers can place calls.
 Only with a Twilio test project and approved destination, install and preflight:
 
 ```bash
-uv sync --extra openai --extra telephony --extra openai-agents --group dev
+uv sync --extra openai --extra telephony --extra telephony-fastapi --extra openai-agents --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env

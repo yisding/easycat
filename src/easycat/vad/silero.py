@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import threading
-import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -301,9 +300,9 @@ class SileroVAD(_VADBase):
             # so the ~40us thread-hop dispatch adds latency and a context
             # switch per frame without meaningfully freeing the event loop.
             speech_prob = self._model.predict(float_samples, target_rate)
-            now = time.monotonic()
+            audio_time_s = self._advance_audio_time(frame_samples / target_rate)
 
-            for event in self._evaluate_speech(speech_prob, now):
+            for event in self._evaluate_speech(speech_prob, audio_time_s):
                 yield event
 
             # A transport may deliver many frames in one chunk (e.g. a buffered

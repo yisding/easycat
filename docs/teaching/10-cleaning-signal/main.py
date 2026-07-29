@@ -22,8 +22,8 @@ we sent to the speaker). We feed the reference every time the
 transport accepts a complete TTS chunk.
 
 Dependencies:
-    uv sync --extra quickstart --extra deepgram --group dev
-    RNNoise is included in quickstart; Krisp requires its own SDK.
+    uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
+    RNNoise uses its opt-in extra; Krisp requires its own SDK.
     For real AEC:  uv sync --extra aec --group dev
     Missing selected backends fall back to passthrough — the
     journal tells you which backend is live.

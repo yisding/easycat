@@ -49,6 +49,9 @@ run_websocket_config_server(config)
 Set `EASYCAT_WS_TOKEN` before exposing the server beyond loopback, and tune
 `EASYCAT_WS_MAX_SESSIONS` from measured CPU/RAM capacity. Non-browser clients
 should authenticate with `Authorization: Bearer <token>`.
+`EASYCAT_WS_DRAIN_TIMEOUT_S` (default `30`) controls the graceful session
+window, while `EASYCAT_WS_FORCE_SHUTDOWN_TIMEOUT_S` (default `10`) bounds
+forced cleanup.
 
 > **Breaking change — `?token=` query auth is now off by default.** The
 > WebSocket and WebRTC serve helpers used to accept a `?token=` query parameter
@@ -64,10 +67,10 @@ should authenticate with `Authorization: Bearer <token>`.
 >
 > The bundled WebRTC client sends `Authorization: Bearer` and is **not** affected.
 
-## Unified auth model (`VoiceServer`)
+## Unified auth model
 
-`VoiceServer` (the `easycat.server` process layer) applies one auth policy to
-**both** the WebSocket and WebRTC paths via `easycat.server.auth`:
+The `easycat.server.auth` policy layer is shared by `VoiceServer`'s WebSocket
+and WebRTC paths and by the standalone WebTransport server:
 
 - `NoAuth` — open access (loopback/dev).
 - `BearerTokenAuth(token=..., allow_query_token=False)` — constant-time
@@ -85,12 +88,13 @@ server = VoiceServer.from_app(
 server.run()
 ```
 
-**Non-loopback binds require a token.** Binding a non-loopback host
-(e.g. `0.0.0.0`) with no token **raises `ValueError` at `start()`** — this is the
-single structured guard applied to every transport, and it closes a previously
-unauthenticated `0.0.0.0` WebSocket voice endpoint. The **only** escape hatch is
-the structured `unsafe_allow_no_auth=True` field (on the auth policy and mirrored
-on `VoiceServerConfig`); never bypass it with prose-only config.
+**Non-loopback binds require a token.** `VoiceServer`, the standalone
+WebSocket/WebRTC helpers, and `WebTransportServer` all raise `ValueError` at
+`start()` when binding a non-loopback host (for example `0.0.0.0`) without a
+token. The **only** escape hatch is the structured
+`unsafe_allow_no_auth=True` field. Twilio uses its own required webhook and
+media-handshake signature validation because provider callbacks must be
+public; local microphone transports do not bind a network listener.
 
 ### Binding a typed principal
 
@@ -239,6 +243,24 @@ streaming semantics and your ingress can support UDP/443 end to end. Keep
 WebTransport behind the optional `webtransport` extra and deploy it only where
 certificate, HTTP/3, QUIC, and load-balancer support are explicit.
 
+`WebTransportTransportConfig` defaults to `host="127.0.0.1"`. For a public
+bind, set `auth_token` (the example reads `EASYCAT_SERVE_TOKEN`); the HTTP/3
+CONNECT is rejected with `401` before a session is created unless it carries
+`Authorization: Bearer <token>`. Browser WebTransport cannot set arbitrary
+CONNECT headers, so browser deployments must explicitly set
+`allow_query_token=True` and connect to
+`https://host/easycat?token=<token>`. Query-token auth is off by default, and
+token-bearing URLs must be treated as secrets. Use
+`unsafe_allow_no_auth=True` only for a deliberately unauthenticated public
+endpoint.
+
+EasyCat bounds stalled-client memory by inspecting aioquic's per-stream send
+buffer. Because aioquic doesn't expose that value publicly, server startup
+preflights the required private access path and refuses to bind with an
+incompatible aioquic release. Treat that startup error as a dependency
+compatibility failure; install the supported extra version or upgrade EasyCat
+rather than bypassing the check.
+
 ## Twilio multi-call servers
 
 Use `VoiceApp.run("twilio")` or
@@ -266,9 +288,12 @@ For public Twilio deployments:
 journal per session under `EasyConfig.data_dir` when set, otherwise
 `EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
-for the exact durability guarantees and storage layout. That promise only
-holds if the resolved data directory is a **persistent** path: a container
-without a volume mounted there, or a process directory that gets wiped on redeploy,
+for the exact durability guarantees and storage layout. Records are committed
+in bounded batches (100 ms / 100 records, plus every turn boundary), and the
+SQLite WAL is auto-checkpointed during long calls; persistent journal work is
+offloaded from the live audio loop. That promise only holds if the resolved
+data directory is a **persistent** path: a container without a
+volume mounted there, or a process directory that gets wiped on redeploy,
 silently discards every journal. The Docker-specific version of this guidance
 — including the image's `VOLUME` declaration and named-volume compose
 config — lives in

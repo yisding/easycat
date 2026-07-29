@@ -183,11 +183,13 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
             "TWILIO_STREAM_TOKEN_SECRET",
             "TWILIO_MAX_SESSIONS",
             "TWILIO_START_TIMEOUT_S",
+            "TWILIO_DRAIN_TIMEOUT_S",
+            "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
             "TWILIO_PUBLIC_TWIML_URL",
             "TRUST_PROXY_HEADERS",
         ),
         description="Phone-call voice agent with a Twilio WebSocket server.",
-        base_extras=("openai-agents", "telephony"),
+        base_extras=("openai-agents", "telephony", "telephony-fastapi"),
         run_command=(
             "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
         ),

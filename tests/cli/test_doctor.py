@@ -471,6 +471,23 @@ def test_check_microphone_skips_when_sounddevice_missing(
     assert "sounddevice" in result.detail
 
 
+def test_check_microphone_fails_with_portaudio_fix_when_native_library_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_portaudio_error(_name: str) -> None:
+        raise OSError("PortAudio library not found")
+
+    monkeypatch.setattr(doctor_module.importlib, "import_module", raise_portaudio_error)
+
+    result = doctor_module.check_microphone()
+
+    assert result.status == "fail"
+    assert result.code == "EASYCAT_E209"
+    assert "PortAudio library not found" in result.detail
+    assert "sudo apt-get install libportaudio2" in result.fix
+    assert "brew install portaudio" in result.fix
+
+
 def test_check_journal_writable_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:

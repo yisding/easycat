@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import runpy
 from pathlib import Path
+
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from tests.examples._examples_helpers import (
     REPO_ROOT,
@@ -208,10 +212,13 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     path = REPO_ROOT / "examples" / "webtransport_server.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 35
+    assert _visible_code_line_count(path) <= 40
     assert "run_webtransport_config_server" in source
     assert "WebTransportTransportConfig" in source
     assert "WebTransportConnectionTransport" in source
+    assert 'default="127.0.0.1"' in source
+    assert 'os.getenv("EASYCAT_SERVE_TOKEN")' in source
+    assert "allow_query_token=args.allow_query_token" in source
     assert "create_session" not in source
     assert "SessionManager" not in source
     assert "attach_runtime_feedback" not in source
@@ -219,6 +226,16 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     assert "asyncio.run(" not in source
     assert "await server.start()" not in source
     assert "await server.stop()" not in source
+
+
+def test_webtransport_browser_client_forwards_query_token_without_displaying_it() -> None:
+    source = (REPO_ROOT / "examples" / "webtransport_browser_client.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'new URLSearchParams(location.search).get("token")' in source
+    assert "encodeURIComponent(WT_TOKEN)" in source
+    assert '"?token=<redacted>"' in source
 
 
 def test_ws_server_authorizes_bearer_or_query_token():
@@ -461,6 +478,38 @@ def test_docker_base_images_are_digest_pinned_and_tracked_by_dependabot() -> Non
     assert 'directory: "/docker"' in docker_updates
     assert 'interval: "weekly"' in docker_updates
     assert "default-days: 7" in docker_updates
+
+
+def test_docker_builder_and_runtime_use_the_same_python_minor() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    stages = {
+        stage: version
+        for version, stage in re.findall(
+            r"^FROM python:(\d+\.\d+)-\S+ AS (builder|runtime)$",
+            dockerfile,
+            re.MULTILINE,
+        )
+    }
+
+    assert stages["builder"] == stages["runtime"]
+    assert f"`python:{stages['runtime']}-slim-bookworm` runtime" in guide
+
+
+def test_docker_builder_pins_a_supported_uv_binary() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    match = re.search(
+        r"^COPY --from=ghcr\.io/astral-sh/uv:(\d+\.\d+\.\d+)@sha256:([0-9a-f]{64}) "
+        r"/uv /uvx /bin/$",
+        dockerfile,
+        re.MULTILINE,
+    )
+    required = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"][
+        "uv"
+    ]["required-version"]
+
+    assert match is not None
+    assert Version(match.group(1)) in SpecifierSet(required)
 
 
 def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> None:
