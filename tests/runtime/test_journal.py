@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import threading
 from typing import Protocol
@@ -202,6 +203,18 @@ class TestInMemoryRingBuffer:
 
         snapshot = j.snapshot()
         assert snapshot.dropped_records == j.dropped_records
+
+    def test_overflow_append_does_not_scan_the_ring(self):
+        class _NoIterationDeque(collections.deque):
+            def __iter__(self):
+                raise AssertionError("the append hot path must not scan the ring")
+
+        j = InMemoryRingBuffer(capacity=10)
+        for i in range(11):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        j._buf = _NoIterationDeque(j._buf, maxlen=10)
+        j.append(kind=JournalRecordKind.EVENT, name="after-overflow", session_id="s1")
 
     def test_close_is_noop(self):
         j = InMemoryRingBuffer(capacity=10)
