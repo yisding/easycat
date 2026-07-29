@@ -648,6 +648,19 @@ class ReplayRunner:
             return False
         if not _is_tool_invocation(record):
             return False
+        sequence = _record_sequence(record)
+        if (
+            sequence is None
+            or (self._spec.from_sequence is not None and sequence < self._spec.from_sequence)
+            or self._spec.to_sequence is not None
+            and sequence > self._spec.to_sequence
+        ):
+            logger.warning(
+                "Replay: skipped ToolReplayPolicy.ALLOW execution for %s because "
+                "its sequence is malformed or outside the requested range.",
+                descriptor,
+            )
+            return False
 
         result = self._tool_executor(copy.deepcopy(record))
         if inspect.isawaitable(result):

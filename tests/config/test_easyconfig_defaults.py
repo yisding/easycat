@@ -90,6 +90,15 @@ def test_easycat_config_rejects_invalid_event_dispatch_settings():
         EasyConfig(openai_api_key="test-key", handler_error_policy="strict")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "threshold",
+    [float("nan"), float("inf"), float("-inf"), True],
+)
+def test_easycat_config_rejects_non_finite_event_dispatch_thresholds(threshold):
+    with pytest.raises(ValueError, match="slow_handler_threshold_s"):
+        EasyConfig(openai_api_key="test-key", slow_handler_threshold_s=threshold)
+
+
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.

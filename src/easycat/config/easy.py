@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import os
 import re
 from collections.abc import Callable, Sequence
@@ -173,8 +174,13 @@ def _validate_event_dispatch(
     slow_handler_threshold_s: float | None,
     handler_error_policy: str,
 ) -> None:
-    if slow_handler_threshold_s is not None:
-        _require_non_negative("slow_handler_threshold_s", slow_handler_threshold_s)
+    if slow_handler_threshold_s is not None and (
+        isinstance(slow_handler_threshold_s, bool)
+        or not isinstance(slow_handler_threshold_s, int | float)
+        or not math.isfinite(slow_handler_threshold_s)
+        or slow_handler_threshold_s < 0
+    ):
+        raise ValueError("slow_handler_threshold_s must be non-negative and finite")
     if handler_error_policy not in _VALID_HANDLER_ERROR_POLICY:
         raise ValueError(
             f"Invalid handler_error_policy={handler_error_policy!r}. "

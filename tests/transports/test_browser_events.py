@@ -200,6 +200,38 @@ class TestBrowserEventForwarder:
         await asyncio.sleep(0)
         forwarder.close()
 
+    async def test_cancellation_suppressing_senders_remain_bounded(self, bus: EventBus):
+        release = asyncio.Event()
+        attempts = 0
+
+        async def cancellation_suppressing_send(_payload: dict[str, Any]) -> None:
+            nonlocal attempts
+            attempts += 1
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        forwarder = BrowserEventForwarder(
+            bus,
+            cancellation_suppressing_send,
+            send_timeout_s=0.005,
+            max_pending_events=2,
+        )
+        for index in range(8):
+            await bus.emit(STTPartial(text=str(index), turn_id="t1"))
+            await _drain(forwarder)
+
+        assert attempts == 2
+        assert sum(not task.done() for task in forwarder._send_tasks) == 2
+
+        release.set()
+        await asyncio.gather(*tuple(forwarder._send_tasks))
+        await asyncio.sleep(0)
+        assert forwarder._send_tasks == set()
+        forwarder.close()
+
     @pytest.mark.parametrize("timeout_s", [0, -1, float("nan"), float("inf")])
     def test_send_timeout_must_be_positive_and_finite(
         self,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import math
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
@@ -672,8 +673,13 @@ class EventBus:
         slow_handler_threshold_s: float | None = None,
         handler_error_policy: EventHandlerErrorPolicy = "continue",
     ) -> None:
-        if slow_handler_threshold_s is not None and slow_handler_threshold_s < 0:
-            raise ValueError("slow_handler_threshold_s must be non-negative")
+        if slow_handler_threshold_s is not None and (
+            isinstance(slow_handler_threshold_s, bool)
+            or not isinstance(slow_handler_threshold_s, int | float)
+            or not math.isfinite(slow_handler_threshold_s)
+            or slow_handler_threshold_s < 0
+        ):
+            raise ValueError("slow_handler_threshold_s must be non-negative and finite")
         if handler_error_policy not in {"continue", "raise"}:
             raise ValueError("handler_error_policy must be either 'continue' or 'raise'")
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
