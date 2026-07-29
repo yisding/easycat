@@ -89,7 +89,9 @@ async def test_fixed_stt_yields_final_after_commit() -> None:
 
 The suite verifies async event iteration, normalized events, repeated stream
 cycles, end-of-stream termination, and the rule that
-`commit_segment() -> True` promises exactly one subsequent `FINAL`.
+`commit_segment() -> True` means the provider accepted the request. Empty or
+silent segments may produce no `FINAL`; consume `events()` to observe actual
+transcript completion.
 `isinstance(provider, STTProvider)` checks member names only and is not a
 behavioral conformance test. The in-tree use of the same installable suite
 lives in

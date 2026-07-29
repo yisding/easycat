@@ -87,10 +87,11 @@ class STTProvider(VersionedProvider, Protocol):
         """Finalize the current STT segment without ending the stream.
 
         Returns ``True`` when the provider accepted a segment commit request.
-        ``True`` is a promise that exactly one subsequent
-        :class:`~easycat.events.STTEvent` with type ``FINAL`` will be emitted
-        for that segment. Providers that cannot guarantee that FINAL, or do
-        not support segmented commits, must return ``False``.
+        Acceptance does not guarantee a subsequent ``FINAL``: providers may
+        suppress empty/silent segments or receive an empty backend response.
+        Consumers must use the :meth:`events` stream as the source of
+        transcript completion. Providers that do not support segmented
+        commits return ``False``.
         """
         ...
 

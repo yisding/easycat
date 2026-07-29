@@ -287,7 +287,7 @@ async def test_stt_suite_rejects_stream_without_final_transcript() -> None:
         await suite.test_stream_lifecycle_yields_normalized_events(_SilentSTT())
 
 
-async def test_stt_suite_rejects_accepted_commit_without_final() -> None:
+async def test_stt_suite_allows_accepted_empty_commit_without_final() -> None:
     class _MissingCommitFinalSTT(_KitSTT):
         async def commit_segment(self) -> bool:
             return True
@@ -297,10 +297,7 @@ async def test_stt_suite_rejects_accepted_commit_without_final() -> None:
         event_timeout = 0.02
 
     suite = _FastCommitSuite()
-    with pytest.raises(pytest.fail.Exception, match="returned True but no FINAL"):
-        await suite.test_accepted_segment_commit_emits_exactly_one_final(
-            suite.build_provider()
-        )
+    await suite.test_segment_commit_reports_boolean_acceptance(suite.build_provider())
 
 
 async def test_stt_suite_rejects_cached_events_iterator() -> None:

@@ -222,51 +222,24 @@ class STTProviderContractSuite(ProviderContractSuite):
             assert finals, "expected at least one FINAL transcript event"
             assert finals[-1].text.strip(), "FINAL transcript text must be non-empty"
 
-    async def test_accepted_segment_commit_emits_exactly_one_final(self, provider: Any) -> None:
-        """``commit_segment() -> True`` promises one FINAL before stream end."""
+    async def test_segment_commit_reports_boolean_acceptance(self, provider: Any) -> None:
+        """Segment commit reports acceptance without predicting transcription."""
         await provider.start_stream()
         for chunk in self.sample_audio_chunks():
             await provider.send_audio(chunk)
-
-        final_seen = asyncio.Event()
 
         async def _collect() -> list[Any]:
             events: list[Any] = []
             async for event in provider.events():
                 events.append(event)
-                if isinstance(event, STTEvent) and event.type is STTEventType.FINAL:
-                    final_seen.set()
             return events
 
         collector = asyncio.create_task(_collect())
         await asyncio.sleep(0)
         committed = await provider.commit_segment()
         assert isinstance(committed, bool), "commit_segment() must return a bool"
-        timed_out = False
-        if committed:
-            try:
-                await asyncio.wait_for(final_seen.wait(), timeout=self.event_timeout)
-            except TimeoutError:
-                timed_out = True
-
         await provider.end_stream()
-        events = await asyncio.wait_for(collector, timeout=self.event_timeout)
-        if timed_out:
-            pytest.fail(
-                "commit_segment() returned True but no FINAL arrived before end_stream(); "
-                "accepted commits must emit exactly one subsequent FINAL",
-                pytrace=False,
-            )
-        if committed:
-            finals = [
-                event
-                for event in events
-                if isinstance(event, STTEvent) and event.type is STTEventType.FINAL
-            ]
-            assert len(finals) == 1, (
-                "commit_segment() returned True but did not emit exactly one FINAL "
-                f"(received {len(finals)})"
-            )
+        await asyncio.wait_for(collector, timeout=self.event_timeout)
 
     async def test_events_iterator_is_fresh_across_turns(self, provider: Any) -> None:
         """A second start/end cycle must use a fresh, productive iterator."""
