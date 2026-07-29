@@ -19,6 +19,7 @@ import os
 import sqlite3
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -154,17 +155,28 @@ class RunBundle:
         spec: ReplaySpec,
         *,
         installed_versions: dict[str, str] | None = None,
+        stage_replayers: dict[str, Callable[[ReplaySpec, ReplayCassette], Any]] | None = None,
+        tool_executor: Callable[[dict[str, Any]], Any] | None = None,
     ) -> ReplayResult:
         """Orchestrate a replay of this bundle under *spec*.
 
         Thin wrapper around :class:`easycat.runtime.replay.ReplayRunner`.
         Pass ``installed_versions`` (``{"stt": "openai-1.2.3", ...}``) to
         enable provider-version match checks; omit it for
-        offline replay where version skew is acceptable.
+        offline replay where version skew is acceptable. Applications
+        that own live provider or tool clients may supply synchronous
+        ``stage_replayers`` and ``tool_executor`` callbacks; the CLI
+        intentionally uses only the provider-free built-in replay path.
         """
         from easycat.runtime.replay import ReplayRunner
 
-        runner = ReplayRunner(self, spec, installed_versions=installed_versions)
+        runner = ReplayRunner(
+            self,
+            spec,
+            installed_versions=installed_versions,
+            stage_replayers=stage_replayers,
+            tool_executor=tool_executor,
+        )
         return runner.run()
 
     def replay_audio(
