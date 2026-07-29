@@ -84,6 +84,34 @@ def test_capabilities_are_declared_frozensets() -> None:
     assert "browser" in transport.capabilities
 
 
+@pytest.mark.parametrize(
+    ("shortcut", "expected"),
+    [
+        ("deepgram/flux-general-en", True),
+        ("deepgram/nova-2", False),
+        ("cartesia/ink-2", True),
+        ("cartesia/ink-whisper", False),
+        ("elevenlabs", True),
+    ],
+)
+def test_stt_catalog_capabilities_follow_selected_model(
+    shortcut: str,
+    expected: bool,
+) -> None:
+    provider = shortcut.partition("/")[0]
+    env_var = {
+        "deepgram": "DEEPGRAM_API_KEY",
+        "cartesia": "CARTESIA_API_KEY",
+        "elevenlabs": "ELEVENLABS_API_KEY",
+    }[provider]
+    plan = build_provider_plan(
+        _profile(stt=shortcut),
+        environ={env_var: "x", "OPENAI_API_KEY": "y"},
+    )
+
+    assert ("native_endpointing" in plan.selected["stt"].capabilities) is expected
+
+
 def test_missing_env_detected_without_instantiating_providers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

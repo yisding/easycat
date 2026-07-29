@@ -67,7 +67,10 @@ def _registry_env_var(surface: Surface, provider: str) -> str:
     from easycat.tts.factory import _PROVIDER_ENV_VAR as _TTS_ENV
 
     env_vars = _STT_ENV if surface == "stt" else _TTS_ENV
-    return env_vars[provider]
+    env_var = env_vars[provider]
+    if env_var is None:
+        raise ValueError(f"{provider}/{surface} is credential-free")
+    return env_var
 
 
 def _default_model_api_version(surface: Surface, provider: str) -> str:

@@ -229,22 +229,13 @@ def _stt_uses_native_endpointing(stt: Any) -> bool:
     neither smart-turn nor the Silero VAD it pulls in (which would otherwise
     double-endpoint and produce duplicate FINAL transcripts).
 
-    Covers:
-      - Deepgram **Flux** (native end-of-turn signal),
-      - Cartesia **ink-2** (native semantic turn detection), and
-      - ElevenLabs realtime with the built-in **VAD** commit strategy.
+    The answer comes from the open STT provider catalog, so third-party
+    providers can declare the same ``native_endpointing`` capability as the
+    built-ins instead of falling through a closed config-type check.
     """
-    from easycat.stt.cartesia_provider import CartesiaSTTConfig
-    from easycat.stt.deepgram_provider import DeepgramSTTConfig
-    from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
+    from easycat.stt.factory import _CATALOG
 
-    if isinstance(stt, DeepgramSTTConfig):
-        return stt.is_flux
-    if isinstance(stt, CartesiaSTTConfig):
-        return stt.resolved_model == "ink-2"
-    if isinstance(stt, ElevenLabsSTTConfig):
-        return stt.mode == "realtime" and stt.realtime_commit_strategy == "vad"
-    return False
+    return "native_endpointing" in _CATALOG.capabilities_for_config(stt)
 
 
 def _normalize_smart_turn_config(

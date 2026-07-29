@@ -133,9 +133,13 @@ def _module_available(module: str) -> bool:
         return False
 
 
-def _extra_is_missing(extra: str | None) -> bool:
-    """Whether ``extra``'s probe module is absent (find_spec, no import)."""
-    probe = probe_module_for_extra(extra)
+def _extra_is_missing(choice: ProviderSelection) -> bool:
+    """Whether a selected provider's exact probe module is absent."""
+    probe = probe_module_for_extra(
+        choice.extra,
+        role=choice.role,
+        provider=choice.provider,
+    )
     if probe is None:
         return False
     return not _module_available(probe)
@@ -197,7 +201,7 @@ def _select_catalog_role(
         config_type=config_type,
         extra=extra,
         required_env=required_env,
-        capabilities=frozenset(),
+        capabilities=catalog.capabilities_for(provider, config=spec, model=model),
     )
 
 
@@ -423,8 +427,8 @@ def build_provider_plan(
         choice = selected[role]
         if choice.required_env and not env.get(choice.required_env):
             missing_env.add(choice.required_env)
-        if _extra_is_missing(choice.extra):
-            assert choice.extra is not None  # _extra_is_missing(None) is False
+        if _extra_is_missing(choice):
+            assert choice.extra is not None
             # A role that degrades gracefully when its extra is absent (the AEC
             # passthrough fallback) is a WARNING, not a blocking gap:
             # ``create_session`` still runs, so ``/health/ready`` must stay
@@ -469,7 +473,7 @@ def _select_catalog_string(
         config_type=config_cls.__name__,
         extra=catalog.extras.get(provider) or None,
         required_env=catalog.env_vars.get(provider),
-        capabilities=frozenset(),
+        capabilities=catalog.capabilities_for(provider, model=model),
     )
 
 

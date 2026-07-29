@@ -258,7 +258,12 @@ NON_CATALOG_ROLES: tuple[str, ...] = (
 )
 
 
-def probe_module_for_extra(extra: str | None) -> str | None:
+def probe_module_for_extra(
+    extra: str | None,
+    *,
+    role: str | None = None,
+    provider: str | None = None,
+) -> str | None:
     """Return the importable probe module for ``extra`` (or ``None``).
 
     ``None`` means there is nothing to probe — either no extra is required, or
@@ -266,18 +271,30 @@ def probe_module_for_extra(extra: str | None) -> str | None:
     that installs no importable package. The planner treats a ``None`` probe as
     "extra is always satisfied" so it never falsely reports it missing.
 
-    Built-in extras have an explicit mapping above (enforced by
-    ``tests/planning/test_transport_registry.py``). A registered third-party
-    STT/TTS provider, however, may carry an ARBITRARY ``extra`` string (via
-    ``register_*_provider`` / entry-point discovery) with no mapping. For those,
-    fall back to probing the extra NAME itself as a best-effort module — so a
-    genuinely-missing third-party install is still flagged. (Returning ``None``
-    would wrongly mark it always-satisfied; a runtime ``KeyError`` would crash
-    the planner and pin ``/health/ready`` for a deployable server.)
+    ``role`` plus ``provider`` preserves the selected catalog entry's identity
+    when two roles happen to reuse an extra name. Generic callers retain the
+    built-in role mapping first, then catalog metadata, then the historical
+    name-as-module fallback.
     """
     if extra is None:
         return None
-    return EXTRA_PROBE_MODULE.get(extra, extra)
+    from easycat._provider_catalog import provider_probe_modules, stt_tts_catalogs
+
+    if role in {"stt", "tts"} and provider is not None:
+        stt_catalog, tts_catalog = stt_tts_catalogs()
+        catalog = stt_catalog if role == "stt" else tts_catalog
+        if catalog.extras.get(provider) == extra:
+            declared_probe = catalog.probe_modules.get(provider)
+            if declared_probe is not None:
+                return declared_probe
+
+    if extra in EXTRA_PROBE_MODULE:
+        return EXTRA_PROBE_MODULE[extra]
+
+    declared_probe = provider_probe_modules().get(extra)
+    if declared_probe is not None:
+        return declared_probe
+    return extra
 
 
 __all__ = [
