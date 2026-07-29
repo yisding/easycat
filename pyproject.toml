@@ -135,7 +135,7 @@ all = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.28,<0.12.0"]
+requires = ["uv_build>=0.11.0,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -201,10 +201,7 @@ source-exclude = [
 ]
 
 [tool.uv]
-# Read by astral-sh/setup-uv in CI (skips network "latest" resolution) and
-# enforced by local uv, so mismatched versions can't churn uv.lock. Bump
-# deliberately alongside a fresh `uv lock` check.
-required-version = "==0.11.30"
+required-version = ">=0.11.0,<0.12.0"
 conflicts = [
     [
         { extra = "pydantic-ai" },
