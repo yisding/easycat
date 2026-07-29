@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -55,9 +54,9 @@ class KrispVAD(_VADBase):
         speech_prob = self._krisp_audio.vad_process(
             self._session, chunk.data, chunk.format.sample_rate
         )
-        now = time.monotonic()
+        audio_time_s = self._advance_audio_time(chunk.duration_ms / 1000.0)
 
-        for event in self._evaluate_speech(speech_prob, now):
+        for event in self._evaluate_speech(speech_prob, audio_time_s):
             yield event
 
     def reset(self) -> None:

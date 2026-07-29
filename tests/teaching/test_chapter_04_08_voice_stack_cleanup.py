@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
 
 import pytest
 
+from tests.teaching import _script_runner as script_runner
 from tests.teaching._source_guards import assert_sources_match
 
 ROOT = Path(__file__).parents[2]
@@ -68,7 +68,7 @@ class FakeSTT:
 
 
 def test_voice_stack_cleanup_probe_covers_normal_cancel_and_failure() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER_6 / "voice_stack_cleanup_probe.py")],
         cwd=ROOT,
         check=True,

@@ -95,7 +95,14 @@ from typing import Any
 
 import pytest
 
-from easycat.events import AgentDelta, AgentRequestStarted, STTFinal, TTSAudio, VADStopSpeaking
+from easycat.events import (
+    AgentDelta,
+    AgentRequestStarted,
+    STTFinal,
+    TTSAudio,
+    VADStartSpeaking,
+    VADStopSpeaking,
+)
 from easycat.validation.latency import (
     LatencySample,
     LatencyStageDurations,
@@ -141,6 +148,9 @@ class LatencyProbe:
     agent_request_start_ts: float | None = None
     first_agent_delta_ts: float | None = None
     first_tts_ts: float | None = None
+    interruption_armed: bool = False
+    interruption_start_ts: float | None = None
+    playback_cleared_ts: float | None = None
 
     def reset(self) -> None:
         self.vad_stop_ts = None
@@ -148,6 +158,19 @@ class LatencyProbe:
         self.agent_request_start_ts = None
         self.first_agent_delta_ts = None
         self.first_tts_ts = None
+        self.interruption_armed = False
+        self.interruption_start_ts = None
+        self.playback_cleared_ts = None
+
+    def arm_interruption(self) -> None:
+        """Capture the next speech-start and transport-clear boundary."""
+        self.interruption_armed = True
+        self.interruption_start_ts = None
+        self.playback_cleared_ts = None
+
+    def on_vad_start(self, event: VADStartSpeaking) -> None:
+        if self.interruption_armed and self.interruption_start_ts is None:
+            self.interruption_start_ts = event.timestamp
 
     def on_vad_stop(self, event: VADStopSpeaking) -> None:
         if self.vad_stop_ts is None:
@@ -204,6 +227,11 @@ class LatencyProbe:
         """VAD-stop -> first TTS audio. End-to-end."""
         return self._diff_ms(self.vad_stop_ts, self.first_tts_ts)
 
+    @property
+    def interruption_cutoff_ms(self) -> float | None:
+        """Barge-in speech detection -> transport playback clear."""
+        return self._diff_ms(self.interruption_start_ts, self.playback_cleared_ts)
+
 
 @dataclass
 class StageBreakdown:
@@ -214,6 +242,7 @@ class StageBreakdown:
     llm_ttft: float | None = None
     tts_ttfb: float | None = None
     transport: float | None = None
+    interruption_cutoff: float | None = None
     total: float | None = None
 
 
@@ -228,6 +257,7 @@ class ConditionResult:
     llm_ttft_ms: list[float] = field(default_factory=list)
     tts_ttfb_ms: list[float] = field(default_factory=list)
     transport_ms: list[float] = field(default_factory=list)
+    interruption_cutoff_ms: list[float] = field(default_factory=list)
 
     def add(self, breakdown: StageBreakdown) -> None:
         if breakdown.total is not None:
@@ -246,6 +276,8 @@ class ConditionResult:
             self.tts_ttfb_ms.append(breakdown.tts_ttfb)
         if breakdown.transport is not None:
             self.transport_ms.append(breakdown.transport)
+        if breakdown.interruption_cutoff is not None:
+            self.interruption_cutoff_ms.append(breakdown.interruption_cutoff)
 
     @staticmethod
     def _median(xs: list[float]) -> float:
@@ -282,6 +314,10 @@ class ConditionResult:
     @property
     def transport_median_ms(self) -> float:
         return self._median(self.transport_ms)
+
+    @property
+    def interruption_cutoff_median_ms(self) -> float:
+        return self._median(self.interruption_cutoff_ms)
 
     @property
     def p90_ms(self) -> float:
@@ -443,8 +479,14 @@ async def _measure_one_turn(
 
     probe = LatencyProbe()
 
+    class BenchmarkTransport(WebSocketConnectionTransport):
+        async def clear_audio(self) -> None:
+            await super().clear_audio()
+            if probe.interruption_armed and probe.playback_cleared_ts is None:
+                probe.playback_cleared_ts = time.monotonic()
+
     async def builder(ws):  # type: ignore[no-untyped-def]
-        transport = WebSocketConnectionTransport(ws, WebSocketTransportConfig())
+        transport = BenchmarkTransport(ws, WebSocketTransportConfig())
         session = _build_session_with_flags(
             transport=transport,
             debug=debug,
@@ -453,6 +495,7 @@ async def _measure_one_turn(
             enable_smart_turn=enable_smart_turn,
             stt_provider=stt_provider,
         )
+        session.subscribe_event(VADStartSpeaking, probe.on_vad_start)
         session.subscribe_event(VADStopSpeaking, probe.on_vad_stop)
         session.subscribe_event(STTFinal, probe.on_stt_final)
         session.subscribe_event(AgentRequestStarted, probe.on_agent_request_started)
@@ -521,6 +564,28 @@ async def _measure_one_turn(
                         f"pipeline likely didn't complete a turn ({_sample_debug()})"
                     )
                 await asyncio.sleep(0.05)
+
+            # Exercise the default interruption-cutoff budget on every live
+            # latency sample. Start a second utterance while reply audio is
+            # flowing and stop as soon as the production barge-in path clears
+            # transport playback.
+            probe.arm_interruption()
+            bytes_per_ms = int((16000 * 2) / 1000)
+            chunk_size = bytes_per_ms * 20
+            cutoff_deadline = asyncio.get_running_loop().time() + 5.0
+            for offset in range(0, len(speech), chunk_size):
+                await client.send_binary(speech[offset : offset + chunk_size])
+                await asyncio.sleep(0.02)
+                if probe.playback_cleared_ts is not None:
+                    break
+                if asyncio.get_running_loop().time() >= cutoff_deadline:
+                    break
+            while probe.playback_cleared_ts is None:
+                if asyncio.get_running_loop().time() >= cutoff_deadline:
+                    raise RuntimeError(
+                        f"barge-in did not clear playback within 5 s ({_sample_debug()})"
+                    )
+                await asyncio.sleep(0.01)
             await asyncio.sleep(0.2)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
@@ -554,6 +619,7 @@ async def _measure_one_turn(
         llm_ttft=probe.llm_ttft_ms,
         tts_ttfb=probe.tts_ttfb_ms,
         transport=_diff_ms(probe.first_tts_ts, client.first_binary_ts),
+        interruption_cutoff=probe.interruption_cutoff_ms,
         total=_diff_ms(client_speech_end_ts, client.first_binary_ts),
     )
 
@@ -807,6 +873,7 @@ def _latency_stage_durations(breakdown: StageBreakdown | None) -> LatencyStageDu
         llm_ttft_ms=breakdown.llm_ttft,
         tts_ttfb_ms=breakdown.tts_ttfb,
         transport_ms=breakdown.transport,
+        interruption_cutoff_ms=breakdown.interruption_cutoff,
         total_ms=breakdown.total,
     )
 
@@ -829,6 +896,7 @@ def _missing_stage_reason(
             ("llm_ttft", breakdown.llm_ttft),
             ("tts_ttfb", breakdown.tts_ttfb),
             ("transport", breakdown.transport),
+            ("interruption_cutoff", breakdown.interruption_cutoff),
             ("total", breakdown.total),
         )
         if value is None
@@ -935,12 +1003,13 @@ async def test_latency_benchmark_by_pipeline_flags(
     print("  LLM       = AgentRequestStarted -> first AgentDelta")
     print("  TTS       = first AgentDelta -> first TTSAudio  (server TTS time-to-first-byte)")
     print("  Wire      = first TTSAudio -> first audio frame received by client")
+    print("  Cutoff    = barge-in VADStartSpeaking -> transport playback clear")
     print("  Total     = client speech-end -> first reply audio at client")
     print("═" * 132)
     header = (
         f"{'id':<4}{'condition':<28}"
         f"{'Detect':>8}{'STT':>8}{'STTClose':>10}{'AStart':>9}{'LLM':>8}"
-        f"{'TTS':>8}{'Wire':>8}{'Total':>8}{'(p90)':>8}"
+        f"{'TTS':>8}{'Wire':>8}{'Cutoff':>8}{'Total':>8}{'(p90)':>8}"
     )
     print(header)
     print("─" * 132)
@@ -959,6 +1028,7 @@ async def test_latency_benchmark_by_pipeline_flags(
             f"{r.llm_ttft_median_ms:>7.0f} "
             f"{r.tts_ttfb_median_ms:>7.0f} "
             f"{r.transport_median_ms:>7.0f} "
+            f"{r.interruption_cutoff_median_ms:>7.0f} "
             f"{r.median_ms:>7.0f} "
             f"{r.p90_display:>8}"
         )

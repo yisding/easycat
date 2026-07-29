@@ -56,7 +56,7 @@ from easycat.tts.input import TTSInput
 from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch09b-cancel-{int(time.time())}"
@@ -97,6 +97,7 @@ async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
     """Consume the agent stream until cancelled."""
     stream = await client.chat.completions.create(
         model=MODEL,
+        reasoning_effort="none",
         messages=[
             {
                 "role": "system",

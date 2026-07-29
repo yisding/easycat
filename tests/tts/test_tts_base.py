@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioFormat
+from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEventType
 from easycat.tts.base import TTSBase
 from easycat.tts.input import TTSInput
@@ -32,7 +32,9 @@ class FakeTTS(TTSBase):
             for chunk_data in self._chunks:
                 if self._cancelled:
                     break
-                yield self._make_audio_event(chunk_data)
+                event = self._make_audio_event(chunk_data)
+                if event is not None:
+                    yield event
         finally:
             self._end_synthesis()
 
@@ -80,6 +82,7 @@ class TestTTSBase:
         data = _make_pcm16_data(50)
         event = base._make_audio_event(data)
 
+        assert event is not None
         assert event.type == TTSEventType.AUDIO
         assert event.audio is not None
         assert event.audio.data == data
@@ -90,12 +93,40 @@ class TestTTSBase:
         data = _make_pcm16_data(160)  # 160 samples at 16kHz = 10ms
         source_fmt = PCM16_MONO_16K
 
+        base._start_synthesis()
         event = base._make_audio_event(data, source_fmt)
-        assert event.type == TTSEventType.AUDIO
-        assert event.audio is not None
+        tail = base._finish_audio_event()
+        events = [item for item in (event, tail) if item is not None]
+
+        assert all(item.type == TTSEventType.AUDIO for item in events)
+        assert all(item.audio is not None for item in events)
         # Resampled from 16kHz to 24kHz, so more samples
-        assert event.audio.format == PCM16_MONO_24K
-        assert len(event.audio.data) > len(data)
+        assert all(item.audio.format == PCM16_MONO_24K for item in events if item.audio)
+        output = b"".join(item.audio.data for item in events if item.audio)
+        assert len(output) > len(data)
+
+    def test_finish_audio_event_emits_delayed_resampler_tail(self):
+        base = TTSBase(output_format=PCM16_MONO_8K)
+        base._start_synthesis()
+        data = _make_pcm16_data(2400)
+
+        first = base._make_audio_event(data, PCM16_MONO_24K)
+        tail = base._finish_audio_event()
+
+        assert first is not None
+        assert first.audio is not None
+        assert tail is not None and tail.audio is not None
+        assert len(tail.audio.data) > 0
+        assert len(first.audio.data) + len(tail.audio.data) == 800 * 2
+
+    def test_end_synthesis_discards_delayed_resampler_tail(self):
+        base = TTSBase(output_format=PCM16_MONO_8K)
+        base._start_synthesis()
+        base._make_audio_event(_make_pcm16_data(2400), PCM16_MONO_24K)
+
+        base._end_synthesis()
+
+        assert base._finish_audio_event() is None
 
     def test_make_audio_event_aligns_odd_frame_without_resample(self):
         """An odd-length frame at the output sample rate (no resample) must be
@@ -104,6 +135,7 @@ class TestTTSBase:
         base._start_synthesis()
         # 5 bytes, source == output format so no resample path runs.
         event = base._make_audio_event(b"\x01\x02\x03\x04\x05", PCM16_MONO_24K)
+        assert event is not None
         assert event.audio is not None
         assert len(event.audio.data) % 2 == 0
         assert event.audio.data == b"\x01\x02\x03\x04"
@@ -115,10 +147,12 @@ class TestTTSBase:
         base = TTSBase(output_format=PCM16_MONO_24K)
         base._start_synthesis()
         first = base._make_audio_event(b"\xaa\xbb\xcc", PCM16_MONO_24K)
+        assert first is not None
         assert first.audio is not None
         assert first.audio.data == b"\xaa\xbb"
         assert base._sample_carry == b"\xcc"
         second = base._make_audio_event(b"\xdd", PCM16_MONO_24K)
+        assert second is not None
         assert second.audio is not None
         assert second.audio.data == b"\xcc\xdd"
         assert base._sample_carry == b""
@@ -129,6 +163,7 @@ class TestTTSBase:
         base = TTSBase(output_format=PCM16_MONO_24K)
         base._start_synthesis()
         event = base._make_audio_event(b"\x01\x02\x03")
+        assert event is not None
         assert event.audio is not None
         assert len(event.audio.data) % 2 == 0
         assert base._sample_carry == b"\x03"
@@ -155,8 +190,9 @@ class TestTTSBase:
         base._start_synthesis()
         # 5 bytes at 16kHz -> resampled to 24kHz; the trailing byte is held.
         event = base._make_audio_event(b"\x01\x02\x03\x04\x05", PCM16_MONO_16K)
-        assert event.audio is not None
-        assert isinstance(event.audio.data, bytes)
+        if event is not None:
+            assert event.audio is not None
+            assert isinstance(event.audio.data, bytes)
         assert base._sample_carry == b"\x05"
 
     def test_make_audio_event_carries_split_sample_across_resample_chunks(self):

@@ -222,6 +222,55 @@ class STTProviderContractSuite(ProviderContractSuite):
             assert finals, "expected at least one FINAL transcript event"
             assert finals[-1].text.strip(), "FINAL transcript text must be non-empty"
 
+    async def test_segment_commit_reports_boolean_acceptance(self, provider: Any) -> None:
+        """Segment commit reports acceptance without predicting transcription."""
+        await provider.start_stream()
+        for chunk in self.sample_audio_chunks():
+            await provider.send_audio(chunk)
+
+        async def _collect() -> list[Any]:
+            events: list[Any] = []
+            async for event in provider.events():
+                events.append(event)
+            return events
+
+        collector = asyncio.create_task(_collect())
+        await asyncio.sleep(0)
+        committed = await provider.commit_segment()
+        assert isinstance(committed, bool), "commit_segment() must return a bool"
+        await provider.end_stream()
+        await asyncio.wait_for(collector, timeout=self.event_timeout)
+
+    async def test_events_iterator_is_fresh_across_turns(self, provider: Any) -> None:
+        """A second start/end cycle must use a fresh, productive iterator."""
+
+        async def _cycle() -> tuple[AsyncIterator[Any], list[Any]]:
+            await provider.start_stream()
+            stream = provider.events()
+            collector = asyncio.create_task(
+                self.collect_events(stream, source="STTProvider.events()")
+            )
+            await asyncio.sleep(0)
+            for chunk in self.sample_audio_chunks():
+                await provider.send_audio(chunk)
+            await provider.commit_segment()
+            await provider.end_stream()
+            return stream, await collector
+
+        first_stream, first_events = await _cycle()
+        second_stream, second_events = await _cycle()
+
+        assert second_stream is not first_stream, "events() must return a fresh iterator per turn"
+        if self.expects_final_transcript:
+            assert any(
+                isinstance(event, STTEvent) and event.type is STTEventType.FINAL
+                for event in first_events
+            )
+            assert any(
+                isinstance(event, STTEvent) and event.type is STTEventType.FINAL
+                for event in second_events
+            ), "the second stream cycle did not yield a FINAL"
+
     async def test_end_stream_is_idempotent(self, provider: Any) -> None:
         await provider.start_stream()
         await provider.end_stream()

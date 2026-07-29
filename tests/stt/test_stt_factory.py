@@ -44,7 +44,7 @@ def test_factory_no_event_bus_by_default() -> None:
 
 @pytest.mark.parametrize(
     ("name", "provider_type"),
-    [provider for provider in _PROVIDERS if provider[0] != "openai"],
+    _PROVIDERS,
 )
 def test_factory_injects_event_bus(name: str, provider_type: type) -> None:
     event_bus = EventBus()
@@ -57,13 +57,14 @@ def test_factory_injects_event_bus(name: str, provider_type: type) -> None:
     assert provider._config.event_bus is event_bus
 
 
-def test_factory_ignores_event_bus_for_config_without_field() -> None:
+def test_factory_injects_event_bus_into_openai_stt() -> None:
+    event_bus = EventBus()
     provider = create_stt_provider(
-        STTProviderConfig(provider="openai", api_key="test-key"), event_bus=EventBus()
+        STTProviderConfig(provider="openai", api_key="test-key"), event_bus=event_bus
     )
 
     assert isinstance(provider, OpenAISTT)
-    assert not hasattr(provider._config, "event_bus")
+    assert provider._config.event_bus is event_bus
 
 
 def test_factory_preserves_event_bus_from_params() -> None:

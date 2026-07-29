@@ -80,7 +80,7 @@ _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
 # Per-template dev dependency groups; the provider package skeleton ships a
 # conformance test, so it also pins pytest.
 _TEMPLATE_DEV_GROUPS: dict[str, list[str]] = {
-    "provider": ["ruff>=0.9", "pytest>=8"],
+    "provider": ["ruff>=0.9", "pytest>=8", "pytest-asyncio>=0.24"],
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -378,6 +378,25 @@ def test_scaffold_dependency_floor_tracks_project_version() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert _easycat_version_floor() == pyproject["project"]["version"]
+
+
+def test_provider_template_registers_and_selects_named_vad() -> None:
+    cfg = InitConfig(template="provider")
+    mapping = _substitutions(cfg, project_name="demo")
+    template = _template_dir("provider")
+    pyproject = tomllib.loads(
+        _render_text((template / "pyproject.toml").read_text(encoding="utf-8"), mapping)
+    )
+    custom_vad = (template / "custom_vad.py").read_text(encoding="utf-8")
+    agent = (template / "agent.py").read_text(encoding="utf-8")
+
+    assert pyproject["project"]["entry-points"]["easycat.vad_providers"] == {
+        "energy": "custom_vad:register"
+    }
+    assert pyproject["build-system"]["build-backend"] == "setuptools.build_meta"
+    assert pyproject["tool"]["setuptools"]["py-modules"] == ["custom_vad"]
+    assert "register_vad_provider(" in custom_vad
+    assert 'vad="energy"' in agent
 
 
 def _template_dir(name: str) -> Path:
@@ -1071,6 +1090,8 @@ def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
 
     assert 'require_env("TWILIO_AUTH_TOKEN")' in server
     assert "validate_twilio_webhook_signature" in server
+    assert "twilio_websocket_signature_process_request" in server
+    assert "process_request=process_request" in server
     assert "TwilioStreamTokenStore" in server
     assert "stream_token_validator=stream_tokens.consume_start" in server
     assert "if not await transport.wait_for_start(timeout_s=start_timeout_s):" in server
