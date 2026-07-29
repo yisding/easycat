@@ -289,7 +289,9 @@ class WebTransportTransportConfig:
     :class:`WebTransportServer`.
     """
 
-    default_echo_cancellation_enabled: ClassVar[bool] = True
+    # The server sees datagram/write time, not the browser's playout clock, so
+    # browser endpoint echo cancellation is the safe automatic default.
+    default_echo_cancellation_enabled: ClassVar[bool] = False
 
     host: str = "127.0.0.1"
     port: int = 4433
@@ -1248,7 +1250,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(
         self,
@@ -1629,7 +1631,7 @@ class WebTransportTransport(AudioQueueMixin):
     """
 
     transport_kind = "webtransport"
-    default_echo_cancellation_enabled = True
+    default_echo_cancellation_enabled = False
 
     def __init__(self, config: WebTransportTransportConfig | None = None) -> None:
         self._config = config or WebTransportTransportConfig()

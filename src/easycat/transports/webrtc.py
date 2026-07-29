@@ -395,12 +395,14 @@ class WebRTCTransport(AudioQueueMixin):
         """Discard queued outbound audio (useful during barge-in)."""
         self._outbound.clear()
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
         """Return and clear pending AEC far-end reference frames, oldest first.
 
         Shared AEC reference capability drained by AudioRouter before the
         near-end mic frame is processed, so the far-end reference is always fed
-        to the echo canceller ahead of the corresponding near-end frame.
+        to the echo canceller ahead of the corresponding near-end frame. Each
+        chunk retains the original reference format so AEC can reject a
+        near/far sample-rate mismatch instead of processing mislabeled PCM.
 
         Returns an empty list when the outbound source is not present.
         """

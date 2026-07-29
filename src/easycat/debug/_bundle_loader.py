@@ -28,6 +28,7 @@ from easycat.debug._bundle_models import (
     CommittableCheckpoint,
     Manifest,
 )
+from easycat.errors import EASYCAT_E402, _attach_error_code
 
 # Inline artifacts expand by 4/3 when base64 encoded into ``manifest.json``.
 # Keep the manifest bounded independently from decoded artifact bytes while
@@ -341,6 +342,17 @@ def _parse_replay_entry_points(
 def load_bundle(path: str | Path) -> LoadedBundle:
     """Read and validate a bundle archive without constructing its facade."""
     bundle_path = Path(path)
+    try:
+        return _load_bundle(bundle_path)
+    except Exception as exc:
+        _attach_error_code(
+            exc,
+            EASYCAT_E402(path=str(bundle_path), detail=str(exc)),
+        )
+        raise
+
+
+def _load_bundle(bundle_path: Path) -> LoadedBundle:
     if not bundle_path.exists():
         raise FileNotFoundError(f"Bundle not found: {bundle_path}")
 

@@ -50,7 +50,7 @@ def profile_config(profile: Profile) -> tuple[dict[str, object], TurnManagerConf
             TurnManagerConfig(
                 end_of_turn_silence_ms=700,
                 punctuated_end_of_turn_silence_ms=250,
-                pre_roll_ms=300,
+                pre_roll_ms=450,
             ),
         )
     if profile == "fast":
@@ -63,7 +63,7 @@ def profile_config(profile: Profile) -> tuple[dict[str, object], TurnManagerConf
             TurnManagerConfig(
                 end_of_turn_silence_ms=400,
                 punctuated_end_of_turn_silence_ms=180,
-                pre_roll_ms=300,
+                pre_roll_ms=450,
             ),
         )
     if profile == "clean":

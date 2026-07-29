@@ -87,6 +87,7 @@ async def test_partial_local_transport_chunk_credits_enqueued_head(monkeypatch) 
             audio_format=chapter.PCM16_MONO_24K,
             frame_duration_ms=chapter.LOCAL_OUTPUT_FRAME_MS,
             max_pending_out_chunks=1,
+            output_preroll_frames=0,
         )
     )
     transport._connected = True
