@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from easycat import EventBusBindable
 from easycat.events import EventBus
-from easycat.providers import EventBusBindable
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 
@@ -68,6 +68,28 @@ def test_failed_public_hook_uses_legacy_event_bus_fallback(
 
     assert provider._event_bus is bus
     assert "rejected set_event_bus" in caplog.text
+
+
+def test_async_public_hook_is_rejected_and_uses_legacy_fallback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class AsyncPublicHook:
+        def __init__(self) -> None:
+            self._event_bus: EventBus | None = None
+
+        async def set_event_bus(self, event_bus: EventBus) -> None:
+            self._event_bus = event_bus
+
+    bus = EventBus()
+    provider = AsyncPublicHook()
+    session = object.__new__(Session)
+    session.event_bus = bus
+
+    with caplog.at_level("WARNING", logger="easycat.session"):
+        session._maybe_attach_event_bus(provider)
+
+    assert provider._event_bus is bus
+    assert "set_event_bus() must be synchronous" in caplog.text
 
 
 def test_legacy_config_fallback_remains_compatible_and_preserves_explicit_bus() -> None:

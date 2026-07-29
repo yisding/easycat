@@ -41,6 +41,7 @@ PUBLIC_API_SNAPSHOT = (
     "ErrorStage",
     "Event",
     "EventBus",
+    "EventBusBindable",
     "ICEServer",
     "Interruption",
     "JournalRecordKind",

@@ -457,9 +457,7 @@ def _resolve_audio_pipeline(
             else inject_event_bus(config.vad, event_bus)
         )
         vad = (
-            _register_close(rollback, _create_vad(vad_config_or_provider))
-            if enable_vad
-            else None
+            _register_close(rollback, _create_vad(vad_config_or_provider)) if enable_vad else None
         )
         noise_config_or_provider = (
             config.noise_reduction

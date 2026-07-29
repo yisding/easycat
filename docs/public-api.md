@@ -231,6 +231,7 @@ from easycat.integrations.agents import PydanticAIBridge
 ### Provider Protocols And Factories
 
 - `EchoCanceller`
+- `EventBusBindable`
 - `NoiseReducer`
 - `STTProvider`
 - `Transport`
