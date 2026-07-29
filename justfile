@@ -21,9 +21,9 @@ sync-extra *EXTRAS:
     uv sync --group dev {{ prepend('--extra ', EXTRAS) }}
 
 # Run the full local test suite. `loadscope` keeps each module on one worker;
-# pytest's default addopts exclude tests that provision external dependencies.
+# live and external integrations stay in their explicit serial lanes.
 test:
-    uv run pytest -n auto --dist loadscope
+    uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"
 
 # Run the safe slice in parallel. `loadscope` keeps each module's tests
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
