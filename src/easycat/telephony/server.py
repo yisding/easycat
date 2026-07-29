@@ -267,7 +267,7 @@ async def serve_twilio_voice_app(
             await transport.disconnect()
             raise
 
-    runtime = WebSocketSessionRuntime(
+    runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=config.max_sessions,
         session_factory=build_session,

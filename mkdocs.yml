@@ -180,6 +180,7 @@ nav:
       - Architecture: architecture.md
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
+      - Journal records: reference/journal-records.md
       - Session lifecycle: reference/session-lifecycle.md
       - Public API contract: public-api.md
       - Extending providers:

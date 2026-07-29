@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 KeyT = TypeVar("KeyT", bound=Hashable)
 ConnectionT = TypeVar("ConnectionT")
-SessionT = TypeVar("SessionT", bound="Session")
+SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
 
 
@@ -153,7 +153,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             if self._runtime_feedback:
                 from easycat.helpers import attach_runtime_feedback
 
-                attach_runtime_feedback(session)
+                attach_runtime_feedback(cast("Session", session))
             await self.manager.add(key, session)
             if self.gate.is_draining:
                 # Shutdown began in the final scheduling window of startup.
@@ -190,15 +190,13 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
     ) -> None:
         """Drain sessions, then close surviving sockets and reap handlers."""
         self.start_draining(server)
-        force_deadline = cast(
-            float,
-            await self.gate.drain(
-                self._active_session_pairs,
-                drain_timeout_s=max(drain_timeout_s, 0.0),
-                force_after=True,
-                force_timeout_s=max(force_timeout_s, 0.0),
-            ),
+        force_deadline = await self.gate.drain(
+            self._active_session_pairs,
+            drain_timeout_s=max(drain_timeout_s, 0.0),
+            force_after=True,
+            force_timeout_s=max(force_timeout_s, 0.0),
         )
+        assert force_deadline is not None
         await close_websocket_connections(
             self._connections.values(),
             timeout_s=_remaining_timeout(force_deadline),
