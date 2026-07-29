@@ -12,6 +12,7 @@ from easycat import (
     EasyConfig,
 )
 from easycat.echo_cancellation import EchoCancellationConfig
+from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransportConfig
@@ -328,6 +329,22 @@ def test_easycat_does_not_warn_about_vad_preroll_in_push_to_talk_mode(
         debug="off",
         vad=VADConfig(min_speech_duration_ms=400),
         turn_taking=TurnManagerConfig(pre_roll_ms=0, mode=TurnMode.PUSH_TO_TALK),
+    )
+
+    assert "pre_roll_ms" not in caplog.text
+
+
+def test_easycat_does_not_warn_when_native_stt_disables_vad(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="easycat.config")
+
+    EasyConfig(
+        stt=ElevenLabsSTTConfig(api_key="test-key"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        debug="off",
+        vad=VADConfig(min_speech_duration_ms=400),
+        turn_taking=TurnManagerConfig(pre_roll_ms=0),
     )
 
     assert "pre_roll_ms" not in caplog.text

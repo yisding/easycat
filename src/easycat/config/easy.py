@@ -624,6 +624,19 @@ class EasyConfig(_AgentSessionConfig):
         """Surface VAD/pre-roll combinations that can clip utterance onset."""
         if not isinstance(self.vad, VADConfig) or self.turn_taking.mode != TurnMode.VAD:
             return
+        smart_turn_enabled = (
+            isinstance(self.smart_turn, SmartTurnConfig) and self.smart_turn.enabled
+        )
+        voicemail_vad_enabled = bool(self.telephony and self.telephony.enable_voicemail_detector)
+        if (
+            _stt_uses_native_endpointing(self.stt)
+            and not smart_turn_enabled
+            and not voicemail_vad_enabled
+        ):
+            # This is the same native-endpointing path that
+            # _should_auto_turn_from_stt_final() uses to disable EasyCat's VAD
+            # stage. Neither pre-roll nor min_speech_duration participates.
+            return
         required_ms = self.vad.min_speech_duration_ms + _MIN_VAD_PRE_ROLL_MARGIN_MS
         if self.turn_taking.pre_roll_ms >= required_ms:
             return
