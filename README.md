@@ -526,7 +526,8 @@ config = EasyConfig(
             pattern=r"\+?\d[\d\s().-]{5,}\d",
             unit_pattern=r"\d",
             minimum_units=7,
-            pause_ms=140,
+            style="ellipsis",
+            ellipsis_count=1,
         ),
     ],
 )
@@ -541,7 +542,7 @@ from easycat import EasyConfig, create_session, default_pronunciation_processors
 config = EasyConfig(
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
-        phone_pause_ms=140,
+        phone_ellipsis_count=1,
     ),
 )
 session = create_session(config)
@@ -557,17 +558,23 @@ PauseProcessor(
     pattern=r"ticket\s+#?\d+",
     # pause between matched digits
     unit_pattern=r"\d",
-    pause_ms=180,
     minimum_units=2,
-    # for style="ellipsis": 1 => "...", 2 => "... ..."
+    # ellipsis is the provider-compatible default:
+    style="ellipsis",
+    # 1 => "...", 2 => "... ..."
     ellipsis_count=1,
 )
 ```
 
 Notes:
 - `strip_markdown=True` still works and is automatically composed with processors.
-- Providers that do not support SSML automatically fall back to plain text.
-- Pause length is adjustable via `pause_ms` for SSML and `ellipsis_count` for ellipsis style.
+- The default ellipsis style reaches every bundled TTS provider as a plain-text
+  pacing cue; the provider decides its exact duration.
+- Exact `pause_ms` timing requires `style="ssml"` and a provider with native
+  SSML support. Every bundled provider currently strips unsupported SSML break
+  tags, retaining spaced digits but losing exact timing.
+- `default_pronunciation_processors(..., phone_pause_style="ssml",
+  phone_pause_ms=180)` opts the convenience stack into that native-SSML path.
 - For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`;
   expose `input_policy` with `TTSInputPolicy.native_ssml()` only when the backend
   accepts SSML unchanged.

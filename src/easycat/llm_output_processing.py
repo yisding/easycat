@@ -63,8 +63,11 @@ class PauseProcessor:
     selects the units that should be separated by pauses (defaults to non-space
     characters).
 
-    For ``style="ellipsis"``, use ``ellipsis_count`` to control single vs
-    double ellipsis pauses (``1`` => ``...``, ``2`` => ``... ...``).
+    The default ``style="ellipsis"`` remains audible with the bundled
+    plain-text TTS providers. Use ``style="ssml"`` for exact ``pause_ms``
+    breaks only when the provider advertises native SSML support. For
+    ellipsis style, ``ellipsis_count`` controls single vs double cues
+    (``1`` => ``...``, ``2`` => ``... ...``).
     """
 
     pattern: str
@@ -72,7 +75,7 @@ class PauseProcessor:
     unit_pattern: str = r"\S"
     minimum_units: int = 2
     flags: int = 0
-    style: PauseStyle = "ssml"
+    style: PauseStyle = "ellipsis"
     ellipsis_count: int = 1
     _pattern_re: re.Pattern[str] = field(init=False, repr=False, compare=False)
     _unit_re: re.Pattern[str] = field(init=False, repr=False, compare=False)
@@ -181,8 +184,10 @@ def default_pronunciation_processors(
     *,
     name_pronunciations: dict[str, str] | None = None,
     phone_pause_ms: int = 120,
+    phone_pause_style: PauseStyle = "ellipsis",
+    phone_ellipsis_count: int = 1,
 ) -> list[LLMOutputProcessor]:
-    """Build the common stack for pronunciations + regex-based phone pauses."""
+    """Build the common stack for pronunciations + provider-compatible phone pauses."""
     processors: list[LLMOutputProcessor] = []
     if name_pronunciations:
         processors.append(PhoneticReplacementProcessor(name_pronunciations))
@@ -192,6 +197,8 @@ def default_pronunciation_processors(
             pause_ms=phone_pause_ms,
             unit_pattern=r"\d",
             minimum_units=7,
+            style=phone_pause_style,
+            ellipsis_count=phone_ellipsis_count,
         )
     )
     return processors

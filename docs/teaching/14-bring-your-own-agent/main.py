@@ -99,7 +99,7 @@ def build_output_processors() -> list[LLMOutputProcessor]:
         MarkdownStripProcessor(),
         *default_pronunciation_processors(
             name_pronunciations={"easycat": "ee zee cat"},
-            phone_pause_ms=120,
+            phone_ellipsis_count=1,
         ),
     ]
 
