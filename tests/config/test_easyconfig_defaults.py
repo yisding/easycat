@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
@@ -10,7 +11,9 @@ from easycat import (
     PCM16_MONO_24K,
     EasyConfig,
 )
+from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
+from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransportConfig
@@ -21,6 +24,8 @@ from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
+from easycat.vad import VADConfig
 from tests.config._helpers import (
     _CapabilityTransportConfig,
     _DummyWebSocket,
@@ -377,6 +382,76 @@ def test_easycat_config_smart_turn_defaults_on_for_local_transport():
     config = EasyConfig(openai_api_key="test-key", transport=LocalTransportConfig())
 
     assert config.smart_turn.enabled is True
+
+
+def test_easycat_default_preroll_covers_vad_confirmation_and_onset_margin() -> None:
+    config = EasyConfig(openai_api_key="test-key")
+
+    assert config.turn_taking.pre_roll_ms >= config.vad.min_speech_duration_ms + 150
+
+
+def test_easycat_warns_when_vad_confirmation_exceeds_preroll_margin(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="easycat.config")
+
+    EasyConfig(
+        openai_api_key="test-key",
+        debug="off",
+        vad=VADConfig(min_speech_duration_ms=400),
+        turn_taking=TurnManagerConfig(pre_roll_ms=450),
+    )
+
+    assert "pre_roll_ms=450 is shorter than vad.min_speech_duration_ms=400" in caplog.text
+    assert "Increase pre_roll_ms to at least 550" in caplog.text
+
+
+def test_easycat_does_not_warn_about_vad_preroll_in_push_to_talk_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="easycat.config")
+
+    EasyConfig(
+        openai_api_key="test-key",
+        debug="off",
+        vad=VADConfig(min_speech_duration_ms=400),
+        turn_taking=TurnManagerConfig(pre_roll_ms=0, mode=TurnMode.PUSH_TO_TALK),
+    )
+
+    assert "pre_roll_ms" not in caplog.text
+
+
+def test_easycat_does_not_warn_when_native_stt_disables_vad(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="easycat.config")
+
+    EasyConfig(
+        stt=ElevenLabsSTTConfig(api_key="test-key"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        debug="off",
+        vad=VADConfig(min_speech_duration_ms=400),
+        turn_taking=TurnManagerConfig(pre_roll_ms=0),
+    )
+
+    assert "pre_roll_ms" not in caplog.text
+
+
+def test_easycat_warns_when_voicemail_enables_vad_with_native_stt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="easycat.config")
+
+    EasyConfig(
+        stt=ElevenLabsSTTConfig(api_key="test-key"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        debug="off",
+        vad=VADConfig(min_speech_duration_ms=400),
+        turn_taking=TurnManagerConfig(pre_roll_ms=0),
+        telephony=TelephonyConfig(enable_voicemail_detector=True),
+    )
+
+    assert "pre_roll_ms=0 is shorter than vad.min_speech_duration_ms=400" in caplog.text
 
 
 def test_easycat_config_mic_preset_defaults_smart_turn_on(

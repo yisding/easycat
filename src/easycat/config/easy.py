@@ -63,7 +63,7 @@ from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.turn_manager import TurnManagerConfig
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, parse_vad_string
 
 if TYPE_CHECKING:
@@ -76,6 +76,8 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import TwilioSessionActionConfig
 
 logger = logging.getLogger("easycat.config")
+
+_MIN_VAD_PRE_ROLL_MARGIN_MS = 150
 
 
 # ── Log-level helpers ───────────────────────────────────────────────
@@ -680,7 +682,39 @@ class EasyConfig(_AgentSessionConfig):
                 )
         if self.debug in ("light", "full"):
             self._apply_debug_defaults()
+        self._warn_if_vad_pre_roll_is_too_short()
         self._validate()
+
+    def _warn_if_vad_pre_roll_is_too_short(self) -> None:
+        """Surface VAD/pre-roll combinations that can clip utterance onset."""
+        if not isinstance(self.vad, VADConfig) or self.turn_taking.mode != TurnMode.VAD:
+            return
+        smart_turn_enabled = (
+            isinstance(self.smart_turn, SmartTurnConfig) and self.smart_turn.enabled
+        )
+        voicemail_vad_enabled = bool(self.telephony and self.telephony.enable_voicemail_detector)
+        if (
+            _stt_uses_native_endpointing(self.stt)
+            and not smart_turn_enabled
+            and not voicemail_vad_enabled
+        ):
+            # This is the same native-endpointing path that
+            # _should_auto_turn_from_stt_final() uses to disable EasyCat's VAD
+            # stage. Neither pre-roll nor min_speech_duration participates.
+            return
+        required_ms = self.vad.min_speech_duration_ms + _MIN_VAD_PRE_ROLL_MARGIN_MS
+        if self.turn_taking.pre_roll_ms >= required_ms:
+            return
+        logger.warning(
+            "turn_taking.pre_roll_ms=%d is shorter than "
+            "vad.min_speech_duration_ms=%d plus the %d ms onset margin; "
+            "the start of each utterance may be clipped. Increase pre_roll_ms "
+            "to at least %d or lower min_speech_duration_ms.",
+            self.turn_taking.pre_roll_ms,
+            self.vad.min_speech_duration_ms,
+            _MIN_VAD_PRE_ROLL_MARGIN_MS,
+            required_ms,
+        )
 
     def _resolve_provider_shortcuts(self, api_key_overrides: dict[str, str] | None) -> None:
         """Resolve every named audio-stage provider before validation/planning."""
