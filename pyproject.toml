@@ -337,7 +337,9 @@ asyncio_mode = "auto"
 # intervals before it stops. Allow one replacement so a single crashed
 # worker does not abort the rest of the suite, while a second crash ends the
 # run instead of starting a long replacement cycle.
-addopts = "--durations=15 --durations-min=1.0 --max-worker-restart=1"
+# Tests that provision external SDKs, binaries, or services run only when
+# explicitly selected with ``-m integration_external``.
+addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_external"'
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
