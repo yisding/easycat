@@ -53,6 +53,8 @@ jobs:
           done
       - run: uv sync --locked --group dev --python 3.12
       - run: uv build --sdist --wheel
+      - name: Enforce 13 MiB wheel size budget
+        run: python scripts/check_wheel_size.py dist/*.whl
       - name: Check package metadata
         run: uvx twine check dist/*
       - name: Configure release venv path

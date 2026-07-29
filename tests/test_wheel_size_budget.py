@@ -54,3 +54,25 @@ def test_build_smoke_enforces_wheel_budget_before_twine() -> None:
     twine = build_smoke.index("- run: uvx twine check dist/*")
 
     assert build < budget < twine
+
+
+def test_release_build_enforces_wheel_budget_before_upload() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    release_build = workflow.split("  build:", 1)[1].split("  publish:", 1)[0]
+
+    build = release_build.index("- run: uv build --sdist --wheel")
+    budget = release_build.index("python scripts/check_wheel_size.py dist/*.whl")
+    upload = release_build.index("- name: Upload distribution artifacts")
+
+    assert build < budget < upload
+
+
+def test_release_validation_enforces_wheel_budget_before_twine() -> None:
+    workflow = Path(".github/workflows/release-validation.yml").read_text(encoding="utf-8")
+    release_validation = workflow.split("  release-validation:", 1)[1]
+
+    build = release_validation.index("- run: uv build --sdist --wheel")
+    budget = release_validation.index("python scripts/check_wheel_size.py dist/*.whl")
+    twine = release_validation.index("- name: Check package metadata")
+
+    assert build < budget < twine

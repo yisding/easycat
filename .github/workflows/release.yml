@@ -56,6 +56,8 @@ jobs:
           enable-cache: false
           python-version: "3.12"
       - run: uv build --sdist --wheel
+      - name: Enforce 13 MiB wheel size budget
+        run: python scripts/check_wheel_size.py dist/*.whl
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
