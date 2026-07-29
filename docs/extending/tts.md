@@ -66,11 +66,11 @@ See `examples/custom_tts_provider.py` for a runnable wrapper-style variant.
 ## Verifying conformance
 
 ```python
-from easycat import TTSProvider
+from easycat.testing import TTSProviderContractSuite
 
 
-def test_silence_tts_conforms_to_protocol() -> None:
-    assert isinstance(SilenceTTS(), TTSProvider)
+class TestSilenceTTS(TTSProviderContractSuite):
+    provider_factory = SilenceTTS
 
 
 async def test_silence_tts_streams_audio_events() -> None:
@@ -80,10 +80,12 @@ async def test_silence_tts_streams_audio_events() -> None:
     assert all(event.audio is not None for event in events)
 ```
 
-The in-tree behavioral contract lives in
+The suite verifies the async stream, normalized audio events, and idempotent
+stop/cancel behavior. `isinstance(provider, TTSProvider)` checks member names
+only and is not a behavioral conformance test. The in-tree use of the same
+installable suite lives in
 [`tests/contracts/test_tts_provider_contracts.py`](../../tests/contracts/test_tts_provider_contracts.py);
-mirror its cases (audio event streaming, `cancel()` discarding pending
-output, teardown via `aclose`) when your provider talks to a real backend.
+add live-backend cases for provider-specific cancellation and teardown.
 
 ## Register a shortcut name
 

@@ -80,7 +80,7 @@ _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
 # Per-template dev dependency groups; the provider package skeleton ships a
 # conformance test, so it also pins pytest.
 _TEMPLATE_DEV_GROUPS: dict[str, list[str]] = {
-    "provider": ["ruff>=0.9", "pytest>=8"],
+    "provider": ["ruff>=0.9", "pytest>=8", "pytest-asyncio>=0.24"],
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (

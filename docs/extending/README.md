@@ -40,20 +40,22 @@ for providers shipped inside EasyCat itself.
 
 ## Verifying conformance
 
-Each protocol in `easycat.providers` is `@runtime_checkable`, so the cheapest
-conformance check is structural:
+Subclass the installable behavioral contract kit in your provider package:
 
 ```python
-from easycat import STTProvider
+from easycat.testing import STTProviderContractSuite
 
-assert isinstance(MySTT(), STTProvider)
+
+class TestMySTT(STTProviderContractSuite):
+    provider_factory = MySTT
 ```
 
-That catches missing methods but not behavior. For behavior, mirror the
-offline protocol contract tests under [`tests/contracts/`](../../tests/contracts/README.md)
-— they define what the Session actually relies on per stage (event ordering,
-cancellation, teardown). Each extending page includes a minimal pytest
-conformance test you can copy into your package.
+The suite exercises the async signatures and lifecycle semantics Session
+actually relies on. The `@runtime_checkable` protocols in
+`easycat.providers` remain useful for dispatch, but `isinstance()` checks only
+member names—not callability, async behavior, signatures, or return types—so
+do not use it as a provider acceptance test. Each extending page shows the
+matching suite and any surface-specific knobs.
 
 ## Scaffolding an external provider package
 

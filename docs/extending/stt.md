@@ -71,11 +71,11 @@ See `examples/custom_stt_provider.py` for a runnable wrapper-style variant.
 ## Verifying conformance
 
 ```python
-from easycat import STTProvider
+from easycat.testing import STTProviderContractSuite
 
 
-def test_fixed_stt_conforms_to_protocol() -> None:
-    assert isinstance(FixedSTT(), STTProvider)
+class TestFixedSTT(STTProviderContractSuite):
+    provider_factory = FixedSTT
 
 
 async def test_fixed_stt_yields_final_after_commit() -> None:
@@ -87,10 +87,15 @@ async def test_fixed_stt_yields_final_after_commit() -> None:
     assert [event.text for event in events] == ["hi"]
 ```
 
-The in-tree behavioral contract lives in
-[`tests/contracts/test_stt_provider_contracts.py`](../../tests/contracts/test_stt_provider_contracts.py);
-mirror its cases (partial-before-final ordering, end-of-stream termination,
-teardown via `aclose`) when your provider talks to a real backend.
+The suite verifies async event iteration, normalized events, repeated stream
+cycles, end-of-stream termination, and the rule that
+`commit_segment() -> True` means the provider accepted the request. Empty or
+silent segments may produce no `FINAL`; consume `events()` to observe actual
+transcript completion.
+`isinstance(provider, STTProvider)` checks member names only and is not a
+behavioral conformance test. The in-tree use of the same installable suite
+lives in
+[`tests/contracts/test_stt_provider_contracts.py`](../../tests/contracts/test_stt_provider_contracts.py).
 
 ## Register a shortcut name
 

@@ -114,6 +114,38 @@ See the [extending guides](extending/) for complete custom provider and
 transport walkthroughs, and `examples/custom_transport.py` for a runnable
 custom transport.
 
+## Provider Testing Extension Surface
+
+Out-of-tree provider and bridge packages can subclass the offline contract
+suites shipped from `easycat.testing`. This module is versioned as an extension
+surface but is not re-exported at the top level, keeping `import easycat`
+lightweight:
+
+- `STTProviderContractSuite`
+- `TTSProviderContractSuite`
+- `VADProviderContractSuite`
+- `TransportContractSuite`
+- `AgentBridgeContractSuite`
+- `ContractSuite`
+- `ProviderContractSuite`
+- `RecordingAgentRecorder`
+- `AGENT_BRIDGE_EVENT_KINDS`
+- `ProviderCapabilities`
+- `ProviderCapabilityReport`
+- `ProviderIdentifier`
+- `contains_unredacted_sensitive_text`
+
+```python
+from easycat.testing import STTProviderContractSuite
+
+
+class TestAcmeSTT(STTProviderContractSuite):
+    provider_factory = AcmeSTT
+```
+
+The [extending guides](extending/) show the corresponding suite for each
+provider surface and how to add optional live checks.
+
 ## Agent Bridge Extension Surface
 
 Agent framework bridges are public from `easycat.integrations.agents`, not from

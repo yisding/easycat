@@ -1,15 +1,16 @@
-"""Conformance tests: EnergyVAD satisfies EasyCat's ``VADProvider`` Protocol.
+"""Conformance tests for EnergyVAD's EasyCat provider behavior.
 
-Run with ``uv run pytest test_custom_vad.py``. The protocol check is
-structural (``@runtime_checkable``); the behavior tests pin the event
-grammar the Session relies on — events only on speech-state transitions.
+Run with ``uv run pytest test_custom_vad.py``. The installable contract suite
+checks the async provider surface; the focused tests below pin the event
+grammar this implementation promises.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from easycat import PCM16_MONO_16K, AudioChunk, VADProvider, VADStartSpeaking, VADStopSpeaking
+from easycat import PCM16_MONO_16K, AudioChunk, VADStartSpeaking, VADStopSpeaking
+from easycat.testing import VADProviderContractSuite
 
 from custom_vad import EnergyVAD, EnergyVADConfig
 
@@ -24,8 +25,8 @@ def events_for(vad: EnergyVAD, chunk: AudioChunk) -> list[object]:
     return asyncio.run(collect())
 
 
-def test_conforms_to_vad_provider_protocol() -> None:
-    assert isinstance(EnergyVAD(), VADProvider)
+class TestEnergyVADContract(VADProviderContractSuite):
+    provider_factory = EnergyVAD
 
 
 def test_version_info_reports_journal_fields() -> None:
