@@ -53,6 +53,10 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   `litestream replicate` subprocess per session; for multi-call production
   servers, prefer `"sqlite"` plus the sidecar pattern in
   [docker.md](../deployment/docker.md#litestream-and-libsql-replicas-in-a-container).
+- `journal_capacity` — maximum records retained by the bounded in-memory
+  `"light"` journal (default `10_000`). Evictions are counted on
+  `session.journal.dropped_records` and carried into exported bundle metadata.
+  Persistent `"full"` backends ignore this value.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
 - `data_dir` — optional storage root. With `debug="full"` it contains the

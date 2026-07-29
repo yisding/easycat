@@ -423,6 +423,7 @@ def _create_debug_resources(
         session_id,
         debug=config.debug,
         backend=config.journal_backend,
+        capacity=config.journal_capacity,
         artifact_store=(
             artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
         ),
@@ -591,6 +592,7 @@ def _make_session_config(
         timeout_config=config.timeouts,
         journal=debug.journal,
         artifact_store=debug.artifact_store,
+        journal_detail=config.debug,
         warmup=config.warmup,
         record_to=config.record_to,
         session_id=session_id,
@@ -932,6 +934,7 @@ def create_text_session(
     session_id: str | None = None,
     debug: Literal["off", "light", "full"] = "light",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
+    journal_capacity: int = 10_000,
     journal_retention: Literal["archive", "delete"] = "archive",
     warmup: bool | None = None,
     wrap_agent: bool = True,
@@ -970,6 +973,7 @@ def create_text_session(
         session_id=session_id,
         debug=debug,
         journal_backend=journal_backend,
+        journal_capacity=journal_capacity,
         journal_retention=journal_retention,
         warmup=warmup,
         wrap_agent=wrap_agent,
@@ -1013,6 +1017,7 @@ def create_text_session(
                 event_bus=event_bus,
                 journal=debug_resources.journal,
                 artifact_store=debug_resources.artifact_store,
+                journal_detail=config.debug,
                 capture_audio=config.capture_audio,
                 warmup=config.warmup,
                 record_to=config.record_to,
@@ -1029,6 +1034,7 @@ def create_text_session(
     session._easycat_config = SimpleNamespace(
         debug=config.debug,
         journal_backend=config.journal_backend,
+        journal_capacity=config.journal_capacity,
         journal_retention=config.journal_retention,
         capture_audio=config.capture_audio,
         warmup=config.warmup,

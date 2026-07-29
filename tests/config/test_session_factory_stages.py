@@ -28,7 +28,35 @@ def test_successful_session_build_transfers_journal_ownership(
     )
 
     assert session._journal is journal
+    assert session._run_ctx.journal_detail == "light"
     journal.close.assert_not_called()
+
+
+def test_session_build_forwards_journal_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_audio_backends(monkeypatch)
+    journal = Mock()
+    captured: dict[str, object] = {}
+
+    def create_tracked_journal(*_args: object, **kwargs: object) -> Mock:
+        captured.update(kwargs)
+        return journal
+
+    monkeypatch.setattr(_factory, "create_journal", create_tracked_journal)
+
+    session = create_session(
+        EasyConfig(
+            openai_api_key="test-key",
+            agent=_DummyAgent(),
+            debug="full",
+            journal_capacity=42_000,
+        )
+    )
+
+    assert session._journal is journal
+    assert session._run_ctx.journal_detail == "full"
+    assert captured["capacity"] == 42_000
 
 
 def test_post_build_failure_rolls_back_acquired_journal(
