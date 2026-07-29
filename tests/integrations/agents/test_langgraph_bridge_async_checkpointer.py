@@ -124,6 +124,73 @@ async def test_aclose_flushes_final_rewrite_and_interruption_note() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_interruption_boundary_waits_for_persisted_state() -> None:
+    graph = _AsyncOnlyGraph()
+    journal = InMemoryRingBuffer(capacity=100)
+    recorder = _recorder(journal)
+    bridge = LangGraphBridge(graph)
+    async for _ in bridge.invoke(AgentTurnInput.from_text("one"), recorder):
+        pass
+
+    bridge.apply_interruption(
+        "partial",
+        CancellationMode.IMMEDIATE_STOP,
+        recorder=recorder,
+        caused_by_signal_id="sig-async",
+    )
+
+    names = [record.name for record in journal.read()]
+    assert "state_committed" in names
+    assert "cancellation_boundary" not in names
+    assert graph._state.values["messages"][-1].content == "partial answer"
+
+    await bridge.aclose()
+
+    records = journal.read()
+    names = [record.name for record in records]
+    assert "cancellation_boundary" in names
+    boundary = next(record for record in records if record.name == "cancellation_boundary")
+    assert boundary.data["caused_by_signal_id"] == "sig-async"
+    assert graph._state.values["messages"][-1].content == "partial..."
+
+
+class _FailingAsyncUpdateGraph(_AsyncOnlyGraph):
+    async def aupdate_state(
+        self,
+        config: dict[str, Any],
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
+        raise RuntimeError("async state update failed")
+
+
+@pytest.mark.asyncio
+async def test_async_interruption_failure_records_failure_without_success_boundary() -> None:
+    graph = _FailingAsyncUpdateGraph()
+    journal = InMemoryRingBuffer(capacity=100)
+    recorder = _recorder(journal)
+    bridge = LangGraphBridge(graph)
+    async for _ in bridge.invoke(AgentTurnInput.from_text("one"), recorder):
+        pass
+
+    bridge.apply_interruption(
+        "partial",
+        CancellationMode.IMMEDIATE_STOP,
+        recorder=recorder,
+    )
+    assert graph._state.values["messages"][-1].content == "partial answer"
+
+    with pytest.raises(RuntimeError, match="async state update failed"):
+        await bridge.aclose()
+
+    names = [record.name for record in journal.read()]
+    assert "state_committed" in names
+    assert "interruption_apply_failed" in names
+    assert "cancellation_boundary" not in names
+    assert graph._state.values["messages"][-1].content == "partial answer"
+    assert bridge._pending_state_mutations == []
+
+
+@pytest.mark.asyncio
 async def test_reset_preserves_pending_write_for_original_thread() -> None:
     graph = _AsyncOnlyGraph()
     bridge = LangGraphBridge(graph)
