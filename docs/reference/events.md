@@ -63,8 +63,10 @@ same).
 
 ### Agent
 
-- `AgentRequestStarted` — the runtime is about to call the agent/LLM for the
-  turn; useful as the start point for model latency.
+- `AgentRequestStarted` — the runtime confirmed and took the turn for agent
+  output. This is the confirmation/take timestamp, not always the start of
+  model work: with preemptive generation, the model request may already be in
+  flight.
 - `AgentDelta` — a streaming text delta from the agent while it generates a
   reply.
 - `AgentFinal` — the agent's final complete response for the turn; carries
