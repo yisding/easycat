@@ -49,6 +49,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "on_agent_failure",
         # Journal config (safe to report)
         "journal_backend",
+        "journal_capacity",
         "journal_retention",
     }
 )
