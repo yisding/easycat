@@ -281,13 +281,17 @@ def probe_module_for_extra(
         return None
     from easycat._provider_registry import provider_catalogs, provider_probe_modules
 
-    catalog_kind = {
-        "stt": "STT",
-        "tts": "TTS",
-        "vad": "VAD",
-        "noise_reducer": "noise reducer",
-        "echo_canceller": "echo canceller",
-    }.get(role)
+    catalog_kind = (
+        {
+            "stt": "STT",
+            "tts": "TTS",
+            "vad": "VAD",
+            "noise_reducer": "noise reducer",
+            "echo_canceller": "echo canceller",
+        }.get(role)
+        if role is not None
+        else None
+    )
     if catalog_kind is not None and provider is not None:
         catalog = next(
             (candidate for candidate in provider_catalogs() if candidate.kind == catalog_kind),
