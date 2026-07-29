@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
 
 from easycat.runtime.records import (
@@ -25,6 +26,7 @@ from easycat.runtime.records import (
 )
 
 __all__ = [
+    "append_journal_record_async",
     "ExecutionJournal",
     "JournalView",
 ]
@@ -33,6 +35,44 @@ __all__ = [
 def _validate_read_limit(limit: int | None) -> None:
     if limit is not None and limit < 0:
         raise ValueError("limit must be >= 0")
+
+
+def _read_records(
+    records: Iterable[JournalRecord],
+    *,
+    start: int = 0,
+    limit: int | None = None,
+) -> list[JournalRecord]:
+    """Apply the in-memory journal read contract to a record snapshot."""
+    _validate_read_limit(limit)
+    out = [record for record in records if record.sequence >= start]
+    if limit is not None:
+        out = out[:limit]
+    return out
+
+
+def _slice_records(
+    records: Iterable[JournalRecord],
+    *,
+    kind: JournalRecordKind | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    name: str | None = None,
+    tags: frozenset[str] | None = None,
+) -> list[JournalRecord]:
+    """Apply the in-memory journal filter contract to a record snapshot."""
+    out = list(records)
+    if kind is not None:
+        out = [record for record in out if record.kind == kind]
+    if session_id is not None:
+        out = [record for record in out if record.session_id == session_id]
+    if turn_id is not None:
+        out = [record for record in out if record.turn_id == turn_id]
+    if name is not None:
+        out = [record for record in out if record.name == name]
+    if tags:
+        out = [record for record in out if tags <= record.tags]
+    return out
 
 
 # ── Protocol ──────────────────────────────────────────────────────
@@ -109,6 +149,63 @@ class ExecutionJournal(Protocol):
 
     @property
     def degraded(self) -> bool: ...
+
+
+async def append_journal_record_async(
+    journal: ExecutionJournal,
+    *,
+    kind: JournalRecordKind,
+    name: str,
+    session_id: str,
+    turn_id: str | None = None,
+    data: dict[str, Any] | None = None,
+    error: ErrorInfo | None = None,
+    tags: frozenset[str] = frozenset(),
+    input_ref: str | None = None,
+    output_ref: str | None = None,
+) -> int:
+    """Append without blocking the event loop for disk-backed journals.
+
+    Persistent/custom backends declare ``writes_block = True`` when their
+    synchronous ``append`` path can cross a syscall boundary. Those writes
+    run in the loop's worker pool; in-memory journals stay inline because a
+    thread hop costs more than their lock-and-deque append.
+    """
+
+    def _append() -> int:
+        return journal.append(
+            kind=kind,
+            name=name,
+            session_id=session_id,
+            turn_id=turn_id,
+            data=data,
+            error=error,
+            tags=tags,
+            input_ref=input_ref,
+            output_ref=output_ref,
+        )
+
+    if bool(getattr(journal, "writes_block", False)):
+        worker = asyncio.create_task(asyncio.to_thread(_append))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Cancelling an asyncio wrapper cannot stop a synchronous worker.
+            # Keep ownership until the append is finished so teardown cannot
+            # close the backend while an untracked write is still in flight.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                worker.result()
+            except BaseException:
+                # Cancellation remains the caller-visible outcome; retrieving
+                # the result prevents a detached worker exception warning.
+                pass
+            raise
+    return _append()
 
 
 # ── JournalView (read-only surface) ──────────────────────────────
@@ -272,3 +369,9 @@ class JournalView:
     @property
     def degraded(self) -> bool:
         return self._journal.degraded
+
+    @property
+    def dropped_records(self) -> int:
+        """Number of records evicted by a bounded backend (zero otherwise)."""
+        value = getattr(self._journal, "dropped_records", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0

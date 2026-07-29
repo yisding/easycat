@@ -37,7 +37,7 @@ class TestWebTransportSession:
         session, _h3, in_q, _out_q = _make_session(target_rate=16000)
         # 48 samples @ 48 kHz → 16 samples @ 16 kHz (32 bytes).
         pcm_48k = b"\x00\x00" * 48
-        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm_48k, 48000), ended=False)
+        session.handle_stream_data(stream_id=4, data=_audio_frame(pcm_48k, 48000), ended=True)
         chunk = in_q.get_nowait()
         assert chunk.format.sample_rate == 16000
         assert len(chunk.data) == 32
@@ -51,7 +51,7 @@ class TestWebTransportSession:
         session.handle_stream_data(stream_id=4, data=frame[:1], ended=False)  # tag
         session.handle_stream_data(stream_id=4, data=frame[1:3], ended=False)  # 2/4 rate
         assert in_q.empty()  # header still incomplete
-        session.handle_stream_data(stream_id=4, data=frame[3:], ended=False)  # rest
+        session.handle_stream_data(stream_id=4, data=frame[3:], ended=True)  # rest
         chunk = in_q.get_nowait()
         assert chunk.format.sample_rate == 16000
         assert len(chunk.data) == 32
@@ -271,7 +271,7 @@ class TestWebTransportSession:
             session.handle_stream_data(
                 stream_id=client_audio_sid,
                 data=_audio_frame(pcm_48k, 48000),
-                ended=False,
+                ended=True,
             )
             chunk = in_q.get_nowait()
             assert chunk.format.sample_rate == 16000

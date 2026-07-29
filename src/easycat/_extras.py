@@ -7,6 +7,11 @@ import importlib.util
 import sys
 from types import ModuleType
 
+PORTAUDIO_INSTALL_FIX = (
+    "Install PortAudio first (Debian/Ubuntu: `sudo apt-get install libportaudio2`; "
+    "macOS: `brew install portaudio`), then retry."
+)
+
 
 def _extra_install_hint(extra: str | None) -> str:
     if extra is None:
@@ -40,6 +45,10 @@ def require_module(
             f"{label} could not import {module_name} (a dependency failed to load): {exc}.{hint}"
         ) from exc
     except OSError as exc:
-        hint = _extra_install_hint(extra)
+        hint = (
+            f" {PORTAUDIO_INSTALL_FIX}"
+            if module_name == "sounddevice"
+            else _extra_install_hint(extra)
+        )
         label = purpose or module_name
         raise ImportError(f"{label} could not load {module_name}: {exc}.{hint}") from exc

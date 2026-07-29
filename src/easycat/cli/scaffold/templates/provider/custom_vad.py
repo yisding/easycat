@@ -13,7 +13,13 @@ from array import array
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from easycat import AudioChunk, Event, VADStartSpeaking, VADStopSpeaking
+from easycat import (
+    AudioChunk,
+    Event,
+    VADStartSpeaking,
+    VADStopSpeaking,
+    register_vad_provider,
+)
 
 
 @dataclass
@@ -53,3 +59,13 @@ class EnergyVAD:
 
     def version_info(self) -> dict[str, str]:
         return {"provider": "energy", "model": "rms", "api_version": "v1", "sdk_version": "none"}
+
+
+def register() -> None:
+    """Make ``vad="energy"`` available to configs, manifests, and plans."""
+    register_vad_provider(
+        "energy",
+        EnergyVAD,
+        EnergyVADConfig,
+        capabilities=frozenset({"offline"}),
+    )

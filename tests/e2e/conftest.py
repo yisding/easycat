@@ -157,18 +157,30 @@ async def _start_ws_server(session_builder: SessionBuilder) -> WSServerHandle:
     return handle
 
 
+_TEARDOWN_TIMEOUT_S = 5.0
+
+
 async def _stop_ws_server(handle: WSServerHandle) -> None:
-    # Close sessions first (tests have finished their assertions by now).
+    # Every wait here is bounded. Teardown runs in a fixture finalizer, so an
+    # unbounded await does not fail the test that caused it -- it hangs the
+    # worker until the global pytest timeout force-exits the process, which
+    # costs the whole run a worker and blames whichever test happened to be
+    # holding the fixture.
     sessions = getattr(handle, "_sessions_to_stop", None) or []
     for session in sessions:
         try:
-            await asyncio.wait_for(session.stop(), timeout=5.0)
+            await asyncio.wait_for(session.stop(), timeout=_TEARDOWN_TIMEOUT_S)
         except Exception:  # noqa: BLE001
             pass
     if handle.server is not None:
         handle.server.close()
         try:
-            await handle.server.wait_closed()
+            # ``wait_closed()`` waits for every live connection handler to
+            # return. A handler parked in ``session.start()`` or
+            # ``ws.wait_closed()`` never does, so this must not be unbounded:
+            # the sockets are already closed by ``close()`` above, and a
+            # leaked handler task is a far cheaper failure than a dead worker.
+            await asyncio.wait_for(handle.server.wait_closed(), timeout=_TEARDOWN_TIMEOUT_S)
         except Exception:  # noqa: BLE001
             pass
 

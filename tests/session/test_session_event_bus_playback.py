@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
 
 import pytest
 
-from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
-from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
     AgentFinal,
@@ -160,6 +157,18 @@ async def test_session_events_include_correlation_ids():
         assert event.session_id == session.session_id
 
 
+def test_begin_turn_exposes_coherent_test_and_replay_seam() -> None:
+    session = Session(_full_config())
+
+    turn = session.begin_turn("turn-harness")
+
+    assert session.current_turn is turn
+    assert turn.id == "turn-harness"
+    assert session.cancel_token is turn.cancel_token
+    with pytest.raises(ValueError, match="non-empty"):
+        session.begin_turn("  ")
+
+
 @pytest.mark.asyncio
 async def test_playback_mark_ack_scoped_to_current_turn():
     """Playback marks are scoped to the current TurnContext.
@@ -171,27 +180,24 @@ async def test_playback_mark_ack_scoped_to_current_turn():
     session._playback_mark_bytes_interval = 1
 
     # ── First turn ──
-    session._turn = TurnContext("turn-first", CancelToken())
+    first_turn = session.begin_turn("turn-first")
     await session._outbound_queue.put(_make_chunk())
     await session._audio_router._drain_outbound_audio()
-    first_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
+    first_turn_marks = list(first_turn.playback_mark_to_bytes)
     assert len(first_turn_marks) == 1
 
     # ── Second turn (replaces the TurnContext) ──
-    session._is_running = True
-    with patch.object(session._stt_committer, "start_event_loop"):
-        await session._turn_runner.on_turn_started(TurnStarted())
-    session._is_running = False
+    second_turn = session.begin_turn("turn-second")
 
     await session._outbound_queue.put(_make_chunk())
     await session._audio_router._drain_outbound_audio()
-    second_turn_marks = list(session._turn.playback_mark_to_bytes.keys())
+    second_turn_marks = list(second_turn.playback_mark_to_bytes)
     assert len(second_turn_marks) == 1
 
     # Ack for the second turn's mark works.
     session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=second_turn_marks[0]))
-    assert len(session._turn.playback_ack_log) == 1
-    assert session._turn.playback_ack_log[0][1] == 320
+    assert len(second_turn.playback_ack_log) == 1
+    assert second_turn.playback_ack_log[0][1] == 320
 
 
 @pytest.mark.asyncio
@@ -206,7 +212,7 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     transport = CanonicalizingPlaybackAckTransport()
     session = Session(_full_config(transport=transport))
     session._playback_mark_bytes_interval = 1
-    session._turn = TurnContext("test-turn", CancelToken())
+    turn = session.begin_turn("test-turn")
 
     await session._outbound_queue.put(_make_chunk())
     await session._audio_router._drain_outbound_audio()
@@ -214,8 +220,8 @@ async def test_playback_mark_ack_tracks_transport_confirmed_name():
     canonical_mark = transport.playback_marks[-1]
     session._audio_router.on_playback_ack(PlaybackMarkAck(mark_name=canonical_mark))
 
-    assert len(session._turn.playback_ack_log) == 1
-    assert session._turn.playback_ack_log[0][1] == 320
+    assert len(turn.playback_ack_log) == 1
+    assert turn.playback_ack_log[0][1] == 320
 
 
 @pytest.mark.asyncio
@@ -226,7 +232,7 @@ async def test_trailing_playback_mark_emitted_while_session_running():
 
     await session.start()
     try:
-        session._turn = TurnContext("test-turn", CancelToken())
+        session.begin_turn("test-turn")
         await session._outbound_queue.put(_make_chunk())
 
         await asyncio.wait_for(transport.playback_mark_sent.wait(), timeout=1.0)
@@ -244,8 +250,7 @@ async def test_trailing_playback_mark_flushed_after_speaking_turn_already_draine
 
     await session.start()
     try:
-        turn = TurnContext("test-turn", CancelToken())
-        session._turn = turn
+        turn = session.begin_turn("test-turn")
         await session._turn_manager.bot_started_speaking()
         await session._outbound_queue.put(_make_chunk())
 
@@ -281,8 +286,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
 
     await session.start()
     try:
-        old_turn = TurnContext("old-turn", CancelToken())
-        session._turn = old_turn
+        old_turn = session.begin_turn("old-turn")
         await session._turn_manager.bot_started_speaking()
         await session._outbound_queue.put(_make_chunk())
 
@@ -301,8 +305,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
         assert old_turn_drained_without_mark()
         assert transport.playback_marks == []
 
-        new_turn = TurnContext("new-turn", CancelToken())
-        session._turn = new_turn
+        new_turn = session.begin_turn("new-turn")
 
         await session._tts_scheduler.finalize_speaking_turn(
             old_turn,
@@ -311,7 +314,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
 
         assert transport.playback_marks == []
         assert old_turn.bytes_since_last_mark == 320
-        assert session._turn is new_turn
+        assert session.current_turn is new_turn
     finally:
         await session.stop()
 
@@ -320,7 +323,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
 async def test_buffered_transport_delivery_is_counted_only_after_report() -> None:
     transport = ReportingTransport()
     session = Session(_full_config(transport=transport))
-    session._turn = TurnContext("test-turn", CancelToken())
+    turn = session.begin_turn("test-turn")
     seen: list[AudioOut] = []
     session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
 
@@ -329,18 +332,18 @@ async def test_buffered_transport_delivery_is_counted_only_after_report() -> Non
     await session._audio_router._drain_outbound_audio()
 
     assert transport.sent == [chunk]
-    assert session._turn.audio_bytes_sent == 0
+    assert turn.audio_bytes_sent == 0
     assert seen == []
 
     await session.event_bus.emit(
         TransportAudioDelivered(
             chunk=chunk,
-            turn_id=session._turn.id,
-            turn_ref=session._turn,
+            turn_id=turn.id,
+            turn_ref=turn,
         )
     )
 
-    assert session._turn.audio_bytes_sent == len(chunk.data)
+    assert turn.audio_bytes_sent == len(chunk.data)
     assert len(seen) == 1
     assert seen[0].chunk is chunk
     assert seen[0].turn_id == "test-turn"
@@ -363,7 +366,7 @@ async def test_buffered_transport_delivery_on_shared_bus_stays_session_scoped() 
             session_id="other-session",
         )
     )
-    victim._turn = TurnContext("victim-turn", CancelToken())
+    victim_turn = victim.begin_turn("victim-turn")
 
     seen: list[AudioOut] = []
     bus.subscribe(AudioOut, lambda event: seen.append(event))
@@ -372,12 +375,12 @@ async def test_buffered_transport_delivery_on_shared_bus_stays_session_scoped() 
     await bus.emit(
         TransportAudioDelivered(
             chunk=chunk,
-            turn_id=victim._turn.id,
-            turn_ref=victim._turn,
+            turn_id=victim_turn.id,
+            turn_ref=victim_turn,
         )
     )
 
-    assert victim._turn.audio_bytes_sent == len(chunk.data)
+    assert victim_turn.audio_bytes_sent == len(chunk.data)
     assert len(seen) == 1
     assert seen[0].session_id == "victim-session"
     assert seen[0].turn_id == "victim-turn"
@@ -387,12 +390,12 @@ async def test_buffered_transport_delivery_on_shared_bus_stays_session_scoped() 
         TransportAudioDelivered(
             chunk=scoped_chunk,
             session_id=victim.session_id,
-            turn_id=victim._turn.id,
-            turn_ref=victim._turn,
+            turn_id=victim_turn.id,
+            turn_ref=victim_turn,
         )
     )
 
-    assert victim._turn.audio_bytes_sent == len(chunk.data) + len(scoped_chunk.data)
+    assert victim_turn.audio_bytes_sent == len(chunk.data) + len(scoped_chunk.data)
     assert len(seen) == 2
     assert {event.session_id for event in seen} == {"victim-session"}
     assert all(event.turn_id == "victim-turn" for event in seen)
@@ -407,7 +410,7 @@ async def test_buffered_transport_delivery_unscoped_falls_back_to_active_turn() 
     # and emit exactly one AudioOut — otherwise older reporting transports
     # regress to silently dropping buffered-playback accounting.
     session = Session(_full_config(transport=ReportingTransport()))
-    session._turn = TurnContext("test-turn", CancelToken())
+    turn = session.begin_turn("test-turn")
 
     seen: list[AudioOut] = []
     session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
@@ -415,7 +418,7 @@ async def test_buffered_transport_delivery_unscoped_falls_back_to_active_turn() 
     chunk = _make_chunk(16)
     await session.event_bus.emit(TransportAudioDelivered(chunk=chunk))
 
-    assert session._turn.audio_bytes_sent == len(chunk.data)
+    assert turn.audio_bytes_sent == len(chunk.data)
     assert len(seen) == 1
     assert seen[0].chunk is chunk
     assert seen[0].turn_id == "test-turn"
@@ -438,16 +441,16 @@ async def test_buffered_transport_delivery_unscoped_is_dropped_on_shared_bus() -
             session_id="other-session",
         )
     )
-    victim._turn = TurnContext("victim-turn", CancelToken())
-    other._turn = TurnContext("other-turn", CancelToken())
+    victim_turn = victim.begin_turn("victim-turn")
+    other_turn = other.begin_turn("other-turn")
 
     seen: list[AudioOut] = []
     bus.subscribe(AudioOut, lambda event: seen.append(event))
 
     await bus.emit(TransportAudioDelivered(chunk=_make_chunk(16)))
 
-    assert victim._turn.audio_bytes_sent == 0
-    assert other._turn.audio_bytes_sent == 0
+    assert victim_turn.audio_bytes_sent == 0
+    assert other_turn.audio_bytes_sent == 0
     assert seen == []
 
 
@@ -472,14 +475,14 @@ async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
     transport = RejectingTransport()
     session = Session(_full_config(transport=transport))
     session._playback_mark_bytes_interval = 1
-    session._turn = TurnContext("test-turn", CancelToken())
+    turn = session.begin_turn("test-turn")
     seen: list[AudioOut] = []
     session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
 
     await session._outbound_queue.put(_make_chunk())
     await session._audio_router._drain_outbound_audio()
 
-    assert session._turn.audio_bytes_sent == 0
-    assert session._turn.bytes_since_last_mark == 0
+    assert turn.audio_bytes_sent == 0
+    assert turn.bytes_since_last_mark == 0
     assert transport.playback_marks == []
     assert seen == []

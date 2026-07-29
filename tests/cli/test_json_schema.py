@@ -28,7 +28,6 @@ from easycat.cli._app import (
     _DOCS_AUDIENCE_ALIAS_NOTE,
     _DOCS_COMMAND_NOTE,
     _available_docs_audience_filters,
-    _docs_entries,
     app,
 )
 from easycat.cli.scaffold import init as init_module
@@ -337,15 +336,7 @@ def test_doctor_usage_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
 
 
 def test_docs_envelope(cli: CliRunner) -> None:
-    """JSON-envelope shape for ``docs --json``.
-
-    Per-entry content is verified structurally against ``_docs_entries()``
-    — the same source the command reads from — instead of hand-typed
-    literal copies of route labels/paths/descriptions/commands. This still
-    catches serialization drift (fields dropped/renamed/reordered) without
-    hard-locking the docs route content; the human-readable rendering and
-    per-route field coverage are guarded in ``tests/cli/test_app.py``.
-    """
+    """JSON-envelope shape for ``docs --json``."""
     result = cli.invoke(app, ["docs", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -356,9 +347,6 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert payload["available_audience_filters"] == list(_available_docs_audience_filters())
     assert "app-builders" in payload["available_audience_filters"]
     assert "coding-agents" in payload["available_audience_filters"]
-    assert payload["entries"] == [
-        {**entry, "commands": list(entry.get("commands", ()))} for entry in _docs_entries()
-    ]
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
 

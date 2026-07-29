@@ -28,7 +28,7 @@ def test_event_bus_probe_covers_both_provider_catalogs(capsys) -> None:
         ("stt", "cartesia", True),
         ("stt", "deepgram", True),
         ("stt", "elevenlabs", True),
-        ("stt", "openai", False),
+        ("stt", "openai", True),
         ("stt", "openai-realtime", True),
         ("tts", "cartesia", True),
         ("tts", "deepgram", True),
@@ -38,5 +38,5 @@ def test_event_bus_probe_covers_both_provider_catalogs(capsys) -> None:
 
     probe.main()
     output = capsys.readouterr().out
-    assert "stt      openai           no" in output
+    assert "stt      openai           yes" in output
     assert "tts      openai           yes" in output

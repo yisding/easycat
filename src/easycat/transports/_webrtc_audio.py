@@ -120,7 +120,7 @@ class OutboundAudioSource:
         self._emit_worker: asyncio.Task[None] | None = None
         self._emit_tasks: set[asyncio.Task[None]] = set()
         self._AudioFrame: type | None = None
-        self._aec_ref_queue: deque[bytes] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
+        self._aec_ref_queue: deque[AudioChunk] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
         self._ref_format: AudioFormat | None = None
         self._aec_reference_enabled = False
 
@@ -246,15 +246,20 @@ class OutboundAudioSource:
 
         delivered_data = queued.original_chunk.data[queued.original_reported : reported]
         queued.original_reported = reported
+        delivered_chunk = AudioChunk(
+            data=delivered_data,
+            format=queued.original_chunk.format,
+            timestamp=queued.original_chunk.timestamp,
+        )
         if delivered_data and self._aec_reference_enabled:
-            self._aec_ref_queue.append(delivered_data)
-            self._ref_format = queued.original_chunk.format
+            # Keep the bytes and their true pre-resample format together.  A
+            # bare-byte queue forced AudioRouter to guess the format from the
+            # near-end mic chunk, silently defeating AEC's rate-mismatch guard
+            # whenever advanced callers disabled TTS/transport alignment.
+            self._aec_ref_queue.append(delivered_chunk)
+            self._ref_format = delivered_chunk.format
         return (
-            AudioChunk(
-                data=delivered_data,
-                format=queued.original_chunk.format,
-                timestamp=queued.original_chunk.timestamp,
-            ),
+            delivered_chunk,
             queued.session_id,
             queued.turn_id,
             queued.turn_ref,
@@ -272,7 +277,12 @@ class OutboundAudioSource:
         padded_samples = padded_bytes // 2  # transport frames are PCM16 mono
         silence_samples = self._ref_format.sample_rate * padded_samples // WEBRTC_SAMPLE_RATE
         if silence_samples > 0:
-            self._aec_ref_queue.append(bytes(silence_samples * self._ref_format.frame_size))
+            self._aec_ref_queue.append(
+                AudioChunk(
+                    data=bytes(silence_samples * self._ref_format.frame_size),
+                    format=self._ref_format,
+                )
+            )
 
     def _make_audio_frame(self, pcm_data: bytes) -> Any:
         assert self._AudioFrame is not None
@@ -315,8 +325,8 @@ class OutboundAudioSource:
             except Exception:
                 logger.exception("TransportAudioDelivered emit failed")
 
-    def drain_aec_reference_frames(self) -> list[bytes]:
-        """Arm AEC capture and return pending far-end frames oldest first."""
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
+        """Arm AEC capture and return typed far-end frames oldest first."""
         self._aec_reference_enabled = True
         frames = list(self._aec_ref_queue)
         self._aec_ref_queue.clear()

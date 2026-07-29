@@ -103,6 +103,8 @@ def _readme_text(
             "",
             "This pack intentionally omits raw journal payload fields such as transcripts, "
             "prompts, generated text, tool arguments, tool results, and provider responses.",
+            "Error messages, tracebacks, and free-form exception notes are also stripped; "
+            "machine-generated stage correlation notes are retained.",
             "Treat the original bundle or SQLite journal as sensitive.",
             f"Requested redaction: {redaction_requested}; applied redaction: {redaction_applied}.",
             "",
@@ -233,6 +235,7 @@ def _write_context_pack(
         "provider_versions": redact_value(bundle.manifest.provider_versions),
         "config_snapshot": redact_value(bundle.manifest.config_snapshot),
         "env_metadata": redact_value(bundle.manifest.env_metadata),
+        "journal_dropped_records": bundle.manifest.journal_dropped_records,
         "sharing_banner": redact_text(bundle.manifest.sharing_banner or bundle.sharing_banner),
     }
     payload = {

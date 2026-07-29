@@ -130,11 +130,13 @@ def _latency_config_classes() -> dict[str, type]:
     from easycat.integrations.agents import AgentRunnerConfig
     from easycat.session._types import SessionConfig
     from easycat.smart_turn import SmartTurnConfig
+    from easycat.transports.local import LocalTransportConfig
     from easycat.turn_manager import TurnManagerConfig
     from easycat.vad import VADConfig
 
     return {
         "AgentRunnerConfig": AgentRunnerConfig,
+        "LocalTransportConfig": LocalTransportConfig,
         "SessionConfig": SessionConfig,
         "SmartTurnConfig": SmartTurnConfig,
         "TurnManagerConfig": TurnManagerConfig,

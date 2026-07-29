@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +12,7 @@ import pytest
 
 from easycat.debug.testing import load_bundle
 from easycat.events import STTEvent, STTEventType
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "02-transcribe"
@@ -153,7 +153,7 @@ def test_selector_names_the_missing_provider_credential(
 
 
 def test_streaming_cli_exposes_both_providers() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(CHAPTER / "streaming.py"), "--help"],
         cwd=ROOT,
         check=True,

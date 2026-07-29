@@ -182,7 +182,8 @@ def test_to_easyconfig_browser_profile_uses_preset(monkeypatch: pytest.MonkeyPat
     assert config.tts is not None  # forwarded + normalized by EasyConfig
 
 
-def test_to_easyconfig_twilio_profile_enforces_manifest_token(
+@pytest.mark.asyncio
+async def test_to_easyconfig_twilio_profile_enforces_manifest_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easycat.transports.twilio_media import TwilioTransportConfig, _twilio_stream_token_valid
@@ -204,12 +205,12 @@ def test_to_easyconfig_twilio_profile_enforces_manifest_token(
 
     assert isinstance(config.transport, TwilioTransportConfig)
     assert config.transport.stream_token_validator is not None
-    assert not _twilio_stream_token_valid({"customParameters": {}}, config.transport)
-    assert not _twilio_stream_token_valid(
+    assert not await _twilio_stream_token_valid({"customParameters": {}}, config.transport)
+    assert not await _twilio_stream_token_valid(
         {"customParameters": {"EasyCatStreamToken": "wrong-stream-token"}},
         config.transport,
     )
-    assert _twilio_stream_token_valid(
+    assert await _twilio_stream_token_valid(
         {"customParameters": {"EasyCatStreamToken": "expected-stream-token"}},
         config.transport,
     )
@@ -235,6 +236,19 @@ def test_to_easyconfig_twilio_profile_token_unset_env_raises_e604(
         manifest.to_easyconfig("phone", resolve_agent=False)
 
     assert exc_info.value.code == "EASYCAT_E604"
+
+
+def test_to_easyconfig_twilio_profile_requires_token_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest({"voice": {"phone": {"transport": "twilio"}}})
+
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert exc_info.value.code == "EASYCAT_E602"
+    assert "requires a token reference" in str(exc_info.value)
 
 
 def test_to_easyconfig_coerces_vad_shortcut_to_vad_config(

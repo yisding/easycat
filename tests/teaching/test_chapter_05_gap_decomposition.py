@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "docs" / "teaching" / "05-blocking-agent" / "gap_decomposition_probe.py"
@@ -31,7 +32,7 @@ def load_probe():
 
 
 def test_gap_decomposition_probe_accounts_for_first_audio_latency() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(PROBE)],
         cwd=ROOT,
         check=True,

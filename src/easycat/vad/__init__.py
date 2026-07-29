@@ -16,7 +16,15 @@ redistribution terms.
 from __future__ import annotations
 
 from easycat.vad._base import VADBackend
-from easycat.vad.factory import VADConfig, create_vad
+from easycat.vad.factory import (
+    VAD_PROVIDER_ENTRY_POINT_GROUP,
+    VADConfig,
+    available_vad_providers,
+    create_vad,
+    is_vad_config,
+    parse_vad_string,
+    register_vad_provider,
+)
 from easycat.vad.funasr import FunASROnnxVAD
 from easycat.vad.krisp import KrispVAD
 from easycat.vad.silero import SileroVAD
@@ -28,6 +36,11 @@ __all__ = [
     "SileroVAD",
     "TenVAD",
     "VADBackend",
+    "VAD_PROVIDER_ENTRY_POINT_GROUP",
     "VADConfig",
+    "available_vad_providers",
     "create_vad",
+    "is_vad_config",
+    "parse_vad_string",
+    "register_vad_provider",
 ]

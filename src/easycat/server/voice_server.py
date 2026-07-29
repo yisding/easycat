@@ -40,7 +40,7 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate
+from easycat.server.transports import CapacityGate, _await_with_hard_timeout
 from easycat.session_manager import SessionManager
 
 if TYPE_CHECKING:
@@ -115,6 +115,8 @@ class VoiceServer:
         # ``asyncio.wait``s on its handlers, it does NOT cancel them) — and thus
         # ``ws_server.wait_closed()`` — blocked forever.
         self._ws_handler_tasks: set[asyncio.Task[None]] = set()
+        self._ws_connections: dict[int, Any] = {}
+        self._await_natural_end_drain = False
 
         # In-process metric snapshot for ``GET /metrics`` (M8). The
         # ``easycat._observability`` instruments are write-only and no-op without
@@ -333,19 +335,18 @@ class VoiceServer:
            check and the ``/ws`` handler reject new connections.
         2. Stop accepting — ``gate.try_acquire()`` already rejects while
            draining and ``_handle_websocket_connection`` checks draining.
-        3. Close the raw-ws listener AND the aiohttp site/runner (both kinds).
+        3. Stop accepting on the raw-ws listener and close the aiohttp
+           site/runner. The default ``drain_mode="stop_sessions"`` also closes
+           existing raw-ws connections immediately; ``"await_natural_end"``
+           leaves them open until caller hangup or ``drain_timeout_s`` expires.
         4. Hand the active sessions to :meth:`CapacityGate.drain`. During drain
            each handler leaves its session in the active set (the drain OWNS the
            stop — see :meth:`_teardown_ws_session`); the drain starts the single
            graceful ``session.stop()`` per session and waits ``drain_timeout_s``.
         5. The drain escalates any session whose graceful stop did NOT finish in
-           the grace window by calling ``session.stop(force=True)`` and then
-           cancelling the still-pending graceful task. Because the DRAIN (not the
-           handler) starts the graceful stop, this is the single ``_stopping``
-           lineage: a fast graceful stays graceful, and a hung graceful is
-           cancelled so it cannot block teardown. The real :class:`Session`
-           ``_stopping`` guard makes a force-after-graceful a no-op, so the
-           cancellation — not the force call — is what unblocks a hung teardown.
+           the grace window by cancelling and reaping the still-pending graceful
+           task, then calling ``session.stop(force=True)`` with one clear
+           teardown owner.
         6. Cancel any handler task still hung in ``ws.wait_closed()`` (e.g. a
            client that never completed the close handshake) so the raw-ws
            ``Server._close`` waiter — which ``asyncio.wait``s on its handlers
@@ -362,22 +363,17 @@ class VoiceServer:
         # without an OTel SDK; the registered name cannot raise in sanitize.
         self._emit_draining(True)
 
-        # (3) close the listeners so no new handler task can start AND in-flight
-        # ``/ws`` connections are closed (each handler's ``ws.wait_closed()``
-        # returns). Do NOT ``await ws_server.wait_closed()`` yet: a hung handler
-        # would deadlock it before the drain can force-escalate. The aiohttp
-        # site/runner are torn down now; the raw-ws server is closed now and
-        # awaited AFTER the drain (and the handler cancel).
-        ws_server = self._ws_server
-        if ws_server is not None:
-            ws_server.close()
-            self._ws_server = None
-        if self._site is not None:
-            await self._site.stop()
-            self._site = None
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
+        await_natural_end = self.config.drain_mode == "await_natural_end" and not force
+        self._await_natural_end_drain = await_natural_end
+
+        # (3) stop accepting so no new handler task can start. In the default
+        # mode, in-flight ``/ws`` connections are also closed so each handler's
+        # ``ws.wait_closed()`` returns. In natural-end mode, existing sockets are
+        # left open until caller hangup or drain timeout. Do NOT ``await
+        # ws_server.wait_closed()`` yet: a hung handler would deadlock it before
+        # the drain can force-escalate. The aiohttp site/runner are torn down
+        # now; the raw-ws server is awaited AFTER the drain and handler cancel.
+        ws_server = await self._close_listeners_for_drain(await_natural_end=await_natural_end)
 
         # (4)+(5) wait for active connection tasks up to ``drain_timeout_s``,
         # then force-escalate the remainder. ``force=True`` skips the grace
@@ -385,6 +381,8 @@ class VoiceServer:
         # force-stop own teardown for any handler whose graceful stop is skipped
         # while draining.
         drain_timeout = 0.0 if force else self.config.drain_timeout_s
+        if await_natural_end:
+            drain_timeout = await self._await_natural_drain_or_escalate(drain_timeout)
         await self._gate.drain(
             self._active_session_pairs,
             drain_timeout_s=drain_timeout,
@@ -392,13 +390,16 @@ class VoiceServer:
             # Bound the forced phase so a session that hangs even in its
             # force-stop is abandoned rather than blocking ``stop()`` forever.
             force_timeout_s=self.config.force_shutdown_timeout_s,
+            stop_for_key=self._stop_managed_session,
         )
 
         # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
         # already force-stopped the sessions; cancelling the surviving handler
         # tasks unblocks the raw-ws ``Server._close`` waiter so the bounded
         # ``wait_closed`` below cannot deadlock.
-        await self._cancel_ws_handler_tasks()
+        await self._cancel_ws_handler_tasks(
+            timeout_s=self.config.force_shutdown_timeout_s,
+        )
 
         # Now all handlers can return (closed connections + forced sessions +
         # cancelled hung handlers), so awaiting the raw-ws server completes
@@ -406,12 +407,11 @@ class VoiceServer:
         # backstop: even a pathological handler that resists cancellation cannot
         # make ``stop()`` block forever.
         if ws_server is not None:
-            try:
-                await asyncio.wait_for(
-                    ws_server.wait_closed(),
-                    timeout=self.config.force_shutdown_timeout_s,
-                )
-            except TimeoutError:
+            closed = await _await_with_hard_timeout(
+                ws_server.wait_closed(),
+                timeout_s=self.config.force_shutdown_timeout_s,
+            )
+            if not closed:
                 logger.warning(
                     "VoiceServer: raw-ws listener did not close within "
                     "force_shutdown_timeout_s=%ss; abandoning the wait",
@@ -424,22 +424,26 @@ class VoiceServer:
         # otherwise outlive ``stop`` and leak. Mirrors the serve helper's
         # ``cancel_cleanup_tasks``.
         if self._webrtc_routes is not None:
-            await self._webrtc_routes.cancel_cleanup_tasks()
+            await self._webrtc_routes.cancel_cleanup_tasks(
+                timeout_s=self.config.force_shutdown_timeout_s,
+            )
             self._webrtc_routes = None
 
         # (7) final hard sweep of the bare registry, then reset the shared gate
         # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
         # their own untrack/release (the drain owns teardown), so reset the gate
-        # here once no handler can still run. The drain already owns the single
-        # effective stop per session; this sweep is an idempotent backstop, so
-        # bound it with ``force_shutdown_timeout_s`` — a session that hangs even
-        # here (e.g. a force-stop that never returns) must not block teardown.
-        try:
-            await asyncio.wait_for(
-                self._manager.stop_all(),
-                timeout=self.config.force_shutdown_timeout_s,
-            )
-        except TimeoutError:
+        # here once no handler can still run. The drain normally owns the single
+        # effective stop per session. A natural disconnect can instead have a
+        # handler-owned graceful removal cancelled at the deadline; because the
+        # manager retains that entry until teardown succeeds, this force sweep
+        # retries it after the handler has unwound. Bound the sweep with
+        # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
+        # block server teardown.
+        swept = await _await_with_hard_timeout(
+            self._manager.stop_all(force=True),
+            timeout_s=self.config.force_shutdown_timeout_s,
+        )
+        if not swept:
             logger.warning(
                 "VoiceServer: SessionManager.stop_all did not finish within "
                 "force_shutdown_timeout_s=%ss; abandoning the hard sweep",
@@ -447,10 +451,59 @@ class VoiceServer:
             )
         self._active_session_objs.clear()
         self._reset_gate_bookkeeping()
+        self._await_natural_end_drain = False
         # Clear the active-connections gauge on both server_state series so the
         # post-drain reading is 0, not a stale non-zero value (M8 fix).
         self._emit_connections_active_cleared()
         self._started = False
+
+    async def _close_listeners_for_drain(self, *, await_natural_end: bool) -> Any:
+        """Stop accepting new work and return the raw-ws server to await later."""
+        ws_server = self._ws_server
+        if ws_server is not None:
+            if await_natural_end:
+                ws_server.close(close_connections=False)
+            else:
+                ws_server.close()
+            self._ws_server = None
+        if self._site is not None:
+            await self._site.stop()
+            self._site = None
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None
+        return ws_server
+
+    async def _await_natural_drain_or_escalate(self, drain_timeout: float) -> float:
+        """Wait for caller hangup; return the remaining stop-session grace window."""
+        if await self._gate.wait_drained(timeout_s=drain_timeout):
+            return 0.0
+        self._await_natural_end_drain = False
+        # ``await_natural_end`` spends the configured grace window waiting for
+        # callers to hang up. Once it expires, stragglers move directly to the
+        # existing force path rather than receiving a second full grace window.
+        await self._close_active_ws_connections()
+        return 0.0
+
+    async def _close_active_ws_connections(self) -> None:
+        """Close still-active raw WebSocket connections after natural drain expires."""
+        connections = list(self._ws_connections.values())
+        if not connections:
+            return
+        close_tasks = [
+            asyncio.create_task(ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON))
+            for ws in connections
+        ]
+        closed = await _await_with_hard_timeout(
+            asyncio.gather(*close_tasks, return_exceptions=True),
+            timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
+        )
+        if not closed:
+            logger.warning(
+                "VoiceServer: raw-ws connections did not close within "
+                "force_shutdown_timeout_s=%ss; cancelling handlers",
+                self.config.force_shutdown_timeout_s,
+            )
 
     def _reset_gate_bookkeeping(self) -> None:
         """Reset the gate's active set, reservations, AND draining flag after a drain.
@@ -468,8 +521,9 @@ class VoiceServer:
         while self._gate.reserved_count > 0:
             self._gate.release()
         self._gate.stop_draining()
+        self._ws_connections.clear()
 
-    async def _cancel_ws_handler_tasks(self) -> None:
+    async def _cancel_ws_handler_tasks(self, *, timeout_s: float | None = None) -> None:
         """Cancel + await any ``/ws`` handler task still running.
 
         Called during :meth:`stop` after the drain so a handler hung in
@@ -484,8 +538,11 @@ class VoiceServer:
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._ws_handler_tasks.clear()
+            gathered = asyncio.gather(*tasks, return_exceptions=True)
+            if timeout_s is None:
+                await gathered
+            else:
+                await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -494,6 +551,10 @@ class VoiceServer:
             for key in self._gate.active_keys()
             if key in self._active_session_objs
         ]
+
+    async def _stop_managed_session(self, key: int, force: bool) -> None:
+        """Route drain teardown through the manager's keyed stop ownership."""
+        await self._manager.remove(key, force=force)
 
     async def health(self) -> VoiceServerHealth:
         """Build a :class:`VoiceServerHealth` snapshot from live state.
@@ -798,11 +859,14 @@ class VoiceServer:
         """
         import websockets
 
+        from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+
         return await websockets.serve(
             self._handle_websocket_connection,
             self.config.host,
             self._websocket_port(),
             compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
         )
 
     def _websocket_port(self) -> int:
@@ -908,6 +972,7 @@ class VoiceServer:
 
             key = id(ws)
             try:
+                self._ws_connections[key] = ws
                 transport = WebSocketConnectionTransport(ws)
                 session = self._build_session(transport)
                 self._gate.track(key)
@@ -919,15 +984,17 @@ class VoiceServer:
                 finally:
                     await self._teardown_ws_session(key)
             finally:
-                # When draining, the shared drain owns BOTH the force-stop and the
-                # gate/objs/release bookkeeping — leave the entry in place so the
-                # drain can still see and force-stop it. Otherwise (normal
-                # disconnect) the handler owns its own cleanup.
-                if not self._gate.is_draining:
+                # In stop-sessions drain mode, the shared drain owns BOTH the
+                # force-stop and gate/objs/release bookkeeping. In natural-end
+                # mode, a caller hangup is the desired completion signal, so the
+                # handler performs its normal cleanup even while the gate is
+                # draining.
+                if not self._gate.is_draining or self._await_natural_end_drain:
                     self._gate.untrack(key)
                     self._active_session_objs.pop(key, None)
                     self._gate.release()
                     self._emit_connections_active()
+                self._ws_connections.pop(key, None)
         finally:
             if task is not None:
                 self._ws_handler_tasks.discard(task)
@@ -935,19 +1002,19 @@ class VoiceServer:
     async def _teardown_ws_session(self, key: int) -> None:
         """Tear down one ``/ws`` session, deferring to the drain when draining.
 
-        When NOT draining (a normal client disconnect), drop the session from
-        the registry, which stops it GRACEFULLY. When draining, leave the
+        When NOT draining (a normal client disconnect), stop the session
+        GRACEFULLY and only then drop it from the registry. When draining, leave the
         session in the active set and registry untouched so the shared
         :meth:`CapacityGate.drain` owns the single stop. The drain starts the
-        sole graceful ``session.stop()`` itself and force-escalates / cancels it
-        on timeout — keeping the teardown effective against the real
-        :class:`Session` ``_stopping`` idempotency guard (a graceful stop already
-        in progress turns a later ``force=True`` into a no-op, so a handler that
-        started its OWN graceful stop could never be force-preempted). The final
-        :meth:`SessionManager.stop_all` hard sweep in :meth:`stop` then clears
-        the registry entry (idempotent against the already-stopped session).
+        sole graceful ``session.stop()`` itself and cancels / force-escalates it
+        on timeout, keeping one lifecycle authority during drain. During a
+        natural-end drain the handler may begin graceful removal after caller
+        hangup; ``SessionManager.remove`` retains that entry until stop succeeds.
+        If the drain deadline cancels the handler, the final force sweep can
+        therefore retry the still-registered session and complete backend
+        teardown.
         """
-        if self._gate.is_draining:
+        if self._gate.is_draining and not self._await_natural_end_drain:
             return
         await self._manager.remove(key)
 

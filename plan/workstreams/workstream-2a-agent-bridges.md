@@ -304,9 +304,7 @@ which builds on the bridges shipped here.
           ...
 
       def record_unit_entered(self, cursor: ExecutionCursor) -> None: ...
-      def record_unit_exited(
-          self, cursor: ExecutionCursor, reason: str | None
-      ) -> None: ...
+      def record_unit_exited(self, cursor: ExecutionCursor, reason: str | None) -> None: ...
 
       @contextmanager
       def unit(
@@ -337,9 +335,7 @@ which builds on the bridges shipped here.
           args_ref: str | None,
           result_ref: str | None,
       ) -> None: ...
-      def record_state_snapshot(
-          self, ref: str, *, payload: bytes | None = None
-      ) -> str: ...
+      def record_state_snapshot(self, ref: str, *, payload: bytes | None = None) -> str: ...
       # Implementation accepts an optional ``payload`` so callers can hand
       # the recorder bytes-to-store-and-hash in one call rather than
       # juggling ``ArtifactStore.put`` themselves.  Returns the resolved
@@ -1171,9 +1167,7 @@ weather_agent = Agent(
 
 
 @weather_agent.tool
-async def weather_forecast(
-    ctx: RunContext[None], location: str, forecast_date: date
-) -> str:
+async def weather_forecast(ctx: RunContext[None], location: str, forecast_date: date) -> str:
     # In real code: call a weather API.
     return f"The forecast in {location} on {forecast_date} is 24°C and sunny."
 
@@ -1534,9 +1528,7 @@ class DirectOpenAIChatBridge:
                     yield AgentBridgeEvent(type="text_delta", text=delta)
 
             self._history.append({"role": "assistant", "content": full})
-            recorder.record_unit_exited(
-                cursor.with_committable(True), reason="stream_complete"
-            )
+            recorder.record_unit_exited(cursor.with_committable(True), reason="stream_complete")
             yield AgentBridgeEvent(type="done", text=full)
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
@@ -1552,9 +1544,7 @@ class DirectOpenAIChatBridge:
             }
         )
 
-    def apply_interruption(
-        self, delivered_text: str, mode: CancellationMode
-    ) -> None:
+    def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         if self._history and self._history[-1]["role"] == "assistant":
             if delivered_text:
                 self._history[-1]["content"] = delivered_text + "..."

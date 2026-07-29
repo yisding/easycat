@@ -80,6 +80,60 @@ def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     assert set(extras["all"]) == union
 
 
+def test_telephony_library_extra_excludes_reference_server_dependencies() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    telephony = {Requirement(dep).name for dep in extras["telephony"]}
+    fastapi_server = {Requirement(dep).name for dep in extras["telephony-fastapi"]}
+
+    assert telephony == {"aiohttp", "phonenumberslite", "twilio"}
+    assert fastapi_server == {"fastapi", "python-multipart", "uvicorn"}
+
+
+def test_declared_dependency_floors_are_compatibility_tested() -> None:
+    project = _pyproject()["project"]
+    extras = project["optional-dependencies"]
+
+    assert _requirement(project["dependencies"], "httpx") == "httpx>=0.27"
+    assert _requirement(project["dependencies"], "rich") == "rich>=13.8"
+    assert _requirement(project["dependencies"], "typer") == "typer>=0.26"
+    assert _requirement(project["dependencies"], "websockets") == "websockets>=14.0,<17"
+    assert _requirement(extras["langchain"], "langchain-core") == "langchain-core>=1.2.28"
+    assert _requirement(extras["telephony"], "aiohttp") == "aiohttp>=3.13.3"
+
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    minimum_job = workflow[workflow.index("  minimum-dependencies:") :]
+    minimum_job = minimum_job[: minimum_job.index("\n  coverage:")]
+    assert "uv sync --resolution lowest-direct --group dev" in minimum_job
+    assert "--extra langchain --extra telephony --python 3.12" in minimum_job
+    assert 'UV_NO_SYNC: "1"' in minimum_job
+    assert "uv run --no-sync --python 3.12 easycat validate quick --show-output" in minimum_job
+    for floor in (
+        '"httpx==0.27.0"',
+        '"websockets==14.0"',
+        '"langchain-core==1.2.28"',
+    ):
+        assert floor in minimum_job
+    assert "tests/integrations/agents/test_langchain_bridge_invoke.py" in minimum_job
+    assert "tests/server/test_webrtc_routes.py" in minimum_job
+
+
+def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}
+    rnnoise_names = {Requirement(dep).name for dep in extras["rnnoise"]}
+    all_names = {Requirement(dep).name for dep in extras["all"]}
+
+    assert {"pyrnnoise", "requests"} <= rnnoise_names
+    assert {"pyrnnoise", "requests"}.isdisjoint(quickstart_names)
+    assert rnnoise_names <= all_names
+
+
+def test_every_install_ships_high_quality_resampling() -> None:
+    dependencies = _pyproject()["project"]["dependencies"]
+
+    assert _requirement(dependencies, "soxr") == "soxr>=1.0.0"
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [

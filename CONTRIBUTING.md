@@ -12,10 +12,9 @@ just                       # list every task (or read the justfile)
 just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 ```
 
-Run `uv run easycat docs` for the maintained reader-facing map, including
-quickstart, CLI and scaffold commands, examples, teaching chapters, public API,
-validation, and operations. Use `uv run easycat docs --audience contributors`
-to narrow the map to contributor-facing routes, or
+Run `uv run easycat docs` for the compact reader-facing route index, or
+`uv run easycat docs --verbose` to expand every route and command hint. Use
+`uv run easycat docs --audience contributors` to show contributor-facing routes, or
 `uv run easycat docs --audience contributors --json` when automation needs
 that smaller route map.
 Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
@@ -41,7 +40,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | --- | --- | --- |
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
-| Full test suite | `just test` | `uv run pytest` |
+| Full local test suite | `just test` | `uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"` |
 | Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"` |
 | One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
 | Lint | `just lint` | `uv run ruff check .` |
@@ -59,7 +58,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
 | Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
-| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest` |
+| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
 
 The docs/onboarding guard table below is generated from the `justfile` by
@@ -69,7 +68,7 @@ in the `justfile`, then re-run the script.
 <!-- BEGIN auto:guard-commands format=table -->
 | Docs guard | `just` recipe | Raw command |
 | --- | --- | --- |
-| Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py` |
+| Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py tests/test_markdown_links.py` |
 | Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py` |
 | Guard examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path tests/cli/test_scaffold_schema.py tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
 | Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py` |
@@ -119,15 +118,19 @@ contracts, packaging, live canaries, or stress behavior.
 
 ## Parallel runs and xdist safety
 
-`just test-fast`, `just cov`, and the `quick` validation lane use
+`just test`, `just test-fast`, `just cov`, and the `quick` validation lane use
 `pytest -n auto --dist loadscope`. `loadscope` keeps every test in a module on
 the **same** worker, which matters for async event-loop tests and any
 socket/port-binding tests. If you add tests that bind a **fixed** port (rather
 than port `0`), keep them in one module and prefer marking them
-`integration_socket` — the socket, stress, and contracts lanes stay serial.
-`just test` (serial) is the source of truth. Always run coverage as
-`pytest --cov` — never `coverage run -m pytest -n auto`, which reports 0% under
-xdist.
+`integration_socket` — the dedicated socket, stress, and contracts validation
+lanes stay serial.
+`just test` is the full local source of truth; it skips live and external
+integrations so xdist cannot duplicate paid session fixtures. Run those lanes
+explicitly and serially with `pytest -m integration_live` or
+`pytest -m integration_external`.
+Always run coverage as `pytest --cov` — never
+`coverage run -m pytest -n auto`, which reports 0% under xdist.
 
 ## Validation slices and the `easycat validate` CLI
 
@@ -179,9 +182,12 @@ collection. The full list lives in `pyproject.toml` under
 - `integration_socket` — needs localhost socket bind/connect (auto-skipped
   where the sandbox forbids binding; see `tests/conftest.py`).
 - `integration_live` — needs live provider/API endpoints, API keys, and
-  optional provider extras.
+  optional provider extras. Excluded from `just test` and `just check`; run
+  explicitly and serially with `pytest -m integration_live`.
 - `integration_external` — needs external local binaries, SDKs, or services
-  without live provider API credentials.
+  without live provider API credentials. Excluded from bare `pytest`,
+  `just test`, and `just check`; run explicitly with
+  `pytest -m integration_external`.
 - `slow` — long end-to-end tests; opt in with `-m slow`.
 - `contract` — provider / protocol / bridge contract tests.
 - `latency` — latency measurement or SLO tests.
@@ -276,6 +282,7 @@ a regression test in the same PR that fixes it:
 
 ```python
 from easycat.debug.testing import load_bundle, assert_turn_completed, assert_no_error
+
 
 def test_roundtrip_regression():
     bundle = load_bundle("tests/fixtures/roundtrip.zip")

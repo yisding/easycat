@@ -208,10 +208,13 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     path = REPO_ROOT / "examples" / "webtransport_server.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 35
+    assert _visible_code_line_count(path) <= 40
     assert "run_webtransport_config_server" in source
     assert "WebTransportTransportConfig" in source
     assert "WebTransportConnectionTransport" in source
+    assert 'default="127.0.0.1"' in source
+    assert 'os.getenv("EASYCAT_SERVE_TOKEN")' in source
+    assert "allow_query_token=args.allow_query_token" in source
     assert "create_session" not in source
     assert "SessionManager" not in source
     assert "attach_runtime_feedback" not in source
@@ -219,6 +222,16 @@ def test_webtransport_server_uses_config_server_helper() -> None:
     assert "asyncio.run(" not in source
     assert "await server.start()" not in source
     assert "await server.stop()" not in source
+
+
+def test_webtransport_browser_client_forwards_query_token_without_displaying_it() -> None:
+    source = (REPO_ROOT / "examples" / "webtransport_browser_client.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'new URLSearchParams(location.search).get("token")' in source
+    assert "encodeURIComponent(WT_TOKEN)" in source
+    assert '"?token=<redacted>"' in source
 
 
 def test_ws_server_authorizes_bearer_or_query_token():
@@ -360,6 +373,16 @@ def test_docker_guide_serves_browser_client_from_localhost():
     assert 'location.hostname + ":8765"' in client
 
 
+def test_websocket_browser_client_clears_scheduled_audio_on_barge_in():
+    client = (REPO_ROOT / "examples" / "ws_browser_client.html").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs" / "browser-playground.md").read_text(encoding="utf-8")
+
+    assert 'msg.type === "clear"' in client
+    assert "scheduledSources.delete(src)" in client
+    assert "src.stop()" in client
+    assert '`{"type": "clear"}`' in guide
+
+
 def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -430,6 +453,27 @@ def test_dockerfile_default_extras_cover_ws_server_golden_path() -> None:
     assert _uses_default_openai_providers(ws_server)
     assert "openai" in extras
     assert "openai-agents" in extras
+
+
+def test_docker_base_images_are_digest_pinned_and_tracked_by_dependabot() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    references = [line.split()[1] for line in dockerfile.splitlines() if line.startswith("FROM ")]
+
+    assert len(references) == 2
+    for reference in references:
+        tagged_image, separator, digest = reference.partition("@sha256:")
+        assert separator
+        assert ":" in tagged_image.rsplit("/", 1)[-1]
+        assert len(digest) == 64
+        assert all(character in "0123456789abcdef" for character in digest)
+
+    dependabot = (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    docker_updates = dependabot.split('- package-ecosystem: "docker"', 1)[1].split(
+        "\n  - package-ecosystem:", 1
+    )[0]
+    assert 'directory: "/docker"' in docker_updates
+    assert 'interval: "weekly"' in docker_updates
+    assert "default-days: 7" in docker_updates
 
 
 def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> None:

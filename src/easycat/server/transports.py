@@ -28,10 +28,202 @@ per-transport ``Callable[[TransportT], EasyConfig | Session]`` factory.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Hashable, Iterable
-from typing import Generic, TypeVar
+from functools import partial
+from typing import Any, Generic, TypeVar
 
 KeyT = TypeVar("KeyT", bound=Hashable)
+logger = logging.getLogger(__name__)
+
+
+async def close_websocket_connections(
+    connections: Iterable[object],
+    *,
+    timeout_s: float | None,
+    code: int = 1001,
+    reason: str = "Server shutdown after drain",
+) -> None:
+    """Close surviving WebSocket connections after their session drain.
+
+    ``websockets.Server.close(close_connections=False)`` stops accepting but
+    intentionally leaves established connections open. Calling ``close()``
+    again cannot switch that mode because the method is idempotent, so servers
+    must retain the accepted connection objects and close survivors explicitly
+    after the graceful session window.
+    """
+    close_tasks: list[asyncio.Task[object]] = []
+    seen: set[int] = set()
+    for connection in connections:
+        identity = id(connection)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        close = getattr(connection, "close", None)
+        if close is None:
+            continue
+        try:
+            result = close(code=code, reason=reason)
+        except Exception:
+            continue
+        if isinstance(result, Awaitable):
+            close_tasks.append(asyncio.ensure_future(result))
+    if close_tasks:
+        await _safe_await(
+            asyncio.gather(*close_tasks, return_exceptions=True),
+            timeout_s=timeout_s,
+        )
+
+
+async def cancel_handler_tasks(
+    tasks: Iterable[asyncio.Task[object]],
+    *,
+    timeout_s: float | None,
+) -> None:
+    """Cancel and reap connection handlers that survived transport shutdown."""
+    current = asyncio.current_task()
+    pending = [task for task in tasks if task is not current and not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await _safe_await(asyncio.gather(*pending, return_exceptions=True), timeout_s=timeout_s)
+
+
+class WebSocketSessionRuntime:
+    """Own one raw-WebSocket server's live session and drain bookkeeping."""
+
+    def __init__(
+        self,
+        *,
+        manager: Any,
+        max_sessions: int,
+        session_factory: Callable[[object], object | Awaitable[object | None]],
+        runtime_feedback: bool = False,
+        capacity_reason: str = "Server is at the configured session limit",
+        on_session: Callable[[object], Callable[[], None] | None] | None = None,
+    ) -> None:
+        self.manager = manager
+        self.gate: CapacityGate[int] = CapacityGate(max_sessions)
+        self._session_factory = session_factory
+        self._runtime_feedback = runtime_feedback
+        self._capacity_reason = capacity_reason
+        self._on_session = on_session
+        self._sessions: dict[int, object] = {}
+        self._connections: dict[int, object] = {}
+        self._handler_tasks: set[asyncio.Task[object]] = set()
+
+    async def handle(self, connection: object) -> None:
+        """Build and run one session, deferring teardown while draining."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._handler_tasks.add(task)
+        try:
+            if not self.gate.try_acquire():
+                reason = "Server is draining" if self.gate.is_draining else self._capacity_reason
+                await connection.close(code=1013, reason=reason)  # type: ignore[attr-defined]
+                return
+            await self._run_connection(connection)
+        finally:
+            if task is not None:
+                self._handler_tasks.discard(task)
+
+    async def _run_connection(self, connection: object) -> None:
+        key = id(connection)
+        cleanup: Callable[[], None] | None = None
+        try:
+            created = self._session_factory(connection)
+            session = await created if isinstance(created, Awaitable) else created
+            if session is None:
+                return
+            # The connection must be visible to shutdown immediately, but the
+            # session is not drainable until manager.add() has completed
+            # Session.start(). A drain during startup closes the connection and
+            # cancels this handler, leaving Session.start() to roll itself back.
+            self._connections[key] = connection
+            if self._on_session is not None:
+                cleanup = self._on_session(session)
+            if self._runtime_feedback:
+                from easycat.helpers import attach_runtime_feedback
+
+                attach_runtime_feedback(session)
+            await self.manager.add(key, session)
+            if self.gate.is_draining:
+                # Shutdown began in the final scheduling window of startup.
+                # Roll the newly-started session back instead of publishing it
+                # after the drain snapshot has already been taken.
+                await self.manager.remove(key)
+                return
+            self.gate.track(key)
+            self._sessions[key] = session
+            try:
+                await connection.wait_closed()  # type: ignore[attr-defined]
+            finally:
+                if not self.gate.is_draining:
+                    await self.manager.remove(key)
+        finally:
+            if cleanup is not None:
+                cleanup()
+            self.gate.untrack(key)
+            self._sessions.pop(key, None)
+            self._connections.pop(key, None)
+            self.gate.release()
+
+    def start_draining(self, server: object) -> None:
+        """Reject new work and stop accepting without severing live sockets."""
+        self.gate.start_draining()
+        server.close(close_connections=False)  # type: ignore[attr-defined]
+
+    async def drain(
+        self,
+        server: object,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        """Drain sessions, then close surviving sockets and reap handlers."""
+        self.start_draining(server)
+        await self.gate.drain(
+            self._active_session_pairs,
+            drain_timeout_s=max(drain_timeout_s, 0.0),
+            force_after=True,
+            force_timeout_s=max(force_timeout_s, 0.0),
+        )
+        await close_websocket_connections(
+            self._connections.values(),
+            timeout_s=max(force_timeout_s, 0.0),
+        )
+        await cancel_handler_tasks(
+            self._handler_tasks,
+            timeout_s=max(force_timeout_s, 0.0),
+        )
+        await self._bounded_cleanup(
+            server.wait_closed(),  # type: ignore[attr-defined]
+            timeout_s=max(force_timeout_s, 0.0),
+            label="WebSocket server handlers",
+        )
+        await self._bounded_cleanup(
+            self.manager.stop_all(),
+            timeout_s=max(force_timeout_s, 0.0),
+            label="WebSocket sessions",
+        )
+        self._sessions.clear()
+        self._connections.clear()
+
+    def _active_session_pairs(self) -> list[tuple[int, object]]:
+        return [
+            (key, self._sessions[key]) for key in self.gate.active_keys() if key in self._sessions
+        ]
+
+    @staticmethod
+    async def _bounded_cleanup(
+        awaitable: Awaitable[object],
+        *,
+        timeout_s: float,
+        label: str,
+    ) -> None:
+        completed = await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+        if not completed:
+            logger.warning("%s did not close within force timeout %ss", label, timeout_s)
 
 
 class CapacityGate(Generic[KeyT]):
@@ -63,6 +255,7 @@ class CapacityGate(Generic[KeyT]):
         self._reserved = 0
         self._active: set[KeyT] = set()
         self._draining = False
+        self._drain_tasks: set[asyncio.Task[None]] = set()
 
     # ── Capacity ─────────────────────────────────────────────────────
 
@@ -134,6 +327,18 @@ class CapacityGate(Generic[KeyT]):
         """
         self._draining = False
 
+    async def wait_drained(self, *, timeout_s: float, poll_interval_s: float = 0.05) -> bool:
+        """Wait for active connections to disappear without stopping sessions."""
+        if self.active_count == 0:
+            return True
+        deadline = asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+        while self.active_count > 0:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(max(poll_interval_s, 0.001), remaining))
+        return True
+
     async def drain(
         self,
         sessions_for_keys: Callable[[], Iterable[tuple[KeyT, object]]],
@@ -142,6 +347,7 @@ class CapacityGate(Generic[KeyT]):
         force_after: bool = True,
         force_timeout_s: float | None = None,
         poll_interval_s: float = 0.05,
+        stop_for_key: Callable[[KeyT, bool], object] | None = None,
     ) -> None:
         """Drive each active session GRACEFULLY, then force-escalate the stragglers.
 
@@ -152,119 +358,156 @@ class CapacityGate(Generic[KeyT]):
         single, effective stop. It does NOT route draining through
         ``SessionManager`` (which has no draining state).
 
-        Why the drain owns the stop (review fix): the real
-        :meth:`~easycat.session._session.Session.stop` has a ``_stopping``
-        idempotency guard, so a ``force=True`` call after an in-progress graceful
-        ``stop`` is a NO-OP. If the handler had already started a graceful stop
-        that hung, the drain could never preempt it and ``stop()`` would deadlock.
-        By making the drain start the (single) graceful stop itself, the
-        force-escalation path stays effective:
+        The drain owns the stop so there is one lifecycle authority per session
+        during server shutdown. :meth:`~easycat.session._session.Session.stop`
+        can now force-preempt an in-progress graceful stop, while session-like
+        integrations with older idempotency-only semantics are still handled by
+        the follow-on task cancellation:
 
         1. Snapshot the active ``(key, session)`` pairs and launch a graceful
            ``session.stop()`` task for each.
         2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
            they all complete in time, the drain stayed graceful (no force).
-        3. For any session whose graceful stop did NOT finish, call
-           ``session.stop(force=True)`` (the force path runs for an
-           idempotency-free session; for a real ``Session`` whose graceful stop
-           is hung, the guard makes it a no-op — handled by step 4) and then
-           CANCEL the still-pending graceful task so a genuinely-hung teardown
-           cannot block the caller forever.
-        4. Untrack every drained key.
+        3. For any session whose graceful stop did NOT finish, CANCEL and reap
+           the still-pending graceful task first. This also supports session-like
+           integrations that retain idempotency-only stop semantics.
+        4. Call ``session.stop(force=True)`` after the cancelled graceful task
+           has unwound, so the force path owns backend teardown.
+        5. Untrack every drained key.
 
         ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace
         window to zero so every session is force-escalated immediately.
 
-        ``force_timeout_s`` (default ``None`` = unbounded) bounds the FORCED
-        phase: the ``stop(force=True)`` call AND the follow-on cancel-await are
-        each wrapped in :func:`asyncio.wait_for`, so a session that hangs even
-        in its force-stop cannot block the caller past roughly
-        ``force_timeout_s``. A hung force-stop is abandoned (the task is
-        cancelled) rather than awaited forever.
+        ``force_timeout_s`` (default ``None`` = unbounded) is one hard deadline
+        for the concurrent forced phase. Work still running at the deadline
+        remains owned in the background rather than making the caller wait for
+        cancellation-resistant teardown.
         """
         pairs = list(sessions_for_keys())
         if not pairs:
             return
 
-        # (1) launch the single graceful stop per active session. The raw
-        # ``stop()`` coroutine is scheduled directly as the task so cancelling it
-        # never leaves an un-awaited coroutine; a synchronous ``stop`` runs inline
-        # and is recorded with no pending task (``None``).
+        # (1) launch the single graceful stop per active session. Servers pass a
+        # keyed manager callback so handler cleanup and drain escalation share
+        # one owned stop task. Direct CapacityGate users retain the session.stop
+        # fallback.
         graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]] = {}
         for key, session in pairs:
-            stop = getattr(session, "stop", None)
-            if stop is None:
+            result = _call_stop(key, session, force=False, stop_for_key=stop_for_key)
+            if result is None:
                 # Nothing to stop; just drop it from the active set.
                 self.untrack(key)
                 continue
-            result = stop(force=False)
             task = asyncio.ensure_future(result) if isinstance(result, Awaitable) else None
             graceful[key] = (session, task)
 
         # (2) wait up to the grace window for the graceful stops to complete.
         pending_tasks = [t for _, t in graceful.values() if t is not None]
-        if pending_tasks and drain_timeout_s > 0:
-            await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
-
-        # (3) escalate / reap each graceful stop, then (4) untrack the key.
-        for key, (session, task) in graceful.items():
-            await _escalate_graceful_stop(
-                session, task, force_after=force_after, force_timeout_s=force_timeout_s
+        try:
+            if pending_tasks and drain_timeout_s > 0:
+                await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
+        finally:
+            # Teardown ownership survives cancellation of the caller running
+            # drain. This prevents graceful tasks from becoming detached and
+            # preserves a keyed path for later force escalation.
+            finish_task = asyncio.create_task(
+                self._finish_drain(
+                    graceful,
+                    force_after=force_after,
+                    force_timeout_s=force_timeout_s,
+                    stop_for_key=stop_for_key,
+                )
             )
+            self._drain_tasks.add(finish_task)
+            finish_task.add_done_callback(self._drain_tasks.discard)
+
+        await asyncio.shield(finish_task)
+
+    async def _finish_drain(
+        self,
+        graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]],
+        *,
+        force_after: bool,
+        force_timeout_s: float | None,
+        stop_for_key: Callable[[KeyT, bool], object] | None,
+    ) -> None:
+        """Escalate all remaining sessions concurrently under one deadline."""
+        escalations: list[asyncio.Task[None]] = []
+        for key, (session, task) in graceful.items():
+            escalation = asyncio.create_task(
+                _escalate_graceful_stop(
+                    key,
+                    session,
+                    task,
+                    force_after=force_after,
+                    stop_for_key=stop_for_key,
+                )
+            )
+            escalation.add_done_callback(partial(self._untrack_after_escalation, key))
+            escalations.append(escalation)
+        if escalations:
+            await _safe_await(
+                asyncio.gather(*escalations, return_exceptions=True),
+                timeout_s=force_timeout_s,
+            )
+        for key in graceful:
             self.untrack(key)
+
+    def _untrack_after_escalation(self, key: KeyT, _task: asyncio.Task[None]) -> None:
+        self.untrack(key)
+
+
+def _call_stop(
+    key: KeyT,
+    session: object,
+    *,
+    force: bool,
+    stop_for_key: Callable[[KeyT, bool], object] | None,
+) -> object | None:
+    if stop_for_key is not None:
+        return stop_for_key(key, force)
+    stop = getattr(session, "stop", None)
+    if stop is None:
+        return None
+    return stop(force=force)
 
 
 async def _escalate_graceful_stop(
+    key: KeyT,
     session: object,
     task: asyncio.Task[None] | None,
     *,
     force_after: bool,
-    force_timeout_s: float | None = None,
+    stop_for_key: Callable[[KeyT, bool], object] | None,
 ) -> None:
     """Reap, force-escalate, or cancel one session's graceful-stop task.
 
     * Graceful already completed (``task.done()``) — reap it, no escalation.
-    * Still pending and ``force_after`` — call ``stop(force=True)`` then cancel
-      the pending graceful task so a hung teardown cannot block forever.
+    * Still pending and ``force_after`` — cancel and reap the pending graceful
+      task, then call ``stop(force=True)`` after its ``_stopping`` guard clears.
     * Still pending and NOT ``force_after`` — cancel it rather than block on a
       teardown that may never complete.
 
-    ``force_timeout_s`` bounds the FORCED phase: the ``stop(force=True)`` call
-    and the follow-on cancel-await are each bounded by it (``None`` = unbounded),
-    so a session that hangs even in its force-stop is abandoned rather than
-    blocking the drain forever.
+    The containing drain applies one shared hard deadline across every
+    escalation, so session count does not multiply the forced-shutdown bound.
     """
     if task is not None and task.done():
         await _safe_await(task)
         return
-    if force_after:
-        stop = getattr(session, "stop", None)
-        if stop is not None:
-            await _safe_await_stop(stop, force=True, timeout_s=force_timeout_s)
     if task is not None:
         task.cancel()
-        await _safe_await(task, timeout_s=force_timeout_s)
-
-
-async def _safe_await_stop(
-    stop: Callable[..., object], *, force: bool, timeout_s: float | None = None
-) -> None:
-    """Call ``stop(force=...)`` and await it if awaitable, swallowing errors.
-
-    When ``timeout_s`` is set the await is bounded by :func:`asyncio.wait_for`;
-    a hung force-stop is cancelled (and swallowed) rather than awaited forever.
-    """
-    result = stop(force=force)
-    if isinstance(result, Awaitable):
-        await _safe_await(result, timeout_s=timeout_s)
+        await _safe_await(task)
+    if force_after:
+        result = _call_stop(key, session, force=True, stop_for_key=stop_for_key)
+        if isinstance(result, Awaitable):
+            await _safe_await(result)
 
 
 async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None = None) -> None:
     """Await ``awaitable`` swallowing errors so one bad teardown cannot abort drain.
 
-    When ``timeout_s`` is set, the await is bounded by :func:`asyncio.wait_for`
-    so a hung teardown cannot block the drain past roughly ``timeout_s``; the
-    :class:`TimeoutError` it raises cancels the awaitable and is swallowed here.
+    When ``timeout_s`` is set, the await uses a hard deadline that does not wait
+    for cancellation-resistant teardown.
 
     A :class:`asyncio.CancelledError` is swallowed ONLY when it belongs to the
     teardown awaitable being reaped — e.g. a graceful-stop task
@@ -278,7 +521,7 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     """
     try:
         if timeout_s is not None:
-            await asyncio.wait_for(asyncio.ensure_future(awaitable), timeout=timeout_s)
+            await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
         else:
             await awaitable
     except asyncio.CancelledError:
@@ -287,3 +530,53 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
             raise
     except Exception:  # pragma: no cover - defensive teardown
         pass
+
+
+_BACKGROUND_TIMEOUT_TASKS: set[asyncio.Future[object]] = set()
+
+
+async def _await_with_hard_timeout(
+    awaitable: Awaitable[object],
+    *,
+    timeout_s: float,
+) -> bool:
+    """Wait no longer than ``timeout_s`` without awaiting cancellation cleanup.
+
+    ``asyncio.wait_for`` is not a hard bound: after its deadline it cancels the
+    child and waits for that cancellation to finish. A teardown coroutine can
+    catch cancellation and keep the caller blocked indefinitely. This helper
+    instead requests cancellation, leaves any still-unfinished work owned in a
+    background set, and returns immediately at the deadline. It returns
+    ``True`` when the awaitable completed in time and ``False`` when it remains
+    in progress.
+    """
+    future = asyncio.ensure_future(awaitable)
+    try:
+        done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
+    except asyncio.CancelledError:
+        _track_background_timeout(future)
+        raise
+    if future not in done:
+        future.cancel()
+        _track_background_timeout(future)
+        # Give cooperative cancellation one event-loop turn without waiting for
+        # a coroutine that deliberately resists it.
+        await asyncio.sleep(0)
+        return False
+    await future
+    return True
+
+
+def _track_background_timeout(future: asyncio.Future[object]) -> None:
+    """Keep timed-out teardown work owned and consume its eventual result."""
+    _BACKGROUND_TIMEOUT_TASKS.add(future)
+
+    def finish(done: asyncio.Future[object]) -> None:
+        _BACKGROUND_TIMEOUT_TASKS.discard(done)
+        if not done.cancelled():
+            try:
+                done.exception()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
+
+    future.add_done_callback(finish)

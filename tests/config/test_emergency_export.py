@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from easycat.config import _factory
+from easycat.config._factory import create_text_session
 
 
 class _FakeSession:
@@ -91,6 +92,31 @@ def test_opt_in_enabled_by_config_knob(monkeypatch: pytest.MonkeyPatch):
         emergency_export = True
 
     assert _factory._emergency_export_enabled(_Cfg()) is True
+
+
+def test_text_session_emergency_export_uses_configured_data_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = tmp_path / "configured"
+    environment = tmp_path / "environment"
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(environment))
+    session = create_text_session(
+        debug="light",
+        data_dir=configured,
+        emergency_export=True,
+    )
+    try:
+        assert id(session) in _factory._EXPORT_REGISTRY
+
+        _factory._run_all_exporters()
+
+        bundles = list((configured / "crash-dumps").glob("*.zip"))
+        assert len(bundles) == 1
+        assert not environment.exists()
+    finally:
+        session._emergency_export_unregister()
+        session._journal.close()
 
 
 def test_uncaught_exception_exports_bundle(tmp_path: Path):
