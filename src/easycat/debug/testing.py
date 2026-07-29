@@ -395,6 +395,8 @@ def assert_latency(
 
 # ── LLM-as-judge ─────────────────────────────────────────────────
 
+_DEFAULT_LLM_JUDGE_MODEL = "gpt-5.6-luna"
+
 
 JUDGE_RUBRIC = """You are evaluating a single voice-bot turn.
 
@@ -441,7 +443,7 @@ async def assert_llm_judge(
     *,
     min_score: int = 4,
     rubric: str = JUDGE_RUBRIC,
-    model: str = "gpt-4o-mini",
+    model: str = _DEFAULT_LLM_JUDGE_MODEL,
     judge: Callable[[str, str], Awaitable[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Judge a turn's transcript with an LLM rubric; assert every score.
@@ -491,14 +493,17 @@ def _openai_judge(model: str) -> Callable[[str, str], Awaitable[Mapping[str, Any
     client = AsyncOpenAI()
 
     async def _judge(transcript: str, rubric: str) -> Mapping[str, Any]:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
+        request: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": rubric},
                 {"role": "user", "content": transcript},
             ],
-            response_format={"type": "json_object"},
-        )
+            "response_format": {"type": "json_object"},
+        }
+        if model == _DEFAULT_LLM_JUDGE_MODEL:
+            request["reasoning_effort"] = "none"
+        resp = await client.chat.completions.create(**request)
         raw = resp.choices[0].message.content or "{}"
         try:
             return json.loads(raw)

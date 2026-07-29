@@ -152,11 +152,11 @@
 -if TYPE_CHECKING:
 -    from openai import AsyncOpenAI
 -
--MODEL = "gpt-4o-mini"
+-MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -76,185 +51,96 @@
+@@ -76,188 +51,96 @@
      )
 
 
@@ -189,7 +189,7 @@
 -        MarkdownStripProcessor(),
 -        *default_pronunciation_processors(
 -            name_pronunciations={"easycat": "ee zee cat"},
--            phone_pause_ms=120,
+-            phone_ellipsis_count=1,
 -        ),
 -    ]
 -
@@ -245,7 +245,10 @@
 -            return
 -
 -        stream = await self._client.chat.completions.create(
--            model=MODEL, messages=self._history, stream=True
+-            model=MODEL,
+-            reasoning_effort="none",
+-            messages=self._history,
+-            stream=True,
 -        )
 -        full = ""
 -        try:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
+
 from ._llama_agents_bridge_support import (
     AgentTurnInput,
     Any,
@@ -109,9 +111,9 @@ class TestLocalLlamaAgentsBridge:
         assert [e.text for e in collected if e.kind == "text_delta"] == ["partial "]
 
     @pytest.mark.asyncio
-    async def test_hard_task_cancel_stops_handler_and_drops_ctx(self, fake_workflows_modules):
+    async def test_hard_task_cancel_preserves_terminal_handler_ctx(self, fake_workflows_modules):
         """Cancelling the invoke task (not just the token) must still stop the
-        workflow and not preserve the interrupted Context."""
+        workflow; a handler that then confirms completion can preserve Context."""
         workflow = _BlockingWorkflow()
         handler = workflow.handler
         bridge = LlamaAgentsBridge(workflow=workflow)
@@ -127,8 +129,7 @@ class TestLocalLlamaAgentsBridge:
             await task
 
         assert handler.cancelled is True
-        # The interrupted Context is dropped, not carried into the next turn.
-        assert bridge.snapshot_state().fields["has_context"] is False
+        assert bridge.snapshot_state().fields["has_context"] is True
 
     @pytest.mark.asyncio
     async def test_early_generator_close_cancels_running_workflow(self, fake_workflows_modules):
@@ -149,7 +150,50 @@ class TestLocalLlamaAgentsBridge:
         await asyncio.wait_for(agen.aclose(), timeout=2.0)
 
         assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["has_context"] is True
+
+    @pytest.mark.asyncio
+    async def test_nonterminal_interruption_drops_ctx_and_records_loss(
+        self, fake_workflows_modules
+    ):
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        # Simulate cancel_run() returning on its timeout while the workflow
+        # runtime still considers this handler active.
+        handler.is_done = lambda: False
+        bridge = LlamaAgentsBridge(workflow=workflow)
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal))
+        first = await agen.__anext__()
+        assert first.kind == "text_delta"
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
         assert bridge.snapshot_state().fields["has_context"] is False
+        errors = [record for record in journal.read() if record.name == "framework_error"]
+        assert errors
+        assert errors[-1].error is not None
+        assert errors[-1].error.type == "LlamaWorkflowContextDropped"
+
+    @pytest.mark.asyncio
+    async def test_nonterminal_interruption_without_preservation_is_not_an_error(
+        self, fake_workflows_modules
+    ):
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        handler.is_done = lambda: False
+        bridge = LlamaAgentsBridge(workflow=workflow, preserve_context=False)
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal))
+        first = await agen.__anext__()
+        assert first.kind == "text_delta"
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
+        assert bridge.snapshot_state().fields["has_context"] is False
+        assert not [record for record in journal.read() if record.name == "framework_error"]
 
     @pytest.mark.asyncio
     async def test_reset_cancels_paused_local_hitl_handler(self, fake_workflows_modules):
@@ -266,9 +310,22 @@ class TestLocalLlamaAgentsBridge:
         bridge.apply_interruption("part", CancellationMode.IMMEDIATE_STOP, _recorder(journal))
 
         assert workflow.interruption == ("part", CancellationMode.IMMEDIATE_STOP)
+        assert bridge._pending_interruption_note == INTERRUPTION_NOTE
         names = [record.name for record in journal.read()]
         assert "state_committed" in names
         assert "cancellation_boundary" in names
+
+    @pytest.mark.asyncio
+    async def test_default_truncate_note_reaches_next_start_event(self, fake_workflows_modules):
+        workflow = _LocalWorkflow(result="ok")
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        bridge.apply_interruption("part", CancellationMode.IMMEDIATE_STOP, _recorder())
+        async for _ in bridge.invoke(AgentTurnInput.from_text("next"), _recorder()):
+            pass
+
+        assert workflow.calls[0]["easycat_interruption_note"] == INTERRUPTION_NOTE
+        assert bridge._pending_interruption_note is None
 
     @pytest.mark.asyncio
     async def test_interruption_snapshot_scrubs_context_secrets(self, fake_workflows_modules):

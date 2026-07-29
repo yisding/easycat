@@ -19,7 +19,7 @@ from easycat.tts.base import TTSBase
 from easycat.tts.cartesia_tts import CartesiaTTS
 from easycat.tts.deepgram_tts import DeepgramTTS
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS
-from easycat.tts.input import TTSInput, strip_ssml_tags
+from easycat.tts.input import TTSInput
 from easycat.tts.openai_tts import OpenAITTS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +36,7 @@ def _load_main_module() -> ModuleType:
     return module
 
 
-def test_chapter_stack_exposes_the_real_ssml_downgrade() -> None:
+def test_chapter_stack_uses_provider_compatible_default_pauses() -> None:
     chapter = _load_main_module()
     processors = chapter.build_output_processors()
 
@@ -46,17 +46,14 @@ def test_chapter_stack_exposes_the_real_ssml_downgrade() -> None:
         is_final=True,
         is_streaming=False,
     )
-    prepared = TTSInput(strip_ssml_tags(processed.text), format="plain")
-
     assert [type(processor).__name__ for processor in processors] == [
         "MarkdownStripProcessor",
         "PhoneticReplacementProcessor",
         "PauseProcessor",
     ]
-    assert processed.format == "ssml"
-    assert '<break time="120ms"/>' in processed.text
-    assert "5 5 5 8 6 7 5 3 0 9" in prepared.text
-    assert "<break" not in prepared.text
+    assert processed.format == "plain"
+    assert "5 ... 5 ... 5 ... 8 ... 6 ... 7 ... 5 ... 3 ... 0 ... 9" in processed.text
+    assert "<break" not in processed.text
 
 
 def test_bundled_tts_providers_use_the_plain_text_policy() -> None:
@@ -82,7 +79,7 @@ def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None
                 "PhoneticReplacementProcessor",
                 "PauseProcessor",
             ],
-            "ssml_downgraded": True,
+            "ssml_downgraded": False,
         },
     )
     export_debug_bundle(SimpleNamespace(journal=SimpleNamespace(read=lambda: [record])), bundle)
@@ -108,4 +105,4 @@ def test_printed_command_finds_the_provider_ready_record(tmp_path: Path) -> None
     payload = json.loads(result.stdout)
     assert payload["total"] == 1
     assert payload["matches"][0]["name"] == "tts_payload_prepared"
-    assert payload["matches"][0]["data"]["ssml_downgraded"] is True
+    assert payload["matches"][0]["data"]["ssml_downgraded"] is False

@@ -100,8 +100,6 @@ quickstart = [
     "sounddevice>=0.4.6",
     "openai>=2.44.0",
     "openai-agents>=0.18.3",
-    "pyrnnoise>=0.3.0",
-    "requests>=2.33.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.28.0",
     "livekit>=1.1.13",
@@ -202,6 +200,10 @@ source-exclude = [
 ]
 
 [tool.uv]
+# Local contributors may use compatible patch releases. CI reads the exact
+# tool pin from each setup-uv step so lock generation remains reproducible;
+# --locked independently rejects dependency drift. Review both deliberately
+# before a uv minor-version upgrade.
 required-version = ">=0.11.0,<0.12.0"
 conflicts = [
     [
@@ -518,17 +520,6 @@ modules = [
     "easycat.tts",
     "easycat.vad",
 ]
-ignore_imports = [
-    # The STT and TTS factories share one central provider-metadata catalog
-    # (_provider_catalog.py). That catalog imports both factories LAZILY
-    # (function-local, inside stt_tts_catalogs()) purely to aggregate metadata
-    # and dodge a module-load cycle — the provider families never reach into
-    # each other directly. Ignore these two shared-catalog edges so the contract
-    # enforces the real invariant: no DIRECT cross-family imports.
-    "easycat._provider_catalog -> easycat.stt.factory",
-    "easycat._provider_catalog -> easycat.tts.factory",
-]
-
 # The WebRTC transport is a leaf: server / cli / debugger must not DIRECTLY
 # depend on it. `allow_indirect_imports` scopes the contract to direct imports,
 # so legitimate lower-layer coupling (config wiring transports) does not red the

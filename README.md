@@ -132,16 +132,19 @@ with EasyCat first and reveal lower-level control as you need it.
 ## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, RNNoise dependencies, NumPy, onnxruntime, and LiveKit AEC3 echo
-cancellation. SoXR is a core dependency because every transport and provider
-can cross a sample-rate boundary. The extra does not include TEN VAD; install
+SDK, NumPy, onnxruntime, and LiveKit AEC3 echo cancellation. SoXR is a core
+dependency because every transport and provider can cross a sample-rate
+boundary. RNNoise is
+opt-in because noise reduction defaults off and its Python binding pulls a
+large multimedia/plotting dependency chain; add the `rnnoise` extra only when
+you enable that backend. `quickstart` also does not include TEN VAD; install
 that optional extra separately only if you accept its non-permissive license.
 Silero VAD runs on its bundled ONNX model via `onnxruntime` (already in
 `quickstart`) — no torch required. If you want a leaner install with Silero,
 add extras individually:
 
 ```bash
-uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad --extra aec --group dev
+uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
 ```
 
 Optional dependencies you may need depending on providers, transports, agent
@@ -526,7 +529,8 @@ config = EasyConfig(
             pattern=r"\+?\d[\d\s().-]{5,}\d",
             unit_pattern=r"\d",
             minimum_units=7,
-            pause_ms=140,
+            style="ellipsis",
+            ellipsis_count=1,
         ),
     ],
 )
@@ -541,7 +545,7 @@ from easycat import EasyConfig, create_session, default_pronunciation_processors
 config = EasyConfig(
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
-        phone_pause_ms=140,
+        phone_ellipsis_count=1,
     ),
 )
 session = create_session(config)
@@ -557,17 +561,23 @@ PauseProcessor(
     pattern=r"ticket\s+#?\d+",
     # pause between matched digits
     unit_pattern=r"\d",
-    pause_ms=180,
     minimum_units=2,
-    # for style="ellipsis": 1 => "...", 2 => "... ..."
+    # ellipsis is the provider-compatible default:
+    style="ellipsis",
+    # 1 => "...", 2 => "... ..."
     ellipsis_count=1,
 )
 ```
 
 Notes:
 - `strip_markdown=True` still works and is automatically composed with processors.
-- Providers that do not support SSML automatically fall back to plain text.
-- Pause length is adjustable via `pause_ms` for SSML and `ellipsis_count` for ellipsis style.
+- The default ellipsis style reaches every bundled TTS provider as a plain-text
+  pacing cue; the provider decides its exact duration.
+- Exact `pause_ms` timing requires `style="ssml"` and a provider with native
+  SSML support. Every bundled provider currently strips unsupported SSML break
+  tags, retaining spaced digits but losing exact timing.
+- `default_pronunciation_processors(..., phone_pause_style="ssml",
+  phone_pause_ms=180)` opts the convenience stack into that native-SSML path.
 - For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`;
   expose `input_policy` with `TTSInputPolicy.native_ssml()` only when the backend
   accepts SSML unchanged.
@@ -597,6 +607,13 @@ This keeps the pipeline (VAD → STT → agent → TTS) identical while letting 
 swap in open-source models for fully local operation. Provider instances are
 accepted directly with `vad=`, `noise_reduction=`, and `echo_cancellation=`
 when you have custom audio-processing stages.
+
+Reusable local packages can also register STT, TTS, VAD, noise-reduction, and
+echo-cancellation configs without an `env_var`. That enables shortcuts such as
+`stt="local-whisper/base"`, `tts="local-piper/en_US"`, and `vad="energy"`,
+plus planning, scaffold extras, readiness probes, and installed-package entry
+point discovery without a dummy credential; see the
+[provider extending guides](docs/extending/).
 
 ## Inspecting conversation flow
 

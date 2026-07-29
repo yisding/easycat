@@ -103,6 +103,15 @@ class ElevenLabsSTTConfig:
     ws_connect: Any = field(default=None, repr=False)
     event_bus: Any = field(default=None, repr=False)
 
+    @property
+    def resolved_model(self) -> str:
+        """Return the model selected by the explicit value and operating mode."""
+        if self.model is not None:
+            return self.model
+        if self.mode == "realtime":
+            return "scribe_v2_realtime"
+        return "scribe_v1"
+
     def __post_init__(self) -> None:
         if self.max_retries < 0:
             raise ValueError(
@@ -154,6 +163,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
             provider_error_name="elevenlabs",
         )
         self._config = config
+        # Batch mode can emit a cap-triggered HTTP transcription from
+        # _on_audio; keep that operation under the lifecycle lock so
+        # end_stream/start_stream cannot replace its event queue mid-emit.
+        self._allow_end_during_audio_send = config.mode == "realtime"
         # Batch mode state
         self._buffer = bytearray()
         self._audio_format: AudioFormat | None = None
@@ -187,12 +200,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._dropping_pending_final: bool = False
         self._audio_resampler = PCM16StreamResampler(config.realtime_sample_rate)
 
+    def _resolve_event_bus(self) -> Any | None:
+        if self._config.mode == "batch":
+            return self._config.event_bus
+        return super()._resolve_event_bus()
+
     def _resolved_model(self) -> str:
-        if self._config.model is not None:
-            return self._config.model
-        if self._config.mode == "realtime":
-            return "scribe_v2_realtime"
-        return "scribe_v1"
+        return self._config.resolved_model
 
     def _realtime_audio_format(self) -> str:
         sample_rate = self._config.realtime_sample_rate
@@ -608,11 +622,18 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return response.json()
 
         try:
-            return await self._run_with_bounded_retry(
-                _attempt,
-                max_retries=self._config.max_retries,
-                provider_label="ElevenLabs batch STT",
-            )
+            try:
+                return await self._run_with_bounded_retry(
+                    _attempt,
+                    max_retries=self._config.max_retries,
+                    provider_label="ElevenLabs batch STT",
+                )
+            except Exception as exc:
+                context: dict[str, Any] = {}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    context["http_status"] = exc.response.status_code
+                self._emit_provider_error(exc, **context)
+                raise
         finally:
             if owns_client:
                 await client.aclose()

@@ -32,7 +32,7 @@ from hmac import compare_digest
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from easycat.errors import EASYCAT_E602, EASYCAT_E605
+from easycat.errors import EASYCAT_E602, EASYCAT_E605, EasyCatError
 from easycat.project.schema import (
     TRANSPORT_PRESET,
     ProjectSection,
@@ -152,13 +152,8 @@ class ProjectManifest:
             value = getattr(spec, field_name)
             if value is not None:
                 kwargs[field_name] = value
-        # ``vad`` is special: ``EasyConfig`` stores a ``vad`` shortcut STRING
-        # verbatim (it never coerces it like ``stt``/``tts``), so forwarding the
-        # raw shortcut would make ``create_session`` -> ``create_vad('silero')``
-        # raise ``AttributeError("'str' object has no attribute 'backend'")``.
-        # Coerce the shortcut into a ``VADConfig(backend=<shortcut>)`` here
-        # (validating the backend against ``VADBackend``) so the manifest ``vad``
-        # role round-trips through ``create_session`` and matches the planner.
+        # Resolve VAD here so manifest failures remain EASYCAT_E602-scoped while
+        # still allowing installed ``easycat.vad_providers`` entry points.
         if spec.vad is not None:
             kwargs["vad"] = self._coerce_vad(spec.vad, profile)
 
@@ -166,13 +161,20 @@ class ProjectManifest:
         if preset == "browser":
             return EasyConfig.browser(**kwargs)
         if preset == "phone":
-            if spec.token is not None:
-                from easycat.transports.twilio_media import TwilioTransportConfig
-
-                token = spec.token.resolve(dict(os.environ))
-                kwargs["transport"] = TwilioTransportConfig(
-                    stream_token_validator=lambda candidate: compare_digest(candidate, token)
+            if spec.token is None:
+                raise EASYCAT_E602(
+                    path=str(self.source_path or "easycat.toml"),
+                    problem=(
+                        f"phone profile {profile!r} requires a token reference; "
+                        "set token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'"
+                    ),
                 )
+            from easycat.transports.twilio_media import TwilioTransportConfig
+
+            token = spec.token.resolve(dict(os.environ))
+            kwargs["transport"] = TwilioTransportConfig(
+                stream_token_validator=lambda candidate: compare_digest(candidate, token)
+            )
             return EasyConfig.phone(**kwargs)
         if preset == "mic":
             return EasyConfig.mic(**kwargs)
@@ -183,24 +185,20 @@ class ProjectManifest:
 
     @staticmethod
     def _coerce_vad(shortcut: str, profile: str) -> Any:
-        """Coerce a ``vad`` shortcut string into a validated ``VADConfig``.
+        """Resolve a built-in or registered VAD shortcut.
 
-        ``EasyConfig`` forwards a ``vad`` shortcut string verbatim (it does not
-        coerce it like ``stt``/``tts``), so a raw shortcut would crash
-        ``create_session`` -> ``create_vad('silero')``. Building a
-        ``VADConfig(backend=<shortcut>)`` here (whose ``__post_init__`` validates
-        the backend against :data:`~easycat.vad._base.VADBackend`) is the
-        manifest-scoped fix that keeps the planner verdict == ``create_session``
-        outcome. An unknown backend RAISES :data:`EASYCAT_E602`.
+        Keeping resolution in this manifest boundary preserves the structured
+        :data:`EASYCAT_E602` error contract for unknown providers while entry
+        points make third-party VADs name-selectable.
         """
-        from easycat.vad import VADConfig
+        from easycat.vad import parse_vad_string
 
         try:
-            return VADConfig(backend=shortcut)  # type: ignore[arg-type]
-        except ValueError as exc:
+            return parse_vad_string(shortcut)
+        except (EasyCatError, ValueError) as exc:
             raise EASYCAT_E602(
                 path=f"[voice.{profile}]",
-                problem=f"vad {shortcut!r} is not a known backend: {exc}",
+                problem=f"vad {shortcut!r} is not a known provider: {exc}",
             )
 
     def resolve_agent(self, profile: str = "default") -> Any:

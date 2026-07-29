@@ -265,10 +265,11 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
 
     **Outbound (server -> client):**
       - Binary frame: raw PCM16 audio bytes.
-      - Text frame: JSON control message (e.g., ``{"type": "ready"}``) or
-        session event message (``stt_partial``, ``stt_final``, ``agent_delta``,
-        ``agent_final``, ``turn_started``, ``interruption``, ``turn_latency``;
-        see :mod:`easycat.transports._browser_events`).
+      - Text frame: JSON control message (``{"type": "ready"}``,
+        ``{"type": "clear"}``) or session event message (``stt_partial``,
+        ``stt_final``, ``agent_delta``, ``agent_final``, ``turn_started``,
+        ``interruption``, ``turn_latency``; see
+        :mod:`easycat.transports._browser_events`).
 
     The maintained reader-facing description of this protocol lives in
     ``docs/browser-playground.md``.
