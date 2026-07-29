@@ -76,6 +76,20 @@ def test_easycat_config_validates_journal_redaction():
         )
 
 
+def test_easycat_config_defaults_event_dispatch_diagnostics():
+    config = EasyConfig(openai_api_key="test-key")
+
+    assert config.slow_handler_threshold_s == 0.005
+    assert config.handler_error_policy == "continue"
+
+
+def test_easycat_config_rejects_invalid_event_dispatch_settings():
+    with pytest.raises(ValueError, match="slow_handler_threshold_s must be non-negative"):
+        EasyConfig(openai_api_key="test-key", slow_handler_threshold_s=-0.001)
+    with pytest.raises(ValueError, match="Invalid handler_error_policy"):
+        EasyConfig(openai_api_key="test-key", handler_error_policy="strict")  # type: ignore[arg-type]
+
+
 def test_debugger_autolaunch_defaults_off_even_with_debug_full():
     # ``debug="full"`` keeps a durable journal but must NOT arm debugger
     # auto-launch on its own — that is strictly opt-in.
