@@ -242,6 +242,13 @@ streaming semantics and your ingress can support UDP/443 end to end. Keep
 WebTransport behind the optional `webtransport` extra and deploy it only where
 certificate, HTTP/3, QUIC, and load-balancer support are explicit.
 
+EasyCat bounds stalled-client memory by inspecting aioquic's per-stream send
+buffer. Because aioquic doesn't expose that value publicly, server startup
+preflights the required private access path and refuses to bind with an
+incompatible aioquic release. Treat that startup error as a dependency
+compatibility failure; install the supported extra version or upgrade EasyCat
+rather than bypassing the check.
+
 ## Twilio multi-call servers
 
 Use `VoiceApp.run("twilio")` or

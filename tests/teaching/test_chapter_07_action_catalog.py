@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER_07 = ROOT / "docs" / "teaching" / "07-tools"
 
 
 def test_action_catalog_discovers_every_runtime_action() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER_07 / "action_catalog.py")],
         cwd=ROOT,
         check=True,

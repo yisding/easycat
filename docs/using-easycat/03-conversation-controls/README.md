@@ -24,8 +24,10 @@ not starting/stopping a `Session` yourself.
 
 - Python 3.11+.
 - `uv sync --extra quickstart --group dev` from the repository root. The
-  quickstart extra includes the smart-turn ONNX runtime, RNNoise support, and
-  LiveKit AEC used by the profiles below.
+  quickstart extra includes the smart-turn ONNX runtime and LiveKit AEC used
+  by the profiles below. Add `--extra rnnoise` when running the `clean`
+  profile; the default-off backend stays opt-in to keep first-run installs
+  lean.
 - `OPENAI_API_KEY` for the default OpenAI STT, TTS, and example agent.
 - A microphone and speakers. Use headphones for the `raw` profile so the bot's
   own speech does not feed back into the microphone at full volume.

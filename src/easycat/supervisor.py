@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import hmac
 import inspect
 import json
 import logging
@@ -21,6 +20,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 import websockets
 
+from easycat._net import constant_time_strings_equal
 from easycat.audio_format import AudioChunk
 from easycat.events import (
     AudioIn,
@@ -85,9 +85,8 @@ def supervisor_message_authorized(
     if expected_token is None:
         return allow_unauthenticated
     supplied_token = message.get("token")
-    return isinstance(supplied_token, str) and hmac.compare_digest(
-        supplied_token,
-        expected_token,
+    return isinstance(supplied_token, str) and constant_time_strings_equal(
+        supplied_token, expected_token
     )
 
 

@@ -1,12 +1,11 @@
-"""NET-NEW declarative metadata for the 5 non-catalog planner roles (M6b).
+"""Declarative metadata for built-in non-STT/TTS planner backends.
 
-Only STT and TTS have a :class:`~easycat._provider_catalog.ProviderCatalog`. The
-other five planner roles — ``transport``, ``vad``, ``noise_reducer``,
-``echo_canceller``, and ``agent`` — have NO catalog: resolution is hand-rolled
-(config-type dispatch, try/except fallback chains, or a net-new
-``python:module:function`` resolver). This module is the single declarative
-source the planner reads for those five roles so it can report ``extra`` /
-``required_env`` / ``capabilities`` WITHOUT instantiating a provider.
+Transport and agent resolution are table-driven. VAD, noise reduction, and echo
+cancellation retain table metadata for their built-in fallback chains while
+third-party implementations use
+:class:`~easycat._provider_catalog.ProviderCatalog`. This module lets the
+planner report built-in ``extra`` / ``required_env`` / ``capabilities`` without
+instantiating a provider.
 
 Capabilities are declared NET-NEW here. ``validation/provider_capabilities.py``
 is a LIVE-derived report (it probes a running provider), NOT a static table, so
@@ -61,7 +60,7 @@ EXTRA_PROBE_MODULE: dict[str, str | None] = {
 
 @dataclass(frozen=True)
 class RoleBackend:
-    """Declarative metadata for one backend of a non-catalog planner role.
+    """Declarative metadata for one built-in planner backend.
 
     ``config_type`` is the dataclass/preset name the role resolves to in
     ``create_session`` (e.g. ``"WebRTCTransportConfig"`` / ``"VADConfig"``);
@@ -247,18 +246,25 @@ AGENT_BACKENDS: dict[str, RoleBackend] = {
 DEFAULT_AGENT = "none"
 
 
-# The five roles this module owns (everything EXCEPT stt/tts, which use the
-# catalog). The planner iterates this for the non-catalog roles.
-NON_CATALOG_ROLES: tuple[str, ...] = (
+# The five roles with built-in metadata here. Registered VAD/noise/AEC
+# extensions supplement (rather than replace) these built-in tables.
+BUILTIN_BACKEND_ROLES: tuple[str, ...] = (
     "transport",
     "vad",
     "agent",
     "noise_reducer",
     "echo_canceller",
 )
+# Backward-compatible name from before audio-stage catalogs were introduced.
+NON_CATALOG_ROLES = BUILTIN_BACKEND_ROLES
 
 
-def probe_module_for_extra(extra: str | None) -> str | None:
+def probe_module_for_extra(
+    extra: str | None,
+    *,
+    role: str | None = None,
+    provider: str | None = None,
+) -> str | None:
     """Return the importable probe module for ``extra`` (or ``None``).
 
     ``None`` means there is nothing to probe — either no extra is required, or
@@ -266,22 +272,48 @@ def probe_module_for_extra(extra: str | None) -> str | None:
     that installs no importable package. The planner treats a ``None`` probe as
     "extra is always satisfied" so it never falsely reports it missing.
 
-    Built-in extras have an explicit mapping above (enforced by
-    ``tests/planning/test_transport_registry.py``). A registered third-party
-    STT/TTS provider, however, may carry an ARBITRARY ``extra`` string (via
-    ``register_*_provider`` / entry-point discovery) with no mapping. For those,
-    fall back to probing the extra NAME itself as a best-effort module — so a
-    genuinely-missing third-party install is still flagged. (Returning ``None``
-    would wrongly mark it always-satisfied; a runtime ``KeyError`` would crash
-    the planner and pin ``/health/ready`` for a deployable server.)
+    ``role`` plus ``provider`` preserves the selected catalog entry's identity
+    when two roles happen to reuse an extra name. Generic callers retain the
+    built-in role mapping first, then catalog metadata, then the historical
+    name-as-module fallback.
     """
     if extra is None:
         return None
-    return EXTRA_PROBE_MODULE.get(extra, extra)
+    from easycat._provider_registry import provider_catalogs, provider_probe_modules
+
+    catalog_kind = (
+        {
+            "stt": "STT",
+            "tts": "TTS",
+            "vad": "VAD",
+            "noise_reducer": "noise reducer",
+            "echo_canceller": "echo canceller",
+        }.get(role)
+        if role is not None
+        else None
+    )
+    if catalog_kind is not None and provider is not None:
+        catalog = next(
+            (candidate for candidate in provider_catalogs() if candidate.kind == catalog_kind),
+            None,
+        )
+        if catalog is not None and catalog.extras.get(provider) == extra:
+            declared_probe = catalog.probe_modules.get(provider)
+            if declared_probe is not None:
+                return declared_probe
+
+    if extra in EXTRA_PROBE_MODULE:
+        return EXTRA_PROBE_MODULE[extra]
+
+    declared_probe = provider_probe_modules().get(extra)
+    if declared_probe is not None:
+        return declared_probe
+    return extra
 
 
 __all__ = [
     "AGENT_BACKENDS",
+    "BUILTIN_BACKEND_ROLES",
     "DEFAULT_AGENT",
     "DEFAULT_ECHO_CANCELLER",
     "DEFAULT_NOISE_REDUCER",

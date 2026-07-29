@@ -308,19 +308,32 @@ class TTSScheduler:
 
     # ── Cancellation ───────────────────────────────────────────
 
-    async def cancel(self) -> None:
-        await self._synth.cancel()
+    def request_turn_cancel(self) -> asyncio.Task[None] | None:
+        """Synchronously cancel and capture the active turn task.
+
+        Returns the exact task that was active at the cutoff boundary.  A
+        detached barge-in cleanup can later drain that captured task without
+        accidentally cancelling a successor turn installed in the meantime.
+        """
+        task = self._current_tts_task
         current_task = asyncio.current_task()
-        if (
-            self._current_tts_task
-            and self._current_tts_task is not current_task
-            and not self._current_tts_task.done()
-        ):
-            self._current_tts_task.cancel()
-            try:
-                await self._current_tts_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        if task is not None and task is not current_task and not task.done():
+            task.cancel()
+        return task
+
+    async def finish_turn_cancel(self, task: asyncio.Task[None] | None) -> None:
+        """Cancel provider work and drain the task captured at cutoff."""
+        await self._synth.cancel()
+        if task is None or task is asyncio.current_task() or task.done():
+            return
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def cancel(self) -> None:
+        task = self.request_turn_cancel()
+        await self.finish_turn_cancel(task)
 
     # ── Journal helpers ────────────────────────────────────────
 

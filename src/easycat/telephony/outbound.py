@@ -241,6 +241,7 @@ class OutboundCallManager:
         self._client: TwilioClient = TwilioClient(twilio_account_sid, twilio_auth_token)
         self._state = OutboundCallManagerState.IDLE
         self._active_call_sid: str | None = None
+        self._owned_call_sids: set[str] = set()
         self._started = False
 
         # Optional plug-ins assigned after construction (see docstring).
@@ -275,6 +276,7 @@ class OutboundCallManager:
             self._event_bus.unsubscribe(CallFailed, self._on_call_failed)
         self._state = OutboundCallManagerState.IDLE
         self._active_call_sid = None
+        self._owned_call_sids.clear()
         self._started = False
 
     async def hangup_call(self, call_sid: str | None = None) -> None:
@@ -284,6 +286,12 @@ class OutboundCallManager:
             return
         await asyncio.to_thread(self._client.calls(target_call_sid).update, status="completed")
         self._clear_active_call(target_call_sid)
+
+    async def hangup_owned_call(self, call_sid: str) -> None:
+        """Hang up ``call_sid`` only when this manager created it."""
+        if call_sid not in self._owned_call_sids:
+            return
+        await self.hangup_call(call_sid)
 
     async def place_call(self, to: str) -> str:
         """Place an outbound call and return the call SID.
@@ -334,6 +342,7 @@ class OutboundCallManager:
         try:
             call = await asyncio.to_thread(self._client.calls.create, **create_kwargs)
             call_sid: str = call.sid
+            self._owned_call_sids.add(call_sid)
             self._set_active_call(call_sid)
             await self._event_bus.emit(
                 CallInitiated(call_sid=call_sid, to=to, from_=self._from_number)
@@ -356,12 +365,15 @@ class OutboundCallManager:
             return
         self._active_call_sid = None
         self._state = OutboundCallManagerState.IDLE
+        self._owned_call_sids.discard(call_sid)
 
     async def _on_call_ringing(self, event: CallRinging) -> None:
-        self._set_active_call(event.call_sid)
+        if event.call_sid in self._owned_call_sids:
+            self._set_active_call(event.call_sid)
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
-        self._set_active_call(event.call_sid)
+        if event.call_sid in self._owned_call_sids:
+            self._set_active_call(event.call_sid)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         self._clear_active_call(event.call_sid)

@@ -170,9 +170,9 @@ def test_latency_runner_fails_when_budget_violated(tmp_path: Path) -> None:
 
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         samples_path = Path(env["EASYCAT_LATENCY_SAMPLES_PATH"])
-        # Ten non-warmup samples with values comfortably above every stage in
-        # DEFAULT_BUDGETS (total p95 8000 ms, tts_ttfb p95 1500 ms, llm_ttft p95
-        # 2500 ms).
+        # Ten non-warmup samples with values comfortably above every populated
+        # response-stage budget. Interruption cutoff has its own optional stage
+        # and is absent from this response-latency scenario.
         samples = [
             LatencySample(
                 sample_id=f"sample-{index}",

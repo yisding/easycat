@@ -219,6 +219,59 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+async def test_silero_burst_debounce_uses_consumed_audio_time(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A buffered second of speech must trigger without wall-clock sleeps."""
+    try:
+        import numpy  # noqa: F401
+    except (ImportError, RecursionError):
+        pytest.skip("numpy not importable")
+
+    class _SpeechModel:
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            assert len(samples) == 512
+            assert sample_rate == 16000
+            return 0.9
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _SpeechModel()
+        self._backend = "onnx"
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    vad.configure(min_speech_duration_ms=250, min_silence_duration_ms=150)
+    # 32 x 32 ms inference frames are delivered in one buffered chunk and
+    # processed far faster than realtime.
+    chunk = _make_chunk(1000, n_samples=512 * 32)
+
+    events = [event async for event in vad.process(chunk)]
+
+    assert [type(event) for event in events] == [VADStartSpeaking]
+    assert vad._audio_time_s == pytest.approx(1.024)
+
+
+def test_vad_reset_restarts_audio_position_clock(monkeypatch: pytest.MonkeyPatch):
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = MagicMock()
+        self._backend = "onnx"
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+    vad = SileroVAD()
+    vad._advance_audio_time(0.5)
+
+    vad.reset()
+
+    assert vad._audio_time_s == 0.0
+
+
+@pytest.mark.asyncio
 async def test_silero_warmup_primes_model_then_resets(monkeypatch: pytest.MonkeyPatch):
     """warmup() runs one zeroed 16k/512-sample predict then resets state."""
 

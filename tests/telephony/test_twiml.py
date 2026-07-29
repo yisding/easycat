@@ -71,6 +71,12 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         params={"CallSid": "CA123", "From": "+15551234567"},
         signature=signature,
     )
+    assert not validate_twilio_webhook_signature(
+        auth_token="token",
+        url="https://voice.example.com/twiml",
+        params={},
+        signature="not-ascii-é",
+    )
     assert twilio_stream_parameters_from_form({"From": "+15551234567"}) == {
         "Direction": "inbound",
         "From": "+15551234567",
@@ -95,10 +101,10 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
             "TWILIO_CALL_API_TOKEN": "call-token",
             "TWILIO_SMS_FROM": "+15557654321",
             "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
-            "TWILIO_MAX_SESSIONS": "12",
             "TWILIO_DRAIN_TIMEOUT_S": "45",
             "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S": "7.5",
             "TWILIO_PUBLIC_TWIML_URL": "https://voice.example.com/prefix/twiml",
+            "TWILIO_MAX_SESSIONS": "12",
         }
     )
 
@@ -108,10 +114,10 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
     assert settings.outbound_calling_enabled is True
     assert settings.twilio_actions_enabled is True
     assert settings.call_api_token == "call-token"
-    assert settings.max_sessions == 12
     assert settings.drain_timeout_s == 45.0
     assert settings.force_shutdown_timeout_s == 7.5
     assert settings.public_twiml_url == "https://voice.example.com/prefix/twiml"
+    assert settings.max_sessions == 12
     actions = settings.twilio_session_actions()
     assert actions is not None
     assert actions.account_sid == "AC123"
@@ -177,7 +183,9 @@ async def test_twilio_call_session_index_tracks_and_unsubscribes() -> None:
 
 def test_bearer_token_matches_is_constant_time_safe_for_non_ascii() -> None:
     assert bearer_token_matches("Bearer secret", "secret")
+    assert bearer_token_matches("bearer secret", "secret")
     assert not bearer_token_matches("Bearer wrong", "secret")
+    assert not bearer_token_matches("Basic secret", "secret")
     assert not bearer_token_matches("Bearer secrét", "secret")
     assert not bearer_token_matches("Bearer secret", "secrét")
 

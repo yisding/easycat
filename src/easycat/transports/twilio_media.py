@@ -27,7 +27,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from easycat._audio_utils import resample
+from easycat._audio_utils import PCM16StreamResampler, resample
 from easycat._net import is_loopback_host
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
@@ -273,15 +273,25 @@ def twilio_websocket_signature_process_request(
     auth_token: str,
     websocket_url: str,
 ) -> Callable[[ServerConnection, Request], Response | None]:
-    """Build a handshake hook that authenticates Twilio before session setup."""
+    """Build a handshake hook that authenticates Twilio before session setup.
+
+    Twilio doesn't support query parameters in ``<Stream url>``; custom
+    parameters arrive only after the WebSocket upgrade in the ``start`` frame.
+    Media Streams does sign the initial handshake with ``X-Twilio-Signature``,
+    so validating that header against the exact public ``wss://`` URL is the
+    supported pre-upgrade authentication boundary. The existing one-time
+    start-frame token remains a second, independent check.
+    """
     from easycat.telephony.twiml import validate_twilio_webhook_signature
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
+        signatures = request.headers.get_all("X-Twilio-Signature")
+        signature = signatures[0] if len(signatures) == 1 else None
         if validate_twilio_webhook_signature(
             auth_token=auth_token,
             url=websocket_url,
             params=[],
-            signature=request.headers.get("X-Twilio-Signature"),
+            signature=signature,
         ):
             return None
         body = b"Missing or invalid Twilio signature.\n"
@@ -761,6 +771,7 @@ class _TwilioProtocolMixin:
     _answered_at: float | None
     _call_ended_emitted: bool
     _mark_counter: int
+    _inbound_resampler: PCM16StreamResampler
 
     # ── Per-class hooks ───────────────────────────────────────────
 
@@ -785,6 +796,7 @@ class _TwilioProtocolMixin:
         self._call_ended_emitted = False
         self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
         self._mark_counter = 0
+        self._inbound_resampler = PCM16StreamResampler(self._audio_format.sample_rate)
 
     def _current_ws(self) -> ServerConnection | None:
         """Return the active Twilio WebSocket connection (or ``None``)."""
@@ -861,6 +873,12 @@ class _TwilioProtocolMixin:
         """
         if self._current_ws() is ws or self._current_ws() is None:
             await self._emit_call_ended_once()
+            tail = self._inbound_resampler.finish()
+            if tail:
+                self._enqueue_chunk(
+                    AudioChunk(data=tail, format=self._audio_format),
+                    context="Twilio",
+                )
             self._reset_connection_state()
             self._client_connected.clear()
             self._stream_sid = None
@@ -947,6 +965,7 @@ class _TwilioProtocolMixin:
             if ws is not None:
                 await ws.close(4003, "Missing or invalid stream token")
             return False
+        self._inbound_resampler.reset()
         self._stream_sid = stream_sid
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
@@ -1004,10 +1023,11 @@ class _TwilioProtocolMixin:
             stream_sid=self._stream_sid,
             mulaw_data=mulaw_data,
         )
-        pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
+        pcm_data = self._inbound_resampler.process(_mulaw_decode(mulaw_data), 8000)
 
-        chunk = AudioChunk(data=pcm_data, format=self._audio_format)
-        self._enqueue_chunk(chunk, context="Twilio")
+        if pcm_data:
+            chunk = AudioChunk(data=pcm_data, format=self._audio_format)
+            self._enqueue_chunk(chunk, context="Twilio")
 
     async def _handle_stop(self, msg: dict[str, Any]) -> None:
         if not _is_active_twilio_stream_event(
@@ -1018,6 +1038,12 @@ class _TwilioProtocolMixin:
             return
         self._diagnostics.observe_sequence(msg)
         logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
+        tail = self._inbound_resampler.finish()
+        if tail:
+            self._enqueue_chunk(
+                AudioChunk(data=tail, format=self._audio_format),
+                context="Twilio",
+            )
         # Mirror the outbound call manager lifecycle for inbound calls.
         await self._emit_call_ended_once()
         self._stream_sid = None
@@ -1156,6 +1182,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         self._call_identity = None
         self._call_ended_emitted = False
         self._diagnostics.reset()
+        self._inbound_resampler.reset()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -1482,6 +1509,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._pending_start_message = None
         self._pending_start_claims = None
         self._diagnostics.reset()
+        self._inbound_resampler.reset()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if self._stream_sid is None:

@@ -49,10 +49,12 @@ async def test_rnnoise_process_mocked():
     chunk = AudioChunk(data=data, format=PCM16_MONO_16K)
 
     result = await reducer.process(chunk)
+    tail = reducer.flush()
 
     # Output should be at original sample rate
     assert result.format.sample_rate == 16000
-    assert len(result.data) > 0
+    assert tail.format.sample_rate == 16000
+    assert len(result.data) + len(tail.data) > 0
     # RNNoise should have been called
     assert mock_rnnoise.process_mono_frame.called
 
@@ -104,6 +106,27 @@ async def test_rnnoise_buffers_subframe_remainder_across_chunks():
     # Flush drains the final partial frame (zero-padded only at end-of-stream).
     reducer.flush()
     assert reducer._buffer_48k == b""
+
+
+@pytest.mark.asyncio
+async def test_rnnoise_flush_preserves_source_rate_and_resampler_tail():
+    pytest.importorskip("numpy")
+
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_rnnoise.create.return_value = MagicMock()
+    mock_rnnoise.process_mono_frame.side_effect = lambda _state, frame: (frame, 0.0)
+
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    data = struct.pack("<100h", *([1000] * 100))
+    result = await reducer.process(AudioChunk(data=data, format=PCM16_MONO_16K))
+    tail = reducer.flush()
+
+    assert result.format == PCM16_MONO_16K
+    assert tail.format == PCM16_MONO_16K
+    assert len(result.data) + len(tail.data) == len(data)
 
 
 def test_rnnoise_uses_pyrnnoise_state_lifecycle():

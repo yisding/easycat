@@ -358,23 +358,21 @@ class CapacityGate(Generic[KeyT]):
         single, effective stop. It does NOT route draining through
         ``SessionManager`` (which has no draining state).
 
-        Why the drain owns the stop (review fix): the real
-        :meth:`~easycat.session._session.Session.stop` has a ``_stopping``
-        idempotency guard, so a ``force=True`` call after an in-progress graceful
-        ``stop`` is a NO-OP. If the handler had already started a graceful stop
-        that hung, the drain could never preempt it and ``stop()`` would deadlock.
-        By making the drain start the (single) graceful stop itself, the
-        force-escalation path stays effective:
+        The drain owns the stop so there is one lifecycle authority per session
+        during server shutdown. :meth:`~easycat.session._session.Session.stop`
+        can now force-preempt an in-progress graceful stop, while session-like
+        integrations with older idempotency-only semantics are still handled by
+        the follow-on task cancellation:
 
         1. Snapshot the active ``(key, session)`` pairs and launch a graceful
            ``session.stop()`` task for each.
         2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
            they all complete in time, the drain stayed graceful (no force).
         3. For any session whose graceful stop did NOT finish, CANCEL and reap
-           the still-pending graceful task first. This clears the real
-           ``Session._stopping`` guard before force escalation.
+           the still-pending graceful task first. This also supports session-like
+           integrations that retain idempotency-only stop semantics.
         4. Call ``session.stop(force=True)`` after the cancelled graceful task
-           has unwound, so the force path can perform backend teardown.
+           has unwound, so the force path owns backend teardown.
         5. Untrack every drained key.
 
         ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace

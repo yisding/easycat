@@ -76,6 +76,8 @@ def validate_twilio_webhook_signature(
         return False
 
     provided = signature.strip()
+    if not provided.isascii():
+        return False
     for candidate in candidates:
         expected = compute_twilio_webhook_signature(
             auth_token=auth_token,

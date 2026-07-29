@@ -37,6 +37,22 @@ def _non_negative_float_setting(
     return value
 
 
+def _positive_int_setting(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    default: int,
+) -> int:
+    raw = _settings_value(env.get(name))
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class TwilioAppSettings:
     """Environment-derived settings for a Twilio Media Streams app."""
@@ -110,6 +126,8 @@ class TwilioCallSessionIndex:
         def remember(event: CallAnswered) -> None:
             nonlocal call_sid
             if event.call_sid:
+                if call_sid and call_sid != event.call_sid:
+                    self._sessions.pop(call_sid, None)
                 call_sid = event.call_sid
                 self._sessions[event.call_sid] = session
 
@@ -139,9 +157,10 @@ class TwilioCallSessionIndex:
 
 def bearer_token_matches(header: str | None, token: str) -> bool:
     """Return whether an Authorization header matches without timing leaks."""
-    provided = header or ""
-    expected = f"Bearer {token}"
-    return provided.isascii() and expected.isascii() and compare_digest(provided, expected)
+    scheme, separator, provided = (header or "").partition(" ")
+    if separator != " " or scheme.lower() != "bearer":
+        return False
+    return provided.isascii() and token.isascii() and compare_digest(provided, token)
 
 
 def twilio_app_settings_from_env(
@@ -161,7 +180,6 @@ def twilio_app_settings_from_env(
             "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
             "connect to."
         )
-
     resolved_auth_token = _settings_value(auth_token) or _settings_value(
         env.get("TWILIO_AUTH_TOKEN")
     )
@@ -171,13 +189,8 @@ def twilio_app_settings_from_env(
             "the media WebSocket handshake."
         )
 
-    try:
-        max_sessions = int(_settings_value(env.get("TWILIO_MAX_SESSIONS")) or "64")
-    except ValueError as exc:
-        raise RuntimeError("TWILIO_MAX_SESSIONS must be a positive integer") from exc
+    max_sessions = _positive_int_setting(env, "TWILIO_MAX_SESSIONS", default=64)
     start_timeout_s = float(_settings_value(env.get("TWILIO_START_TIMEOUT_S")) or "10")
-    if max_sessions <= 0:
-        raise RuntimeError("TWILIO_MAX_SESSIONS must be a positive integer")
     if start_timeout_s <= 0:
         raise ValueError("TWILIO_START_TIMEOUT_S must be positive")
 

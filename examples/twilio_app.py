@@ -6,6 +6,7 @@ Setup:
   export TWILIO_ACCOUNT_SID="AC..."
   export TWILIO_AUTH_TOKEN="..."
   export TWILIO_STREAM_TOKEN_SECRET="..."  # optional, pins stream-token signing key
+  export TWILIO_MAX_SESSIONS="8"  # optional
   export TWILIO_VOICE_FROM="+15551234567"  # optional, enables POST /calls
   export TWILIO_TWIML_URL="https://your-public-host/twiml"
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
@@ -127,6 +128,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 settings.auth_token,
                 settings.stream_url,
             ),
+            compression=None,
         )
         try:
             yield

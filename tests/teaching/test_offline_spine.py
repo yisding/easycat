@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
@@ -67,7 +68,7 @@ def test_offline_spine_prioritizes_primary_chapter_questions() -> None:
 
 
 def test_offline_spine_json_list_is_documented() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--json"],
         cwd=ROOT,
         check=True,
@@ -99,7 +100,7 @@ def test_offline_spine_json_list_is_documented() -> None:
 
 
 def test_offline_spine_lists_only_completed_chapters() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--through", "5", "--json"],
         cwd=ROOT,
         check=True,
@@ -115,7 +116,7 @@ def test_offline_spine_lists_only_completed_chapters() -> None:
 
 
 def test_offline_spine_runs_only_completed_chapters() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--run", "--through", "1", "--jobs", "2", "--json"],
         cwd=ROOT,
         check=True,
@@ -137,7 +138,7 @@ def test_offline_spine_runs_only_completed_chapters() -> None:
 
 def test_offline_spine_rejects_out_of_range_chapter() -> None:
     for chapter in ("-1", "16"):
-        completed = subprocess.run(
+        completed = script_runner.run(
             [sys.executable, str(SPINE), "--through", chapter],
             cwd=ROOT,
             check=False,
@@ -150,7 +151,7 @@ def test_offline_spine_rejects_out_of_range_chapter() -> None:
 
 
 def test_offline_spine_show_evidence_requires_run() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--show-evidence"],
         cwd=ROOT,
         check=False,
@@ -163,7 +164,7 @@ def test_offline_spine_show_evidence_requires_run() -> None:
 
 
 def test_offline_spine_human_run_can_show_observed_evidence() -> None:
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--run", "--through", "0", "--show-evidence"],
         cwd=ROOT,
         check=True,
@@ -222,7 +223,7 @@ def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
 
 def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
     spine = _load_spine()
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE)],
         cwd=ROOT,
         check=True,
@@ -265,7 +266,7 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
         path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
         for path in TEACHING.rglob("*")
     }
-    completed = subprocess.run(
+    completed = script_runner.run(
         [sys.executable, str(SPINE), "--run", "--jobs", "4", "--json"],
         cwd=ROOT,
         check=True,

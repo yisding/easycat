@@ -188,11 +188,11 @@
 +if TYPE_CHECKING:
 +    from openai import AsyncOpenAI
 +
-+MODEL = "gpt-4o-mini"
++MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,115 +76,189 @@
+@@ -75,115 +76,192 @@
      )
 
 
@@ -262,7 +262,7 @@
 +        MarkdownStripProcessor(),
 +        *default_pronunciation_processors(
 +            name_pronunciations={"easycat": "ee zee cat"},
-+            phone_pause_ms=120,
++            phone_ellipsis_count=1,
 +        ),
 +    ]
 +
@@ -311,7 +311,10 @@
 +            return
 +
 +        stream = await self._client.chat.completions.create(
-+            model=MODEL, messages=self._history, stream=True
++            model=MODEL,
++            reasoning_effort="none",
++            messages=self._history,
++            stream=True,
          )
 -    )
 -
@@ -630,7 +633,10 @@ class MyWorkflow:
             return
 
         stream = await self._client.chat.completions.create(
-            model=MODEL, messages=self._history, stream=True
+            model=MODEL,
+            reasoning_effort="none",
+            messages=self._history,
+            stream=True,
         )
         full = ""
         try:
@@ -755,7 +761,7 @@ processors live in `src/easycat/llm_output_processing.py`:
 |---|---|
 | `MarkdownStripProcessor` | Strip `**bold**` / lists / code spans for voice |
 | `PhoneticReplacementProcessor` | Case-insensitive whole-word swap |
-| `PauseProcessor` | Regex-match → insert SSML `<break>` between matched units |
+| `PauseProcessor` | Regex-match → insert provider-compatible ellipsis cues (or opt-in SSML breaks) |
 | `LLMOutputProcessor` | Protocol — roll your own |
 
 Processors run serially, fail-open: an exception in one is logged
@@ -775,11 +781,11 @@ provider-ready payload. Its `processors` list names the configured
 stack, while `changed`, the original/prepared formats, and
 `ssml_downgraded` describe the combined result. There are no
 per-processor `output_processor.*` records or intermediate strings.
-The four bundled providers currently accept plain text only, so the
-default SSML break tags are stripped: spaced digits remain, but exact
-pause timing does not. Use `style="ellipsis"` for a provider-neutral
-plain-text cue, or a native-SSML provider when exact break duration is
-required.
+The default ellipsis style stays plain text, so all four bundled providers
+receive the pacing cue and `ssml_downgraded` remains false. The provider still
+decides its exact timing. For an exact `pause_ms`, opt into `style="ssml"` and
+use a provider that advertises native SSML support; bundled providers currently
+strip those tags.
 
 ## MCP (a short sidebar)
 
