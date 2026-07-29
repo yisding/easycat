@@ -239,6 +239,29 @@ async def test_silence_timeout_transitions_to_processing():
 
 
 @pytest.mark.asyncio
+async def test_silence_timeout_logs_strict_handler_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bus = EventBus(handler_error_policy="raise")
+    tm = TurnManager(bus, config=TurnManagerConfig(end_of_turn_silence_ms=0))
+
+    async def fail(_event: TurnEnded) -> None:
+        raise RuntimeError("turn handler failed")
+
+    bus.subscribe(TurnEnded, fail)
+    with caplog.at_level(logging.ERROR, logger="easycat.runtime.scope"):
+        await tm.on_vad_event(VADStartSpeaking())
+        await tm.on_vad_event(VADStopSpeaking())
+        timer = tm._silence_timer_task
+        assert timer is not None
+        with pytest.raises(RuntimeError, match="turn handler failed"):
+            await asyncio.wait_for(timer, timeout=1)
+
+    assert "Background task failed" in caplog.text
+    assert "turn handler failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_bot_started_from_turn_ended_handler_does_not_cancel_dispatch():
     """bot_started_speaking must not cancel its own silence-timeout dispatch."""
     bus = EventBus()

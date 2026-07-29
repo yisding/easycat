@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 from easycat.runtime import InMemoryRingBuffer
+from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "03-parrot-naive"
@@ -25,7 +25,7 @@ def _load_main():
 
 
 def test_speak_acceptance_probe_is_provider_free_and_executable() -> None:
-    result = subprocess.run(
+    result = script_runner.run(
         [sys.executable, str(CHAPTER / "speak_acceptance_probe.py")],
         cwd=ROOT,
         capture_output=True,

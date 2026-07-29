@@ -10,7 +10,11 @@ import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
-from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+    WebSocketTransportConfig,
+)
 
 from ._webrtc_fakes import _UsesPytestTcpPortFactory
 from .conftest import make_chunk
@@ -22,6 +26,12 @@ def test_websocket_transport_config_defaults_to_loopback():
     config = WebSocketTransportConfig()
 
     assert config.host == "127.0.0.1"
+
+
+def test_websocket_transports_leave_server_side_aec_off_by_default():
+    assert WebSocketTransportConfig.default_echo_cancellation_enabled is False
+    assert WebSocketTransport.default_echo_cancellation_enabled is False
+    assert WebSocketConnectionTransport.default_echo_cancellation_enabled is False
 
 
 @pytest.mark.asyncio
@@ -137,6 +147,24 @@ class TestWebSocketTransport(_UsesPytestTcpPortFactory):
             assert len(data) == 640
 
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_clear_audio_sends_client_playback_reset(self):
+        port = self._unused_port()
+        transport = WebSocketTransport(WebSocketTransportConfig(host="127.0.0.1", port=port))
+        await transport.connect()
+
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                await ws.recv()  # ready
+                await asyncio.wait_for(transport.wait_for_client(), timeout=2.0)
+
+                await transport.clear_audio()
+
+                message = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                assert json.loads(message) == {"type": "clear"}
+        finally:
+            await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_server_forwards_session_events_as_json_text_frames(self):

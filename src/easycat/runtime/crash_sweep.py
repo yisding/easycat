@@ -66,8 +66,9 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     across this call (the in-session promoter closes its live connection
     first; the sweep operates on orphaned files no one owns).  We open our
     own short-lived connection to fold any uncheckpointed WAL pages into the
-    main database before the byte copy — with ``wal_autocheckpoint=0`` recent
-    records may live only in the WAL, and a bare copy would lose them.
+    main database before the byte copy — even with bounded auto-checkpointing,
+    recent committed records may live only in the WAL and a bare copy would
+    lose them.
     """
     try:
         conn = sqlite3.connect(str(db_path))

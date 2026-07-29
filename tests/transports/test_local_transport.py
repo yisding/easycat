@@ -310,7 +310,8 @@ class TestLocalTransport:
         assert not transport._primed  # never primed without queued audio
         frames = transport.drain_aec_reference_frames()
         assert len(frames) == 3
-        assert all(len(f) == frame_bytes for f in frames)
+        assert all(len(frame.data) == frame_bytes for frame in frames)
+        assert all(frame.format == transport._audio_format for frame in frames)
 
     @pytest.mark.asyncio
     async def test_output_preroll_depth_is_configurable(self):

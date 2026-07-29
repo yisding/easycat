@@ -1,17 +1,29 @@
 """Leaf networking helpers with zero intra-package imports.
 
-Both ``is_loopback_host`` and ``normalize_auth_token`` are shared by the
-transports, the CLI serve pre-flight, the server auth guard, and the debugger
-origin guard. Keeping them here — depending only on the stdlib — lets every one
-of those callers import downward without the import cycles that previously
-forced lazy imports out of :mod:`easycat.transports.webrtc`.
+These helpers are shared by the transports, the CLI serve pre-flight, the
+server auth guard, and the debugger origin guard. Keeping them here —
+depending only on the stdlib — lets every one of those callers import downward
+without the import cycles that previously forced lazy imports out of
+:mod:`easycat.transports.webrtc`.
 """
 
 from __future__ import annotations
 
+from hmac import compare_digest
 from ipaddress import ip_address
 
-__all__ = ["is_loopback_host", "normalize_auth_token"]
+__all__ = ["constant_time_strings_equal", "is_loopback_host", "normalize_auth_token"]
+
+
+def constant_time_strings_equal(candidate: str, expected: str) -> bool:
+    """Compare untrusted strings in constant time, denying non-ASCII inputs.
+
+    :func:`hmac.compare_digest` raises :class:`TypeError` for non-ASCII
+    strings. Authentication boundaries should treat either a hostile
+    credential or a misconfigured expected token as a clean mismatch rather
+    than leaking that exception into an HTTP/WebSocket handler.
+    """
+    return candidate.isascii() and expected.isascii() and compare_digest(candidate, expected)
 
 
 def normalize_auth_token(token: str | None) -> str | None:

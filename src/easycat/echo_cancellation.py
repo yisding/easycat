@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
 from easycat._extras import require_module
+from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,13 @@ EchoCancellationFallbackPolicy: TypeAlias = Literal["passthrough", "error"]
 _VALID_AEC_FALLBACK_POLICIES: tuple[EchoCancellationFallbackPolicy, ...] = (
     "passthrough",
     "error",
+)
+_BUILTIN_ECHO_CANCELLERS = frozenset({"passthrough", "livekit"})
+ECHO_CANCELLER_PROVIDER_ENTRY_POINT_GROUP = "easycat.echo_canceller_providers"
+_CATALOG = ProviderCatalog(
+    specs={},
+    kind="echo canceller",
+    entry_point_group=ECHO_CANCELLER_PROVIDER_ENTRY_POINT_GROUP,
 )
 
 
@@ -225,14 +233,80 @@ class EchoCancellationConfig:
         self.fallback_policy = _validate_aec_fallback_policy(self.fallback_policy)
 
 
-def create_echo_canceller(config: EchoCancellationConfig | None = None) -> Any:
+def register_echo_canceller_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str | None = None,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+    probe_module: str | None = None,
+    capabilities: frozenset[str] = frozenset(),
+) -> None:
+    """Register a third-party echo canceller and its discovery metadata."""
+    normalized = name.strip().lower() if isinstance(name, str) else ""
+    if normalized in _BUILTIN_ECHO_CANCELLERS:
+        raise ValueError(
+            f"Echo canceller provider name {normalized!r} is reserved by a built-in backend."
+        )
+    _CATALOG.register(
+        name,
+        provider_cls,
+        config_cls,
+        env_var=env_var,
+        extra=extra,
+        api_domains=api_domains,
+        probe_module=probe_module,
+        capabilities=capabilities,
+    )
+
+
+def available_echo_canceller_providers() -> list[str]:
+    """Return every built-in or registered echo-canceller provider name."""
+    return sorted(_BUILTIN_ECHO_CANCELLERS | set(_CATALOG.available_names()))
+
+
+def is_echo_canceller_config(value: object) -> bool:
+    """True when ``value`` is a built-in or registered echo-canceller config."""
+    return isinstance(value, EchoCancellationConfig) or _CATALOG.is_config_instance(value)
+
+
+def parse_echo_canceller_string(spec: str) -> Any:
+    """Parse a built-in or registered ``provider/model`` shortcut."""
+    provider, separator, model = spec.partition("/")
+    normalized = provider.strip().lower()
+    if normalized in _BUILTIN_ECHO_CANCELLERS:
+        if separator and model.strip():
+            raise ValueError(f"Built-in echo canceller {normalized!r} does not accept a model.")
+        return EchoCancellationConfig(enabled=normalized == "livekit")
+    return _CATALOG.parse_string(spec)
+
+
+def create_echo_canceller(config: Any = None) -> Any:
     """Create an echo canceller based on configuration.
 
     Returns LiveKitAEC when enabled and the livekit package is available.
     Missing LiveKit falls back to PassthroughAEC when fallback_policy is
     "passthrough", or raises RuntimeError when fallback_policy is "error".
     """
+    if isinstance(config, str):
+        config = parse_echo_canceller_string(config)
+    if (
+        config is not None
+        and callable(getattr(config, "process", None))
+        and callable(getattr(config, "feed_reference", None))
+    ):
+        return config
+    if _CATALOG.is_config_instance(config):
+        return _CATALOG.create_from_config(config, event_bus=None)
+
     cfg = config or EchoCancellationConfig()
+    if not isinstance(cfg, EchoCancellationConfig):
+        raise ValueError(
+            f"Unsupported echo canceller configuration type: {type(cfg).__name__!r}. "
+            "Pass EchoCancellationConfig, a registered config, or an echo-canceller instance."
+        )
     cfg.fallback_policy = _validate_aec_fallback_policy(cfg.fallback_policy)
 
     if not cfg.enabled:

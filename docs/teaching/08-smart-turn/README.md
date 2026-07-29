@@ -151,9 +151,9 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -57,236 +59,217 @@
+@@ -57,237 +59,218 @@
  PREROLL_FRAMES = 15
- MODEL = "gpt-4o-mini"
+ MODEL = "gpt-5.6-luna"
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch07-tools-{int(time.time())}"
 -
@@ -372,6 +372,7 @@
 -    for _ in range(2):
 -        stream = await client.chat.completions.create(
 -            model=MODEL,
+-            reasoning_effort="none",
 -            messages=messages,
 -            tools=TOOLS,
 -            stream=True,
@@ -523,6 +524,7 @@
 +async def run_agent_streaming(client, user_text, sentence_queue):
 +    stream = await client.chat.completions.create(
 +        model=MODEL,
++        reasoning_effort="none",
 +        messages=[
 +            {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
 +            {"role": "user", "content": user_text},
@@ -566,7 +568,7 @@
          synth_start = time.monotonic()
          sentence_accepted = sentence_rejected = 0
          async for event in tts.synthesize(TTSInput(text=sentence)):
-@@ -300,13 +283,8 @@
+@@ -301,13 +284,8 @@
                          journal.append(
                              kind=JournalRecordKind.EVENT,
                              name="tts.first_audio",
@@ -582,7 +584,7 @@
                          )
                  else:
                      rejected_chunks += 1
-@@ -314,11 +292,9 @@
+@@ -315,11 +293,9 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -595,7 +597,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -328,33 +304,42 @@
+@@ -329,33 +305,42 @@
      return first_audio_t, accepted_chunks, rejected_chunks
 
 
@@ -644,7 +646,7 @@
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "tts_accepted_chunks": accepted_chunks,
              "tts_rejected_chunks": rejected_chunks,
-@@ -372,9 +357,15 @@
+@@ -373,9 +358,15 @@
              print("  (turn gap unavailable — TTS produced no audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
@@ -663,7 +665,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -390,7 +381,15 @@
+@@ -391,7 +382,15 @@
                  stt = None
                  try:
                      await active_stt.end_stream()
@@ -680,7 +682,7 @@
                  finally:
                      await close_if_supported(active_stt)
      finally:
-@@ -402,8 +401,25 @@
+@@ -403,8 +402,25 @@
 
 
  async def main() -> None:
@@ -706,7 +708,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -421,9 +437,21 @@
+@@ -422,9 +438,21 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
 
@@ -730,7 +732,7 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -432,15 +460,15 @@
+@@ -433,15 +461,15 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 

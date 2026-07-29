@@ -138,6 +138,7 @@ async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
                     pattern=r"\+?\d[\d\s().-]{5,}\d",
                     unit_pattern=r"\d",
                     minimum_units=7,
+                    style="ssml",
                 )
             ],
             transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
@@ -167,6 +168,7 @@ async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
                     pattern=r"\+?\d[\d\s().-]{5,}\d",
                     unit_pattern=r"\d",
                     minimum_units=7,
+                    style="ssml",
                 )
             ],
         )
@@ -203,7 +205,7 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
     await session._turn_runner.run_streaming_agent("call Siobhan at 415-555-2671", token=None)
 
     assert tts.payloads
-    # provider doesn't support SSML, so we should receive plain text fallback.
+    # The default ellipsis style reaches a plain-text provider unchanged.
     assert tts.payloads[0].format == "plain"
     assert "shi-vawn" in tts.payloads[0].text
-    assert "4 1 5" in tts.payloads[0].text
+    assert "4 ... 1 ... 5" in tts.payloads[0].text
