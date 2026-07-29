@@ -1171,6 +1171,7 @@ async def test_send_time_aec_reference_reports_degradation_once_to_journal():
 
     await router._handle_audio_delivery(_make_chunk(byte_value=3), None)
     await router._handle_audio_delivery(_make_chunk(byte_value=4), None)
+    await state["runtime_scope"].drain("aec_reference_degraded_emit")
 
     degraded = [event for event in state["emitted"] if isinstance(event, TransportDegraded)]
     assert len(degraded) == 1
@@ -1179,6 +1180,39 @@ async def test_send_time_aec_reference_reports_degradation_once_to_journal():
     records = [record for record in journal.read() if record.name == "transport_degraded"]
     assert len(records) == 1
     assert records[0].data["reason"] == "aec_reference_degraded"
+
+
+@pytest.mark.asyncio
+async def test_slow_degraded_handler_does_not_stall_audio_delivery() -> None:
+    class _WebSocketLikeTransport(_FakeTransport):
+        transport_kind = "websocket"
+
+    turn = TurnContext(turn_id="delivery", cancel_token=CancelToken())
+    router, state = _make_router(
+        transport=_WebSocketLikeTransport(),
+        enable_aec=True,
+        current_turn=turn,
+    )
+    handler_started = asyncio.Event()
+    handler_release = asyncio.Event()
+
+    async def slow_handler(_event: TransportDegraded) -> None:
+        handler_started.set()
+        await handler_release.wait()
+
+    state["bus"].subscribe(TransportDegraded, slow_handler)
+
+    await asyncio.wait_for(
+        router._handle_audio_delivery(_make_chunk(byte_value=3), turn),
+        timeout=0.1,
+    )
+    await asyncio.wait_for(handler_started.wait(), timeout=0.1)
+
+    assert turn.audio_bytes_sent > 0
+    assert state["runtime_scope"].tasks("aec_reference_degraded_emit")
+
+    handler_release.set()
+    await state["runtime_scope"].drain("aec_reference_degraded_emit")
 
 
 @pytest.mark.asyncio

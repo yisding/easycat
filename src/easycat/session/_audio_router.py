@@ -135,6 +135,7 @@ class AudioRouter:
     _INGRESS_TASK_NAME = "audio_ingress_pipeline"
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
     _INLINE_SEND_TASK_NAME = "audio_inline_send"
+    _AEC_DEGRADED_EMIT_TASK_NAME = "aec_reference_degraded_emit"
 
     def __init__(
         self,
@@ -328,6 +329,7 @@ class AudioRouter:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
+        await self._runtime_scope.cancel_and_drain(self._AEC_DEGRADED_EMIT_TASK_NAME)
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = 2.0) -> None:
@@ -984,13 +986,20 @@ class AudioRouter:
             "or a transport with drain_aec_reference_frames()"
         )
         logger.warning("%s AEC reference degraded: %s", provider, detail)
-        await self._emit(
-            TransportDegraded(
-                provider=provider,
-                reason="aec_reference_degraded",
-                detail=detail,
-            )
+        event = TransportDegraded(
+            provider=provider,
+            reason="aec_reference_degraded",
+            detail=detail,
         )
+
+        async def _emit_degraded() -> None:
+            await self._emit(event)
+
+        task: asyncio.Task[None] = self._runtime_scope.create_task(
+            self._AEC_DEGRADED_EMIT_TASK_NAME,
+            _emit_degraded(),
+        )
+        task.add_done_callback(self._runtime_scope.log_task_exception)
 
     async def _maybe_record_aec_reference(
         self,
