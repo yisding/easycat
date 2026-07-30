@@ -61,12 +61,18 @@ def redact_validation_artifacts(
     failures: dict[str, ValidationFailure] = {}
     for name, path, artifact_format in artifact_specs:
         try:
-            redact_runtime_secrets_in_file(
+            redacted = redact_runtime_secrets_in_file(
                 path,
                 secrets,
                 artifact_format=artifact_format,
                 raise_on_error=True,
             )
+            if not redacted and path.is_file():
+                raise ArtifactRedactionError(
+                    artifact_format,
+                    "parse",
+                    ValueError("existing artifact is not valid UTF-8 text"),
+                )
         except (ArtifactRedactionError, OSError) as exc:
             safe_path = redact_runtime_secrets(str(path), secrets)
             failures[name] = ValidationFailure(
