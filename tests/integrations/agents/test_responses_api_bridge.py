@@ -111,6 +111,48 @@ class _StaticSSEClient:
         pass
 
 
+class _TerminalSSEAfterCompletionResponse:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.raw_closed = False
+        self.lines_closed = False
+        self.context_closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.context_closed = True
+
+    def raise_for_status(self) -> None:
+        pass
+
+    async def raw_lines(self):
+        try:
+            yield ('data: {"type":"response.completed","response":{"id":"resp_terminal"}}')
+            await self.release.wait()
+        finally:
+            self.raw_closed = True
+
+    async def aiter_lines(self):
+        try:
+            async for line in self.raw_lines():
+                yield line
+        finally:
+            self.lines_closed = True
+
+
+class _TerminalSSEAfterCompletionClient:
+    def __init__(self, response: _TerminalSSEAfterCompletionResponse) -> None:
+        self.response = response
+
+    def stream(self, *args, **kwargs):
+        return self.response
+
+    async def aclose(self) -> None:
+        pass
+
+
 async def _make_static_sse_bridge(lines: list[str]) -> RemoteResponsesAPIBridge:
     bridge = RemoteResponsesAPIBridge(
         base_url="http://testserver",
@@ -610,6 +652,31 @@ class TestDrainCurrentUnit:
         assert response.context_closed
         await bridge.aclose()
         assert client.closed
+
+    @pytest.mark.asyncio
+    async def test_completed_stream_drain_is_bounded_and_closes_nested_line_reader(self):
+        bridge = RemoteResponsesAPIBridge(
+            base_url="http://testserver",
+            model="test-model",
+            api_key="test-key",
+        )
+        response = _TerminalSSEAfterCompletionResponse()
+        await bridge._client.aclose()
+        bridge._client = _TerminalSSEAfterCompletionClient(response)
+
+        events = [
+            event
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("hello"),
+                _recorder(),
+            )
+        ]
+
+        assert [event.kind for event in events] == ["done"]
+        assert response.raw_closed
+        assert response.lines_closed
+        assert response.context_closed
+        await bridge.aclose()
 
     @pytest.mark.asyncio
     async def test_cancel_during_tool_call_drains_through_tool_result(self):
