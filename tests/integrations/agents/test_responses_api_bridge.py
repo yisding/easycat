@@ -1657,6 +1657,7 @@ class TestRequestBody:
         second_request = server.received_requests[-1]
         assert second_request["previous_response_id"] == first_id
         assert second_request["input"] == [{"role": "user", "content": "second question"}]
+        await runner.aclose()
 
     def test_chained_request_keeps_only_transient_caller_context(self):
         server = MockResponsesServer()

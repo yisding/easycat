@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import sys
 import types
 import zipfile
 from pathlib import Path
@@ -1224,7 +1223,9 @@ class TestBundlePartialJournal:
     def test_from_partial_current_journal_normalizes_deep_error_children(
         self,
         tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        import easycat.debug.bundle as bundle_module
         from easycat.runtime import SqliteJournal
 
         journal = SqliteJournal("deep-corrupt-errors", data_dir=tmp_path)
@@ -1236,8 +1237,7 @@ class TestBundlePartialJournal:
         )
         journal.close()
         db_path = tmp_path / "journals" / "deep-corrupt-errors.sqlite"
-        nesting = sys.getrecursionlimit() * 10
-        deeply_nested_json = ("[" * nesting) + "0" + ("]" * nesting)
+        deeply_nested_json = "[[0]]"
         conn = sqlite3.connect(db_path)
         conn.execute(
             "UPDATE journal SET error_children = ? WHERE sequence = ?",
@@ -1246,6 +1246,15 @@ class TestBundlePartialJournal:
         conn.commit()
         conn.close()
 
+        def raise_recursion_error(value: object) -> object:
+            assert value == deeply_nested_json
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(
+            bundle_module,
+            "json",
+            types.SimpleNamespace(loads=raise_recursion_error, dumps=json.dumps),
+        )
         with pytest.raises(
             BundleValidationError,
             match="error_children is not valid JSON",
