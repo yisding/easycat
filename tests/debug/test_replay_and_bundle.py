@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 import types
 import zipfile
 from pathlib import Path
@@ -1235,7 +1236,8 @@ class TestBundlePartialJournal:
         )
         journal.close()
         db_path = tmp_path / "journals" / "deep-corrupt-errors.sqlite"
-        deeply_nested_json = ("[" * 10_000) + "0" + ("]" * 10_000)
+        nesting = sys.getrecursionlimit() * 10
+        deeply_nested_json = ("[" * nesting) + "0" + ("]" * nesting)
         conn = sqlite3.connect(db_path)
         conn.execute(
             "UPDATE journal SET error_children = ? WHERE sequence = ?",
