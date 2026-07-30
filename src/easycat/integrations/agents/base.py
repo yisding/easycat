@@ -535,6 +535,12 @@ class ExternalAgentBridge(Protocol):
     # bridges legitimately omit it.  The full contract lives in prose docs:
     # see "The configure_runtime contract" in
     # ``docs/teaching/14-bring-your-own-agent/README.md``.
+    #
+    # ``MANAGES_CONVERSATION_HISTORY`` is another optional extension marker.
+    # Stateful bridges that set it to true tell ``AgentRunner`` not to inject
+    # the runner's advisory shadow history into ``AgentTurnInput.context``.
+    # Bridges without the marker retain the historical default and receive
+    # runner-managed history.
 
 
 # ── Errors ───────────────────────────────────────────────────────

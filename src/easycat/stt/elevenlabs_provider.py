@@ -113,6 +113,25 @@ class ElevenLabsSTTConfig:
         return "scribe_v1"
 
     def __post_init__(self) -> None:
+        normalized_mode = self.mode.strip().lower() if isinstance(self.mode, str) else ""
+        if normalized_mode not in {"realtime", "batch"}:
+            raise ValueError(
+                f"ElevenLabsSTTConfig.mode must be 'realtime' or 'batch' (got {self.mode!r})"
+            )
+        self.mode = normalized_mode
+
+        normalized_commit_strategy = (
+            self.realtime_commit_strategy.strip().lower()
+            if isinstance(self.realtime_commit_strategy, str)
+            else ""
+        )
+        if normalized_commit_strategy not in {"vad", "manual"}:
+            raise ValueError(
+                "ElevenLabsSTTConfig.realtime_commit_strategy must be 'vad' or 'manual' "
+                f"(got {self.realtime_commit_strategy!r})"
+            )
+        self.realtime_commit_strategy = normalized_commit_strategy
+
         if self.max_retries < 0:
             raise ValueError(
                 "ElevenLabsSTTConfig.max_retries must be >= 0 "
@@ -276,6 +295,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
     def mode(self) -> str:
         return self._config.mode
 
+    def _uses_streaming_audio_path(self) -> bool:
+        """Apply WebSocket PCM16/mono normalization only in realtime mode."""
+        return self._config.mode == "realtime"
+
     # -- Lifecycle hooks ---------------------------------------------------
 
     async def _on_start(self) -> None:
@@ -381,16 +404,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
             await self._send_commit(wait_for_final=True)
 
         self._final_received = None
-        try:
-            # ElevenLabs keeps the realtime socket open after delivering the
-            # committed transcript, so draining first would block in the
-            # receive loop until the close timeout fires.  Close-before-drain
-            # wakes the receive loop, keeping turn-to-agent latency low.
-            await self._close_active_websocket(close_before_drain=True)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("ElevenLabs realtime close failed during end", exc_info=True)
+        # ElevenLabs keeps the realtime socket open after delivering the
+        # committed transcript, so draining first would block in the receive
+        # loop until the close timeout fires. Close-before-drain wakes the
+        # receive loop, keeping turn-to-agent latency low. Cleanup failures
+        # propagate to STTBase so the exact socket remains retry-owned.
+        await self._close_active_websocket(close_before_drain=True)
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws

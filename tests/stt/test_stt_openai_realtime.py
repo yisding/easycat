@@ -395,6 +395,41 @@ async def test_openai_realtime_sends_commit_on_end():
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_close_failure_blocks_restart_until_cleanup_retry(
+    monkeypatch,
+):
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False))
+    close_calls = 0
+
+    async def fail_once_close(*, close_before_drain: bool = False) -> None:
+        nonlocal close_calls
+        assert close_before_drain is True
+        close_calls += 1
+        if close_calls == 1:
+            raise RuntimeError("socket close failed")
+
+    async def connect_replacement() -> None:
+        return None
+
+    monkeypatch.setattr(stt, "_close_active_websocket", fail_once_close)
+    monkeypatch.setattr(stt, "_connect_new_websocket", connect_replacement)
+    stt._running = True
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await stt.end_stream()
+
+    assert stt._failed_end_cleanup_pending is True
+    assert close_calls == 1
+
+    await stt.start_stream()
+
+    assert close_calls == 2
+    assert stt._failed_end_cleanup_pending is False
+    assert stt._running is True
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_skips_commit_on_short_tail():
     """OpenAI Realtime refuses commits with <100ms of buffered audio
     (1008 policy violation).  The provider must skip the send locally

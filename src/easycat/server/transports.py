@@ -33,6 +33,8 @@ from collections.abc import Awaitable, Callable, Hashable, Iterable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
+from easycat._numeric import is_finite_number
+
 if TYPE_CHECKING:
     from easycat.session import Session
 
@@ -40,6 +42,25 @@ KeyT = TypeVar("KeyT", bound=Hashable)
 ConnectionT = TypeVar("ConnectionT")
 SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
+
+
+def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
+    if allow_none and value is None:
+        return
+    if not is_finite_number(value) or value < 0:
+        raise ValueError(f"{name} must be a finite number >= 0")
+
+
+def _validate_poll_interval(name: str, value: object) -> None:
+    if not is_finite_number(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number > 0")
+
+
+def _validate_max_sessions(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("max_sessions must be an integer >= 1")
+    if value < 1:
+        raise ValueError("max_sessions must be >= 1")
 
 
 async def close_websocket_connections(
@@ -253,8 +274,7 @@ class CapacityGate(Generic[KeyT]):
     """
 
     def __init__(self, max_sessions: int) -> None:
-        if max_sessions < 1:
-            raise ValueError("max_sessions must be >= 1")
+        _validate_max_sessions(max_sessions)
         self._max_sessions = max_sessions
         # A reservation counter rather than an ``asyncio.Semaphore``: the serve
         # helpers want a non-blocking reject-when-full check (the existing
@@ -338,14 +358,16 @@ class CapacityGate(Generic[KeyT]):
 
     async def wait_drained(self, *, timeout_s: float, poll_interval_s: float = 0.05) -> bool:
         """Wait for active connections to disappear without stopping sessions."""
+        _validate_timeout("timeout_s", timeout_s)
+        _validate_poll_interval("poll_interval_s", poll_interval_s)
         if self.active_count == 0:
             return True
-        deadline = asyncio.get_running_loop().time() + max(timeout_s, 0.0)
+        deadline = asyncio.get_running_loop().time() + timeout_s
         while self.active_count > 0:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return False
-            await asyncio.sleep(min(max(poll_interval_s, 0.001), remaining))
+            await asyncio.sleep(min(poll_interval_s, remaining))
         return True
 
     async def drain(
@@ -355,7 +377,6 @@ class CapacityGate(Generic[KeyT]):
         drain_timeout_s: float,
         force_after: bool = True,
         force_timeout_s: float | None = None,
-        poll_interval_s: float = 0.05,
         stop_for_key: Callable[[KeyT, bool], object] | None = None,
     ) -> float | None:
         """Drive each active session GRACEFULLY, then force-escalate the stragglers.
@@ -392,6 +413,8 @@ class CapacityGate(Generic[KeyT]):
         remains owned in the background rather than making the caller wait for
         cancellation-resistant teardown.
         """
+        _validate_timeout("drain_timeout_s", drain_timeout_s)
+        _validate_timeout("force_timeout_s", force_timeout_s, allow_none=True)
         pairs = list(sessions_for_keys())
         if not pairs:
             return _deadline_after(force_timeout_s)

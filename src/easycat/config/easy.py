@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from easycat._provider_helpers import has_usable_credential
 from easycat.echo_cancellation import (
     EchoCancellationConfig,
     is_echo_canceller_config,
@@ -640,8 +641,10 @@ class EasyConfig(_AgentSessionConfig):
         # the standard OpenAI SDK convention.  Resolved before string
         # parsing so ``stt="openai-realtime"`` honors the env var
         # without needing to be passed explicitly.
-        if self.openai_api_key is None and (env_key := os.getenv("OPENAI_API_KEY")):
-            self.openai_api_key = env_key
+        if self.openai_api_key is None:
+            env_key = os.getenv("OPENAI_API_KEY")
+            if has_usable_credential(env_key):
+                self.openai_api_key = env_key
 
         # Resolve string-keyed provider shortcuts ("deepgram/flux" →
         # DeepgramSTTConfig(...)) before any downstream validation. Typed
@@ -651,11 +654,13 @@ class EasyConfig(_AgentSessionConfig):
         # per-call credential override, avoiding process-global
         # ``os.environ`` mutation during config construction.
         api_key_overrides = (
-            {"OPENAI_API_KEY": self.openai_api_key} if self.openai_api_key else None
+            {"OPENAI_API_KEY": self.openai_api_key}
+            if has_usable_credential(self.openai_api_key)
+            else None
         )
         self._resolve_provider_shortcuts(api_key_overrides)
 
-        if self.openai_api_key:
+        if has_usable_credential(self.openai_api_key):
             if self.stt is None:
                 # Default to the Realtime WebSocket STT: audio is streamed
                 # as it arrives (sub-second stop-to-final), versus the
@@ -790,7 +795,9 @@ class EasyConfig(_AgentSessionConfig):
         # configured.  Route it through the error catalog so the user
         # sees the missing env var (and its fix) instead of a symptom
         # they never touched.
-        if (self.stt is None or self.tts is None) and not self.openai_api_key:
+        if (self.stt is None or self.tts is None) and not has_usable_credential(
+            self.openai_api_key
+        ):
             raise EASYCAT_E203(var="OPENAI_API_KEY")
         if self.stt is None:
             raise ValueError("STT configuration is required.")
@@ -801,7 +808,7 @@ class EasyConfig(_AgentSessionConfig):
             (self.tts, "TTS"),
         )
         for cfg, kind in provider_configs:
-            if hasattr(cfg, "api_key") and not cfg.api_key:
+            if hasattr(cfg, "api_key") and not has_usable_credential(cfg.api_key):
                 # Keep the per-provider display-name ValueError here —
                 # there is no (cfg, kind) -> env-var helper today, and the
                 # None-branch fix above captures ~all of the leverage.

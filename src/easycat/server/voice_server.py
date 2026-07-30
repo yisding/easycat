@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import is_dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -132,6 +132,16 @@ class VoiceServer:
         self._site: Any = None
         self._ws_server: Any = None
         self._started = False
+        # Public lifecycle transitions are serialized so concurrent starts
+        # cannot publish different runner/site pairs into the same fields, and
+        # stop cannot drain a half-published startup transaction.
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_owner: asyncio.Task[Any] | None = None
+        self._lifecycle_action: str | None = None
+        # A failed teardown keeps the resource references that did not cleanly
+        # close.  A later ``stop`` retries them; ``start`` must not overwrite
+        # those references with a fresh listener stack in the meantime.
+        self._lifecycle_cleanup_error: Exception | None = None
 
         # The mounted WebRTC route unit (M7). WebRTC ``/offer`` reserve through
         # the SAME shared ``_gate`` and register into the SAME
@@ -176,6 +186,27 @@ class VoiceServer:
         surfaces a clear, actionable error rather than an ``ImportError`` at
         package import time.
         """
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "start":
+                return
+            raise RuntimeError("VoiceServer.start() cannot run reentrantly during stop()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "start"
+            try:
+                await self._start_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _start_unlocked(self) -> None:
+        """Start while the caller owns ``_lifecycle_lock``."""
+        if self._lifecycle_cleanup_error is not None:
+            raise RuntimeError(
+                "VoiceServer cannot start because previous teardown cleanup "
+                "is incomplete; call stop() again to retry cleanup"
+            ) from self._lifecycle_cleanup_error
         if self._started:
             return
 
@@ -236,15 +267,31 @@ class VoiceServer:
             self._webrtc_routes = self._build_webrtc_routes()
             self._webrtc_routes.register(app, prefix="/webrtc", web=web)
 
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.config.host, self.config.port)
-        await site.start()
+        runner, site = await self._start_http_listener(web, app)
         self._runner = runner
         self._site = site
 
-        if self.config.enable_websocket:
-            self._ws_server = await self._start_websocket_listener()
+        try:
+            if self.config.enable_websocket:
+                self._ws_server = await self._start_websocket_listener()
+        except BaseException as startup_error:
+            # The HTTP listener is already live here, and can even have accepted
+            # a WebRTC offer while the raw-WebSocket bind was pending. Route the
+            # rollback through the normal forced-stop owner so every partially
+            # started listener/session is closed and all lifecycle references
+            # are reset before the original startup failure propagates.
+            try:
+                await self._stop_unlocked(force=True)
+            except BaseException as cleanup_error:
+                if isinstance(cleanup_error, asyncio.CancelledError):
+                    # This rollback calls the unlocked teardown directly, so
+                    # it does not pass through stop()'s cancellation epilogue.
+                    # Publish the same retryable stopped state here.
+                    self._finalize_stop_cleanup(
+                        [RuntimeError("VoiceServer startup rollback was interrupted")]
+                    )
+                raise startup_error from cleanup_error
+            raise
 
         self._started = True
         # Reflect the fresh serving state on the draining gauge (M8). A prior
@@ -259,6 +306,31 @@ class VoiceServer:
             self.config.enable_websocket,
             self._webrtc_routes is not None,
         )
+
+    async def _start_http_listener(self, web: Any, app: Any) -> tuple[Any, Any]:
+        """Start aiohttp transactionally, retaining failed rollback ownership."""
+        runner = web.AppRunner(app)
+        site: Any | None = None
+        try:
+            await runner.setup()
+            site = web.TCPSite(runner, self.config.host, self.config.port)
+            await site.start()
+        except BaseException as startup_error:
+            self._webrtc_routes = None
+            try:
+                await runner.cleanup()
+            except BaseException as cleanup_error:
+                self._runner = runner
+                self._site = site
+                retained_error = (
+                    cleanup_error
+                    if isinstance(cleanup_error, Exception)
+                    else RuntimeError("VoiceServer startup rollback was interrupted")
+                )
+                self._finalize_stop_cleanup([retained_error])
+                raise startup_error from cleanup_error
+            raise
+        return runner, site
 
     def _build_webrtc_routes(self) -> Any:
         """Build the mounted :class:`WebRTCRoutes` from process policy.
@@ -357,6 +429,35 @@ class VoiceServer:
         ``force=True`` collapses the grace window to zero so remaining sessions
         are force-stopped immediately.
         """
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "stop":
+                return
+            raise RuntimeError("VoiceServer.stop() cannot run reentrantly during start()")
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "stop"
+            try:
+                try:
+                    await self._stop_unlocked(force=force)
+                except asyncio.CancelledError:
+                    # Cancellation may interrupt any direct cleanup await
+                    # before _stop_unlocked reaches its normal epilogue.
+                    # Publish a truthful, retryable stopped state while all
+                    # not-yet-cleaned resource references are still retained,
+                    # then preserve the caller's cancellation.
+                    self._finalize_stop_cleanup(
+                        [RuntimeError("VoiceServer teardown was interrupted by cancellation")]
+                    )
+                    raise
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _stop_unlocked(self, *, force: bool = False) -> None:
+        """Stop while the caller owns ``_lifecycle_lock``."""
+        cleanup_errors: list[Exception] = []
+
         # (1) draining flag.
         self._gate.start_draining()
         # Reflect the state transition on the draining gauge (M8). A no-op
@@ -373,32 +474,35 @@ class VoiceServer:
         # ws_server.wait_closed()`` yet: a hung handler would deadlock it before
         # the drain can force-escalate. The aiohttp site/runner are torn down
         # now; the raw-ws server is awaited AFTER the drain and handler cancel.
-        ws_server = await self._close_listeners_for_drain(await_natural_end=await_natural_end)
+        ws_server = await self._close_listeners_for_drain(
+            await_natural_end=await_natural_end,
+            cleanup_errors=cleanup_errors,
+        )
 
         # (4)+(5) wait for active connection tasks up to ``drain_timeout_s``,
         # then force-escalate the remainder. ``force=True`` skips the grace
         # window entirely. Running BEFORE ``ws_server.wait_closed()`` lets the
         # force-stop own teardown for any handler whose graceful stop is skipped
         # while draining.
-        drain_timeout = 0.0 if force else self.config.drain_timeout_s
-        if await_natural_end:
-            drain_timeout = await self._await_natural_drain_or_escalate(drain_timeout)
-        await self._gate.drain(
-            self._active_session_pairs,
-            drain_timeout_s=drain_timeout,
-            force_after=True,
-            # Bound the forced phase so a session that hangs even in its
-            # force-stop is abandoned rather than blocking ``stop()`` forever.
-            force_timeout_s=self.config.force_shutdown_timeout_s,
-            stop_for_key=self._stop_managed_session,
+        await self._attempt_cleanup(
+            "session drain",
+            self._drain_sessions_for_stop(
+                force=force,
+                await_natural_end=await_natural_end,
+            ),
+            cleanup_errors,
         )
 
         # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
         # already force-stopped the sessions; cancelling the surviving handler
         # tasks unblocks the raw-ws ``Server._close`` waiter so the bounded
         # ``wait_closed`` below cannot deadlock.
-        await self._cancel_ws_handler_tasks(
-            timeout_s=self.config.force_shutdown_timeout_s,
+        await self._attempt_cleanup(
+            "WebSocket handler cancellation",
+            self._cancel_ws_handler_tasks(
+                timeout_s=self.config.force_shutdown_timeout_s,
+            ),
+            cleanup_errors,
         )
 
         # Now all handlers can return (closed connections + forced sessions +
@@ -407,16 +511,24 @@ class VoiceServer:
         # backstop: even a pathological handler that resists cancellation cannot
         # make ``stop()`` block forever.
         if ws_server is not None:
-            closed = await _await_with_hard_timeout(
-                ws_server.wait_closed(),
-                timeout_s=self.config.force_shutdown_timeout_s,
+            wait_succeeded, closed = await self._attempt_cleanup(
+                "raw-WebSocket listener wait",
+                _await_with_hard_timeout(
+                    ws_server.wait_closed(),
+                    timeout_s=self.config.force_shutdown_timeout_s,
+                ),
+                cleanup_errors,
             )
-            if not closed:
-                logger.warning(
-                    "VoiceServer: raw-ws listener did not close within "
-                    "force_shutdown_timeout_s=%ss; abandoning the wait",
-                    self.config.force_shutdown_timeout_s,
-                )
+            if wait_succeeded:
+                if not closed:
+                    timeout_error = RuntimeError(
+                        "raw-WebSocket listener did not close within "
+                        f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
+                    )
+                    logger.warning("VoiceServer: %s", timeout_error)
+                    cleanup_errors.append(timeout_error)
+                elif self._ws_server is ws_server:
+                    self._ws_server = None
 
         # Cancel the per-offer WebRTC ``wait_closed`` cleanup tasks. The drain
         # step already force-stopped the sessions via the shared active set;
@@ -424,10 +536,16 @@ class VoiceServer:
         # otherwise outlive ``stop`` and leak. Mirrors the serve helper's
         # ``cancel_cleanup_tasks``.
         if self._webrtc_routes is not None:
-            await self._webrtc_routes.cancel_cleanup_tasks(
-                timeout_s=self.config.force_shutdown_timeout_s,
+            routes = self._webrtc_routes
+            cleanup_succeeded, _ = await self._attempt_cleanup(
+                "WebRTC cleanup tasks",
+                routes.cancel_cleanup_tasks(
+                    timeout_s=self.config.force_shutdown_timeout_s,
+                ),
+                cleanup_errors,
             )
-            self._webrtc_routes = None
+            if cleanup_succeeded and self._webrtc_routes is routes:
+                self._webrtc_routes = None
 
         # (7) final hard sweep of the bare registry, then reset the shared gate
         # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
@@ -439,39 +557,142 @@ class VoiceServer:
         # retries it after the handler has unwound. Bound the sweep with
         # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
         # block server teardown.
-        swept = await _await_with_hard_timeout(
-            self._manager.stop_all(force=True),
-            timeout_s=self.config.force_shutdown_timeout_s,
+        sweep_succeeded, swept = await self._attempt_cleanup(
+            "SessionManager hard sweep",
+            _await_with_hard_timeout(
+                self._manager.stop_all(force=True),
+                timeout_s=self.config.force_shutdown_timeout_s,
+            ),
+            cleanup_errors,
         )
-        if not swept:
-            logger.warning(
-                "VoiceServer: SessionManager.stop_all did not finish within "
-                "force_shutdown_timeout_s=%ss; abandoning the hard sweep",
-                self.config.force_shutdown_timeout_s,
+        if sweep_succeeded:
+            self._record_incomplete_hard_sweep(
+                completed=swept,
+                cleanup_errors=cleanup_errors,
             )
-        self._active_session_objs.clear()
+
+        # Keep session/resource references when any cleanup stage failed so a
+        # later stop can retry them. The gate itself is always reset to a
+        # truthful non-serving state; start is blocked by
+        # ``_lifecycle_cleanup_error`` until a retry completes successfully.
+        self._finalize_stop_cleanup(cleanup_errors)
+        if cleanup_errors:
+            raise cleanup_errors[0]
+
+    def _record_incomplete_hard_sweep(
+        self,
+        *,
+        completed: bool,
+        cleanup_errors: list[Exception],
+    ) -> None:
+        """Retain lifecycle ownership when the manager still owns sessions."""
+        if not completed:
+            timeout_error = RuntimeError(
+                "SessionManager.stop_all did not finish within "
+                f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
+            )
+            logger.warning("VoiceServer: %s", timeout_error)
+            cleanup_errors.append(timeout_error)
+            return
+        retained_keys = self._manager.active_keys()
+        if retained_keys:
+            retained_error = RuntimeError(
+                f"SessionManager retained {len(retained_keys)} session(s) after the hard sweep"
+            )
+            logger.warning("VoiceServer: %s", retained_error)
+            cleanup_errors.append(retained_error)
+
+    def _finalize_stop_cleanup(self, cleanup_errors: list[Exception]) -> None:
+        """Publish truthful stopped state while retaining failed cleanup ownership."""
+        if not cleanup_errors:
+            self._active_session_objs.clear()
         self._reset_gate_bookkeeping()
         self._await_natural_end_drain = False
         # Clear the active-connections gauge on both server_state series so the
         # post-drain reading is 0, not a stale non-zero value (M8 fix).
         self._emit_connections_active_cleared()
         self._started = False
+        self._emit_draining(False)
+        self._lifecycle_cleanup_error = cleanup_errors[0] if cleanup_errors else None
 
-    async def _close_listeners_for_drain(self, *, await_natural_end: bool) -> Any:
+    @staticmethod
+    def _record_cleanup_error(
+        stage: str,
+        exc: Exception,
+        cleanup_errors: list[Exception],
+    ) -> None:
+        logger.exception("VoiceServer cleanup failed during %s", stage, exc_info=exc)
+        cleanup_errors.append(exc)
+
+    async def _attempt_cleanup(
+        self,
+        stage: str,
+        awaitable: Awaitable[Any],
+        cleanup_errors: list[Exception],
+    ) -> tuple[bool, Any]:
+        """Await one cleanup stage, recording failure so later stages still run."""
+        try:
+            return True, await awaitable
+        except Exception as exc:
+            self._record_cleanup_error(stage, exc, cleanup_errors)
+            return False, None
+
+    async def _drain_sessions_for_stop(
+        self,
+        *,
+        force: bool,
+        await_natural_end: bool,
+    ) -> None:
+        """Drain sessions after listeners stop accepting, escalating at the deadline."""
+        drain_timeout = 0.0 if force else self.config.drain_timeout_s
+        if await_natural_end:
+            drain_timeout = await self._await_natural_drain_or_escalate(drain_timeout)
+        await self._gate.drain(
+            self._active_session_pairs,
+            drain_timeout_s=drain_timeout,
+            force_after=True,
+            force_timeout_s=self.config.force_shutdown_timeout_s,
+            stop_for_key=self._stop_managed_session,
+        )
+
+    async def _close_listeners_for_drain(
+        self,
+        *,
+        await_natural_end: bool,
+        cleanup_errors: list[Exception],
+    ) -> Any:
         """Stop accepting new work and return the raw-ws server to await later."""
         ws_server = self._ws_server
         if ws_server is not None:
-            if await_natural_end:
-                ws_server.close(close_connections=False)
-            else:
-                ws_server.close()
-            self._ws_server = None
+            try:
+                if await_natural_end:
+                    ws_server.close(close_connections=False)
+                else:
+                    ws_server.close()
+            except Exception as exc:
+                self._record_cleanup_error(
+                    "raw-WebSocket listener close",
+                    exc,
+                    cleanup_errors,
+                )
         if self._site is not None:
-            await self._site.stop()
-            self._site = None
+            site = self._site
+            succeeded, _ = await self._attempt_cleanup(
+                "HTTP site stop",
+                site.stop(),
+                cleanup_errors,
+            )
+            if succeeded and self._site is site:
+                self._site = None
         if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
+            runner = self._runner
+            succeeded, _ = await self._attempt_cleanup(
+                "HTTP runner cleanup",
+                runner.cleanup(),
+                cleanup_errors,
+            )
+            if succeeded and self._runner is runner:
+                self._runner = None
         return ws_server
 
     async def _await_natural_drain_or_escalate(self, drain_timeout: float) -> float:

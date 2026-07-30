@@ -10,12 +10,17 @@ provider-level test drifts.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from easycat.events import Error, ErrorStage
 from easycat.tts._ws_base import _WSTTSBase
+from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
+from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 
 
 @dataclass
@@ -91,8 +96,8 @@ async def test_emit_provider_error_skips_none_context():
 
 
 @pytest.mark.asyncio
-async def test_close_ws_is_idempotent_and_swallows_errors():
-    """``_close_ws`` clears the socket and tolerates a failing close()."""
+async def test_close_ws_retains_failed_socket_for_idempotent_retry():
+    """``_close_ws`` forgets the exact socket only after close succeeds."""
 
     class _FakeWS:
         def __init__(self) -> None:
@@ -100,18 +105,113 @@ async def test_close_ws_is_idempotent_and_swallows_errors():
 
         async def close(self) -> None:
             self.closed += 1
-            raise RuntimeError("already gone")
+            if self.closed == 1:
+                raise RuntimeError("socket close failed")
 
     probe = _Probe(_Config())
     fake = _FakeWS()
     probe._ws = fake  # type: ignore[assignment]
 
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await probe._close_ws()
+    assert probe._ws is fake
+    assert fake.closed == 1
+
     await probe._close_ws()
     assert probe._ws is None
-    assert fake.closed == 1
-    # A second call is a no-op (socket already cleared).
+    assert fake.closed == 2
+    # Once the successful close clears ownership, further calls are no-ops.
     await probe._close_ws()
-    assert fake.closed == 1
+    assert fake.closed == 2
+
+
+@pytest.mark.asyncio
+async def test_close_drains_emit_tasks_even_when_socket_close_fails():
+    bus = _RecordingBus()
+    probe = _Probe(_Config(event_bus=bus))
+    failing_ws = MagicMock()
+    failing_ws.close = AsyncMock(side_effect=RuntimeError("socket close failed"))
+    probe._ws = failing_ws
+    probe._emit_provider_error(RuntimeError("provider failed"))
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await probe.close()
+
+    assert probe._emit_tasks == set()
+    assert len(bus.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_replace_oneshot_ws_waits_for_retained_close_before_factory():
+    class _FailOnceWS:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("socket close failed")
+
+    probe = _Probe(_Config())
+    retained = _FailOnceWS()
+    replacement = _FailOnceWS()
+    factory = MagicMock(return_value=replacement)
+    probe._ws = retained  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await probe._replace_oneshot_ws(factory)
+
+    assert probe._ws is retained
+    factory.assert_not_called()
+
+    assert await probe._replace_oneshot_ws(factory) is replacement
+    assert retained.close_calls == 2
+    factory.assert_called_once_with()
+    assert probe._ws is replacement
+
+
+@pytest.mark.parametrize(
+    "provider_factory",
+    [
+        pytest.param(
+            lambda: CartesiaTTS(CartesiaTTSConfig(persistent_ws=False)),
+            id="cartesia",
+        ),
+        pytest.param(
+            lambda: DeepgramTTS(DeepgramTTSConfig(persistent_ws=False)),
+            id="deepgram",
+        ),
+        pytest.param(
+            lambda: ElevenLabsTTS(ElevenLabsTTSConfig(persistent_ws=False)),
+            id="elevenlabs",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_one_shot_provider_stop_retries_exact_failed_socket(
+    provider_factory: Callable[[], _WSTTSBase],
+) -> None:
+    provider = provider_factory()
+
+    class _FailOnceWS:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("socket close failed")
+
+    ws = _FailOnceWS()
+    provider._ws = ws  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await provider.stop()
+
+    assert provider._ws is ws
+    await provider.stop()
+    assert provider._ws is None
+    assert ws.close_calls == 2
 
 
 @pytest.mark.asyncio

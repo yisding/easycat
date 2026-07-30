@@ -196,6 +196,11 @@ def test_bind_guard_allows_non_loopback_with_token() -> None:
     enforce_bind_guard("0.0.0.0", auth=BearerTokenAuth(token="sekrit"))
 
 
+def test_bind_guard_rejects_non_loopback_with_whitespace_token() -> None:
+    with pytest.raises(ValueError, match="without a token"):
+        enforce_bind_guard("0.0.0.0", auth=BearerTokenAuth(token="   "))
+
+
 def test_bind_guard_allows_non_loopback_with_unsafe_escape_hatch() -> None:
     enforce_bind_guard("0.0.0.0", auth=None, unsafe_allow_no_auth=True)
 
@@ -247,6 +252,15 @@ def test_bearer_auth_from_env_reads_serve_token(monkeypatch: pytest.MonkeyPatch)
 def test_bearer_auth_from_env_returns_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
     assert bearer_auth_from_env() is None
+
+
+def test_bearer_auth_from_env_treats_whitespace_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", " \t ")
+    assert bearer_auth_from_env() is None
+    with pytest.raises(ValueError, match="without a token"):
+        enforce_bind_guard("0.0.0.0", auth=bearer_auth_from_env())
 
 
 def test_bearer_auth_from_env_ignores_the_server_token_typo(

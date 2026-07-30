@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -70,6 +72,384 @@ async def test_start_is_idempotent() -> None:
         assert server.http_address == first_http
     finally:
         await server.stop()
+
+
+async def test_start_rolls_back_http_listener_when_websocket_bind_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    app = SimpleNamespace(router=SimpleNamespace(add_get=Mock()))
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    site = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    monkeypatch.setattr(
+        voice_server_module,
+        "require_module",
+        lambda *_args, **_kwargs: web,
+    )
+    monkeypatch.setattr(
+        voice_server_module,
+        "metrics_middleware",
+        lambda _server: object(),
+    )
+
+    server = _idle_server(enable_webrtc=False)
+    websocket_start = AsyncMock(side_effect=OSError("websocket port busy"))
+    monkeypatch.setattr(server, "_start_websocket_listener", websocket_start)
+
+    with pytest.raises(OSError, match="websocket port busy"):
+        await server.start()
+
+    runner.setup.assert_awaited_once()
+    site.start.assert_awaited_once()
+    websocket_start.assert_awaited_once()
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+    assert server._ws_server is None
+    assert server._webrtc_routes is None
+    assert server._started is False
+    assert server._gate.is_draining is False
+
+    # A caller may still unconditionally stop in its own finally block.
+    await server.stop(force=True)
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+
+
+async def test_start_preserves_bind_failure_when_listener_rollback_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    app = SimpleNamespace(router=SimpleNamespace(add_get=Mock()))
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    rollback_error = RuntimeError("site rollback failed")
+    site = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(side_effect=rollback_error))
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+
+    server = _idle_server(enable_webrtc=False)
+    monkeypatch.setattr(
+        server,
+        "_start_websocket_listener",
+        AsyncMock(side_effect=OSError("websocket port busy")),
+    )
+
+    with pytest.raises(OSError, match="websocket port busy") as exc_info:
+        await server.start()
+
+    assert exc_info.value.__cause__ is rollback_error
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert server._site is site
+    assert server._runner is None
+    assert server._started is False
+    assert server._lifecycle_cleanup_error is rollback_error
+
+
+async def test_start_retains_runner_when_setup_and_runner_rollback_both_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    app = SimpleNamespace(router=SimpleNamespace(add_get=Mock()))
+    rollback_error = RuntimeError("runner rollback failed")
+    runner = SimpleNamespace(
+        setup=AsyncMock(side_effect=OSError("runner setup failed")),
+        cleanup=AsyncMock(side_effect=rollback_error),
+    )
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+
+    with pytest.raises(OSError, match="runner setup failed") as exc_info:
+        await server.start()
+
+    assert exc_info.value.__cause__ is rollback_error
+    assert server._runner is runner
+    assert server._site is None
+    assert server._lifecycle_cleanup_error is rollback_error
+    with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
+        await server.start()
+
+    runner.cleanup = AsyncMock()
+    await server.stop(force=True)
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._lifecycle_cleanup_error is None
+
+
+async def test_cancelled_internal_startup_rollback_records_retry_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    rollback_started = asyncio.Event()
+
+    async def block_site_stop() -> None:
+        rollback_started.set()
+        await asyncio.Event().wait()
+
+    app = SimpleNamespace(router=SimpleNamespace(add_get=Mock()))
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    site = SimpleNamespace(
+        start=AsyncMock(),
+        stop=AsyncMock(side_effect=block_site_stop),
+    )
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+    server = _idle_server(enable_webrtc=False)
+    monkeypatch.setattr(
+        server,
+        "_start_websocket_listener",
+        AsyncMock(side_effect=OSError("websocket port busy")),
+    )
+
+    starting = asyncio.create_task(server.start())
+    await rollback_started.wait()
+    starting.cancel()
+    with pytest.raises(OSError, match="websocket port busy") as exc_info:
+        await starting
+
+    assert isinstance(exc_info.value.__cause__, asyncio.CancelledError)
+    assert server._site is site
+    assert server._runner is runner
+    assert server._started is False
+    assert server._gate.is_draining is False
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+
+    site.stop = AsyncMock()
+    await server.stop(force=True)
+    assert server._site is None
+    assert server._runner is None
+    assert server._lifecycle_cleanup_error is None
+
+
+async def test_concurrent_starts_publish_one_listener_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    setup_started = asyncio.Event()
+    release_setup = asyncio.Event()
+    app = SimpleNamespace(router=Mock())
+    runner = SimpleNamespace(cleanup=AsyncMock())
+
+    async def setup() -> None:
+        setup_started.set()
+        await release_setup.wait()
+
+    runner.setup = AsyncMock(side_effect=setup)
+    site = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    first = asyncio.create_task(server.start())
+    await setup_started.wait()
+    second = asyncio.create_task(server.start())
+    await asyncio.sleep(0)
+
+    web.AppRunner.assert_called_once()
+    release_setup.set()
+    await asyncio.gather(first, second)
+    await server.stop(force=True)
+
+    web.AppRunner.assert_called_once()
+    web.TCPSite.assert_called_once_with(runner, "127.0.0.1", 0)
+    runner.cleanup.assert_awaited_once()
+    site.stop.assert_awaited_once()
+
+
+async def test_stop_waits_for_in_progress_start_then_cleans_same_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    setup_started = asyncio.Event()
+    release_setup = asyncio.Event()
+    app = SimpleNamespace(router=Mock())
+    runner = SimpleNamespace(cleanup=AsyncMock())
+
+    async def setup() -> None:
+        setup_started.set()
+        await release_setup.wait()
+
+    runner.setup = AsyncMock(side_effect=setup)
+    site = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    starting = asyncio.create_task(server.start())
+    await setup_started.wait()
+    stopping = asyncio.create_task(server.stop(force=True))
+    await asyncio.sleep(0)
+
+    assert not stopping.done()
+    release_setup.set()
+    await asyncio.gather(starting, stopping)
+
+    web.AppRunner.assert_called_once()
+    web.TCPSite.assert_called_once()
+    runner.cleanup.assert_awaited_once()
+    site.stop.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+    assert server._started is False
+
+
+async def test_cleanup_failure_finishes_stop_and_rejects_queued_start_until_retry() -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    site_stop_started = asyncio.Event()
+    release_site_stop = asyncio.Event()
+
+    async def fail_site_stop() -> None:
+        site_stop_started.set()
+        await release_site_stop.wait()
+        raise RuntimeError("site cleanup failed")
+
+    site = SimpleNamespace(stop=AsyncMock(side_effect=fail_site_stop))
+    runner = SimpleNamespace(cleanup=AsyncMock())
+    server._site = site
+    server._runner = runner
+    server._started = True
+
+    stopping = asyncio.create_task(server.stop(force=True))
+    await site_stop_started.wait()
+    queued_start = asyncio.create_task(server.start())
+    await asyncio.sleep(0)
+    assert not queued_start.done()
+
+    release_site_stop.set()
+    with pytest.raises(RuntimeError, match="site cleanup failed"):
+        await stopping
+    with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
+        await queued_start
+
+    # Teardown continues after the failed site stage, publishes truthful
+    # lifecycle flags, and keeps only the failed resource reference for retry.
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is site
+    assert server._started is False
+    assert server._gate.is_draining is False
+
+    site.stop = AsyncMock()
+    await server.stop(force=True)
+    site.stop.assert_awaited_once()
+    assert server._site is None
+    assert server._lifecycle_cleanup_error is None
+
+
+async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership() -> None:
+    class FailingSession(_FakeSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_stop = True
+            self.stop_calls: list[bool] = []
+
+        async def stop(self, *, force: bool = False) -> None:
+            self.stop_calls.append(force)
+            if self.fail_stop:
+                raise RuntimeError("session teardown failed")
+            await super().stop(force=force)
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    session = FailingSession()
+    key = 17
+    server._started = True
+    server._manager._sessions[key] = session
+    server._active_session_objs[key] = session
+    assert server._gate.try_acquire()
+    server._gate.track(key)
+
+    with pytest.raises(RuntimeError, match="retained 1 session"):
+        await server.stop(force=True)
+
+    assert server._manager.get(key) is session
+    assert server._active_session_objs == {key: session}
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+    with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
+        await server.start()
+
+    session.fail_stop = False
+    await server.stop(force=True)
+
+    assert session.stopped.is_set()
+    assert server._manager.get(key) is None
+    assert server._active_session_objs == {}
+    assert server._lifecycle_cleanup_error is None
+
+
+async def test_cancelled_stop_publishes_retryable_stopped_state_before_reraising() -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    site_stop_started = asyncio.Event()
+    release_site_stop = asyncio.Event()
+
+    async def stop_site() -> None:
+        site_stop_started.set()
+        await release_site_stop.wait()
+
+    site = SimpleNamespace(stop=AsyncMock(side_effect=stop_site))
+    runner = SimpleNamespace(cleanup=AsyncMock())
+    server._site = site
+    server._runner = runner
+    server._started = True
+
+    stopping = asyncio.create_task(server.stop(force=True))
+    await site_stop_started.wait()
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    assert server._started is False
+    assert server._gate.is_draining is False
+    assert server._site is site
+    assert server._runner is runner
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+    with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
+        await server.start()
+
+    site.stop = AsyncMock()
+    await server.stop(force=True)
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert server._site is None
+    assert server._runner is None
+    assert server._lifecycle_cleanup_error is None
 
 
 @pytest.mark.integration_socket

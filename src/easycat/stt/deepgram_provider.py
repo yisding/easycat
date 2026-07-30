@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import math
 from collections import deque
@@ -220,9 +219,16 @@ class DeepgramSTT(WebSocketSTTBase):
         self._keepalive_task = None
         if task is None or task.done():
             return
+        current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            if current is not None and current.cancelling() > cancellation_count:
+                raise
+        if current is not None and current.cancelling() > cancellation_count:
+            raise asyncio.CancelledError
 
     async def _discard_connection(self) -> None:
         self._audio_resampler.reset()
@@ -504,7 +510,8 @@ class DeepgramSTT(WebSocketSTTBase):
             params.update(
                 {
                     "language": self._config.language,
-                    "channels": str(self._config.channels),
+                    # WebSocketSTTBase normalizes streaming payloads to mono.
+                    "channels": "1",
                     "punctuate": str(self._config.punctuate).lower(),
                     "interim_results": str(self._config.interim_results).lower(),
                     "smart_format": str(self._config.smart_format).lower(),

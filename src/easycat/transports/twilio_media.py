@@ -527,9 +527,11 @@ def _twilio_start_stream_sid(
 ) -> tuple[str | None, bool]:
     """Return the canonical stream SID and whether duplicate fields agree."""
     top_stream_sid = msg.get("streamSid")
-    top_stream_sid = top_stream_sid if isinstance(top_stream_sid, str) else None
+    top_stream_sid = top_stream_sid if isinstance(top_stream_sid, str) and top_stream_sid else None
     nested_stream_sid = start.get("streamSid")
-    nested_stream_sid = nested_stream_sid if isinstance(nested_stream_sid, str) else None
+    nested_stream_sid = (
+        nested_stream_sid if isinstance(nested_stream_sid, str) and nested_stream_sid else None
+    )
     return top_stream_sid or nested_stream_sid, (
         top_stream_sid is None or nested_stream_sid is None or top_stream_sid == nested_stream_sid
     )
@@ -906,6 +908,27 @@ class _TwilioProtocolMixin:
     async def _handle_connected(self, msg: dict[str, Any]) -> None:
         logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
 
+    async def _validated_start_stream_sid(
+        self,
+        msg: Mapping[str, Any],
+        start: Mapping[str, Any],
+    ) -> str | None:
+        """Return a usable start-frame stream SID, closing malformed streams."""
+        stream_sid, stream_sid_valid = _twilio_start_stream_sid(msg, start)
+        if stream_sid is None:
+            logger.warning("Rejecting Twilio start without streamSid")
+            ws = self._current_ws()
+            if ws is not None:
+                await ws.close(4003, "Missing streamSid")
+            return None
+        if not stream_sid_valid:
+            logger.warning("Rejecting Twilio start with conflicting streamSid values")
+            ws = self._current_ws()
+            if ws is not None:
+                await ws.close(4003, "Conflicting streamSid")
+            return None
+        return stream_sid
+
     async def _accept_start(
         self,
         msg: dict[str, Any],
@@ -945,12 +968,8 @@ class _TwilioProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return False
-        stream_sid, stream_sid_valid = _twilio_start_stream_sid(msg, start)
-        if not stream_sid_valid:
-            logger.warning("Rejecting Twilio start with conflicting streamSid values")
-            ws = self._current_ws()
-            if ws is not None:
-                await ws.close(4003, "Conflicting streamSid")
+        stream_sid = await self._validated_start_stream_sid(msg, start)
+        if stream_sid is None:
             return False
         token_claims = (
             prevalidated_claims
@@ -1414,6 +1433,25 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._pending_start_message: dict[str, Any] | None = None
         self._pending_start_claims: dict[str, str] | None = None
         self._connection_generation = 0
+        # One accepted WebSocket supports one connection lifecycle. A shared
+        # task makes concurrent connect() callers observe the same tentative
+        # start/observer outcome instead of treating `_connected=True` as a
+        # completed handshake.
+        self._connect_task: asyncio.Task[None] | None = None
+        self._socket_consumed = False
+        # The accepted socket remains cleanup-owned until close succeeds.
+        # Public connected state and receive metadata may already be cleared
+        # when cancellation/failure interrupts disconnect, so keep an explicit
+        # retry ledger instead of relying on those fields for admission.
+        self._socket_close_pending = True
+        self._disconnect_cleanup_error: Exception | None = None
+        # Serialize socket ownership transitions. ``connect`` releases this
+        # lock while dispatching a deferred CallAnswered event so an observer
+        # can still initiate disconnect; its final publish phase reacquires the
+        # lock and rejects a generation invalidated by that disconnect.
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_owner: asyncio.Task[Any] | None = None
+        self._lifecycle_action: str | None = None
         self._init_audio_queue(
             resolved_config.max_pending_chunks,
             resolved_config.max_pending_bytes,
@@ -1427,33 +1465,129 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._connected = False
 
     async def connect(self) -> None:
-        if self._connected:
+        current = asyncio.current_task()
+        if current is not None and self._connect_task is current:
             return
+        if current is not None and self._lifecycle_owner is current:
+            raise RuntimeError(
+                "TwilioConnectionTransport.connect() cannot run during disconnect()"
+            )
+        leader = False
+        connect_task: asyncio.Task[None] | None = None
+        async with self._lifecycle_lock:
+            connect_task = self._connect_task
+            leader = connect_task is None or connect_task.done()
+            if leader:
+                connect_task = asyncio.create_task(
+                    self._connect_transaction(),
+                    name="twilio-connection-connect",
+                )
+                self._connect_task = connect_task
+        if connect_task is None:
+            raise RuntimeError("Twilio connection transaction was not initialized")
+        if leader:
+            # Cancellation of the initiating caller cancels the shared
+            # transaction so partial startup rolls back just as it did before
+            # connect became single-flight.
+            await connect_task
+        else:
+            # A secondary caller may abandon its wait without cancelling the
+            # connection transaction owned by the initiating caller.
+            await asyncio.shield(connect_task)
+
+    async def _connect_transaction(self) -> None:
+        """Run one shared connection attempt with serialized publish phases."""
+        current = asyncio.current_task()
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "connect"
+            try:
+                connect_state = self._begin_connect_unlocked()
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+        if connect_state is None:
+            return
+        generation, pending_start, pending_claims = connect_state
+        accepted = True
+        try:
+            # Event handlers run outside the lifecycle lock. In particular, a
+            # CallAnswered observer may synchronously await disconnect().
+            if pending_start is not None:
+                accepted = await self._accept_start(
+                    pending_start,
+                    token_prevalidated=True,
+                    prevalidated_claims=pending_claims,
+                )
+            async with self._lifecycle_lock:
+                self._lifecycle_owner = current
+                self._lifecycle_action = "connect"
+                try:
+                    if not accepted:
+                        await self._rollback_connect_unlocked(generation)
+                        return
+                    if generation != self._connection_generation or not self._connected:
+                        # A disconnect may have completed while an observer was
+                        # running. Remove metadata published by that stale
+                        # observer before reporting the invalidated connect.
+                        self._clear_connection_metadata()
+                        self._enqueue_sentinel()
+                        raise ConnectionError("Twilio transport disconnected during connect")
+                    self._receive_task = asyncio.create_task(self._receive_loop())
+                finally:
+                    self._lifecycle_owner = None
+                    self._lifecycle_action = None
+        except BaseException:
+            await self._rollback_connect(generation)
+            raise
+
+    def _begin_connect_unlocked(
+        self,
+    ) -> tuple[int, dict[str, Any] | None, dict[str, str] | None] | None:
+        """Claim the accepted socket while holding ``_lifecycle_lock``."""
+        if self._connected:
+            return None
+        if self._disconnect_cleanup_error is not None:
+            raise RuntimeError(
+                "Twilio connection cleanup is incomplete; call disconnect() "
+                "again before reconnecting"
+            ) from self._disconnect_cleanup_error
+        if self._socket_consumed:
+            if self._socket_close_pending:
+                raise RuntimeError(
+                    "Twilio accepted connection has ended; call disconnect() "
+                    "to finish socket cleanup"
+                )
+            raise RuntimeError("Twilio accepted connection is already closed")
+        if not self._socket_close_pending:
+            raise RuntimeError("Twilio accepted connection is already closed")
+        self._socket_consumed = True
         self._connection_generation += 1
         generation = self._connection_generation
         self._connected = True
+        self._socket_close_pending = True
         self._reset_audio_queue()
         self._client_connected.set()
         pending_start = self._pending_start_message
         pending_claims = self._pending_start_claims
         self._pending_start_message = None
         self._pending_start_claims = None
-        try:
-            if pending_start is not None and not await self._accept_start(
-                pending_start,
-                token_prevalidated=True,
-                prevalidated_claims=pending_claims,
-            ):
-                await self._rollback_connect(generation)
-                return
-            if generation != self._connection_generation or not self._connected:
-                raise ConnectionError("Twilio transport disconnected during connect")
-            self._receive_task = asyncio.create_task(self._receive_loop())
-        except BaseException:
-            await self._rollback_connect(generation)
-            raise
+        return generation, pending_start, pending_claims
 
     async def _rollback_connect(self, generation: int) -> None:
+        """Serialize rollback with a competing disconnect."""
+        current = asyncio.current_task()
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "connect"
+            try:
+                await self._rollback_connect_unlocked(generation)
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _rollback_connect_unlocked(self, generation: int) -> None:
+        """Roll back one connect generation while holding ``_lifecycle_lock``."""
         if generation != self._connection_generation:
             return
         self._connection_generation += 1
@@ -1463,12 +1597,38 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._clear_connection_metadata()
         self._enqueue_sentinel()
         try:
-            await self._ws.close()
-        except Exception:
+            await self._close_socket_for_disconnect()
+        except asyncio.CancelledError:
+            self._publish_interrupted_disconnect()
+            raise
+        except Exception as exc:
+            self._disconnect_cleanup_error = exc
             logger.debug("Error closing Twilio WebSocket after connect failure", exc_info=True)
         await self._drain_emit_tasks()
 
     async def disconnect(self) -> None:
+        current = asyncio.current_task()
+        if current is not None and self._lifecycle_owner is current:
+            if self._lifecycle_action == "disconnect":
+                return
+            raise RuntimeError(
+                "TwilioConnectionTransport.disconnect() cannot run during connect()"
+            )
+        async with self._lifecycle_lock:
+            self._lifecycle_owner = current
+            self._lifecycle_action = "disconnect"
+            try:
+                try:
+                    await self._disconnect_unlocked()
+                except asyncio.CancelledError:
+                    self._publish_interrupted_disconnect()
+                    raise
+            finally:
+                self._lifecycle_owner = None
+                self._lifecycle_action = None
+
+    async def _disconnect_unlocked(self) -> None:
+        """Disconnect while holding ``_lifecycle_lock``."""
         # Remote EOF clears ``_connected`` in the shared receive finalizer
         # before the owner calls disconnect. Only skip once the connection
         # task and all per-call teardown state have been released.
@@ -1482,6 +1642,8 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
             and not self._call_ended_emitted
             and self._pending_start_message is None
             and not self._emit_tasks
+            and not self._socket_close_pending
+            and self._disconnect_cleanup_error is None
         ):
             return
         self._connection_generation += 1
@@ -1489,22 +1651,60 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         self._client_connected.clear()
         receive_task = self._receive_task
         self._receive_task = None
-        if receive_task is not None and receive_task is not asyncio.current_task():
-            if not receive_task.done():
-                receive_task.cancel()
-            try:
-                await receive_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.debug("Twilio receive loop failed during disconnect", exc_info=True)
+        cleanup_errors: list[Exception] = []
+        await self._reap_receive_task_for_disconnect(receive_task)
         self._clear_connection_metadata()
-        try:
-            await self._ws.close()
-        except Exception:
-            logger.debug("Error closing Twilio WebSocket", exc_info=True)
+        if self._socket_close_pending:
+            try:
+                await self._close_socket_for_disconnect()
+            except Exception as exc:
+                logger.debug("Error closing Twilio WebSocket", exc_info=True)
+                cleanup_errors.append(exc)
         self._enqueue_sentinel()
-        await self._drain_emit_tasks()
+        try:
+            await self._drain_emit_tasks()
+        except Exception as exc:
+            logger.debug("Error draining Twilio diagnostic events", exc_info=True)
+            cleanup_errors.append(exc)
+        self._disconnect_cleanup_error = cleanup_errors[0] if cleanup_errors else None
+        if cleanup_errors:
+            raise cleanup_errors[0]
+
+    async def _reap_receive_task_for_disconnect(
+        self,
+        receive_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Cancel the receive loop without consuming caller cancellation."""
+        if receive_task is None or receive_task is asyncio.current_task():
+            return
+        current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
+        if not receive_task.done():
+            receive_task.cancel()
+        try:
+            await receive_task
+        except asyncio.CancelledError:
+            if current is not None and current.cancelling() > cancellation_count:
+                raise
+        except Exception:
+            logger.debug("Twilio receive loop failed during disconnect", exc_info=True)
+        if current is not None and current.cancelling() > cancellation_count:
+            raise asyncio.CancelledError
+
+    async def _close_socket_for_disconnect(self) -> None:
+        """Close the accepted socket and clear its retry ledger on success."""
+        await self._ws.close()
+        self._socket_close_pending = False
+
+    def _publish_interrupted_disconnect(self) -> None:
+        """Preserve caller cancellation while retaining unfinished cleanup."""
+        self._connected = False
+        self._client_connected.clear()
+        self._clear_connection_metadata()
+        self._enqueue_sentinel()
+        self._disconnect_cleanup_error = RuntimeError(
+            "Twilio connection disconnect was interrupted by cancellation"
+        )
 
     def _clear_connection_metadata(self) -> None:
         self._stream_sid = None
@@ -1580,10 +1780,8 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return None
-        stream_sid, stream_sid_valid = _twilio_start_stream_sid(msg, start)
-        if not stream_sid_valid:
-            logger.warning("Rejecting Twilio start with conflicting streamSid values")
-            await self._ws.close(4003, "Conflicting streamSid")
+        stream_sid = await self._validated_start_stream_sid(msg, start)
+        if stream_sid is None:
             return False
         token_claims = await _twilio_stream_token_claims(
             start,

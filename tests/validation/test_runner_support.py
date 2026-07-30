@@ -8,6 +8,7 @@ from easycat.validation._runner_support import (
     ValidationSourceCheckoutError,
     ensure_validation_source_checkout,
     pytest_command_prefix,
+    redact_validation_artifacts,
 )
 
 
@@ -79,3 +80,27 @@ def test_validation_rejects_an_override_for_the_wrong_lane(
 
     with pytest.raises(ValidationSourceCheckoutError, match=missing_override):
         ensure_validation_source_checkout(test_override_mode=required_mode)
+
+
+def test_artifact_redaction_allows_missing_optional_artifact(tmp_path: Path) -> None:
+    failures = redact_validation_artifacts(
+        [("samples", tmp_path / "missing.json", "json")],
+        (),
+    )
+
+    assert failures == {}
+
+
+def test_artifact_redaction_rejects_existing_non_utf8_artifact(tmp_path: Path) -> None:
+    secret = "plain-runtime-token-value"
+    artifact = tmp_path / "samples.json"
+    artifact.write_bytes(b"\xffcredential=" + secret.encode())
+
+    failures = redact_validation_artifacts(
+        [("samples", artifact, "json")],
+        (secret,),
+    )
+
+    assert failures["samples"].name == "artifact_redaction.samples"
+    assert failures["samples"].failure_class == "artifact_redaction_error"
+    assert secret.encode() not in artifact.read_bytes()

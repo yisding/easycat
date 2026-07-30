@@ -316,6 +316,25 @@ class TestDeepgramTTSConfig:
         with pytest.raises(ValueError, match=name):
             DeepgramTTSConfig(api_key="test-key", **{name: value})
 
+    @pytest.mark.parametrize("sample_rate", [0, -1, True, 24_000.5, "24000"])
+    def test_rejects_invalid_sample_rate(self, sample_rate):
+        with pytest.raises(ValueError, match="sample_rate must be a positive integer"):
+            DeepgramTTSConfig(api_key="test-key", sample_rate=sample_rate)
+
+    @pytest.mark.parametrize("encoding", ["mulaw", "alaw", "mp3"])
+    def test_rejects_non_linear16_encoding(self, encoding):
+        with pytest.raises(
+            ValueError,
+            match="TTS audio normalizer only supports linear16 PCM",
+        ):
+            DeepgramTTSConfig(api_key="test-key", encoding=encoding)
+
+    @pytest.mark.parametrize("encoding", ["linear16", "LINEAR16", " Linear16 "])
+    def test_normalizes_linear16_encoding(self, encoding):
+        config = DeepgramTTSConfig(api_key="test-key", encoding=encoding)
+
+        assert config.encoding == "linear16"
+
     def test_custom_values(self):
         config = DeepgramTTSConfig(
             api_key="key",
@@ -337,6 +356,17 @@ class TestDeepgramTTS:
         assert "encoding=linear16" in url
         assert "sample_rate=24000" in url
 
+    def test_build_url_uses_normalized_linear16_encoding(self):
+        provider = DeepgramTTS(
+            DeepgramTTSConfig(
+                api_key="test-key",
+                encoding=" LINEAR16 ",
+                persistent_ws=False,
+            )
+        )
+
+        assert "encoding=linear16" in provider._build_url()
+
     async def test_synthesize_yields_audio_events(self):
         provider = self._make_provider()
         audio_chunks = [_pcm16_bytes(240), _pcm16_bytes(240)]
@@ -356,6 +386,31 @@ class TestDeepgramTTS:
 
         chunks = extract_audio_chunks(events)
         assert verify_pcm16_audio(chunks)
+
+    async def test_synthesize_does_not_overwrite_retained_failed_socket(self):
+        class _RetainedWS:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            async def close(self) -> None:
+                self.close_calls += 1
+                raise RuntimeError("retained socket close failed")
+
+        provider = self._make_provider()
+        retained = _RetainedWS()
+        factory = MagicMock()
+        provider._ws = retained  # type: ignore[assignment]
+
+        with (
+            patch.object(provider, "_create_ws", factory),
+            pytest.raises(RuntimeError, match="retained socket close failed"),
+        ):
+            await anext(provider.synthesize("Hello"))
+
+        factory.assert_not_called()
+        assert provider._ws is retained
+        assert retained.close_calls == 1
+        assert not provider.is_active
 
     async def test_synthesize_sends_text_and_flush(self):
         provider = self._make_provider()
@@ -390,6 +445,22 @@ class TestDeepgramTTS:
 
         # Only the audio before "Flushed" should be yielded
         assert len(events) == 1
+
+    async def test_synthesize_raises_when_stream_ends_before_terminal_control(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[_pcm16_bytes(100)])
+        events = []
+
+        with (
+            patch.object(provider, "_create_ws", return_value=fake_ws),
+            pytest.raises(ConnectionError, match="before a terminal Flushed/Error"),
+        ):
+            async for event in provider.synthesize("truncated"):
+                events.append(event)
+
+        assert len(events) == 1
+        assert fake_ws._closed
+        assert not provider.is_active
 
     async def test_cancel_stops_iteration(self):
         provider = self._make_provider()

@@ -242,7 +242,35 @@ class OutboundCallManager:
         self._state = OutboundCallManagerState.IDLE
         self._active_call_sid: str | None = None
         self._owned_call_sids: set[str] = set()
+        # Calls created by an invalidated placement whose immediate provider
+        # completion failed remain manager-owned across stop/start. Keeping
+        # this separate from the live lifecycle's owned calls lets ``stop``
+        # retain its normal state-reset semantics without losing retry
+        # authority for a billable stale call.
+        self._pending_cleanup_call_sids: set[str] = set()
+        # Provider-created calls being completed after an invalidated or
+        # cancelled placement remain placement-owned until REST cleanup and
+        # failure-event dispatch both settle. Terminal callbacks observed
+        # during that window prevent failed cleanup from resurrecting a call
+        # the provider has already declared terminal.
+        self._reconciling_call_sids: set[str] = set()
+        self._terminal_reconciliation_call_sids: set[str] = set()
+        # ``place_call`` reports reconciliation failure with a synthetic
+        # CallFailed event. Track its exact identity so the manager's own
+        # subscriber does not mistake it for a provider terminal callback.
+        self._synthetic_failure_event_ids: set[int] = set()
         self._started = False
+        # Synchronous lifecycle methods cannot acquire ``_place_call_lock``.
+        # Advance an epoch on every real start/stop transition instead, so an
+        # in-flight REST create can detect that the lifecycle which authorized
+        # it no longer exists before publishing its SID.
+        self._lifecycle_epoch = 0
+        # Serialize the full eligibility -> REST create -> activation
+        # transaction.  ``place_call`` awaits both DNC storage and the Twilio
+        # thread offload, so a state check alone lets concurrent callers both
+        # observe IDLE and originate separate billable calls before either one
+        # records its SID.
+        self._place_call_lock = asyncio.Lock()
 
         # Optional plug-ins assigned after construction (see docstring).
         self.dnc_list: DNCStore | None = None
@@ -260,6 +288,7 @@ class OutboundCallManager:
     def start(self) -> None:
         if self._started:
             return
+        self._lifecycle_epoch += 1
         self._event_bus.subscribe(CallRinging, self._on_call_ringing)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(CallEnded, self._on_call_ended)
@@ -269,6 +298,10 @@ class OutboundCallManager:
         self._active_call_sid = None
 
     def stop(self) -> None:
+        # Invalidate an in-flight placement before resetting visible state.
+        # ``place_call`` retains ownership of its uncancellable REST worker and
+        # will immediately complete any SID returned for this stale epoch.
+        self._lifecycle_epoch += 1
         if self._started:
             self._event_bus.unsubscribe(CallRinging, self._on_call_ringing)
             self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
@@ -284,12 +317,21 @@ class OutboundCallManager:
         target_call_sid = call_sid or self._active_call_sid
         if not target_call_sid:
             return
-        await asyncio.to_thread(self._client.calls(target_call_sid).update, status="completed")
+        error, cancellation = await self._complete_call_owned(target_call_sid)
+        if error is not None:
+            if cancellation is not None:
+                raise cancellation from error
+            raise error
         self._clear_active_call(target_call_sid)
+        if cancellation is not None:
+            raise cancellation
 
     async def hangup_owned_call(self, call_sid: str) -> None:
         """Hang up ``call_sid`` only when this manager created it."""
-        if call_sid not in self._owned_call_sids:
+        if (
+            call_sid not in self._owned_call_sids
+            and call_sid not in self._pending_cleanup_call_sids
+        ):
             return
         await self.hangup_call(call_sid)
 
@@ -303,18 +345,116 @@ class OutboundCallManager:
           this to wire :func:`~easycat.telephony.compliance.check_calling_hours`
           or your own timezone / DNC-vendor lookup.
         """
+        async with self._place_call_lock:
+            (
+                call_sid,
+                cancellation,
+                create_error,
+                lifecycle_error,
+                stale_cleanup_error,
+            ) = await self._place_call_transaction(to)
+
+        if lifecycle_error is not None:
+            assert call_sid is not None
+            return await self._finish_stale_call_placement(
+                call_sid=call_sid,
+                error=lifecycle_error,
+                cleanup_error=stale_cleanup_error,
+                cancellation=cancellation,
+            )
+
+        return await self._finish_call_placement(
+            to=to,
+            call_sid=call_sid if create_error is None else None,
+            cancellation=cancellation,
+            create_error=create_error,
+        )
+
+    async def _place_call_transaction(
+        self,
+        to: str,
+    ) -> tuple[
+        str | None,
+        asyncio.CancelledError | None,
+        Exception | None,
+        RuntimeError | None,
+        Exception | None,
+    ]:
+        """Run eligibility, provider creation, and epoch reconciliation under the lock."""
+        self._ensure_can_place_call()
+        placement_epoch = self._lifecycle_epoch
+        await self._check_pre_call_gates(to)
+        if not self._placement_epoch_is_current(placement_epoch):
+            # A stop while awaiting a DNC store invalidates the transaction
+            # before it reaches Twilio, so no provider reconciliation is needed.
+            # Keep this lifecycle error in the create_error tuple slot:
+            # place_call must route it through _finish_call_placement instead
+            # of the stale-call path, which requires a provider call SID.
+            return None, None, self._lifecycle_changed_error(), None, None
+
+        # ``asyncio.to_thread`` cannot stop its worker when the awaiting
+        # coroutine is cancelled. Retain placement ownership until it settles.
+        call, cancellation, create_error = await self._create_call_owned(
+            self._build_create_kwargs(to)
+        )
+        if create_error is not None:
+            return None, cancellation, create_error, None, None
+        assert call is not None
+        try:
+            call_sid = call.sid
+            if not isinstance(call_sid, str) or not call_sid:
+                raise ValueError("Twilio call creation returned an empty call SID")
+        except Exception as exc:
+            return None, cancellation, exc, None, None
+
+        if self._placement_epoch_is_current(placement_epoch) and cancellation is None:
+            self._owned_call_sids.add(call_sid)
+            self._set_active_call(call_sid)
+            return call_sid, cancellation, None, None, None
+
+        self._reconciling_call_sids.add(call_sid)
+        stale_cleanup_error, cleanup_cancellation = await self._complete_call_owned(call_sid)
+        cancellation = cancellation or cleanup_cancellation
+        if self._placement_epoch_is_current(placement_epoch):
+            lifecycle_error = self._placement_cancelled_error(
+                call_sid=call_sid,
+                cleanup_error=stale_cleanup_error,
+            )
+        else:
+            lifecycle_error = self._lifecycle_changed_error(
+                call_sid=call_sid,
+                cleanup_error=stale_cleanup_error,
+            )
+        if (
+            stale_cleanup_error is not None
+            and call_sid not in self._terminal_reconciliation_call_sids
+        ):
+            # Keep retry ownership without reactivating the current lifecycle.
+            self._pending_cleanup_call_sids.add(call_sid)
+        return call_sid, cancellation, None, lifecycle_error, stale_cleanup_error
+
+    def _ensure_can_place_call(self) -> None:
         if not self._started:
             raise RuntimeError("OutboundCallManager must be started before placing calls")
-        if self._state is not OutboundCallManagerState.IDLE or self._active_call_sid is not None:
-            raise RuntimeError("OutboundCallManager already has an active call")
-        if self.dnc_list is not None:
-            if await dnc_is_on_dnc(self.dnc_list, to):
-                raise ValueError(f"Refusing to call {to!r}: on DNC list")
+        if (
+            self._state is not OutboundCallManagerState.IDLE
+            or self._active_call_sid is not None
+            or self._owned_call_sids
+            or self._pending_cleanup_call_sids
+            or self._reconciling_call_sids
+        ):
+            raise RuntimeError("OutboundCallManager already has an active call or pending cleanup")
+
+    async def _check_pre_call_gates(self, to: str) -> None:
+        if self.dnc_list is not None and await dnc_is_on_dnc(self.dnc_list, to):
+            raise ValueError(f"Refusing to call {to!r}: on DNC list")
         if self.compliance_check is not None and not self.compliance_check(to):
             raise ValueError(
                 f"Refusing to call {to!r}: blocked by compliance_check "
                 "(e.g. outside allowed calling hours)"
             )
+
+    def _build_create_kwargs(self, to: str) -> dict[str, Any]:
         create_kwargs: dict[str, Any] = {
             "to": to,
             "from_": self._from_number,
@@ -329,7 +469,6 @@ class OutboundCallManager:
         if self._enable_realtime_transcription:
             create_kwargs["transcription"] = True
             create_kwargs["transcription_track"] = "inbound_track"
-
         if self._status_callback_url:
             create_kwargs["status_callback"] = self._status_callback_url
             create_kwargs["status_callback_event"] = [
@@ -338,19 +477,215 @@ class OutboundCallManager:
                 "answered",
                 "completed",
             ]
+        return create_kwargs
 
+    def _placement_epoch_is_current(self, placement_epoch: int) -> bool:
+        return self._started and self._lifecycle_epoch == placement_epoch
+
+    @staticmethod
+    def _lifecycle_changed_error(
+        *,
+        call_sid: str | None = None,
+        cleanup_error: Exception | None = None,
+    ) -> RuntimeError:
+        message = "Outbound call placement was invalidated by a manager lifecycle change"
+        if call_sid is not None:
+            message += f" after Twilio created call {call_sid}"
+        if cleanup_error is not None:
+            message += f"; immediate hangup failed: {cleanup_error}"
+        return RuntimeError(message)
+
+    @staticmethod
+    def _placement_cancelled_error(
+        *,
+        call_sid: str,
+        cleanup_error: Exception | None = None,
+    ) -> RuntimeError:
+        message = f"Outbound call placement was cancelled after Twilio created call {call_sid}"
+        if cleanup_error is not None:
+            message += f"; immediate hangup failed: {cleanup_error}"
+        return RuntimeError(message)
+
+    async def _create_call_owned(
+        self,
+        create_kwargs: dict[str, Any],
+    ) -> tuple[Any | None, asyncio.CancelledError | None, Exception | None]:
+        """Await one uncancellable REST worker while retaining placement ownership."""
+        cancellation: asyncio.CancelledError | None = None
+        create_task = asyncio.create_task(
+            asyncio.to_thread(self._client.calls.create, **create_kwargs)
+        )
+        while not create_task.done():
+            try:
+                await asyncio.shield(create_task)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+            except Exception:
+                # Read the provider exception from ``result`` below after
+                # leaving the wait loop.
+                break
         try:
-            call = await asyncio.to_thread(self._client.calls.create, **create_kwargs)
-            call_sid: str = call.sid
-            self._owned_call_sids.add(call_sid)
-            self._set_active_call(call_sid)
+            return create_task.result(), cancellation, None
+        except Exception as exc:
+            return None, cancellation, exc
+
+    async def _complete_call_owned(
+        self,
+        call_sid: str,
+    ) -> tuple[Exception | None, asyncio.CancelledError | None]:
+        """Complete a Twilio call without abandoning its REST worker."""
+        cancellation: asyncio.CancelledError | None = None
+        cleanup_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._client.calls(call_sid).update,
+                status="completed",
+            )
+        )
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+            except Exception:
+                break
+        try:
+            cleanup_task.result()
+        except Exception as exc:
+            return exc, cancellation
+        return None, cancellation
+
+    async def _finish_stale_call_placement(
+        self,
+        *,
+        call_sid: str,
+        error: RuntimeError,
+        cleanup_error: Exception | None,
+        cancellation: asyncio.CancelledError | None,
+    ) -> str:
+        """Report a stale placement, then preserve the original caller outcome."""
+        dispatch_error: Exception | None = None
+        failure_event = CallFailed(call_sid=call_sid, reason=str(error))
+        failure_event_id = id(failure_event)
+        self._synthetic_failure_event_ids.add(failure_event_id)
+        try:
+            await self._event_bus.emit(failure_event)
+        except Exception as exc:
+            dispatch_error = exc
+        finally:
+            self._synthetic_failure_event_ids.discard(failure_event_id)
+            terminal_observed = call_sid in self._terminal_reconciliation_call_sids
+            self._terminal_reconciliation_call_sids.discard(call_sid)
+            self._reconciling_call_sids.discard(call_sid)
+            if terminal_observed:
+                # A provider terminal callback is authoritative even when the
+                # redundant REST completion failed.
+                self._pending_cleanup_call_sids.discard(call_sid)
+        if cancellation is not None:
+            raise cancellation from (dispatch_error or error)
+        if dispatch_error is not None:
+            raise error from dispatch_error
+        raise error from cleanup_error
+
+    async def _finish_call_placement(
+        self,
+        *,
+        to: str,
+        call_sid: str | None,
+        cancellation: asyncio.CancelledError | None,
+        create_error: Exception | None,
+    ) -> str:
+        """Dispatch placement events after unlocking, then propagate the caller outcome."""
+        # EventBus dispatch is inline and async handlers are awaited. Never hold
+        # the non-reentrant placement lock across dispatch: a handler that tries
+        # another placement must reach the active-call check and fail promptly,
+        # not deadlock waiting on its own dispatch stack.
+        if create_error is not None:
+            await self._event_bus.emit(CallFailed(call_sid="", reason=str(create_error)))
+            if cancellation is not None:
+                raise cancellation
+            raise create_error
+
+        assert call_sid is not None
+        # Treat the whole initiated-dispatch window as reconciliation-owned.
+        # A provider terminal callback can arrive while an async subscriber is
+        # still blocked.  If dispatch is then cancelled, remembering that
+        # terminal outcome prevents a redundant REST completion failure from
+        # resurrecting already-ended call ownership.
+        self._reconciling_call_sids.add(call_sid)
+        try:
             await self._event_bus.emit(
                 CallInitiated(call_sid=call_sid, to=to, from_=self._from_number)
             )
-            return call_sid
+        except asyncio.CancelledError as exc:
+            return await self._finish_dispatch_failed_call(
+                call_sid=call_sid,
+                error=RuntimeError("CallInitiated dispatch was cancelled"),
+                cancellation=exc,
+            )
         except Exception as exc:
-            await self._event_bus.emit(CallFailed(call_sid="", reason=str(exc)))
-            raise
+            return await self._finish_dispatch_failed_call(
+                call_sid=call_sid,
+                error=exc,
+                cancellation=cancellation,
+            )
+        self._terminal_reconciliation_call_sids.discard(call_sid)
+        self._reconciling_call_sids.discard(call_sid)
+        if cancellation is not None:
+            raise cancellation
+        return call_sid
+
+    async def _finish_dispatch_failed_call(
+        self,
+        *,
+        call_sid: str,
+        error: Exception,
+        cancellation: asyncio.CancelledError | None,
+    ) -> str:
+        """Reconcile an activated call whose initiated-event dispatch failed."""
+        self._reconciling_call_sids.add(call_sid)
+        cleanup_error, cleanup_cancellation = await self._complete_call_owned(call_sid)
+        cancellation = cancellation or cleanup_cancellation
+        terminal_observed = call_sid in self._terminal_reconciliation_call_sids
+        self._clear_active_call(call_sid)
+        if cleanup_error is not None and not terminal_observed:
+            self._pending_cleanup_call_sids.add(call_sid)
+
+        if cleanup_error is None:
+            failure_reason = f"{error}; Twilio call {call_sid} was completed"
+        else:
+            failure_reason = (
+                f"{error}; immediate hangup of Twilio call {call_sid} failed: {cleanup_error}"
+            )
+        failure_event = CallFailed(call_sid=call_sid, reason=failure_reason)
+        failure_event_id = id(failure_event)
+        self._synthetic_failure_event_ids.add(failure_event_id)
+        secondary_dispatch_error: Exception | None = None
+        try:
+            await self._event_bus.emit(failure_event)
+        except Exception as exc:
+            secondary_dispatch_error = exc
+        finally:
+            self._synthetic_failure_event_ids.discard(failure_event_id)
+            terminal_observed = (
+                terminal_observed or call_sid in self._terminal_reconciliation_call_sids
+            )
+            self._terminal_reconciliation_call_sids.discard(call_sid)
+            self._reconciling_call_sids.discard(call_sid)
+            if terminal_observed:
+                self._pending_cleanup_call_sids.discard(call_sid)
+
+        if cancellation is not None:
+            raise cancellation from error
+        if cleanup_error is not None:
+            reconciliation_error = RuntimeError(failure_reason)
+            if secondary_dispatch_error is not None:
+                reconciliation_error.add_note(
+                    f"CallFailed dispatch also failed: {secondary_dispatch_error}"
+                )
+            raise error from reconciliation_error
+        raise error
 
     def _set_active_call(self, call_sid: str) -> None:
         if not call_sid:
@@ -361,11 +696,17 @@ class OutboundCallManager:
         self._state = OutboundCallManagerState.ACTIVE
 
     def _clear_active_call(self, call_sid: str) -> None:
+        self._owned_call_sids.discard(call_sid)
+        self._pending_cleanup_call_sids.discard(call_sid)
         if self._active_call_sid is not None and call_sid != self._active_call_sid:
             return
         self._active_call_sid = None
         self._state = OutboundCallManagerState.IDLE
-        self._owned_call_sids.discard(call_sid)
+
+    def _record_terminal_call(self, call_sid: str) -> None:
+        if call_sid in self._reconciling_call_sids:
+            self._terminal_reconciliation_call_sids.add(call_sid)
+        self._clear_active_call(call_sid)
 
     async def _on_call_ringing(self, event: CallRinging) -> None:
         if event.call_sid in self._owned_call_sids:
@@ -376,7 +717,9 @@ class OutboundCallManager:
             self._set_active_call(event.call_sid)
 
     async def _on_call_ended(self, event: CallEnded) -> None:
-        self._clear_active_call(event.call_sid)
+        self._record_terminal_call(event.call_sid)
 
     async def _on_call_failed(self, event: CallFailed) -> None:
-        self._clear_active_call(event.call_sid)
+        if id(event) in self._synthetic_failure_event_ids:
+            return
+        self._record_terminal_call(event.call_sid)

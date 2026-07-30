@@ -25,7 +25,13 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from easycat.debug._bundle_loader import _ArtifactAccumulator, _reject_traversal, load_bundle
+from easycat.debug._bundle_loader import (
+    _ArtifactAccumulator,
+    _iter_journal_records,
+    _reject_traversal,
+    _validate_journal_metadata,
+    load_bundle,
+)
 from easycat.debug._bundle_models import (
     _SHA256_REF,
     FORMAT_VERSION,
@@ -83,14 +89,7 @@ class RunBundle:
 
     def records(self):
         """Iterate journal records."""
-        for line in self.journal_ndjson.decode("utf-8", errors="replace").splitlines():
-            if line.strip():
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(record, dict):
-                    yield record
+        yield from _iter_journal_records(self.journal_ndjson)
 
     def filter_by_stage(self, stage_name: str) -> list[dict[str, Any]]:
         """Filter journal records by stage name."""
@@ -250,6 +249,10 @@ class RunBundle:
         for ref, data in self.artifact_blobs.items():
             validated_artifacts.add(ref, data)
             _reject_traversal(f"artifacts/{ref}.bin")
+        _validate_journal_metadata(
+            self.journal_ndjson,
+            artifact_refs=set(validated_artifacts.index),
+        )
 
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name: str | None = None
@@ -315,7 +318,6 @@ class RunBundle:
             raise BundleRecoveryError(f"Cannot read journal records: {e}") from e
         finally:
             conn.close()
-
         # Walk artifact directory.  Read blobs so downstream replay has
         # the bytes available; respect the same 500MB cap as ``load`` to
         # avoid OOM on a corrupted artifact tree.
@@ -333,6 +335,10 @@ class RunBundle:
                 size = f.stat().st_size
                 artifacts.ensure_capacity(size)
                 artifacts.add(ref, f.read_bytes())
+        _validate_journal_metadata(
+            journal_ndjson,
+            artifact_refs=set(artifacts.index) if artifact_root is not None else None,
+        )
 
         manifest = Manifest(format_version=FORMAT_VERSION)
 
@@ -343,6 +349,78 @@ class RunBundle:
             artifact_index=artifacts.index,
             artifact_blobs=artifacts.blobs,
         )
+
+
+def _partial_journal_error(
+    sequence: Any,
+    error_type: Any,
+    error_message: Any,
+    error_traceback: Any,
+    error_notes: Any,
+    error_children: Any,
+) -> dict[str, Any] | None:
+    children: list[Any] = []
+    if error_children:
+        try:
+            decoded_children = json.loads(error_children)
+        except Exception as exc:
+            raise BundleValidationError(
+                f"Journal sequence {sequence!r} error_children is not valid JSON",
+                reason_code="INVALID_JOURNAL",
+            ) from exc
+        if not isinstance(decoded_children, list):
+            raise BundleValidationError(
+                f"Journal sequence {sequence!r} error_children must be a JSON list",
+                reason_code="INVALID_JOURNAL",
+            )
+        children = decoded_children
+    if not error_type:
+        return None
+    return {
+        "type": error_type,
+        "message": error_message or "",
+        "traceback": error_traceback,
+        "notes": error_notes,
+        "children": children,
+    }
+
+
+def _add_partial_journal_data(record: dict[str, Any], raw_data: Any) -> None:
+    """Recover one current-schema data cell without losing malformed evidence."""
+    if not raw_data or raw_data == "{}":
+        return
+    try:
+        record["data"] = json.loads(raw_data)
+    except Exception:
+        # Partially-written journal data has historically been retained as raw
+        # evidence. JSON parsing can also raise UnicodeDecodeError, ValueError
+        # (for over-large integer literals), or RecursionError, so keep every
+        # ordinary parser failure on that same recovery path.
+        record["data"] = raw_data
+
+
+def _serialize_partial_record(record: dict[str, Any], *, sequence: Any) -> str:
+    """Serialize a recovered current-schema row with contextual validation."""
+    try:
+        return json.dumps(record, default=str)
+    except Exception as exc:
+        raise BundleValidationError(
+            f"Journal sequence {sequence!r} cannot be serialized",
+            reason_code="INVALID_JOURNAL",
+        ) from exc
+
+
+def _serialize_legacy_journal_data(data: Any, *, sequence: Any) -> str:
+    """Serialize one legacy data cell or normalize its failure contract."""
+    if isinstance(data, str):
+        return data
+    try:
+        return json.dumps(data)
+    except Exception as exc:
+        raise BundleValidationError(
+            f"Legacy journal sequence {sequence!r} data cannot be serialized",
+            reason_code="INVALID_JOURNAL",
+        ) from exc
 
 
 def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
@@ -357,9 +435,19 @@ def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
     lines: list[str] = []
 
     if "journal" in tables:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
+
+        def select_column(name: str, fallback: str) -> str:
+            return name if name in columns else f"{fallback} AS {name}"
+
         cursor = conn.execute(
             "SELECT sequence, session_id, kind, name, wall_ns, mono_ns, "
-            "turn_id, data, error_type, error_msg, input_ref, output_ref, tags "
+            f"{select_column('cpu_ns', '0')}, "
+            "turn_id, data, error_type, error_msg, "
+            f"{select_column('error_tb', 'NULL')}, "
+            f"{select_column('error_notes', 'NULL')}, "
+            "input_ref, output_ref, tags, "
+            f"{select_column('error_children', 'NULL')} "
             "FROM journal ORDER BY sequence"
         )
         for row in cursor:
@@ -370,27 +458,32 @@ def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
                 "name": row[3],
                 "wall_ns": row[4],
                 "mono_ns": row[5],
-                "turn_id": row[6],
+                "cpu_ns": row[6],
+                "turn_id": row[7],
             }
-            if row[7] and row[7] != "{}":
-                try:
-                    record["data"] = json.loads(row[7])
-                except json.JSONDecodeError:
-                    record["data"] = row[7]
-            if row[8]:
-                record["error"] = {"type": row[8], "message": row[9] or ""}
-            if row[10]:
-                record["input_ref"] = row[10]
-            if row[11]:
-                record["output_ref"] = row[11]
-            if row[12] and row[12] != "":
-                record["tags"] = row[12].split(",")
-            lines.append(json.dumps(record, default=str))
+            _add_partial_journal_data(record, row[8])
+            error = _partial_journal_error(
+                row[0],
+                row[9],
+                row[10],
+                row[11],
+                row[12],
+                row[16],
+            )
+            if error is not None:
+                record["error"] = error
+            if row[13]:
+                record["input_ref"] = row[13]
+            if row[14]:
+                record["output_ref"] = row[14]
+            if isinstance(row[15], str) and row[15]:
+                record["tags"] = row[15].split(",")
+            lines.append(_serialize_partial_record(record, sequence=row[0]))
     elif "records" in tables:
         # Legacy schema: single JSON blob per row.
-        cursor = conn.execute("SELECT data FROM records ORDER BY sequence")
-        for (data,) in cursor:
-            lines.append(data if isinstance(data, str) else json.dumps(data))
+        cursor = conn.execute("SELECT sequence, data FROM records ORDER BY sequence")
+        for sequence, data in cursor:
+            lines.append(_serialize_legacy_journal_data(data, sequence=sequence))
     else:
         raise sqlite3.OperationalError("no recognized journal table found")
 

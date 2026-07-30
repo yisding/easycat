@@ -61,6 +61,16 @@ _REPLAY_BOUNDARY = object()
 # we never let the cancel send block on a reconnect window; on timeout we fall
 # back to closing the socket outright.
 _CANCEL_SEND_TIMEOUT = 0.5
+# A graceful close frame is best-effort too: a wedged sender must not hold the
+# connection lock and strand every close/connect waiter forever.
+_SOCKET_CLOSE_SEND_TIMEOUT = 0.5
+
+
+def validate_context_queue_maxsize(value: object, *, provider: str | None = None) -> None:
+    """Require a truly bounded positive integer context queue."""
+    label = f"{provider} context_queue_maxsize" if provider else "context_queue_maxsize"
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{label} must be an integer >= 1")
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,9 @@ class MultiContextAdapter:
     on_global_frame: Callable[[Any], None]
     # Bounded per-context queue size for the demux reader.
     context_queue_maxsize: int = 256
+
+    def __post_init__(self) -> None:
+        validate_context_queue_maxsize(self.context_queue_maxsize)
 
 
 @dataclass
@@ -152,6 +165,10 @@ class MultiContextWSManager:
     def __init__(self, adapter: MultiContextAdapter) -> None:
         self._adapter = adapter
         self._ws: Any | None = None
+        # Exact socket retained when physical close fails. No replacement may
+        # be created until that same wrapper closes successfully.
+        self._pending_socket_close: Any | None = None
+        self._socket_close_error: BaseException | None = None
         self._contexts: dict[str, _Context] = {}
         self._reader_task: asyncio.Task[None] | None = None
         # Serializes every ws.send across the reconnect-replay hook and the
@@ -162,6 +179,10 @@ class MultiContextWSManager:
         # the manager, but cold callers must not treat that wrapper as usable
         # until the first caller has finished connecting it.
         self._connect_lock = asyncio.Lock()
+        # Physical close is a shared transaction. Every caller that arrives
+        # while it is running joins this exact task, so no follower can report
+        # success before the socket owner settles (or miss its failure).
+        self._close_task: asyncio.Task[None] | None = None
         self._closed = False
         # Set during deliberate teardown (aclose / cancel-fallback socket close)
         # so the reader's exit does NOT surface a spurious error on contexts —
@@ -194,6 +215,11 @@ class MultiContextWSManager:
         if self._closed:
             raise RuntimeError("MultiContextWSManager is closed")
         await self.connect()
+        # close() can begin after connect() returns but before this coroutine is
+        # scheduled again. Do not publish a context into a manager whose close
+        # transaction has already closed admission.
+        if self._closed:
+            raise RuntimeError("MultiContextWSManager is closed")
         ctx = _Context(
             context_id=str(uuid4()),
             queue=asyncio.Queue(maxsize=self._adapter.context_queue_maxsize),
@@ -221,26 +247,30 @@ class MultiContextWSManager:
         """
         ctx.cancelled = True
         ctx.pending_frames = None
-        cancel_frames = self._adapter.context_cancel_frames(ctx.context_id)
-        if cancel_frames and self._ws is not None:
-            if not getattr(self._ws, "is_connected", True):
-                # Mid-reconnect: do not block waiting for the socket to come
-                # back. Drop the socket and let the next turn reconnect.
-                await self._close_socket_only()
-            else:
-                try:
-                    await asyncio.wait_for(
-                        self._send_frames(cancel_frames),
-                        timeout=_CANCEL_SEND_TIMEOUT,
-                    )
-                except Exception:
-                    # Covers TimeoutError from wait_for and any send failure.
-                    logger.debug(
-                        "Multi-context cancel send failed/timed out; closing socket",
-                        exc_info=True,
-                    )
+        try:
+            cancel_frames = self._adapter.context_cancel_frames(ctx.context_id)
+            if cancel_frames and self._ws is not None:
+                if not getattr(self._ws, "is_connected", True):
+                    # Mid-reconnect: do not block waiting for the socket to come
+                    # back. Drop the socket and let the next turn reconnect.
                     await self._close_socket_only()
-        self._finish_context(ctx)
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            self._send_frames(cancel_frames),
+                            timeout=_CANCEL_SEND_TIMEOUT,
+                        )
+                    except Exception:
+                        # Covers TimeoutError from wait_for and any send failure.
+                        logger.debug(
+                            "Multi-context cancel send failed/timed out; closing socket",
+                            exc_info=True,
+                        )
+                        await self._close_socket_only()
+        finally:
+            # Even a failed physical socket close must not strand the cancelled
+            # consumer. Socket ownership is retained separately for retry.
+            self._finish_context(ctx)
 
     async def cancel_all(self) -> None:
         """Cancel every live context (barge-in/stop), keeping the socket open.
@@ -263,27 +293,41 @@ class MultiContextWSManager:
         self._finish_context(ctx)
 
     async def aclose(self) -> None:
-        """Close the socket and tear down the reader task (idempotent)."""
-        if self._closed:
+        """Close the socket and tear down the reader task.
+
+        Successful close is idempotent. A failed physical socket close remains
+        retryable through a later call, even though new contexts are blocked as
+        soon as the first close begins.
+        """
+        current = asyncio.current_task()
+        close_task = self._close_task
+        if close_task is current:
+            # A socket callback may re-enter provider teardown from inside the
+            # owned close transaction. It is already performing this cleanup;
+            # awaiting itself would deadlock.
             return
+        if close_task is not None:
+            await self._await_close_task(close_task)
+            return
+        if (
+            self._closed
+            and self._pending_socket_close is None
+            and self._ws is None
+            and self._reader_task is None
+        ):
+            return
+        # Close admission synchronously before spawning the task: a connect()
+        # scheduled on the next loop turn must observe closure even if this
+        # caller is cancelled while awaiting the shared transaction.
         self._closed = True
         self._closing = True
-        close_frames = self._adapter.socket_close_frames()
-        if close_frames and self._ws is not None:
-            with contextlib.suppress(Exception):
-                await self._send_frames(close_frames)
-        # Snapshot the handle before cancelling the reader, whose ``finally``
-        # nulls ``self._ws``.
-        ws = self._ws
-        await self._cancel_background_tasks()
-        self._ws = None
-        if ws is not None:
-            with contextlib.suppress(Exception):
-                await ws.close()
-        # Drain any contexts still waiting.
-        for ctx in list(self._contexts.values()):
-            self._finish_context(ctx)
-        self._contexts.clear()
+        close_task = asyncio.create_task(
+            self._aclose_transaction(),
+            name="tts_multi_context_close",
+        )
+        self._close_task = close_task
+        close_task.add_done_callback(self._close_task_done)
+        await self._await_close_task(close_task)
 
     # ── reconnect hook ────────────────────────────────────────────
 
@@ -311,22 +355,126 @@ class MultiContextWSManager:
 
     async def _ensure_socket(self) -> None:
         async with self._connect_lock:
+            # A connect caller can pass the public pre-check and then queue
+            # behind close. Recheck after acquiring the shared transition lock.
+            if self._closed:
+                raise RuntimeError("MultiContextWSManager is closed")
+            await self._retry_pending_socket_close()
             if self._ws is not None:
                 return
             ws = self._adapter.connect_factory(self._on_reconnect)
             self._ws = ws
             try:
                 await ws.connect()
-            except BaseException:
+            except BaseException as connect_error:
                 # The initial connect failed (retries exhausted). Leave no
                 # failed wrapper behind, or the next open_context() would
                 # early-return and send() would run against a socket that never
-                # connected; clear it so the next open reconnects a fresh one.
+                # connected. Retain it separately if rollback close fails.
                 self._ws = None
-                with contextlib.suppress(Exception):
-                    await ws.close()
+                try:
+                    await self._close_owned_socket(ws)
+                except BaseException as cleanup_error:
+                    # The connect failure remains primary; the cleanup error is
+                    # chained and retained for the next connect()/aclose().
+                    raise connect_error from cleanup_error
                 raise
+            if self._closed:
+                # aclose() began while ws.connect() was suspended. Leave the
+                # exact published wrapper for the close transaction waiting on
+                # this lock; never publish a reader or report connect success.
+                raise RuntimeError("MultiContextWSManager closed during connect")
             self._reader_task = asyncio.create_task(self._reader_loop())
+
+    async def _aclose_transaction(self) -> None:
+        """Run one physical close transaction after any connect owner settles."""
+        async with self._connect_lock:
+            ws = self._pending_socket_close
+            if ws is None:
+                ws = self._ws
+            close_frames: list[str] = []
+            if self._pending_socket_close is None and self._ws is not None:
+                with contextlib.suppress(Exception):
+                    close_frames = self._adapter.socket_close_frames()
+            if close_frames:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        self._send_frames(close_frames),
+                        timeout=_SOCKET_CLOSE_SEND_TIMEOUT,
+                    )
+            # Snapshot the handle before cancelling the reader, whose
+            # ``finally`` nulls ``self._ws``.
+            await self._cancel_background_tasks()
+            self._ws = None
+            try:
+                if ws is not None:
+                    await self._close_owned_socket(ws)
+            finally:
+                # Drain contexts even when physical close failed. They no
+                # longer own the retained socket cleanup.
+                for ctx in list(self._contexts.values()):
+                    self._finish_context(ctx)
+                self._contexts.clear()
+
+    def _close_task_done(self, task: asyncio.Task[None]) -> None:
+        """Release/reap the shared task so a later call can retry failure."""
+        if self._close_task is task:
+            self._close_task = None
+        if not task.cancelled():
+            # Retrieve background failure when every waiter was cancelled.
+            # Awaiters that already captured the task still observe the same
+            # stored exception.
+            task.exception()
+
+    async def _await_close_task(self, close_task: asyncio.Task[None]) -> None:
+        """Join a close transaction without misclassifying child cancellation."""
+        waiter = asyncio.current_task()
+        cancellation_requests = waiter.cancelling() if waiter is not None else 0
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError as exc:
+            if waiter is not None and waiter.cancelling() > cancellation_requests:
+                # This caller acquired a real cancellation request. Shielding
+                # leaves the shared close transaction running for every other
+                # waiter (or a later retry).
+                raise
+            # A close implementation may raise CancelledError despite its task
+            # receiving no cancellation request. The owned child then has a
+            # cancelled result, but the caller itself is not cancelled. Surface
+            # that as an ordinary retryable cleanup failure while preserving
+            # the exact socket and original error in the ownership ledger.
+            close_error = self._socket_close_error
+            if close_error is None:
+                close_error = exc
+            raise RuntimeError(
+                "Multi-context WebSocket cleanup was cancelled internally; "
+                "retry close() to finish cleanup"
+            ) from close_error
+
+    async def _close_owned_socket(self, ws: Any) -> None:
+        """Close one exact wrapper, retaining ownership on every failure."""
+        try:
+            await ws.close()
+        except BaseException as exc:
+            self._pending_socket_close = ws
+            self._socket_close_error = exc
+            raise
+        else:
+            if self._pending_socket_close is ws:
+                self._pending_socket_close = None
+            self._socket_close_error = None
+
+    async def _retry_pending_socket_close(self) -> None:
+        ws = self._pending_socket_close
+        if ws is None:
+            return
+        try:
+            await self._close_owned_socket(ws)
+        except BaseException as exc:
+            raise RuntimeError(
+                "Previous multi-context WebSocket cleanup is incomplete; "
+                "retry close() or connect() after cleanup recovers"
+            ) from exc
 
     async def _send_frames(self, frames: list[str]) -> None:
         async with self._send_lock:
@@ -450,20 +598,27 @@ class MultiContextWSManager:
         Used by the cancel fallback: the next ``open_context`` lazily
         reconnects a fresh socket.
         """
-        ws = self._ws
-        # Mark this as a deliberate teardown so the reader's finally does not
-        # surface a spurious connection-death error on still-live contexts;
-        # reset afterwards since the manager stays reusable (the awaited task
-        # cancel guarantees the reader's finally has already run).
-        self._closing = True
-        try:
-            await self._cancel_background_tasks()
-        finally:
-            self._closing = False
-        self._ws = None
-        if ws is not None:
-            with contextlib.suppress(Exception):
-                await ws.close()
+        async with self._connect_lock:
+            # Permanent close owns every remaining resource once admission is
+            # closed. If it won the transition lock, do not independently
+            # retry or double-close its exact socket from a cancel fallback.
+            if self._closed:
+                return
+            await self._retry_pending_socket_close()
+            ws = self._ws
+            # Mark this as a deliberate teardown so the reader's finally does
+            # not surface a spurious connection-death error on still-live
+            # contexts; reset afterwards since the manager stays reusable (the
+            # awaited task cancel guarantees the reader's finally has run).
+            self._closing = True
+            try:
+                await self._cancel_background_tasks()
+            finally:
+                if not self._closed:
+                    self._closing = False
+            self._ws = None
+            if ws is not None:
+                await self._close_owned_socket(ws)
 
     async def _cancel_background_tasks(self) -> None:
         task = self._reader_task

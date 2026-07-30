@@ -61,6 +61,22 @@ class DeepgramTTSConfig:
     persistent_ws: bool = True
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.sample_rate, bool)
+            or not isinstance(self.sample_rate, int)
+            or self.sample_rate <= 0
+        ):
+            raise ValueError("Deepgram sample_rate must be a positive integer")
+        normalized_encoding = (
+            self.encoding.strip().lower() if isinstance(self.encoding, str) else ""
+        )
+        if normalized_encoding != "linear16":
+            raise ValueError(
+                f"Unsupported Deepgram TTS encoding: {self.encoding!r}. "
+                "EasyCat's TTS audio normalizer only supports linear16 PCM; "
+                "mulaw, alaw, and compressed encodings require decoding first."
+            )
+        self.encoding = normalized_encoding
         for name in ("clear_timeout_s", "warmup_timeout_s"):
             value = getattr(self, name)
             if (
@@ -284,13 +300,14 @@ class DeepgramTTS(_WSTTSBase):
 
     async def _synthesize_locked(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Run one serialized Speak/Flush cycle."""
+        if not self._config.persistent_ws:
+            await self._replace_oneshot_ws(self._create_ws)
         self._start_synthesis()
         self._synthesis_owner = asyncio.current_task()
         cycle_done = asyncio.Event()
         self._cycle_done = cycle_done
         cycle_completed = False
-        if not self._config.persistent_ws:
-            self._ws = self._create_ws()
+        terminal_received = False
         # Leave replay disarmed until the request has actually been sent on a
         # connected stream. ``on_reconnect`` fires for retries during the
         # *initial* connect too, and arming earlier would replay the Speak/
@@ -328,8 +345,13 @@ class DeepgramTTS(_WSTTSBase):
                 if event is not None:
                     yield event
                 if terminal is not None:
+                    terminal_received = True
                     cycle_completed = terminal
                     break
+            self._require_terminal_response(
+                terminal_received,
+                terminal_label="Flushed/Error",
+            )
             tail = self._finish_audio_event(emit=cycle_completed)
             if tail is not None:
                 yield tail

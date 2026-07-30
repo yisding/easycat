@@ -46,6 +46,30 @@ def _require_positive_int(value: int, *, name: str) -> int:
     return value
 
 
+def _remember_rollback_cancellation(
+    retained: asyncio.CancelledError | None,
+    current: asyncio.CancelledError,
+    startup_error: BaseException,
+) -> asyncio.CancelledError | None:
+    """Retain the first new caller cancellation during owned rollback."""
+    if retained is None and not isinstance(startup_error, asyncio.CancelledError):
+        return current
+    return retained
+
+
+def _raise_rollback_cancellation(
+    cancellation: asyncio.CancelledError | None,
+    startup_error: BaseException,
+    cleanup_error: BaseException | None = None,
+) -> None:
+    """Deliver a retained caller cancellation after rollback settles."""
+    if cancellation is None:
+        return
+    if cleanup_error is not None:
+        startup_error.add_note(f"connect rollback failed: {cleanup_error!r}")
+    raise cancellation from startup_error
+
+
 class _InboundAudioQueue(asyncio.Queue[AudioChunk | None]):
     """Count- and byte-bounded queue for decoded inbound audio."""
 
@@ -442,30 +466,54 @@ class ServerTransportBase(AudioQueueMixin):
 
         self._server: Server | None = None
         self._ws: ServerConnection | None = None
+        self._pending_client_close: ServerConnection | None = None
+        self._client_close_error: Exception | None = None
+        # A disconnect is a retained transaction spanning the accepted client,
+        # listener shutdown, sentinel publication, and diagnostic-task drain.
+        # ``_connected`` is cleared before its first await, while this ledger
+        # remains set until every exact cleanup owner has completed. A later
+        # disconnect retries the unfinished steps; connect must never treat the
+        # stale pre-disconnect ``_connected`` value as a live listener.
+        self._disconnect_cleanup_pending = False
+        self._disconnect_cleanup_error: Exception | None = None
+        self._server_wait_task: asyncio.Future[Any] | None = None
+        self._disconnect_emit_cleanup_task: asyncio.Task[None] | None = None
+        self._lifecycle_lock = asyncio.Lock()
 
     # ── Transport protocol ────────────────────────────────────────
 
     async def connect(self) -> None:
         """Start the WebSocket server."""
-        if self._connected:
-            return
+        async with self._lifecycle_lock:
+            if self._pending_client_close is not None:
+                raise RuntimeError(
+                    f"{self._transport_name} client cleanup is incomplete; "
+                    "call disconnect() again before reconnecting"
+                ) from (self._disconnect_cleanup_error or self._client_close_error)
+            if self._disconnect_cleanup_pending:
+                raise RuntimeError(
+                    f"{self._transport_name} cleanup is incomplete; "
+                    "call disconnect() again before reconnecting"
+                ) from self._disconnect_cleanup_error
+            if self._connected:
+                return
 
-        self._reset_audio_queue()
+            self._reset_audio_queue()
 
-        self._server = await websockets.serve(
-            self._handle_connection,
-            self._host,
-            self._port,
-            compression=None,
-            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
-        )
-        self._connected = True
-        logger.info(
-            "%s transport listening on ws://%s:%d",
-            self._transport_name,
-            self._host,
-            self._port,
-        )
+            self._server = await websockets.serve(
+                self._handle_connection,
+                self._host,
+                self._port,
+                compression=None,
+                max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+            )
+            self._connected = True
+            logger.info(
+                "%s transport listening on ws://%s:%d",
+                self._transport_name,
+                self._host,
+                self._port,
+            )
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
         """Override in subclasses to handle a new WebSocket connection."""
@@ -473,25 +521,189 @@ class ServerTransportBase(AudioQueueMixin):
 
     async def disconnect(self) -> None:
         """Disconnect the current client and stop the server."""
-        if not self._connected:
-            return
+        async with self._lifecycle_lock:
+            if self._disconnect_is_idle():
+                return
 
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                logger.debug("Error closing %s WebSocket", self._transport_name, exc_info=True)
+            self._begin_disconnect_cleanup()
+            cleanup_errors: list[Exception] = []
+            await self._close_client_for_disconnect(cleanup_errors)
+            await self._close_server_for_disconnect(cleanup_errors)
+            self._enqueue_sentinel()
+            await self._drain_diagnostics_for_disconnect(cleanup_errors)
+
+            if cleanup_errors:
+                self._disconnect_cleanup_error = cleanup_errors[0]
+                raise cleanup_errors[0]
+
+            # ``wait_closed`` has reaped every accepted handler. Clear any
+            # protocol pointer a handler already released, then admit reuse.
             self._ws = None
-        self._client_connected.clear()
+            self._disconnect_cleanup_pending = False
+            self._disconnect_cleanup_error = None
 
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+    def _disconnect_is_idle(self) -> bool:
+        return (
+            not self._connected
+            and not self._disconnect_cleanup_pending
+            and self._pending_client_close is None
+        )
 
-        self._enqueue_sentinel()
+    def _begin_disconnect_cleanup(self) -> None:
+        """Publish shutdown before the first await and retain cleanup admission."""
         self._connected = False
-        await self._drain_emit_tasks()
+        self._client_connected.clear()
+        self._disconnect_cleanup_pending = True
+        self._disconnect_cleanup_error = None
+
+    async def _close_client_for_disconnect(self, cleanup_errors: list[Exception]) -> None:
+        client = self._pending_client_close or self._ws
+        if client is None:
+            return
+        self._pending_client_close = client
+        caller = asyncio.current_task()
+        cancellation_requests = caller.cancelling() if caller is not None else 0
+        try:
+            await client.close()
+        except asyncio.CancelledError as cancellation:
+            interrupted = RuntimeError(f"{self._transport_name} client close was interrupted")
+            self._client_close_error = interrupted
+            self._disconnect_cleanup_error = interrupted
+            if caller is not None and caller.cancelling() > cancellation_requests:
+                raise cancellation
+            logger.debug(
+                "%s WebSocket client close cancelled internally",
+                self._transport_name,
+                exc_info=True,
+            )
+            cleanup_errors.append(interrupted)
+        except Exception as exc:
+            logger.debug(
+                "Error closing %s WebSocket",
+                self._transport_name,
+                exc_info=True,
+            )
+            cleanup_errors.append(exc)
+            self._client_close_error = exc
+        else:
+            if self._ws is client:
+                self._ws = None
+            self._pending_client_close = None
+            self._client_close_error = None
+
+    def _start_server_wait_for_disconnect(
+        self,
+        server: Server,
+        cleanup_errors: list[Exception],
+    ) -> asyncio.Future[Any] | None:
+        wait_task = self._server_wait_task
+        if wait_task is not None:
+            return wait_task
+        try:
+            server.close()
+        except Exception as exc:
+            logger.debug(
+                "Error closing %s server listener",
+                self._transport_name,
+                exc_info=True,
+            )
+            cleanup_errors.append(exc)
+            return None
+        wait_task = asyncio.ensure_future(server.wait_closed())
+        self._server_wait_task = wait_task
+        return wait_task
+
+    async def _close_server_for_disconnect(self, cleanup_errors: list[Exception]) -> None:
+        server = self._server
+        if server is None:
+            return
+        wait_task = self._start_server_wait_for_disconnect(server, cleanup_errors)
+        if wait_task is None:
+            return
+        caller = asyncio.current_task()
+        cancellation_requests = caller.cancelling() if caller is not None else 0
+        try:
+            await asyncio.shield(wait_task)
+        except asyncio.CancelledError as cancellation:
+            self._handle_server_wait_cancellation(
+                wait_task,
+                cleanup_errors,
+                cancellation,
+                caller=caller,
+                cancellation_requests=cancellation_requests,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Error waiting for %s server listener to close",
+                self._transport_name,
+                exc_info=True,
+            )
+            cleanup_errors.append(exc)
+            if self._server_wait_task is wait_task:
+                self._server_wait_task = None
+        else:
+            if self._server is server:
+                self._server = None
+            if self._server_wait_task is wait_task:
+                self._server_wait_task = None
+
+    def _handle_server_wait_cancellation(
+        self,
+        wait_task: asyncio.Future[Any],
+        cleanup_errors: list[Exception],
+        cancellation: asyncio.CancelledError,
+        *,
+        caller: asyncio.Task[Any] | None,
+        cancellation_requests: int,
+    ) -> None:
+        interrupted = RuntimeError(f"{self._transport_name} server close was interrupted")
+        self._disconnect_cleanup_error = interrupted
+        if wait_task.cancelled() and self._server_wait_task is wait_task:
+            self._server_wait_task = None
+        if caller is not None and caller.cancelling() > cancellation_requests:
+            raise cancellation
+        cleanup_errors.append(interrupted)
+
+    async def _drain_diagnostics_for_disconnect(
+        self,
+        cleanup_errors: list[Exception],
+    ) -> None:
+        emit_cleanup_task = self._disconnect_emit_cleanup_task
+        if emit_cleanup_task is None:
+            emit_cleanup_task = asyncio.create_task(
+                self._drain_emit_tasks(),
+                name=f"{self._transport_name.lower()}_diagnostic_cleanup",
+            )
+            self._disconnect_emit_cleanup_task = emit_cleanup_task
+        caller = asyncio.current_task()
+        cancellation_requests = caller.cancelling() if caller is not None else 0
+        try:
+            await asyncio.shield(emit_cleanup_task)
+        except asyncio.CancelledError:
+            interrupted = RuntimeError(
+                f"{self._transport_name} diagnostic cleanup was interrupted"
+            )
+            self._disconnect_cleanup_error = interrupted
+            if (
+                emit_cleanup_task.cancelled()
+                and self._disconnect_emit_cleanup_task is emit_cleanup_task
+            ):
+                self._disconnect_emit_cleanup_task = None
+            if caller is not None and caller.cancelling() > cancellation_requests:
+                raise
+            cleanup_errors.append(interrupted)
+        except Exception as exc:
+            logger.debug(
+                "Error draining %s diagnostic tasks",
+                self._transport_name,
+                exc_info=True,
+            )
+            cleanup_errors.append(exc)
+            if self._disconnect_emit_cleanup_task is emit_cleanup_task:
+                self._disconnect_emit_cleanup_task = None
+        else:
+            if self._disconnect_emit_cleanup_task is emit_cleanup_task:
+                self._disconnect_emit_cleanup_task = None
 
     @property
     def has_client(self) -> bool:

@@ -147,7 +147,7 @@ def test_vad_whatif_frames_skips_malformed_sequence_values():
     ]
     source = _DictSource(records, {"bad": b"NO", "bool": b"NO", "ok": b"OK"})
 
-    assert _vad_whatif_frames(source, "t1") == [b"OK"]
+    assert _vad_whatif_frames(source, "t1") == [(b"OK", {"stage": "vad"})]
 
 
 def test_align_tracks_groups_by_track_and_orders_by_mono_ns():

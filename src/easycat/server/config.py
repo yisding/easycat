@@ -16,11 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from easycat._numeric import is_finite_number
+
 # ``AuthPolicy`` is a real type as of M5 (``easycat.server.auth``). The import
 # is light (auth.py pulls only hmac/dataclasses/typing/os and the leaf
 # ``is_loopback_host`` from ``easycat._net``), so importing it at module load
 # does not pull aiohttp or any heavy SDK and keeps ``import easycat.server`` light.
 from easycat.server.auth import AuthPolicy
+from easycat.server.transports import _validate_max_sessions
 
 
 @dataclass
@@ -72,3 +75,12 @@ class VoiceServerConfig:
     enable_metrics: bool = True
     manifest_path: Path | None = None
     profile: str = "default"
+
+    def __post_init__(self) -> None:
+        _validate_max_sessions(self.max_sessions)
+        for name, value in (
+            ("drain_timeout_s", self.drain_timeout_s),
+            ("force_shutdown_timeout_s", self.force_shutdown_timeout_s),
+        ):
+            if not is_finite_number(value) or value < 0:
+                raise ValueError(f"{name} must be a finite number >= 0")

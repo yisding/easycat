@@ -32,6 +32,7 @@ from rich.table import Table
 
 from easycat._audio_utils import resample_backend
 from easycat._extras import PORTAUDIO_INSTALL_FIX
+from easycat._provider_helpers import has_usable_credential
 from easycat._provider_registry import credential_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
@@ -188,7 +189,7 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
         var = provider_env.get(only_provider)
         if var is None:
             return []
-        if os.getenv(var, ""):
+        if has_usable_credential(os.getenv(var, "")):
             return [CheckResult(name=f"env_{only_provider}", status="ok", detail=f"{var} set")]
         return [
             CheckResult(
@@ -207,7 +208,7 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
     any_set = False
     for provider, var in provider_env.items():
         value = os.getenv(var, "")
-        if value:
+        if has_usable_credential(value):
             any_set = True
             results.append(CheckResult(name=f"env_{provider}", status="ok", detail=f"{var} set"))
         else:
@@ -258,7 +259,7 @@ def check_provider_reachability(
     for provider, var in _provider_env().items():
         if only_provider and only_provider != provider:
             continue
-        if not os.getenv(var):
+        if not has_usable_credential(os.getenv(var)):
             # Skip probes for unconfigured providers; we only care that
             # the configured ones are reachable.
             continue

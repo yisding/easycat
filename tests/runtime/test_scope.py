@@ -239,6 +239,42 @@ async def test_runtime_scope_cancel_and_drain_cancels_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_detaches_caller_and_cancels_siblings() -> None:
+    scope = RuntimeScope()
+    sibling_started = asyncio.Event()
+    sibling_cleaned_up = asyncio.Event()
+    caller_continued = asyncio.Event()
+
+    async def sibling() -> None:
+        sibling_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            sibling_cleaned_up.set()
+
+    sibling_task = scope.create_task("sibling", sibling())
+    await sibling_started.wait()
+
+    async def cancel_from_owned_task() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        scope.add_task("owner", current)
+
+        await scope.cancel_and_drain()
+        await asyncio.sleep(0)
+        caller_continued.set()
+
+    owner_task = asyncio.create_task(cancel_from_owned_task())
+    await owner_task
+
+    assert not owner_task.cancelled()
+    assert caller_continued.is_set()
+    assert sibling_task.cancelled()
+    assert sibling_cleaned_up.is_set()
+    assert scope.empty
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_discard_detaches_without_cancelling_task() -> None:
     scope = RuntimeScope()
     started = asyncio.Event()

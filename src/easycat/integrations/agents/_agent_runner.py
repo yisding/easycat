@@ -297,9 +297,11 @@ class AgentRunner:
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Drive a wrapped stateful bridge and mirror only completed turns."""
-        # Forward runner-managed history so multi-turn bridges that rely
-        # on turn_input.context stay stateful across turns.  Any context
-        # the caller already set takes precedence.
+        # Forward runner-managed history so stateless multi-turn bridges that
+        # rely on turn_input.context stay stateful across turns.  Any context
+        # the caller already set takes precedence, while bridges that own a
+        # durable conversation chain can opt out via the optional
+        # ``MANAGES_CONVERSATION_HISTORY`` capability.
         #
         # The inner bridge owns the authoritative turn state: it records
         # the user message and any partial assistant output into its own
@@ -309,7 +311,10 @@ class AgentRunner:
         # runner's *advisory* shadow ``_history`` after the inner turn has
         # completed successfully.
         bridge_input = turn_input
-        if not turn_input.context and self._history:
+        manages_conversation_history = bool(
+            getattr(self._agent, "MANAGES_CONVERSATION_HISTORY", False)
+        )
+        if not manages_conversation_history and not turn_input.context and self._history:
             bridge_input = AgentTurnInput(
                 text=turn_input.text,
                 context=list(self._history),

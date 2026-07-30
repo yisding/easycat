@@ -58,6 +58,17 @@ class TestTTSBase:
         base = TTSBase(output_format=PCM16_MONO_16K)
         assert base._output_format == PCM16_MONO_16K
 
+    @pytest.mark.parametrize(
+        "output_format",
+        [
+            AudioFormat(sample_rate=24_000, channels=1, sample_width=1),
+            AudioFormat(sample_rate=24_000, channels=1, sample_width=2, encoding="mulaw"),
+        ],
+    )
+    def test_rejects_non_pcm16_output_format(self, output_format):
+        with pytest.raises(ValueError, match="output_format must be PCM16"):
+            TTSBase(output_format=output_format)
+
     def test_default_input_policy_is_plain_text(self):
         base = TTSBase()
         assert base.input_policy.accepted_formats == ("plain",)
@@ -104,6 +115,74 @@ class TestTTSBase:
         assert all(item.audio.format == PCM16_MONO_24K for item in events if item.audio)
         output = b"".join(item.audio.data for item in events if item.audio)
         assert len(output) > len(data)
+
+    def test_make_audio_event_upmixes_mono_to_stereo_output(self):
+        stereo_output = AudioFormat(sample_rate=24_000, channels=2, sample_width=2)
+        base = TTSBase(output_format=stereo_output)
+
+        event = base._make_audio_event(struct.pack("<2h", 100, -200), PCM16_MONO_24K)
+
+        assert event is not None and event.audio is not None
+        assert event.audio.format == stereo_output
+        assert event.audio.num_samples == 2
+        assert struct.unpack("<4h", event.audio.data) == (100, 100, -200, -200)
+
+    def test_make_audio_event_preserves_matching_stereo_channels(self):
+        stereo_format = AudioFormat(sample_rate=24_000, channels=2, sample_width=2)
+        base = TTSBase(output_format=stereo_format)
+        data = struct.pack("<4h", 1000, -1000, 2000, -2000)
+
+        event = base._make_audio_event(data, stereo_format)
+
+        assert event is not None and event.audio is not None
+        assert event.audio.data == data
+        assert struct.unpack("<4h", event.audio.data) == (1000, -1000, 2000, -2000)
+
+    def test_make_audio_event_discards_carry_when_source_format_changes(self):
+        stereo_format = AudioFormat(sample_rate=24_000, channels=2, sample_width=2)
+        base = TTSBase(output_format=PCM16_MONO_24K)
+        base._start_synthesis()
+
+        # Half a stereo frame cannot be completed by a later mono chunk.
+        assert base._make_audio_event(struct.pack("<h", 100), stereo_format) is None
+        assert base._sample_carry == struct.pack("<h", 100)
+        assert base._sample_carry_format == stereo_format
+
+        event = base._make_audio_event(struct.pack("<h", 200), PCM16_MONO_24K)
+
+        assert event is not None and event.audio is not None
+        assert struct.unpack("<h", event.audio.data) == (200,)
+        assert base._sample_carry == b""
+        assert base._sample_carry_format is None
+
+    def test_resampler_tail_is_upmixed_to_stereo_output(self):
+        stereo_output = AudioFormat(sample_rate=8_000, channels=2, sample_width=2)
+        base = TTSBase(output_format=stereo_output)
+        base._start_synthesis()
+
+        first = base._make_audio_event(_make_pcm16_data(2400), PCM16_MONO_24K)
+        tail = base._finish_audio_event()
+        output = b"".join(
+            event.audio.data
+            for event in (first, tail)
+            if event is not None and event.audio is not None
+        )
+
+        assert len(output) == 800 * stereo_output.frame_size
+        samples = struct.unpack(f"<{len(output) // 2}h", output)
+        assert samples[::2] == samples[1::2]
+
+    def test_make_audio_event_rejects_non_pcm16_source_format(self):
+        base = TTSBase()
+        source_format = AudioFormat(
+            sample_rate=24_000,
+            channels=1,
+            sample_width=1,
+            encoding="mulaw",
+        )
+
+        with pytest.raises(ValueError, match="source_format must be PCM16"):
+            base._make_audio_event(b"\x00", source_format)
 
     def test_finish_audio_event_emits_delayed_resampler_tail(self):
         base = TTSBase(output_format=PCM16_MONO_8K)

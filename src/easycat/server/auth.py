@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, TypeGuard, runtime_checkable
 
 from easycat._net import constant_time_strings_equal, is_loopback_host
 
@@ -157,6 +157,11 @@ _MISSING = AuthResult(allowed=False, reason="missing")
 _INVALID = AuthResult(allowed=False, reason="invalid")
 
 
+def _has_usable_token(value: object) -> TypeGuard[str]:
+    """Return whether ``value`` is a non-blank string token."""
+    return isinstance(value, str) and bool(value.strip())
+
+
 @runtime_checkable
 class AuthPolicy(Protocol):
     """A synchronous request authorizer (see module docstring for sync rationale)."""
@@ -201,7 +206,7 @@ class BearerTokenAuth:
         # against it. Otherwise ``compare_digest("", "")`` would accept an empty
         # ``Authorization: Bearer `` credential. No-auth is expressed via
         # ``NoAuth`` / ``unsafe_allow_no_auth``, never a blank-token policy.
-        if not self.token or not self.token.strip():
+        if not _has_usable_token(self.token):
             return _MISSING
         header = request.authorization_header
         if header is not None:
@@ -240,7 +245,7 @@ def bearer_auth_from_env(
     :class:`NoAuth` (subject to the non-loopback bind guard).
     """
     token = os.getenv(env_var)
-    if not token:
+    if not _has_usable_token(token):
         return None
     return BearerTokenAuth(
         token=token,
@@ -251,8 +256,7 @@ def bearer_auth_from_env(
 
 def _policy_has_token(auth: AuthPolicy | None) -> bool:
     """Return whether ``auth`` carries a usable token (closes the bind guard)."""
-    token = getattr(auth, "token", None)
-    return bool(token)
+    return _has_usable_token(getattr(auth, "token", None))
 
 
 def enforce_bind_guard(

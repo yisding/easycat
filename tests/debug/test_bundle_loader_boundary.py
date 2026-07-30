@@ -190,12 +190,124 @@ def test_loader_rejects_inline_artifact_count_overflow(
     assert exc_info.value.reason_code == "SIZE_EXCEEDED"
 
 
-def test_journal_scalar_records_do_not_break_bundle_loading(tmp_path: Path) -> None:
-    path = tmp_path / "scalar-record.zip"
+@pytest.mark.parametrize(
+    ("journal_payload", "message"),
+    [
+        (b"\xff\xfe", "not valid UTF-8 at byte 0"),
+        (b'{"sequence": 1}\nnot-json\n', "line 2 is not valid JSON"),
+        (b'{"sequence": 1}\n[]\n', "line 2 must be a JSON object"),
+    ],
+)
+def test_loader_rejects_invalid_journal_records(
+    tmp_path: Path,
+    journal_payload: bytes,
+    message: str,
+) -> None:
+    path = tmp_path / "invalid-journal.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
-        archive.writestr("journal.ndjson", "1\nnull\n[]\n")
+        archive.writestr("journal.ndjson", journal_payload)
 
-    bundle = bundle_facade.RunBundle.load(path)
+    with pytest.raises(BundleValidationError, match=message) as exc_info:
+        bundle_facade.RunBundle.load(path)
 
-    assert list(bundle.records()) == []
+    assert exc_info.value.reason_code == "INVALID_JOURNAL"
+
+
+def test_in_memory_bundle_records_never_silently_skip_invalid_journal_data() -> None:
+    bundle = bundle_facade.RunBundle(
+        journal_ndjson=b'{"sequence": 1}\nnot-json\n{"sequence": 3}\n'
+    )
+
+    with pytest.raises(BundleValidationError, match="line 2 is not valid JSON") as exc_info:
+        list(bundle.records())
+
+    assert exc_info.value.reason_code == "INVALID_JOURNAL"
+
+
+def test_loader_normalizes_huge_integer_parse_failure(tmp_path: Path) -> None:
+    path = tmp_path / "huge-integer-journal.zip"
+    journal_payload = b'{"sequence": ' + (b"9" * 5_000) + b"}\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", journal_payload)
+
+    with pytest.raises(
+        BundleValidationError,
+        match="Bundle journal line 1 is not valid JSON",
+    ) as exc_info:
+        bundle_facade.RunBundle.load(path)
+
+    assert exc_info.value.reason_code == "INVALID_JOURNAL"
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+@pytest.mark.parametrize(
+    "journal_payload",
+    [
+        b'{"name": "missing"}\n',
+        b'{"sequence": true}\n',
+        b'{"sequence": "1"}\n',
+        b'{"sequence": -1}\n',
+        b'{"sequence": 2}\n{"sequence": 2}\n',
+        b'{"sequence": 2}\n{"sequence": 1}\n',
+    ],
+)
+def test_loader_rejects_invalid_or_non_monotonic_sequences(
+    tmp_path: Path,
+    journal_payload: bytes,
+) -> None:
+    path = tmp_path / "invalid-sequence.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", journal_payload)
+
+    with pytest.raises(BundleValidationError) as exc_info:
+        bundle_facade.RunBundle.load(path)
+
+    assert exc_info.value.reason_code == "INVALID_JOURNAL"
+
+
+def test_loader_accepts_recovery_sequence_zero_followed_by_live_records(tmp_path: Path) -> None:
+    path = tmp_path / "recovery-sequence.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr(
+            "journal.ndjson",
+            b'{"sequence": 0, "kind": "recovery"}\n{"sequence": 1, "kind": "event"}\n',
+        )
+
+    assert [record["sequence"] for record in bundle_facade.RunBundle.load(path).records()] == [
+        0,
+        1,
+    ]
+
+
+@pytest.mark.parametrize(
+    "journal_payload",
+    [
+        (
+            b'{"sequence": -1, "kind": "degraded", "name": "journal_degraded"}\n'
+            b'{"sequence": 0, "kind": "event"}\n'
+        ),
+        (
+            b'{"sequence": 0, "kind": "event"}\n'
+            b'{"sequence": -1, "kind": "degraded", "name": "journal_degraded"}\n'
+            b'{"sequence": 1, "kind": "event"}\n'
+        ),
+    ],
+)
+def test_loader_accepts_degraded_sentinel_outside_live_sequence_order(
+    tmp_path: Path,
+    journal_payload: bytes,
+) -> None:
+    path = tmp_path / "degraded-sequence.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", journal_payload)
+
+    records = list(bundle_facade.RunBundle.load(path).records())
+
+    assert [record["sequence"] for record in records] == [
+        json.loads(line)["sequence"] for line in journal_payload.splitlines()
+    ]

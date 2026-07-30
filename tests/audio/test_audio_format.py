@@ -1,3 +1,5 @@
+import pytest
+
 from easycat.audio_format import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
@@ -21,6 +23,30 @@ def test_audio_format_bytes_per_second():
     assert PCM16_MONO_16K.bytes_per_second == 32000
     assert PCM16_MONO_24K.bytes_per_second == 48000
     assert PCM16_MONO_48K.bytes_per_second == 96000
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sample_rate", 0),
+        ("sample_rate", -1),
+        ("sample_rate", True),
+        ("sample_rate", 16_000.0),
+        ("channels", 0),
+        ("channels", False),
+        ("sample_width", 0),
+        ("sample_width", 2.0),
+    ],
+)
+def test_audio_format_rejects_invalid_geometry(field: str, value: object) -> None:
+    values: dict[str, object] = {
+        "sample_rate": 16_000,
+        "channels": 1,
+        "sample_width": 2,
+    }
+    values[field] = value
+    with pytest.raises(ValueError, match=field):
+        AudioFormat(**values)  # type: ignore[arg-type]
 
 
 def test_pcm16_mono_constants():

@@ -245,6 +245,41 @@ async def test_elevenlabs_realtime_sends_stop():
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_close_failure_blocks_restart_until_cleanup_retry(
+    monkeypatch,
+):
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="test-key", mode="realtime"))
+    close_calls = 0
+
+    async def fail_once_close(*, close_before_drain: bool = False) -> None:
+        nonlocal close_calls
+        assert close_before_drain is True
+        close_calls += 1
+        if close_calls == 1:
+            raise RuntimeError("socket close failed")
+
+    async def start_replacement() -> None:
+        return None
+
+    monkeypatch.setattr(stt, "_close_active_websocket", fail_once_close)
+    monkeypatch.setattr(stt, "_on_start", start_replacement)
+    stt._running = True
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await stt.end_stream()
+
+    assert stt._failed_end_cleanup_pending is True
+    assert close_calls == 1
+
+    await stt.start_stream()
+
+    assert close_calls == 2
+    assert stt._failed_end_cleanup_pending is False
+    assert stt._running is True
+    await stt.end_stream()
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_commit_segment_keeps_stream_open_for_later_audio():
     messages = [
         _el_transcript("hello", is_final=True),
@@ -410,6 +445,30 @@ def test_elevenlabs_rejects_overlong_keyterm():
 def test_elevenlabs_stt_config_rejects_negative_max_retries():
     with pytest.raises(ValueError, match="max_retries"):
         ElevenLabsSTTConfig(api_key="k", max_retries=-1)
+
+
+@pytest.mark.parametrize("mode", ["", "realtim", "streaming", 1, None])
+def test_elevenlabs_stt_config_rejects_unknown_mode(mode):
+    with pytest.raises(ValueError, match=r"mode must be 'realtime' or 'batch'"):
+        ElevenLabsSTTConfig(api_key="k", mode=mode)
+
+
+@pytest.mark.parametrize("commit_strategy", ["", "vda", "auto", 1, None])
+def test_elevenlabs_stt_config_rejects_unknown_commit_strategy(commit_strategy):
+    with pytest.raises(ValueError, match=r"realtime_commit_strategy must be 'vad' or 'manual'"):
+        ElevenLabsSTTConfig(api_key="k", realtime_commit_strategy=commit_strategy)
+
+
+def test_elevenlabs_stt_config_normalizes_mode_and_commit_strategy():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode=" ReAlTiMe ",
+        realtime_commit_strategy=" VAD ",
+    )
+
+    assert config.mode == "realtime"
+    assert config.realtime_commit_strategy == "vad"
+    assert config.resolved_model == "scribe_v2_realtime"
 
 
 def test_elevenlabs_config_final_timeout_default():
@@ -828,6 +887,26 @@ async def test_elevenlabs_batch_sends_wav():
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_batch_preserves_multichannel_non_pcm16_wav_geometry():
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="test-key", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+    stereo_pcm8 = AudioChunk(
+        data=b"\x01\x02\x03\x04",
+        format=AudioFormat(sample_rate=8000, channels=2, sample_width=1),
+    )
+
+    await collect_stt_events(stt, [stereo_pcm8])
+
+    files = mock_client.post.call_args.kwargs["files"]
+    _, wav_data, _ = files["file"]
+    assert int.from_bytes(wav_data[22:24], "little") == 2
+    assert int.from_bytes(wav_data[24:28], "little") == 8000
+    assert int.from_bytes(wav_data[34:36], "little") == 8
+    assert wav_data[44:] == stereo_pcm8.data
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_batch_sends_auth():
     mock_client = _make_mock_http_client("test")
     config = ElevenLabsSTTConfig(api_key="xi-key-123", mode="batch", http_client=mock_client)
@@ -912,7 +991,7 @@ async def test_elevenlabs_batch_finalizes_utterance_when_buffer_cap_hit():
 
 @pytest.mark.asyncio
 async def test_elevenlabs_batch_rejects_nonpositive_byte_rate_for_duration_cap():
-    """A non-positive byte rate must raise a clear error, not divide by zero."""
+    """A corrupted format must raise a clear error, not divide by zero."""
     config = ElevenLabsSTTConfig(
         api_key="k",
         mode="batch",
@@ -920,7 +999,11 @@ async def test_elevenlabs_batch_rejects_nonpositive_byte_rate_for_duration_cap()
         http_client=_make_mock_http_client("test"),
     )
     stt = ElevenLabsSTT(config)
-    bad_format = AudioFormat(sample_rate=0, channels=1, sample_width=2)
+    bad_format = object.__new__(AudioFormat)
+    object.__setattr__(bad_format, "sample_rate", 0)
+    object.__setattr__(bad_format, "channels", 1)
+    object.__setattr__(bad_format, "sample_width", 2)
+    object.__setattr__(bad_format, "encoding", "pcm")
 
     await stt.start_stream()
     with pytest.raises(ValueError, match="non-positive byte rate"):

@@ -431,6 +431,12 @@ def test_deepgram_build_url():
     assert "interim_results=true" in url
 
 
+def test_deepgram_build_url_advertises_mono_wire_payload_after_downmix():
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", channels=2))
+
+    assert "channels=1" in stt._build_url()
+
+
 def test_deepgram_flux_build_url_uses_v2_without_legacy_params():
     config = DeepgramSTTConfig(
         api_key="k",
@@ -574,6 +580,31 @@ async def test_deepgram_persistent_socket_sends_idle_keepalive():
         json.loads(frame).get("type") == "KeepAlive" for frame in ws.sent if isinstance(frame, str)
     )
     await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_keepalive_cleanup_preserves_caller_cancellation() -> None:
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k"))
+    child_cancelled = asyncio.Event()
+    release_child = asyncio.Event()
+
+    async def cancellation_resistant_keepalive() -> None:
+        while not release_child.is_set():
+            try:
+                await release_child.wait()
+            except asyncio.CancelledError:
+                child_cancelled.set()
+
+    stt._keepalive_task = asyncio.create_task(cancellation_resistant_keepalive())
+    cancelling = asyncio.create_task(stt._cancel_keepalive())
+    await child_cancelled.wait()
+    cancelling.cancel()
+    release_child.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cancelling
+
+    assert stt._keepalive_task is None
 
 
 @pytest.mark.asyncio

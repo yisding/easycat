@@ -39,7 +39,7 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime.scope import RuntimeScope
-from easycat.smart_turn import SmartTurnProvider
+from easycat.smart_turn import SmartTurnProvider, _validate_probability_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,8 @@ class TurnManagerConfig:
             raise ValueError("max_pre_roll_chunks must be positive")
         if self.max_turn_audio_chunks < 1:
             raise ValueError("max_turn_audio_chunks must be positive")
+        if self.endpoint_threshold is not None:
+            _validate_probability_threshold("endpoint_threshold", self.endpoint_threshold)
 
 
 class TurnManager:
