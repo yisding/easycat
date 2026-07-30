@@ -407,6 +407,65 @@ async def test_streaming_audio_downmixes_stereo_pcm16_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_audio_carries_split_multichannel_frames_before_downmix() -> None:
+    class _AudioProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[AudioChunk] = []
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            self.audio.append(chunk)
+
+    probe = _AudioProbe()
+    await probe.start_stream()
+    stereo_format = AudioFormat(sample_rate=16000, channels=2, sample_width=2)
+
+    await probe.send_audio(
+        AudioChunk(
+            data=struct.pack("<3h", 100, 300, 1000),
+            format=stereo_format,
+        )
+    )
+    await probe.send_audio(
+        AudioChunk(
+            data=struct.pack("<3h", 2000, 3000, 4000),
+            format=stereo_format,
+        )
+    )
+
+    assert [chunk.data for chunk in probe.audio] == [
+        struct.pack("<h", 200),
+        struct.pack("<2h", 1500, 3500),
+    ]
+    assert probe._source_frame_carry == b""
+    await probe.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_streaming_audio_discards_frame_carry_at_stream_boundary() -> None:
+    class _AudioProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[AudioChunk] = []
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            self.audio.append(chunk)
+
+    probe = _AudioProbe()
+    stereo_format = AudioFormat(sample_rate=16000, channels=2, sample_width=2)
+    await probe.start_stream()
+    await probe.send_audio(AudioChunk(data=struct.pack("<h", 100), format=stereo_format))
+    assert probe.audio == []
+    await probe.end_stream()
+
+    await probe.start_stream()
+    await probe.send_audio(AudioChunk(data=struct.pack("<2h", 300, 500), format=stereo_format))
+
+    assert [chunk.data for chunk in probe.audio] == [struct.pack("<h", 400)]
+    await probe.end_stream()
+
+
+@pytest.mark.asyncio
 async def test_streaming_audio_rejects_non_pcm16_sample_width() -> None:
     probe = _Probe()
     await probe.start_stream()

@@ -350,7 +350,10 @@ class ElevenLabsTTS(_WSTTSBase):
                 if terminal:
                     terminal_received = True
                     break
-            self._require_terminal_response(terminal_received)
+            self._require_terminal_response(
+                terminal_received,
+                terminal_label="isFinal/error",
+            )
             tail = self._finish_audio_event()
             if tail is not None:
                 yield tail
@@ -373,12 +376,6 @@ class ElevenLabsTTS(_WSTTSBase):
             finally:
                 self._pending_messages = None
                 self._end_synthesis()
-
-    def _require_terminal_response(self, terminal_received: bool) -> None:
-        if not self._cancelled and not terminal_received:
-            raise ConnectionError(
-                "ElevenLabs TTS stream ended before a terminal isFinal/error response"
-            )
 
     async def _start_ws_stream(self, text: str) -> ReconnectingWebSocket:
         """Send the full ElevenLabs stream-init sequence, retrying once on stale sockets."""

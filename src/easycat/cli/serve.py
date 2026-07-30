@@ -132,14 +132,14 @@ def _playground_config_factory(
 def _validate_playground_config() -> None:
     """Surface the playground's credential requirement before serving.
 
-    Each client connection builds a fresh ``EasyConfig.browser`` through the
+    Each client connection builds a fresh ``EasyConfig`` through the
     per-connection factory, so a missing ``OPENAI_API_KEY`` would otherwise only
     fail server-side when the first client connects — after the CLI has already
     printed the Open URL and started listening. Construct the same browser preset
-    once up front (the per-connection agent/transport do not affect the
-    credential check) so the catalogued missing-key error (``EASYCAT_E203``)
-    fails at startup instead. The throwaway config builds no network clients, so
-    it is safe to discard.
+    once up front via ``EasyConfig.browser()`` (the per-connection agent/transport
+    do not affect the credential check) so the catalogued missing-key error
+    (``EASYCAT_E203``) fails at startup instead. The throwaway config builds no
+    network clients, so it is safe to discard.
     """
     from easycat.config import EasyConfig
 

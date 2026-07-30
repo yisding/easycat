@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from typing import Any
 
 import websockets
 
-from easycat._audio_utils import to_mono_chunk
+from easycat._audio_utils import to_mono_chunk, validate_pcm16_format
 from easycat._provider_helpers import ProviderErrorEmitter
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.errors import EASYCAT_E304
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
@@ -57,6 +58,9 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._provider_event_bus: Any | None = None
+        self._source_frame_carry = b""
+        self._source_frame_carry_format: AudioFormat | None = None
+        self._source_frame_generation = -1
         # Persistent providers set this while deliberately discarding a socket
         # whose drained frames must still reach the current turn's queue: the
         # receive loop then skips its terminal sentinel so events emitted after
@@ -67,17 +71,29 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
 
     def _validate_audio(self, chunk: AudioChunk) -> None:
         super()._validate_audio(chunk)
-        if self._uses_streaming_audio_path() and chunk.format.sample_width != 2:
-            raise ValueError(
-                "Streaming STT expects PCM16 audio "
-                f"(sample_width=2), got sample_width={chunk.format.sample_width}"
-            )
+        if self._uses_streaming_audio_path():
+            validate_pcm16_format("Streaming STT input", chunk.format)
 
     def _prepare_audio(self, chunk: AudioChunk) -> AudioChunk:
-        """Downmix once before provider-specific streaming resampling."""
+        """Frame-align and downmix before provider-specific resampling."""
         if not self._uses_streaming_audio_path():
             return chunk
-        return to_mono_chunk(chunk)
+        if (
+            self._source_frame_generation != self._stream_generation
+            or self._source_frame_carry_format != chunk.format
+        ):
+            self._source_frame_carry = b""
+        self._source_frame_generation = self._stream_generation
+        self._source_frame_carry_format = chunk.format
+
+        source_data = self._source_frame_carry + chunk.data
+        remainder = len(source_data) % chunk.format.frame_size
+        if remainder:
+            self._source_frame_carry = source_data[-remainder:]
+            source_data = source_data[:-remainder]
+        else:
+            self._source_frame_carry = b""
+        return to_mono_chunk(replace(chunk, data=source_data))
 
     def _uses_streaming_audio_path(self) -> bool:
         """Whether this stream sends raw PCM through the WebSocket path."""

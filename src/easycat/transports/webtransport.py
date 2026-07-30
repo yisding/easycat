@@ -115,6 +115,8 @@ from easycat.transports._base import (
 from easycat.transports._base import (
     AudioQueueMixin,
     _enqueue_inbound_chunk,
+    _raise_rollback_cancellation,
+    _remember_rollback_cancellation,
     make_version_info,
 )
 from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
@@ -1374,10 +1376,16 @@ class WebTransportConnectionTransport(AudioQueueMixin):
                 self._disconnect_unlocked(),
                 name="webtransport-connect-rollback",
             )
+            cancellation: asyncio.CancelledError | None = None
             while not cleanup_task.done():
                 try:
                     await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as exc:
+                    cancellation = _remember_rollback_cancellation(
+                        cancellation,
+                        exc,
+                        startup_error,
+                    )
                     continue
                 except Exception:
                     break
@@ -1388,7 +1396,9 @@ class WebTransportConnectionTransport(AudioQueueMixin):
                     self._disconnect_cleanup_error = RuntimeError(
                         "WebTransport connect rollback was interrupted"
                     )
+                _raise_rollback_cancellation(cancellation, startup_error, cleanup_error)
                 raise startup_error from cleanup_error
+            _raise_rollback_cancellation(cancellation, startup_error)
             raise
         self._connected = True
         self._client_connected.set()
@@ -1815,13 +1825,13 @@ class WebTransportServer:
             except Exception as exc:
                 logger.exception("WebTransport server close failed", exc_info=exc)
                 cleanup_errors.append(exc)
-            try:
-                await server.wait_closed()
-            except AttributeError:
-                pass
-            except Exception as exc:
-                logger.exception("WebTransport server wait_closed failed", exc_info=exc)
-                cleanup_errors.append(exc)
+            wait_closed = getattr(server, "wait_closed", None)
+            if wait_closed is not None:
+                try:
+                    await wait_closed()
+                except Exception as exc:
+                    logger.exception("WebTransport server wait_closed failed", exc_info=exc)
+                    cleanup_errors.append(exc)
             if not cleanup_errors and self._server is server:
                 self._server = None
         self._cleanup_error = cleanup_errors[0] if cleanup_errors else None

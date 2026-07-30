@@ -1472,6 +1472,8 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
             raise RuntimeError(
                 "TwilioConnectionTransport.connect() cannot run during disconnect()"
             )
+        leader = False
+        connect_task: asyncio.Task[None] | None = None
         async with self._lifecycle_lock:
             connect_task = self._connect_task
             leader = connect_task is None or connect_task.done()
@@ -1481,7 +1483,8 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
                     name="twilio-connection-connect",
                 )
                 self._connect_task = connect_task
-        assert connect_task is not None
+        if connect_task is None:
+            raise RuntimeError("Twilio connection transaction was not initialized")
         if leader:
             # Cancellation of the initiating caller cancels the shared
             # transaction so partial startup rolls back just as it did before

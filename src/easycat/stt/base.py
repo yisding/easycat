@@ -122,7 +122,7 @@ class STTBase:
                 self._running = False
                 self._failed_start_cleanup_pending = True
                 try:
-                    await self._finish_failed_start()
+                    cancellation = await self._finish_failed_start()
                 except BaseException as cleanup_error:
                     self._failed_start_cleanup_error = cleanup_error
                     logger.warning("STT failed-start cleanup failed", exc_info=True)
@@ -131,6 +131,10 @@ class STTBase:
                     raise startup_error from cleanup_error
                 else:
                     self._clear_failed_start_cleanup()
+                if cancellation is not None and not isinstance(
+                    startup_error, asyncio.CancelledError
+                ):
+                    raise cancellation from startup_error
                 raise
             self._stream_generation += 1
 
@@ -144,6 +148,8 @@ class STTBase:
                         raise RuntimeError("Stream not started; call start_stream() first")
                     self._validate_audio(chunk)
                     chunk = self._prepare_audio(chunk)
+                    if not chunk.data:
+                        return
                 # Run the provider write in an owned task. end_stream() can
                 # cancel that task without cancelling the long-lived audio
                 # ingress task that called send_audio().
@@ -178,6 +184,8 @@ class STTBase:
                 raise RuntimeError("Stream not started; call start_stream() first")
             self._validate_audio(chunk)
             chunk = self._prepare_audio(chunk)
+            if not chunk.data:
+                return
             await self._on_audio(chunk)
 
     async def commit_segment(self) -> bool:
@@ -548,8 +556,9 @@ class STTBase:
     async def _on_start(self) -> None:
         """Called when a new stream starts. Override in subclass."""
 
-    async def _finish_failed_start(self) -> None:
+    async def _finish_failed_start(self) -> asyncio.CancelledError | None:
         """Run failed-start cleanup to completion despite repeated cancellation."""
+        cancellation: asyncio.CancelledError | None = None
         cleanup_task = asyncio.create_task(
             self._on_start_failed(),
             name="stt_failed_start_cleanup",
@@ -557,19 +566,23 @@ class STTBase:
         while not cleanup_task.done():
             try:
                 await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
                 # The outer startup task may be cancelled more than once while
-                # cleanup is in progress. Keep ownership of the cleanup task;
-                # the original startup exception is re-raised by start_stream.
+                # cleanup is in progress. Keep ownership of the cleanup task,
+                # but preserve the first caller cancellation for delivery once
+                # the provider-owned cleanup has settled.
+                if cancellation is None:
+                    cancellation = exc
                 continue
         cleanup_task.result()
+        return cancellation
 
     async def _retry_failed_start_cleanup(self) -> None:
         """Finish a retained partial-start rollback before reusing the provider."""
         if not self._failed_start_cleanup_pending:
             return
         try:
-            await self._finish_failed_start()
+            cancellation = await self._finish_failed_start()
         except BaseException as cleanup_error:
             self._failed_start_cleanup_error = cleanup_error
             raise RuntimeError(
@@ -577,6 +590,8 @@ class STTBase:
                 "retry close() or start_stream() after cleanup recovers"
             ) from cleanup_error
         self._clear_failed_start_cleanup()
+        if cancellation is not None:
+            raise cancellation
 
     def _clear_failed_start_cleanup(self) -> None:
         self._failed_start_cleanup_pending = False

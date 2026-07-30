@@ -289,6 +289,52 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
+    async def test_connect_rollback_preserves_new_caller_cancellation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        startup_error = RuntimeError("setup failed")
+        cleanup_entered = asyncio.Event()
+        release_cleanup = asyncio.Event()
+
+        async def block_cleanup() -> None:
+            cleanup_entered.set()
+            await release_cleanup.wait()
+
+        router = SimpleNamespace(
+            add_post=Mock(),
+            add_get=Mock(),
+            add_options=Mock(),
+            add_static=Mock(),
+        )
+        app = SimpleNamespace(router=router)
+        runner = SimpleNamespace(
+            setup=AsyncMock(side_effect=startup_error),
+            cleanup=AsyncMock(side_effect=block_cleanup),
+        )
+        web = SimpleNamespace(
+            Application=Mock(return_value=app),
+            AppRunner=Mock(return_value=runner),
+            TCPSite=Mock(),
+        )
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        connecting = asyncio.create_task(transport.connect())
+        await cleanup_entered.wait()
+        connecting.cancel()
+        release_cleanup.set()
+
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await connecting
+
+        assert exc_info.value.__cause__ is startup_error
+        runner.cleanup.assert_awaited_once()
+        assert transport._runner is None
+
+    @pytest.mark.asyncio
     async def test_concurrent_connects_publish_one_signaling_stack(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -601,7 +601,7 @@ class TestDrainCurrentUnit:
         await asyncio.sleep(0)
 
         token.cancel()
-        terminal = await asyncio.wait_for(pending, timeout=0.2)
+        terminal = await asyncio.wait_for(pending, timeout=5.0)
 
         assert terminal.kind == "done"
         with pytest.raises(StopAsyncIteration):

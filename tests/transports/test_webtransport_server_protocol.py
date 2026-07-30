@@ -418,6 +418,29 @@ class TestWebTransportServerWiring:
         assert server._cleanup_error is None  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_server_stop_does_not_hide_attribute_error_from_wait_closed(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            _noop,
+        )
+        wait_error = AttributeError("wait implementation failed")
+        bound = SimpleNamespace(
+            close=Mock(),
+            wait_closed=AsyncMock(side_effect=wait_error),
+        )
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+
+        with pytest.raises(AttributeError, match="wait implementation failed"):
+            await server.stop()
+
+        assert server._cleanup_error is wait_error  # noqa: SLF001
+        assert server._server is bound  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_cancelled_stop_blocks_restart_until_server_cleanup_retry(self) -> None:
         wait_entered = asyncio.Event()
 

@@ -46,6 +46,30 @@ def _require_positive_int(value: int, *, name: str) -> int:
     return value
 
 
+def _remember_rollback_cancellation(
+    retained: asyncio.CancelledError | None,
+    current: asyncio.CancelledError,
+    startup_error: BaseException,
+) -> asyncio.CancelledError | None:
+    """Retain the first new caller cancellation during owned rollback."""
+    if retained is None and not isinstance(startup_error, asyncio.CancelledError):
+        return current
+    return retained
+
+
+def _raise_rollback_cancellation(
+    cancellation: asyncio.CancelledError | None,
+    startup_error: BaseException,
+    cleanup_error: BaseException | None = None,
+) -> None:
+    """Deliver a retained caller cancellation after rollback settles."""
+    if cancellation is None:
+        return
+    if cleanup_error is not None:
+        startup_error.add_note(f"connect rollback failed: {cleanup_error!r}")
+    raise cancellation from startup_error
+
+
 class _InboundAudioQueue(asyncio.Queue[AudioChunk | None]):
     """Count- and byte-bounded queue for decoded inbound audio."""
 

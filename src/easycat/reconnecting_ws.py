@@ -145,7 +145,6 @@ class ReconnectingWebSocket:
         # whether it was committed, rolled back during installation, or
         # arrived late from a cancellation-resistant connector.
         self._pending_connection_closes: list[ClientConnection] = []
-        self._connection_cleanup_error: BaseException | None = None
         self._connection_cleanup_lock = asyncio.Lock()
         self._connection_cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
@@ -335,8 +334,6 @@ class ReconnectingWebSocket:
             if owned is connection:
                 del self._pending_connection_closes[index]
                 break
-        if not self._pending_connection_closes:
-            self._connection_cleanup_error = None
 
     async def _close_retained_connection(self, connection: ClientConnection) -> None:
         """Close one exact owned connection and release it only on success."""
@@ -345,8 +342,7 @@ class ReconnectingWebSocket:
                 return
             try:
                 await connection.close()
-            except BaseException as close_error:
-                self._connection_cleanup_error = close_error
+            except BaseException:
                 raise
             self._release_connection_after_close(connection)
 

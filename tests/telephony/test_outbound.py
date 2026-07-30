@@ -26,6 +26,27 @@ from easycat.telephony.outbound import (
 )
 
 
+def _make_bare_manager(**overrides: object) -> OutboundCallManager:
+    """Construct a manager with every private lifecycle field initialized."""
+    manager = OutboundCallManager.__new__(OutboundCallManager)
+    defaults: dict[str, object] = {
+        "_state": OutboundCallManagerState.IDLE,
+        "_active_call_sid": None,
+        "_owned_call_sids": set(),
+        "_pending_cleanup_call_sids": set(),
+        "_reconciling_call_sids": set(),
+        "_terminal_reconciliation_call_sids": set(),
+        "_synthetic_failure_event_ids": set(),
+        "_started": False,
+        "_lifecycle_epoch": 0,
+        "_place_call_lock": asyncio.Lock(),
+    }
+    defaults.update(overrides)
+    for name, value in defaults.items():
+        setattr(manager, name, value)
+    return manager
+
+
 class TestParseCallStatusCallback:
     def test_initiated_status(self) -> None:
         result = parse_call_status_callback(
@@ -347,32 +368,13 @@ class TestOutboundCallManager:
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_init_stores_config(self, mock_init: MagicMock) -> None:
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._state = OutboundCallManagerState.IDLE
-        manager._active_call_sid = None
-        manager._owned_call_sids = set()
-        manager._pending_cleanup_call_sids = set()
-        manager._reconciling_call_sids = set()
-        manager._terminal_reconciliation_call_sids = set()
-        manager._synthetic_failure_event_ids = set()
-        manager._started = False
-        manager._lifecycle_epoch = 0
+        manager = _make_bare_manager()
         assert manager.state == OutboundCallManagerState.IDLE
         assert manager.active_call_sid is None
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_start_stop_idempotent(self, mock_init: MagicMock) -> None:
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._event_bus = EventBus()
-        manager._state = OutboundCallManagerState.IDLE
-        manager._active_call_sid = None
-        manager._owned_call_sids = set()
-        manager._pending_cleanup_call_sids = set()
-        manager._reconciling_call_sids = set()
-        manager._terminal_reconciliation_call_sids = set()
-        manager._synthetic_failure_event_ids = set()
-        manager._started = False
-        manager._lifecycle_epoch = 0
+        manager = _make_bare_manager(_event_bus=EventBus())
         manager.start()
         manager.start()
         assert manager._started is True
@@ -382,17 +384,13 @@ class TestOutboundCallManager:
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_stop_resets_state(self, mock_init: MagicMock) -> None:
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._event_bus = EventBus()
-        manager._state = OutboundCallManagerState.ACTIVE
-        manager._active_call_sid = "CA1"
-        manager._owned_call_sids = {"CA1"}
-        manager._pending_cleanup_call_sids = set()
-        manager._reconciling_call_sids = set()
-        manager._terminal_reconciliation_call_sids = set()
-        manager._synthetic_failure_event_ids = set()
-        manager._started = True
-        manager._lifecycle_epoch = 0
+        manager = _make_bare_manager(
+            _event_bus=EventBus(),
+            _state=OutboundCallManagerState.ACTIVE,
+            _active_call_sid="CA1",
+            _owned_call_sids={"CA1"},
+            _started=True,
+        )
         manager.stop()
         assert manager.state == OutboundCallManagerState.IDLE
         assert manager.active_call_sid is None
@@ -408,8 +406,7 @@ class TestOutboundCallManager:
 
 class TestOutboundCallManagerPlaceCall:
     def _make_manager(self, bus: EventBus) -> OutboundCallManager:
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._event_bus = bus
+        manager = _make_bare_manager(_event_bus=bus, _started=True)
         manager._from_number = "+15559876543"
         manager._amd_mode = "DetectMessageEnd"
         manager._async_amd = True
@@ -421,16 +418,6 @@ class TestOutboundCallManagerPlaceCall:
         manager._status_callback_url = "https://example.com/status"
         manager._twiml_url = "https://example.com/twiml"
         manager._client = MagicMock()
-        manager._state = OutboundCallManagerState.IDLE
-        manager._active_call_sid = None
-        manager._owned_call_sids = set()
-        manager._pending_cleanup_call_sids = set()
-        manager._reconciling_call_sids = set()
-        manager._terminal_reconciliation_call_sids = set()
-        manager._synthetic_failure_event_ids = set()
-        manager._started = True
-        manager._lifecycle_epoch = 0
-        manager._place_call_lock = asyncio.Lock()
         manager.dnc_list = None
         manager.compliance_check = None
         manager.retry_strategy = None
@@ -1005,18 +992,8 @@ class TestOutboundCallManagerPlaceCall:
 
 class TestOutboundCallManagerStatusTracking:
     def _make_manager(self, bus: EventBus) -> OutboundCallManager:
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._event_bus = bus
+        manager = _make_bare_manager(_event_bus=bus)
         manager._client = MagicMock()
-        manager._state = OutboundCallManagerState.IDLE
-        manager._active_call_sid = None
-        manager._owned_call_sids = set()
-        manager._pending_cleanup_call_sids = set()
-        manager._reconciling_call_sids = set()
-        manager._terminal_reconciliation_call_sids = set()
-        manager._synthetic_failure_event_ids = set()
-        manager._started = False
-        manager._lifecycle_epoch = 0
         return manager
 
     @pytest.mark.asyncio

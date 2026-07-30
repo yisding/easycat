@@ -6,11 +6,19 @@ import os
 import shlex
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
+
+from easycat.validation._report_models import ValidationFailure
+from easycat.validation.redaction import (
+    ArtifactRedactionError,
+    TextArtifactFormat,
+    redact_runtime_secrets,
+    redact_runtime_secrets_in_file,
+)
 
 _SOURCE_CHECKOUT_ERROR = (
     "validation lanes require the EasyCat source checkout; run from the EasyCat "
@@ -43,6 +51,34 @@ class CommandRunner(Protocol):
 
 class ValidationSourceCheckoutError(RuntimeError):
     """Raised when a repository validation lane has no repository tests."""
+
+
+def redact_validation_artifacts(
+    artifact_specs: Sequence[tuple[str, Path, TextArtifactFormat]],
+    secrets: Sequence[str],
+) -> dict[str, ValidationFailure]:
+    """Fail closed while scrubbing validation-owned secondary artifacts."""
+    failures: dict[str, ValidationFailure] = {}
+    for name, path, artifact_format in artifact_specs:
+        try:
+            redact_runtime_secrets_in_file(
+                path,
+                secrets,
+                artifact_format=artifact_format,
+                raise_on_error=True,
+            )
+        except (ArtifactRedactionError, OSError) as exc:
+            safe_path = redact_runtime_secrets(str(path), secrets)
+            failures[name] = ValidationFailure(
+                name=f"artifact_redaction.{name}",
+                message=redact_runtime_secrets(
+                    f"could not safely redact validation artifact {path}: {exc}",
+                    secrets,
+                ),
+                failure_class="artifact_redaction_error",
+                details={"path": safe_path},
+            )
+    return failures
 
 
 def _is_source_checkout_root(path: Path) -> bool:

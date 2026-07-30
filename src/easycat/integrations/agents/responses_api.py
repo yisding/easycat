@@ -164,7 +164,7 @@ async def _aiter_lines_with_cancellation(
                     return
             else:
                 try:
-                    line = next_line.result()
+                    line = await next_line
                 except StopAsyncIteration:
                     exhausted = True
                     return

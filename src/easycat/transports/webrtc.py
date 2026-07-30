@@ -25,12 +25,17 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
 from easycat.audio_format import AudioChunk
-from easycat.transports._base import AudioQueueMixin, make_version_info
+from easycat.transports._base import (
+    AudioQueueMixin,
+    _raise_rollback_cancellation,
+    _remember_rollback_cancellation,
+    make_version_info,
+)
 from easycat.transports._webrtc_audio import (
     WEBRTC_SAMPLE_RATE,
     OutboundAudioSource,
@@ -340,12 +345,19 @@ class WebRTCTransport(AudioQueueMixin):
                 self._rollback_failed_connect(),
                 name="webrtc-connect-rollback",
             )
+            cancellation: asyncio.CancelledError | None = None
             while not cleanup_task.done():
                 try:
                     await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as exc:
+                    cancellation = _remember_rollback_cancellation(
+                        cancellation,
+                        exc,
+                        startup_error,
+                    )
                     continue
             cleanup_error = cleanup_task.result()
+            _raise_rollback_cancellation(cancellation, startup_error, cleanup_error)
             if cleanup_error is not None:
                 raise startup_error from cleanup_error
             raise
@@ -693,7 +705,7 @@ class WebRTCTransport(AudioQueueMixin):
         self,
         pc: Any | None,
         cancellation: asyncio.CancelledError,
-    ) -> None:
+    ) -> NoReturn:
         """Close an unpublished peer in an owned task, then preserve cancellation."""
         cleanup_error = await self._close_unpublished_peer(
             pc,

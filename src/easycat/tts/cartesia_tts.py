@@ -238,12 +238,6 @@ class CartesiaTTS(_WSTTSBase):
             return [], True
         return [], False
 
-    def _require_terminal_response(self, terminal_received: bool) -> None:
-        if not self._cancelled and not terminal_received:
-            raise ConnectionError(
-                "Cartesia TTS stream ended before a terminal done/error response"
-            )
-
     async def _replay_request(self) -> None:
         """Re-send the in-flight synthesis request after a reconnect.
 
@@ -345,7 +339,10 @@ class CartesiaTTS(_WSTTSBase):
                 if terminal:
                     terminal_received = True
                     break
-            self._require_terminal_response(terminal_received)
+            self._require_terminal_response(
+                terminal_received,
+                terminal_label="done/error",
+            )
             tail = self._finish_audio_event()
             if tail is not None:
                 yield tail

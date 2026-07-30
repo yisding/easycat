@@ -10,8 +10,9 @@ provider-level test drifts.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -125,6 +126,22 @@ async def test_close_ws_retains_failed_socket_for_idempotent_retry():
 
 
 @pytest.mark.asyncio
+async def test_close_drains_emit_tasks_even_when_socket_close_fails():
+    bus = _RecordingBus()
+    probe = _Probe(_Config(event_bus=bus))
+    failing_ws = MagicMock()
+    failing_ws.close = AsyncMock(side_effect=RuntimeError("socket close failed"))
+    probe._ws = failing_ws
+    probe._emit_provider_error(RuntimeError("provider failed"))
+
+    with pytest.raises(RuntimeError, match="socket close failed"):
+        await probe.close()
+
+    assert probe._emit_tasks == set()
+    assert len(bus.events) == 1
+
+
+@pytest.mark.asyncio
 async def test_replace_oneshot_ws_waits_for_retained_close_before_factory():
     class _FailOnceWS:
         def __init__(self) -> None:
@@ -154,26 +171,28 @@ async def test_replace_oneshot_ws_waits_for_retained_close_before_factory():
 
 
 @pytest.mark.parametrize(
-    "provider",
+    "provider_factory",
     [
         pytest.param(
-            CartesiaTTS(CartesiaTTSConfig(persistent_ws=False)),
+            lambda: CartesiaTTS(CartesiaTTSConfig(persistent_ws=False)),
             id="cartesia",
         ),
         pytest.param(
-            DeepgramTTS(DeepgramTTSConfig(persistent_ws=False)),
+            lambda: DeepgramTTS(DeepgramTTSConfig(persistent_ws=False)),
             id="deepgram",
         ),
         pytest.param(
-            ElevenLabsTTS(ElevenLabsTTSConfig(persistent_ws=False)),
+            lambda: ElevenLabsTTS(ElevenLabsTTSConfig(persistent_ws=False)),
             id="elevenlabs",
         ),
     ],
 )
 @pytest.mark.asyncio
 async def test_one_shot_provider_stop_retries_exact_failed_socket(
-    provider: _WSTTSBase,
+    provider_factory: Callable[[], _WSTTSBase],
 ) -> None:
+    provider = provider_factory()
+
     class _FailOnceWS:
         def __init__(self) -> None:
             self.close_calls = 0

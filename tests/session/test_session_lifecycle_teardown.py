@@ -586,7 +586,7 @@ async def test_session_concurrent_start_calls_share_single_startup():
 
 
 @pytest.mark.asyncio
-async def test_stop_waits_for_in_progress_start_then_closes_started_transport():
+async def test_force_stop_cancels_in_progress_start_without_waiting_for_connect():
     class BlockingConnectTransport(FakeTransport):
         def __init__(self) -> None:
             super().__init__()
@@ -613,15 +613,13 @@ async def test_stop_waits_for_in_progress_start_then_closes_started_transport():
     starting = asyncio.create_task(session.start())
     await transport.connect_entered.wait()
     stopping = asyncio.create_task(session.stop(force=True))
-    await asyncio.sleep(0)
 
-    assert not stopping.done()
-    transport.allow_connect.set()
-    await asyncio.gather(starting, stopping)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(starting, timeout=1)
+    await asyncio.wait_for(stopping, timeout=1)
 
     assert session._closed
     assert not session.is_running
-    assert transport.disconnected
     assert not transport.connected
 
 

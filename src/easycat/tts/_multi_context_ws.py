@@ -61,6 +61,9 @@ _REPLAY_BOUNDARY = object()
 # we never let the cancel send block on a reconnect window; on timeout we fall
 # back to closing the socket outright.
 _CANCEL_SEND_TIMEOUT = 0.5
+# A graceful close frame is best-effort too: a wedged sender must not hold the
+# connection lock and strand every close/connect waiter forever.
+_SOCKET_CLOSE_SEND_TIMEOUT = 0.5
 
 
 def validate_context_queue_maxsize(value: object, *, provider: str | None = None) -> None:
@@ -395,7 +398,10 @@ class MultiContextWSManager:
                     close_frames = self._adapter.socket_close_frames()
             if close_frames:
                 with contextlib.suppress(Exception):
-                    await self._send_frames(close_frames)
+                    await asyncio.wait_for(
+                        self._send_frames(close_frames),
+                        timeout=_SOCKET_CLOSE_SEND_TIMEOUT,
+                    )
             # Snapshot the handle before cancelling the reader, whose
             # ``finally`` nulls ``self._ws``.
             await self._cancel_background_tasks()

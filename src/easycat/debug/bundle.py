@@ -337,7 +337,7 @@ class RunBundle:
                 artifacts.add(ref, f.read_bytes())
         _validate_journal_metadata(
             journal_ndjson,
-            artifact_refs=set(artifacts.index),
+            artifact_refs=set(artifacts.index) if artifact_root is not None else None,
         )
 
         manifest = Manifest(format_version=FORMAT_VERSION)
@@ -476,7 +476,7 @@ def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
                 record["input_ref"] = row[13]
             if row[14]:
                 record["output_ref"] = row[14]
-            if row[15] and row[15] != "":
+            if isinstance(row[15], str) and row[15]:
                 record["tags"] = row[15].split(",")
             lines.append(_serialize_partial_record(record, sequence=row[0]))
     elif "records" in tables:

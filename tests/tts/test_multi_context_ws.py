@@ -437,6 +437,32 @@ class TestMultiContextWSManager:
         # Idempotent.
         await mgr.aclose()
 
+    async def test_aclose_bounds_wedged_graceful_close_frame(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        import easycat.tts._multi_context_ws as multi_context_module
+
+        send_started = asyncio.Event()
+
+        class WedgedSendWS(FakeMultiContextWS):
+            async def send(self, message: str) -> None:
+                _ = message
+                send_started.set()
+                await asyncio.Future()
+
+        monkeypatch.setattr(multi_context_module, "_SOCKET_CLOSE_SEND_TIMEOUT", 0.01)
+        ws = WedgedSendWS()
+        mgr = MultiContextWSManager(
+            _make_adapter(ws, socket_close_frames=lambda: [json.dumps({"close_socket": True})])
+        )
+        await mgr.open_context()
+
+        await asyncio.wait_for(mgr.aclose(), timeout=1)
+
+        assert send_started.is_set()
+        assert ws.closed
+
     async def test_aclose_retains_fail_once_socket_and_retries_exact_owner(self):
         ws = FakeMultiContextWS()
         close_error = RuntimeError("socket close failed")
