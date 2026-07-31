@@ -91,6 +91,38 @@ def test_age_window_archives_stale_journal_keeps_fresh(tmp_path):
     assert [p.name for p in archives] == ["stale-sess.tar.gz"]
 
 
+def test_archive_retention_preserves_prior_archive_for_reused_session_id(tmp_path):
+    """A later reuse of an id must not overwrite its earlier archive."""
+    _seed_journal(tmp_path, "reused-sess")
+    assert (
+        run_retention(
+            tmp_path,
+            max_sessions=0,
+            max_age_days=10**9,
+            mode="archive",
+        )
+        == 1
+    )
+
+    archive_dir = tmp_path / "archive"
+    first_archive = archive_dir / "reused-sess.tar.gz"
+    first_bytes = first_archive.read_bytes()
+
+    _seed_journal(tmp_path, "reused-sess")
+    assert (
+        run_retention(
+            tmp_path,
+            max_sessions=0,
+            max_age_days=10**9,
+            mode="archive",
+        )
+        == 1
+    )
+
+    assert first_archive.read_bytes() == first_bytes
+    assert (archive_dir / "reused-sess-1.tar.gz").exists()
+
+
 def test_age_window_delete_mode_removes_stale_without_archive(tmp_path):
     stale = _seed_journal(tmp_path, "stale-sess")
     fresh = _seed_journal(tmp_path, "fresh-sess")

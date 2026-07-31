@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import sqlite3
 import tarfile
@@ -10,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from easycat.runtime._private_files import mkdir_private, private_tar_filter, touch_private_file
+from easycat.runtime._private_files import mkdir_private, private_tar_filter
 from easycat.runtime.crash_sweep import is_journal_live
 
 logger = logging.getLogger(__name__)
@@ -209,10 +210,10 @@ def _session_bytes(root: Path, db_path: Path) -> int | None:
 def _archive_session(root: Path, oldest: Path) -> bool:
     """Tar the journal (plus artifacts) into ``archive/``; False on failure."""
     archive_dir = root / "archive"
-    mkdir_private(archive_dir)
-    archive_path = archive_dir / f"{oldest.stem}.tar.gz"
-    touch_private_file(archive_path)
+    archive_path: Path | None = None
     try:
+        mkdir_private(archive_dir)
+        archive_path = _reserve_archive_path(archive_dir, oldest.stem)
         # Checkpoint WAL so all data is in the main database file
         # before archiving — otherwise uncheckpointed pages are lost.
         conn = sqlite3.connect(str(oldest))
@@ -242,10 +243,36 @@ def _archive_session(root: Path, oldest: Path) -> bool:
                     arcname=f"artifacts/{session_id}",
                     filter=private_tar_filter,
                 )
-    except OSError:
+    except (OSError, sqlite3.DatabaseError, tarfile.TarError):
+        if archive_path is not None:
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("Failed to remove incomplete archive %s", archive_path, exc_info=True)
         logger.warning("Failed to archive %s", oldest, exc_info=True)
         return False
     return True
+
+
+def _reserve_archive_path(archive_dir: Path, session_id: str) -> Path:
+    """Create and return an exclusive, collision-free archive path.
+
+    Session ids can be reused after retention has removed their prior live
+    journal.  Keep the first archive's historic name and suffix later
+    archives so a later session cannot replace an earlier post-mortem.
+    """
+    suffix = 0
+    while True:
+        suffix_text = "" if suffix == 0 else f"-{suffix}"
+        archive_path = archive_dir / f"{session_id}{suffix_text}.tar.gz"
+        try:
+            fd = os.open(archive_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            suffix += 1
+            continue
+        os.close(fd)
+        os.chmod(archive_path, 0o600)
+        return archive_path
 
 
 def _remove_session(root: Path, oldest: Path) -> bool:

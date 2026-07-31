@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+import pytest
+
 from easycat.server import transports as server_transports
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session_manager import SessionManager
@@ -145,6 +147,39 @@ async def test_runtime_rejects_new_connection_after_drain_starts() -> None:
     assert connection.close_calls == [(1013, "Server is draining")]
     assert manager.sessions == {}
     assert server.close_calls == [False]
+
+
+async def test_runtime_drains_after_listener_close_failure() -> None:
+    """A listener-close failure must not skip the established-session drain."""
+
+    events: list[str] = []
+
+    class _FailingCloseServer(_Server):
+        def close(self, close_connections: bool = True) -> None:
+            super().close(close_connections)
+            raise RuntimeError("listener close failed")
+
+    manager = _Manager(events)
+    server = _FailingCloseServer(events)
+    connection = _Connection(events)
+    session = _Session(events)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=lambda _connection: session,
+    )
+    handler = asyncio.create_task(runtime.handle(connection))
+    await asyncio.wait_for(connection.waiting.wait(), timeout=1)
+
+    with pytest.raises(RuntimeError, match="listener close failed"):
+        await asyncio.wait_for(
+            runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0), timeout=2
+        )
+
+    assert session.closed is True
+    assert connection.close_calls == [(1001, "Server shutdown after drain")]
+    assert "manager_stop_all" in events
+    await asyncio.wait_for(handler, timeout=1)
 
 
 async def test_runtime_allows_async_preflight_to_reject_before_session_creation() -> None:

@@ -42,6 +42,7 @@ class _PendingManualCommit:
 
     final_received: asyncio.Event
     drop_late_final: bool = False
+    final_lost_on_reconnect: bool = False
 
 
 @dataclass
@@ -381,11 +382,19 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._audio_resampler.reset()
         self._audio_pending_commit = False
         # Fresh socket: nothing is buffered server-side and any manual commit
-        # we were awaiting will never be acked, so treat everything sent so far
-        # as accounted for.
+        # we were awaiting will never be acked. Wake those waiters so an
+        # end-of-turn commit can promote its partial immediately instead of
+        # waiting out the full final-transcript timeout. The FIFO records must
+        # then be discarded: finals on the fresh socket cannot acknowledge
+        # commits from the disconnected one.
         self._committed_through_epoch = self._audio_epoch
+        for pending_commit in self._pending_manual_commits:
+            pending_commit.final_lost_on_reconnect = True
+            pending_commit.final_received.set()
         self._manual_commit_inflight = 0
         self._pending_manual_commits.clear()
+        self._final_received = None
+        self._dropping_pending_final = False
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         payload_audio = self._audio_resampler.process(
@@ -469,11 +478,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # committed_transcript we receive while a manual commit is in flight.
         self._committed_through_epoch = self._audio_epoch
         if wait_for_final:
+            final_unavailable = False
             try:
                 await asyncio.wait_for(
                     final_received.wait(), timeout=self._config.final_transcript_timeout_s
                 )
             except TimeoutError:
+                final_unavailable = True
                 # Give up on ElevenLabs' committed transcript and promote
                 # whatever we've streamed via ``partial_transcript`` so the
                 # session can still drive the agent.  The real committed
@@ -486,6 +497,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
                     self._config.final_transcript_timeout_s,
                     len(self._partial_text),
                 )
+            final_unavailable = final_unavailable or pending_commit.final_lost_on_reconnect
+            if final_unavailable:
+                if pending_commit.final_lost_on_reconnect:
+                    logger.warning(
+                        "ElevenLabs reconnect invalidated an in-flight final transcript; "
+                        "promoting %d-char partial to FINAL",
+                        len(self._partial_text),
+                    )
                 if self._partial_text:
                     self._emit_event(
                         STTEvent(

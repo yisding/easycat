@@ -215,34 +215,47 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         force_timeout_s: float,
     ) -> None:
         """Drain sessions, then close surviving sockets and reap handlers."""
-        self.start_draining(server)
-        force_deadline = await self.gate.drain(
-            self._active_session_pairs,
-            drain_timeout_s=max(drain_timeout_s, 0.0),
-            force_after=True,
-            force_timeout_s=max(force_timeout_s, 0.0),
-        )
-        assert force_deadline is not None
-        await close_websocket_connections(
-            self._connections.values(),
-            timeout_s=_remaining_timeout(force_deadline),
-        )
-        await cancel_handler_tasks(
-            self._handler_tasks,
-            timeout_s=_remaining_timeout(force_deadline),
-        )
-        await self._bounded_cleanup(
-            server.wait_closed(),  # type: ignore[attr-defined]
-            timeout_s=_remaining_timeout(force_deadline),
-            label="WebSocket server handlers",
-        )
-        await self._bounded_cleanup(
-            self.manager.stop_all(),
-            timeout_s=_remaining_timeout(force_deadline),
-            label="WebSocket sessions",
-        )
-        self._sessions.clear()
-        self._connections.clear()
+        listener_error: Exception | None = None
+        try:
+            self.start_draining(server)
+        except Exception as exc:
+            # A raw WebSocket listener close is synchronous, but it can still
+            # fail (for example from an event-loop/server implementation
+            # error). Its established connections and sessions remain our
+            # responsibility, so preserve the error until every downstream
+            # drain stage has had a chance to run.
+            listener_error = exc
+        try:
+            force_deadline = await self.gate.drain(
+                self._active_session_pairs,
+                drain_timeout_s=max(drain_timeout_s, 0.0),
+                force_after=True,
+                force_timeout_s=max(force_timeout_s, 0.0),
+            )
+            assert force_deadline is not None
+            await close_websocket_connections(
+                self._connections.values(),
+                timeout_s=_remaining_timeout(force_deadline),
+            )
+            await cancel_handler_tasks(
+                self._handler_tasks,
+                timeout_s=_remaining_timeout(force_deadline),
+            )
+            await self._bounded_cleanup(
+                server.wait_closed(),  # type: ignore[attr-defined]
+                timeout_s=_remaining_timeout(force_deadline),
+                label="WebSocket server handlers",
+            )
+            await self._bounded_cleanup(
+                self.manager.stop_all(),
+                timeout_s=_remaining_timeout(force_deadline),
+                label="WebSocket sessions",
+            )
+        finally:
+            self._sessions.clear()
+            self._connections.clear()
+        if listener_error is not None:
+            raise listener_error
 
     def _active_session_pairs(self) -> list[tuple[int, SessionT]]:
         return [
