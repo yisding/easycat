@@ -181,11 +181,11 @@ class DeepgramSTT(WebSocketSTTBase):
             headers=headers,
             event_bus=self._config.event_bus,
             connect_fn=self._config.ws_connect,
-            on_reconnect=(self._on_persistent_reconnect if self._persistent_enabled() else None),
+            on_reconnect=self._on_persistent_reconnect,
         )
 
     async def _on_persistent_reconnect(self) -> None:
-        """Contain unfinalized audio when a reusable socket reconnects.
+        """Contain unfinalized audio when a Deepgram socket reconnects.
 
         Deepgram's ``from_finalize`` acknowledgements carry no request id and
         are scoped to one physical WebSocket.  A Finalize sent before a drop
