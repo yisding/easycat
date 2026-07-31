@@ -67,6 +67,16 @@ class DeepgramSTTConfig:
     event_bus: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        normalized_encoding = (
+            self.encoding.strip().lower() if isinstance(self.encoding, str) else ""
+        )
+        if normalized_encoding != "linear16":
+            raise ValueError(
+                f"Unsupported Deepgram STT encoding: {self.encoding!r}. "
+                "EasyCat's streaming STT path sends linear16 PCM; other "
+                "encodings require a matching encoder."
+            )
+        self.encoding = normalized_encoding
         requested_persistence = self.persistent_ws
         if requested_persistence is None:
             self.persistent_ws = not self.is_flux

@@ -394,6 +394,19 @@ def test_deepgram_config_constructs_without_api_key():
     assert config.warmup_timeout_s == 5.0
 
 
+@pytest.mark.parametrize("encoding", ["linear16", "LINEAR16", " Linear16 "])
+def test_deepgram_config_normalizes_linear16_encoding(encoding: str):
+    config = DeepgramSTTConfig(encoding=encoding)
+
+    assert config.encoding == "linear16"
+
+
+@pytest.mark.parametrize("encoding", ["mulaw", "pcm_s16le", "", None])
+def test_deepgram_config_rejects_unsupported_encoding(encoding: object):
+    with pytest.raises(ValueError, match="Unsupported Deepgram STT encoding"):
+        DeepgramSTTConfig(encoding=encoding)  # type: ignore[arg-type]
+
+
 def test_deepgram_flux_disables_persistence_by_default():
     config = DeepgramSTTConfig(model="flux-general-en")
     assert config.persistent_ws is False

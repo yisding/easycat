@@ -243,20 +243,15 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         queue = self._event_queue
         try:
             async for raw_message in ws.recv_iter():
-                if isinstance(raw_message, bytes):
-                    await self._handle_ws_bytes_message(raw_message)
-                    continue
-                try:
-                    msg = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                self._handle_json_message(msg)
+                await self._handle_incoming_message(raw_message)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("%s WebSocket closed", self._provider_log_label)
-        except Exception:
+        except Exception as exc:
             logger.exception("Error in %s receive loop", self._provider_log_label)
+            # recv_iter() itself can fail with exceptions other than
+            # ConnectionClosed. Such a terminal failure cannot be recovered
+            # per frame, but it still must not look like a clean EOF.
+            self._emit_provider_error(exc, phase="receive_loop")
         finally:
             self._on_receive_loop_end()
             if ws.died_abnormally:
@@ -278,6 +273,41 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             terminal_queue = self._event_queue if self._dynamic_event_queue else queue
             if not self._suppress_terminal_sentinel:
                 terminal_queue.put_nowait(None)
+
+    async def _handle_incoming_message(self, raw_message: Any) -> None:
+        """Parse and dispatch one frame without letting it kill reception."""
+        if not isinstance(raw_message, str | bytes):
+            logger.debug(
+                "Ignoring unsupported %s WebSocket message type %s",
+                self._provider_log_label,
+                type(raw_message).__name__,
+            )
+            return
+        frame_type = "binary" if isinstance(raw_message, bytes) else "json"
+        try:
+            if isinstance(raw_message, bytes):
+                await self._handle_ws_bytes_message(raw_message)
+                return
+            try:
+                msg = json.loads(raw_message)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(msg, dict):
+                return
+            self._handle_json_message(msg)
+        except Exception as exc:
+            # One malformed provider frame must not tear down the receive task
+            # and silently truncate every later transcript.
+            logger.exception(
+                "Error handling %s %s message",
+                frame_type,
+                self._provider_log_label,
+            )
+            self._emit_provider_error(
+                exc,
+                phase="receive_frame",
+                frame_type=frame_type,
+            )
 
     async def _handle_ws_bytes_message(self, message: bytes) -> None:
         """Handle binary messages from the provider. Default policy ignores them."""

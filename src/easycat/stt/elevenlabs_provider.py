@@ -539,8 +539,6 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
         text = msg.get("text", "")
-        if not text:
-            return
 
         if self._transcribed_through_epoch <= self._committed_through_epoch:
             # Some valid VAD commits arrive without a preceding
@@ -569,15 +567,20 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 self._final_received.set()
             return
 
-        self._emit_event(
-            STTEvent(
-                type=STTEventType.FINAL,
-                text=text,
-                confidence=msg.get("confidence"),
-                language=msg.get("language_code") or self._config.language,
-                word_timestamps=word_timestamps_from_words(msg.get("words")),
+        # An empty committed transcript is still the server's acknowledgment
+        # of a manual or VAD commit (for example, a silence-only segment).
+        # Keep the control-boundary reconciliation above and release the waiter
+        # below, but do not expose an empty FINAL to downstream consumers.
+        if text:
+            self._emit_event(
+                STTEvent(
+                    type=STTEventType.FINAL,
+                    text=text,
+                    confidence=msg.get("confidence"),
+                    language=msg.get("language_code") or self._config.language,
+                    word_timestamps=word_timestamps_from_words(msg.get("words")),
+                )
             )
-        )
         self._partial_text = ""
         if self._final_received is not None:
             self._final_received.set()

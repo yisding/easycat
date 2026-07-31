@@ -199,6 +199,223 @@ class TestWebRTCIngressQueueOwnership:
         assert offer_task.done()
 
     @pytest.mark.asyncio
+    async def test_disconnect_cancels_active_offer_before_waiting_for_offer_lock(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        body_read_started = asyncio.Event()
+        body_read_cancelled = asyncio.Event()
+
+        class _StalledOfferRequest:
+            async def json(self) -> object:
+                body_read_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    body_read_cancelled.set()
+                    raise
+
+        active_offer = asyncio.create_task(transport._handle_offer(_StalledOfferRequest()))
+        await body_read_started.wait()
+        queued_offer = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await asyncio.sleep(0)
+        assert not queued_offer.done()
+
+        await asyncio.wait_for(transport.disconnect(), timeout=1.0)
+
+        assert active_offer.cancelled()
+        assert body_read_cancelled.is_set()
+        queued_response = await asyncio.wait_for(queued_offer, timeout=1.0)
+        assert queued_response.status == 503
+        assert transport._active_offer_task is None
+        assert not transport._offer_lock.locked()
+        assert transport._connected is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bounds_uncooperative_offer_and_allows_retry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        offer_started = asyncio.Event()
+        offer_cancelled = asyncio.Event()
+        release_offer = asyncio.Event()
+        runner = SimpleNamespace(cleanup=AsyncMock())
+        transport._runner = runner
+        monkeypatch.setattr(webrtc_module, "_OFFER_CANCEL_DRAIN_TIMEOUT_S", 0.01)
+
+        async def permanently_resistant_offer(_request: object) -> object:
+            offer_started.set()
+            while not release_offer.is_set():
+                try:
+                    await release_offer.wait()
+                except asyncio.CancelledError:
+                    offer_cancelled.set()
+            return object()
+
+        monkeypatch.setattr(transport, "_handle_offer_locked", permanently_resistant_offer)
+        active_offer = asyncio.create_task(transport._handle_offer(object()))
+        await offer_started.wait()
+        queued_offer = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await asyncio.sleep(0)
+
+        with pytest.raises(TimeoutError, match="offer handler did not stop"):
+            await asyncio.wait_for(transport.disconnect(), timeout=0.25)
+
+        assert offer_cancelled.is_set()
+        assert queued_offer.cancelled()
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 503
+        runner.cleanup.assert_not_awaited()
+        assert isinstance(transport._disconnect_cleanup_error, TimeoutError)
+
+        release_offer.set()
+        await active_offer
+        await transport.disconnect()
+
+        runner.cleanup.assert_awaited_once()
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_discards_candidate_when_sdp_await_consumes_cancellation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        negotiation_started = asyncio.Event()
+
+        async def cancellation_resistant_remote_description(
+            self: _FakeRTCPeerConnection,
+            _offer: _FakeSessionDescription,
+        ) -> None:
+            negotiation_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return
+
+        monkeypatch.setattr(
+            _FakeRTCPeerConnection,
+            "setRemoteDescription",
+            cancellation_resistant_remote_description,
+        )
+        active_offer = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await negotiation_started.wait()
+
+        await asyncio.wait_for(transport.disconnect(), timeout=1.0)
+
+        response = active_offer.result()
+        assert response.status == 503
+        assert len(_FakeRTCPeerConnection.instances) == 1
+        assert _FakeRTCPeerConnection.instances[0].closed is True
+        assert transport._pc is None
+        assert transport._pending_peer_cleanup is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_discards_candidate_when_retirement_consumes_cancellation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        old_peer = _FakeRTCPeerConnection.instances[0]
+        retirement_started = asyncio.Event()
+
+        async def cancellation_resistant_close() -> None:
+            retirement_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                old_peer.closed = True
+                old_peer.connectionState = "closed"
+
+        monkeypatch.setattr(old_peer, "close", cancellation_resistant_close)
+        replacement = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await retirement_started.wait()
+
+        await asyncio.wait_for(transport.disconnect(), timeout=1.0)
+
+        response = replacement.result()
+        candidate = _FakeRTCPeerConnection.instances[1]
+        assert response.status == 503
+        assert candidate.closed is True
+        assert transport._pc is None
+        assert transport._retiring_peer_generation is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_from_active_offer_fails_instead_of_self_deadlocking(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = WebRTCTransport()
+        transport._connected = True
+
+        async def disconnect_from_offer(_request: object) -> object:
+            await transport.disconnect()
+            raise AssertionError("disconnect should reject offer-task reentrancy")
+
+        monkeypatch.setattr(transport, "_handle_offer_locked", disconnect_from_offer)
+
+        with pytest.raises(RuntimeError, match="cannot run from the active offer handler"):
+            await asyncio.wait_for(transport._handle_offer(object()), timeout=1.0)
+
+        assert transport._connected is True
+        assert transport._active_offer_task is None
+        assert not transport._offer_lock.locked()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_disconnect_reaps_active_offer_and_remains_retryable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = WebRTCTransport()
+        transport._connected = True
+        offer_cancelled = asyncio.Event()
+        release_offer = asyncio.Event()
+
+        async def cancellation_resistant_offer(_request: object) -> object:
+            while not release_offer.is_set():
+                try:
+                    await release_offer.wait()
+                except asyncio.CancelledError:
+                    offer_cancelled.set()
+            return object()
+
+        monkeypatch.setattr(transport, "_handle_offer_locked", cancellation_resistant_offer)
+        active_offer = asyncio.create_task(transport._handle_offer(object()))
+        await asyncio.sleep(0)
+
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await offer_cancelled.wait()
+        disconnecting.cancel()
+        release_offer.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await disconnecting
+
+        assert active_offer.done()
+        assert transport._active_offer_task is None
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+
+        await transport.disconnect()
+
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
     async def test_disconnect_cleanup_failures_are_best_effort_and_retryable(self):
         transport = WebRTCTransport()
         transport._web = _FakeWeb

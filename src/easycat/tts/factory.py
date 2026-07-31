@@ -31,7 +31,6 @@ _CATALOG = ProviderCatalog(
             "OPENAI_API_KEY",
             "openai",
             ("openai.com",),
-            probe_module="openai",
         ),
         "deepgram": ProviderSpec(
             DeepgramTTS, DeepgramTTSConfig, "DEEPGRAM_API_KEY", "deepgram", ("deepgram.com",)

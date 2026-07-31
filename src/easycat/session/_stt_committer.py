@@ -132,6 +132,29 @@ class STTCommitter:
         """
         return self._stt_task
 
+    @property
+    def requires_successor_handoff(self) -> bool:
+        """Whether a successor turn must finish the prior STT lifecycle first.
+
+        A PROCESSING-state barge-in can cancel ``on_turn_ended`` while it is
+        still waiting for a delayed segment final.  At that point ``_active``
+        has already been cleared, but the provider stream and its event
+        consumer are still live.  Starting the successor stream directly would
+        race (or be rejected by) the same provider's open stream.
+
+        The committed-transcript fast path has the inverse shape: its event
+        consumer may already have completed while the scoped close task is
+        still releasing the provider.  Include both ownership signals.
+        """
+        event_task = self._stt_task
+        return bool(
+            self._active
+            or (event_task is not None and not event_task.done())
+            or any(
+                not task.done() for task in self._runtime_scope.tasks(self.FINAL_CLOSE_TASK_NAME)
+            )
+        )
+
     def mark_active(self) -> None:
         self._active = True
 

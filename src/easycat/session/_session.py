@@ -2023,9 +2023,14 @@ class Session:
             raise RuntimeError("send_text() is only available in text_session mode")
         if self._closed:
             raise RuntimeError("Session has been stopped")
+        if self._stopping:
+            raise RuntimeError("Session is stopping")
         self._mark_observability_active()
         try:
             with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
-                return await self._turn_runner.send_text(text)
+                return await self._turn_runner.send_text(
+                    text,
+                    admit=lambda: not self._closed and not self._stopping,
+                )
         finally:
             self._mark_observability_inactive()
