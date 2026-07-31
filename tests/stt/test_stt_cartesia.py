@@ -6,6 +6,7 @@ import asyncio
 import json
 
 import pytest
+import websockets
 
 from easycat.events import Error, ErrorStage, EventBus, STTEventType
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
@@ -36,6 +37,66 @@ class MockWebSocket:
         msg = self.messages[self._iter_index]
         self._iter_index += 1
         return msg
+
+
+class PersistentMockWebSocket:
+    """Queue-backed socket used to exercise reconnect behavior."""
+
+    _STOP = object()
+
+    def __init__(self) -> None:
+        self.sent: list[bytes | str] = []
+        self.close_code: int | None = None
+        self._queue: asyncio.Queue[str | bytes | object] = asyncio.Queue()
+
+    async def send(self, data: bytes | str) -> None:
+        self.sent.append(data)
+
+    async def push(self, message: str | bytes) -> None:
+        await self._queue.put(message)
+
+    async def close(self) -> None:
+        if self.close_code is not None:
+            return
+        self.close_code = 1000
+        await self._queue.put(self._STOP)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._STOP:
+            raise StopAsyncIteration
+        assert isinstance(message, str | bytes)
+        return message
+
+
+class DropAfterAudioWebSocket(PersistentMockWebSocket):
+    """Socket that drops after accepting one audio frame."""
+
+    _DROP = object()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._dropped = False
+
+    async def send(self, data: bytes | str) -> None:
+        await super().send(data)
+        if self._dropped or not isinstance(data, bytes):
+            return
+        self._dropped = True
+        await self._queue.put(self._DROP)
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._DROP:
+            close_frame = websockets.frames.Close(1006, "abnormal")
+            raise websockets.exceptions.ConnectionClosed(close_frame, None)
+        if message is self._STOP:
+            raise StopAsyncIteration
+        assert isinstance(message, str | bytes)
+        return message
 
 
 def _transcript_msg(
@@ -385,6 +446,57 @@ async def test_cartesia_ignores_turn_lifecycle_events():
 
     assert [e.type for e in events] == [STTEventType.PARTIAL, STTEventType.FINAL]
     assert events[-1].text == "hello world"
+
+
+async def test_cartesia_reconnect_promotes_partial_before_replacement_final():
+    first_socket = DropAfterAudioWebSocket()
+    second_socket = PersistentMockWebSocket()
+    reconnected = asyncio.Event()
+    partial_seen = asyncio.Event()
+    boundary_final_seen = asyncio.Event()
+    replacement_final_seen = asyncio.Event()
+    connect_count = 0
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 2:
+            reconnected.set()
+            return second_socket
+        return first_socket
+
+    stt = CartesiaSTT(CartesiaSTTConfig(api_key="k", ws_connect=mock_connect))
+    emitted = []
+
+    def emit(event):
+        emitted.append(event)
+        if event.type == STTEventType.PARTIAL:
+            partial_seen.set()
+        if event.type == STTEventType.FINAL and event.text == "before reconnect":
+            boundary_final_seen.set()
+        if event.type == STTEventType.FINAL and event.text == "after reconnect":
+            replacement_final_seen.set()
+
+    stt._emit_event = emit  # type: ignore[method-assign]
+    try:
+        await stt.start_stream()
+        await first_socket.push(_transcript_msg("before reconnect", is_final=False))
+        await asyncio.wait_for(partial_seen.wait(), timeout=0.5)
+
+        await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+        await asyncio.wait_for(reconnected.wait(), timeout=0.5)
+        await asyncio.wait_for(boundary_final_seen.wait(), timeout=0.5)
+        await second_socket.push(_transcript_msg("after reconnect", is_final=True))
+        await asyncio.wait_for(replacement_final_seen.wait(), timeout=0.5)
+        await stt._close_active_websocket(close_before_drain=True)
+
+        assert [(event.type, event.text) for event in emitted] == [
+            (STTEventType.PARTIAL, "before reconnect"),
+            (STTEventType.FINAL, "before reconnect"),
+            (STTEventType.FINAL, "after reconnect"),
+        ]
+    finally:
+        await stt.close()
 
 
 # ── Multiple streams ─────────────────────────────────────────────
