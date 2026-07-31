@@ -307,20 +307,32 @@ class AudioQueueMixin:
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
 
-    async def _drain_emit_tasks(self) -> None:
+    async def _drain_emit_tasks(
+        self,
+        *,
+        exclude_task: asyncio.Task[Any] | None = None,
+    ) -> None:
         """Await any in-flight fire-and-forget ``_emit_degraded`` tasks.
 
         Called from ``disconnect`` so a transport torn down with emit tasks
         still pending does not leave them dangling into interpreter shutdown
         ("Task was destroyed but it is pending"). Late emits are already safe
         (the journal sink no-ops after Session finalization), so this is
-        lifecycle tidiness, not correctness.
+        lifecycle tidiness, not correctness. ``exclude_task`` lets a child
+        cleanup transaction avoid waiting on the event-emitter task that
+        initiated its parent teardown.
         """
         if not self._emit_tasks:
             return
+        # A subscriber runs inside its EventBus emitter task. It may call a
+        # transport teardown method that drains diagnostics, so never await
+        # that current task (or an explicitly supplied parent emitter): doing
+        # so creates a self-await cycle and strands the diagnostic forever.
+        excluded = {task for task in (asyncio.current_task(), exclude_task) if task is not None}
         # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
-        pending = list(self._emit_tasks)
-        await asyncio.gather(*pending, return_exceptions=True)
+        pending = [task for task in self._emit_tasks if task not in excluded]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     # ── Browser event channel ─────────────────────────────────────
     #
@@ -670,8 +682,17 @@ class ServerTransportBase(AudioQueueMixin):
     ) -> None:
         emit_cleanup_task = self._disconnect_emit_cleanup_task
         if emit_cleanup_task is None:
+            caller = asyncio.current_task()
+            # ``disconnect()`` can be invoked from an EventBus handler owned
+            # by a tracked diagnostic task. The helper below is a separate
+            # task, so it must explicitly exclude that parent emitter rather
+            # than relying only on _drain_emit_tasks()'s current-task guard.
+            if caller is not None and caller in self._emit_tasks:
+                drain = self._drain_emit_tasks(exclude_task=caller)
+            else:
+                drain = self._drain_emit_tasks()
             emit_cleanup_task = asyncio.create_task(
-                self._drain_emit_tasks(),
+                drain,
                 name=f"{self._transport_name.lower()}_diagnostic_cleanup",
             )
             self._disconnect_emit_cleanup_task = emit_cleanup_task
