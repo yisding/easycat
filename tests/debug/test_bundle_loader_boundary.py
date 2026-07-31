@@ -242,6 +242,37 @@ def test_loader_normalizes_huge_integer_parse_failure(tmp_path: Path) -> None:
     assert isinstance(exc_info.value.__cause__, ValueError)
 
 
+def test_loader_normalizes_huge_manifest_integer_parse_failure(tmp_path: Path) -> None:
+    path = tmp_path / "huge-integer-manifest.zip"
+    manifest_payload = b'{"format_version": ' + (b"9" * 5_000) + b"}"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", manifest_payload)
+        archive.writestr("journal.ndjson", "")
+
+    with pytest.raises(
+        BundleValidationError,
+        match="Bundle manifest is not valid JSON",
+    ) as exc_info:
+        bundle_facade.RunBundle.load(path)
+
+    assert exc_info.value.reason_code == "INVALID_MANIFEST_JSON"
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_loader_rejects_duplicate_zip_members(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-members.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": 99}))
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", "")
+
+    with pytest.raises(BundleValidationError, match="duplicate member") as exc_info:
+        bundle_facade.RunBundle.load(path)
+
+    assert exc_info.value.reason_code == "DUPLICATE_MEMBER"
+
+
 @pytest.mark.parametrize(
     "journal_payload",
     [

@@ -2041,6 +2041,22 @@ def test_bundles_show_corrupt_member(cli: CliRunner, tmp_path: Path) -> None:
     assert "corrupt or unreadable" in result.stderr
 
 
+def test_bundles_show_normalizes_huge_manifest_integer(cli: CliRunner, tmp_path: Path) -> None:
+    corrupt = tmp_path / "huge-integer-manifest.zip"
+    with zipfile.ZipFile(corrupt, "w") as zf:
+        zf.writestr("manifest.json", b'{"format_version": ' + (b"9" * 5_000) + b"}")
+        zf.writestr("journal.ndjson", "")
+
+    result = cli.invoke(app, ["bundles", "show", str(corrupt), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "bundles_show"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 5
+    assert "corrupt or unreadable" in payload["message"]
+
+
 def test_bundles_show_missing_journal(cli: CliRunner, tmp_path: Path) -> None:
     corrupt = tmp_path / "missing-journal.zip"
     with zipfile.ZipFile(corrupt, "w", zipfile.ZIP_DEFLATED) as zf:

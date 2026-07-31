@@ -148,7 +148,11 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
     )
     try:
         raw = json.loads(encoded)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (RecursionError, ValueError) as exc:
+        # In addition to malformed syntax, CPython's JSON parser raises
+        # ``ValueError`` for an integer over its digit limit and
+        # ``RecursionError`` for deeply nested input.  They are both invalid
+        # untrusted manifest input, not public loader implementation details.
         raise BundleValidationError(
             "Bundle manifest is not valid JSON",
             reason_code="INVALID_MANIFEST_JSON",
@@ -214,8 +218,18 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
 
 
 def _validate_member_names(archive: zipfile.ZipFile) -> None:
+    seen_names: set[str] = set()
     for info in archive.infolist():
         _reject_traversal(info.filename)
+        if info.filename in seen_names:
+            # ``ZipFile.getinfo(name)`` resolves duplicates to the last entry
+            # while a sequential reader can see an earlier one.  Reject them
+            # so every bundle consumer observes one canonical archive view.
+            raise BundleValidationError(
+                f"Bundle contains duplicate member {info.filename!r}",
+                reason_code="DUPLICATE_MEMBER",
+            )
+        seen_names.add(info.filename)
 
 
 def _read_file_artifacts(
