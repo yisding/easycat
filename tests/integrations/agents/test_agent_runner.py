@@ -61,6 +61,12 @@ def test_config_rejects_nonfinite_timeout(timeout: object) -> None:
         AgentRunnerConfig(timeout=timeout)
 
 
+@pytest.mark.parametrize("retries", [True, "3", 1.5, None])
+def test_config_rejects_noninteger_preemptive_retry_limit(retries: object) -> None:
+    with pytest.raises(ValueError, match="preemptive_max_retries must be an integer"):
+        AgentRunnerConfig(preemptive_max_retries=retries)
+
+
 class UpperAgent:
     async def run(self, text: str) -> str:
         return text.upper()
