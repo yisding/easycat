@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
+from easycat._session_id import validate_persistent_session_id
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -223,6 +225,7 @@ class FilesystemArtifactStore:
         data_dir: str | Path | None = None,
         max_bytes: int = 512_000_000,
     ) -> None:
+        validate_persistent_session_id(session_id)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._dir = root / "artifacts" / session_id
         self._lock = threading.Lock()

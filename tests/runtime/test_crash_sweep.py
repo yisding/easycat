@@ -80,6 +80,16 @@ def test_sqlite_construction_skips_repeat_sweep_within_interval(
         second.close()
 
 
+@pytest.mark.parametrize("directory_name", ["runs?blue", "runs#blue"])
+def test_crash_sweep_handles_reserved_uri_characters(tmp_path, directory_name: str) -> None:
+    data_dir = tmp_path / directory_name
+    _crash_one("crashed", data_dir)
+
+    assert sweep_crashed_journals(data_dir) == 1
+    assert (data_dir / "crash-dumps" / "crashed.sqlite").exists()
+    assert not (data_dir / "journals" / "crashed.sqlite").exists()
+
+
 def test_sqlite_construction_rescans_root_after_interval_and_finds_later_crash(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

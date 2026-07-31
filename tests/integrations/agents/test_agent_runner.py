@@ -517,6 +517,26 @@ async def test_bridge_delegation_stops_after_done_without_timeout():
     ]
 
 
+class _PrematureEOFBridge(_PostDoneHangingBridge):
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        try:
+            yield AgentBridgeEvent(kind="text_delta", text="partial")
+        finally:
+            self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_bridge_delegation_rejects_eof_before_terminal_done():
+    inner = _PrematureEOFBridge()
+    runner = AgentRunner(inner, AgentRunnerConfig(timeout=None))
+
+    with pytest.raises(RuntimeError, match="before a terminal done"):
+        await _drain(runner, "hello")
+
+    assert inner.closed
+    assert runner.history == []
+
+
 @pytest.mark.asyncio
 async def test_bridge_delegation_closes_inner_stream_on_early_consumer_close():
     inner = _PostDoneHangingBridge()

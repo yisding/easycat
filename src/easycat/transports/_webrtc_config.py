@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from easycat._audio_utils import validate_pcm16_format
 from easycat._net import normalize_auth_token
 from easycat.audio_format import PCM16_MONO_16K, AudioFormat
 from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
@@ -94,6 +95,14 @@ class WebRTCTransportConfig:
     stats_max_file_bytes: int = 1_048_576
     stats_max_requests_per_minute: int = 120
     max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
+
+    def __post_init__(self) -> None:
+        validate_pcm16_format("audio_format", self.audio_format)
+        if self.audio_format.channels != 1:
+            raise ValueError(
+                "audio_format must be mono PCM16 audio "
+                f"(got channels={self.audio_format.channels!r})"
+            )
 
 
 def _env_flag(name: str) -> bool:

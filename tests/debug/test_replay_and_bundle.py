@@ -1109,6 +1109,28 @@ class TestBundleValidation:
 
 
 class TestBundlePartialJournal:
+    @pytest.mark.parametrize("directory_name", ["runs?blue", "runs#blue"])
+    def test_from_partial_journal_handles_reserved_uri_characters(
+        self,
+        tmp_path,
+        directory_name: str,
+    ) -> None:
+        data_dir = tmp_path / directory_name
+        data_dir.mkdir()
+        db_path = data_dir / "partial.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, json.dumps({"sequence": 1, "data": {"stage": "agent"}})),
+        )
+        conn.commit()
+        conn.close()
+
+        bundle = RunBundle.from_partial_journal(db_path)
+
+        assert [record["sequence"] for record in bundle.records()] == [1]
+
     def test_from_partial_journal(self, tmp_path):
         """from_partial_journal should load from SQLite journal + artifacts."""
         db_path = tmp_path / "test.sqlite"

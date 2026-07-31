@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.smart_turn import SmartTurnConfig, SmartTurnONNX, SmartTurnResult
 
 _WORKER_EVENT_TIMEOUT = 2.0
@@ -485,6 +485,23 @@ def test_chunks_to_float32_16k_batches_same_rate_resampling(
 
     assert len(audio) == 8 * 16000
     assert resample_calls == 1
+
+
+def test_chunks_to_float32_16k_downmixes_multichannel_frames() -> None:
+    from array import array
+
+    np = pytest.importorskip("numpy")
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    provider._np = np
+    stereo = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    chunk = AudioChunk(
+        data=array("h", [1000, 3000, 2000, 4000]).tobytes(),
+        format=stereo,
+    )
+
+    audio = provider._chunks_to_float32_16k([chunk])
+
+    assert audio.tolist() == pytest.approx([2000 / 32768.0, 3000 / 32768.0])
 
 
 @pytest.mark.asyncio

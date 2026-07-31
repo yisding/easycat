@@ -21,7 +21,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from easycat._audio_utils import resample
+from easycat._audio_utils import resample, to_mono
 from easycat._extras import require_module
 from easycat._smart_turn_features import (
     _create_triangular_filter_bank as _create_triangular_filter_bank,
@@ -207,6 +207,8 @@ class SmartTurnONNX:
             if not data or source_samples <= 0:
                 continue
 
+            if chunk.format.channels > 1:
+                data = to_mono(data, chunk.format.channels)
             reversed_chunks.append((data, source_rate))
             converted_samples = int(source_samples * 16000 / source_rate)
             remaining_samples -= min(remaining_samples, converted_samples)

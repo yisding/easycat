@@ -36,6 +36,7 @@ from easycat.integrations.agents.base import (
     NullAgentRecorder,
     UnitKind,
 )
+from easycat.runtime.records import ErrorInfo
 from easycat.timeouts import AgentTimeoutError
 
 logger = logging.getLogger(__name__)
@@ -337,8 +338,10 @@ class AgentRunner:
                         event = await _await_with_timeout(inner_iter.__anext__(), remaining)
                     else:
                         event = await inner_iter.__anext__()
-                except StopAsyncIteration:
-                    break
+                except StopAsyncIteration as exc:
+                    error = RuntimeError("Agent bridge ended before a terminal done event")
+                    recorder.record_framework_error(ErrorInfo.from_exception(error))
+                    raise error from exc
                 except TimeoutError:
                     timed_out = True
                     break
@@ -357,7 +360,6 @@ class AgentRunner:
                 # never recorded this turn, so its shadow history stays in
                 # sync without a manual rollback.
                 raise AgentTimeoutError(timeout or 0)
-            self._append_completed_turn(turn_input, accumulated)
         finally:
             # Closing the runner mid-yield does not automatically close the
             # wrapped bridge. Finish its partial-turn cleanup synchronously so

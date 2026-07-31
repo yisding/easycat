@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import (
     FilesystemArtifactStore,
@@ -119,6 +121,20 @@ class TestInMemoryArtifactStore:
 
 
 class TestFilesystemArtifactStore:
+    @pytest.mark.parametrize(
+        "session_id",
+        [".", "..", "../escape", r"..\escape", "/absolute", "nested/session"],
+    )
+    def test_rejects_session_ids_that_can_escape_artifact_root(
+        self,
+        tmp_path,
+        session_id: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="session_id must"):
+            FilesystemArtifactStore(session_id, data_dir=tmp_path)
+
+        assert not (tmp_path.parent / "escape").exists()
+
     def test_put_and_get(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"hello fs")

@@ -48,6 +48,7 @@ from easycat.debug._bundle_models import (
     checkpoint_id,
     parse_checkpoint_id,
 )
+from easycat.runtime._private_files import sqlite_readonly_uri
 
 __all__ = [
     "FORMAT_VERSION",
@@ -302,7 +303,7 @@ class RunBundle:
 
         # Build journal NDJSON from SQLite
         try:
-            conn = sqlite3.connect(f"file:{journal_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(sqlite_readonly_uri(journal_path), uri=True)
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e):
                 raise BundleInUseError(

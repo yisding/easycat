@@ -21,7 +21,11 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from easycat.runtime._private_files import chmod_private_file, mkdir_private
+from easycat.runtime._private_files import (
+    chmod_private_file,
+    mkdir_private,
+    sqlite_readonly_uri,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +176,7 @@ def _crashed_state(db_path: Path) -> str:
 def _read_only_state(db_path: Path) -> str:
     """Read-only classification of *db_path* (never opens for writing)."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
     except sqlite3.DatabaseError:
         return "skip"
     try:
@@ -251,7 +255,7 @@ def is_journal_live(db_path: Path) -> bool:
     journal is never mutated.
     """
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
     except sqlite3.DatabaseError:
         return True  # Unreadable -> preserve rather than risk a live DB.
     try:
