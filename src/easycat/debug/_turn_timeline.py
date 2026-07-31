@@ -156,7 +156,10 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if r.get("name") == CONTROL_SIGNAL_RECORD_NAME:
             data = r.get("data") or {}
             if isinstance(data, dict) and data.get("signal_kind") == "interrupt":
-                bucket["_interrupt_signal_ids"].add(data.get("signal_id") or "")
+                signal_id = data.get("signal_id")
+                bucket["_interrupt_signal_ids"].add(
+                    signal_id if isinstance(signal_id, str) else ""
+                )
         elif r.get("name") == INTERRUPTION_RECORD_NAME:
             bucket["_legacy_interruptions"] = bucket.get("_legacy_interruptions", 0) + 1
         if r.get("error"):
