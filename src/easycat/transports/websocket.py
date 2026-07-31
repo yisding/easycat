@@ -151,7 +151,11 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
         ws = self._ws
         if ws is None or not self._websocket_is_active(ws):
             return
-        await ws.send(json.dumps(payload))
+        try:
+            await ws.send(json.dumps(payload))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send client event: client disconnected")
+            self._finish_websocket(ws)
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send audio, announcing sample-rate changes before binary PCM."""
@@ -222,7 +226,7 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
         """Process one JSON control message from the client."""
         try:
             msg = json.loads(raw)
-        except json.JSONDecodeError:
+        except (RecursionError, ValueError):
             logger.warning("Ignoring invalid JSON control message")
             self._emit_degraded(_DEGRADED_CONTROL_DECODE_FAILED, "control frame is not valid JSON")
             return

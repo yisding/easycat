@@ -181,6 +181,25 @@ async def test_connection_transport_ready_disconnect_is_not_raised():
 
 
 @pytest.mark.asyncio
+async def test_connection_transport_clear_audio_close_race_is_not_raised():
+    transport = WebSocketConnectionTransport(_ClosingReadyWebSocket())  # type: ignore[arg-type]
+    transport._connected = True
+
+    await transport.clear_audio()
+
+    assert transport._ws is None
+
+
+def test_connection_transport_ignores_large_integer_control_message():
+    transport = WebSocketConnectionTransport(object())  # type: ignore[arg-type]
+
+    transport._handle_control_message('{"type":' + "9" * 5000 + "}")
+    transport._handle_control_message('{"type":"config","sample_rate":24000}')
+
+    assert transport._audio_format.sample_rate == 24000
+
+
+@pytest.mark.asyncio
 async def test_connection_transport_connect_cancellation_keeps_socket_for_disconnect():
     ws = _BlockingReadyWebSocket()
     transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]

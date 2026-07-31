@@ -490,7 +490,7 @@ class _ControlCodec:
             del self._buf[: 4 + length]
             try:
                 msg = json.loads(payload.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (RecursionError, ValueError):
                 logger.warning("Ignoring malformed WebTransport control frame")
                 continue
             if isinstance(msg, dict):

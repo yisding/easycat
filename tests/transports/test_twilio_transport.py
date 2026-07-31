@@ -1584,7 +1584,10 @@ class TestTwilioProtocolConsolidation:
             "mark",
         }
 
-    @pytest.mark.parametrize("raw", ["{", "[]", json.dumps({"event": []})])
+    @pytest.mark.parametrize(
+        "raw",
+        ["{", "[]", json.dumps({"event": []}), '{"event":' + "9" * 5000 + "}"],
+    )
     @pytest.mark.asyncio
     async def test_router_ignores_malformed_messages(self, raw: str) -> None:
         transport = TwilioTransport(event_bus=EventBus())
