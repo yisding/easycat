@@ -1400,6 +1400,9 @@ class TestSSEParser:
     def test_invalid_json_returns_none(self):
         assert parse_sse_line("data: not json") is None
 
+    def test_oversized_json_integer_returns_none(self):
+        assert parse_sse_line('data: {"type":' + "9" * 5000 + "}") is None
+
     def test_non_object_json_returns_none(self):
         assert parse_sse_line("data: []") is None
 

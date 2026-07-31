@@ -69,7 +69,7 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
 
     try:
         data = json.loads(payload)
-    except json.JSONDecodeError:
+    except (RecursionError, ValueError):
         logger.debug("SSE line is not valid JSON: %s", payload[:120])
         return None
     if not isinstance(data, dict):
