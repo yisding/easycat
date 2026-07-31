@@ -1705,6 +1705,23 @@ class Session:
             turn_id=turn_id,
         )
 
+    def _cancel_cleanup_owns_turn(self, turn: TurnContext | None) -> bool:
+        """Whether a deferred cancel cleanup may still change turn-wide state.
+
+        ``cancel_turn()`` captures a turn before awaiting the playback clear.
+        A VAD/PTT barge-in can install its successor during that await, before
+        the stale caller reaches its global STT/preemptive cleanup.  The
+        manager publishes the successor's token before its ``TurnStarted``
+        subscribers run, so checking both owners prevents an old cleanup from
+        tearing down the successor in that window.
+        """
+        if self._turn is not turn:
+            return False
+        manager_token = self._turn_manager.cancel_token
+        if turn is None:
+            return manager_token is None
+        return manager_token is None or manager_token is turn.cancel_token
+
     async def _finish_turn_cancel(
         self,
         turn: TurnContext | None,
@@ -1722,16 +1739,17 @@ class Session:
         try:
             if barge_in:
                 await self._notify_barge_in(turn)
-            if not successor_expected:
+            if not successor_expected and self._cancel_cleanup_owns_turn(turn):
                 await self._turn_runner.cancel_preemptive_generation()
-                await self._stt_committer.cancel(turn)
+                if self._cancel_cleanup_owns_turn(turn):
+                    await self._stt_committer.cancel(turn)
         finally:
             try:
                 await tts_cleanup
             finally:
                 await prompt_cleanup
 
-        if not barge_in:
+        if not barge_in and self._cancel_cleanup_owns_turn(turn):
             self._reset_turn_state()
 
     async def _begin_barge_in(self) -> None:
