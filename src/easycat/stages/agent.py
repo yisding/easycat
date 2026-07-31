@@ -298,7 +298,8 @@ class AgentStage:
                                         turn_id=turn.id,
                                         data_extra={"type": "DONE", "text": text},
                                     )
-                                accumulated = [text]
+                                if not (cancel_token and cancel_token.is_cancelled):
+                                    accumulated = [text]
                         elif kind == "tool_started" and getattr(event, "tool_name", ""):
                             if journal_enabled:
                                 journal_append_event(

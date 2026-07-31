@@ -765,6 +765,28 @@ class TestStageExecuteRecording:
         assert complete.data["response"] == ""
         assert stage._history == []
 
+    async def test_agent_stage_excludes_cancelled_done_from_completion_history(self):
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        turn.cancel_token.cancel()
+        stage = AgentStage(_ContextRecordingBridge("unheard"), journal=journal)
+
+        events = [
+            event
+            async for event in stage.execute_streaming(
+                "hello",
+                ctx,
+                turn,
+                cancel_token=turn.cancel_token,
+            )
+        ]
+
+        assert [event.kind for event in events] == ["done"]
+        complete = next(record for record in journal.read() if record.name == "stage_complete")
+        assert complete.data["response"] == ""
+        assert stage._history == []
+
     async def test_tts_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)
         ctx = _make_ctx(journal=journal)
