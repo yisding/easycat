@@ -139,7 +139,12 @@ class RuntimeScope:
         task_name: str | None = None,
     ) -> asyncio.Task[_T]:
         """Create and track a named task."""
-        task = asyncio.create_task(coro, name=task_name or name)
+        self._validate_new_task_name(name, coro)
+        try:
+            task = asyncio.create_task(coro, name=task_name or name)
+        except BaseException:
+            coro.close()
+            raise
         return self.add_task(name, task)
 
     def create_journaled_task(
@@ -164,16 +169,33 @@ class RuntimeScope:
         Use one per logical task — don't baseline it on Python object
         ids, which don't survive serialisation.
         """
+        self._validate_new_task_name(name, coro)
+
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except BaseException:
+            coro.close()
+            raise
+
         # Resolve the turn id once at scheduling time so the terminal
         # record carries the same id even if a new turn has started by
-        # the time the task completes.
-        resolved_turn = journal_sink.current_turn_id(turn_id)
-        journal_sink.append_record(
-            name="task_scheduled",
-            turn_id=resolved_turn,
-            data={"task_name": name},
-        )
-        task = asyncio.create_task(coro, name=name)
+        # the time the task completes.  The task cannot run before this
+        # synchronous setup finishes, but creating it first avoids recording
+        # a phantom scheduled task when no event loop is available.
+        try:
+            resolved_turn = journal_sink.current_turn_id(turn_id)
+            journal_sink.append_record(
+                name="task_scheduled",
+                turn_id=resolved_turn,
+                data={"task_name": name},
+            )
+        except BaseException:
+            # The caller never receives the task when journaling setup fails.
+            # Cancel and observe it here instead of leaving an unowned task
+            # running after the synchronous failure.
+            task.cancel()
+            task.add_done_callback(self.log_task_exception)
+            raise
 
         def _on_done(
             t: asyncio.Task[Any],
@@ -328,3 +350,10 @@ class RuntimeScope:
                 if not tasks:
                     self._tasks.pop(name, None)
                 return
+
+    @staticmethod
+    def _validate_new_task_name(name: str, coro: Coroutine[Any, Any, Any]) -> None:
+        """Reject an invalid tracked-task name before scheduling *coro*."""
+        if not name:
+            coro.close()
+            raise ValueError("RuntimeScope task name must be non-empty")

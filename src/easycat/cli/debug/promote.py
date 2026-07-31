@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import keyword
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -157,6 +158,36 @@ def _validate_promoted_slice(
     return len(first), None
 
 
+def _publish_promoted_slice(tmp_path: Path, out: Path, *, force: bool) -> bool:
+    """Publish a validated temp bundle, preserving a raced no-force output.
+
+    Returns ``False`` only when a competing writer created *out* after the
+    caller's initial destination check. Other I/O failures propagate after the
+    temporary file is removed.
+    """
+    if force:
+        try:
+            tmp_path.replace(out)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        return True
+
+    try:
+        # Link gives the sibling temp's validated bytes a new name only when
+        # the destination does not already exist. Unlike rename/replace, it
+        # never turns a late competing output into an overwrite.
+        os.link(tmp_path, out)
+    except FileExistsError:
+        tmp_path.unlink(missing_ok=True)
+        return False
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    tmp_path.unlink()
+    return True
+
+
 @cli_command
 def promote_turn(
     bundle_path: Path = typer.Argument(
@@ -275,11 +306,16 @@ def promote_turn(
         )
         raise typer.Exit(6)
 
-    if out.exists():
-        # A directory destination was rejected up front, so only a file or
-        # symlink can be here — replace it without ever deleting a tree.
-        out.unlink()
-    tmp_path.rename(out)
+    if not _publish_promoted_slice(tmp_path, out, force=force):
+        emit_command_error(
+            "journal_promote",
+            f"Output already exists: {out}. Use --force to overwrite.",
+            json_output=json_output,
+            exit_code=101,
+            path=str(bundle_path),
+            out=str(out),
+        )
+        raise typer.Exit(101)
 
     expected = _promoted_agent_text(turn_records)
     stub = _promote_test_stub(bundle_name=out.name, turn_id=safe_id, expected=expected)

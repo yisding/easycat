@@ -510,6 +510,34 @@ def test_media_listener_closed_when_http_startup_fails(
     assert web.runner_cleaned is True
 
 
+def test_http_startup_failure_cleans_runner_when_media_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The original HTTP startup error survives an independent media cleanup error."""
+    web = _FakeAiohttpWeb()
+    media_server = _FakeMediaServer()
+
+    async def fail_site_start(_self: Any) -> None:
+        raise OSError("address already in use")
+
+    def fail_media_close(_self: Any, *, close_connections: bool = True) -> None:
+        raise RuntimeError("media listener close failed")
+
+    async def fake_serve_ws(handler: Any, host: str, port: int, **_: Any) -> _FakeMediaServer:
+        return media_server
+
+    monkeypatch.setattr(web.TCPSite, "start", fail_site_start)
+    monkeypatch.setattr(_FakeMediaServer, "close", fail_media_close)
+    monkeypatch.setattr(server_module, "require_module", lambda *a, **k: web)
+    monkeypatch.setattr(server_module.websockets, "serve", fake_serve_ws)
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media", twilio_auth_token="tok")
+
+    with pytest.raises(OSError, match="address already in use"):
+        asyncio.run(serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config))
+
+    assert web.runner_cleaned is True
+
+
 def test_media_listener_bounds_messages_and_disables_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -571,6 +599,152 @@ def test_twilio_drains_media_sessions_after_http_listener_stop_failure(
     asyncio.run(run())
 
     assert drained is True
+    assert harness.web.runner_cleaned is True
+
+
+def test_twilio_shutdown_preserves_cancellation_during_media_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prior listener error must not turn a later cancellation into that error."""
+    harness = _ServerHarness(monkeypatch)
+    drain_entered = asyncio.Event()
+    never_finishes = asyncio.Event()
+
+    async def fail_site_stop(_self: Any) -> None:
+        raise RuntimeError("HTTP listener stop failed")
+
+    async def block_drain(
+        _self: Any,
+        _media_server: Any,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        assert drain_timeout_s >= 0
+        assert force_timeout_s >= 0
+        drain_entered.set()
+        await never_finishes.wait()
+
+    monkeypatch.setattr(harness.web.TCPSite, "stop", fail_site_stop)
+    monkeypatch.setattr(server_module.WebSocketSessionRuntime, "drain", block_drain)
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config)
+        )
+        await harness._started.wait()
+        harness._shutdown.set()
+        await drain_entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert harness.web.runner_cleaned is True
+
+
+def test_twilio_shutdown_preserves_cancellation_during_http_listener_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation from listener cleanup outranks an earlier close failure."""
+    harness = _ServerHarness(monkeypatch)
+    site_stop_entered = asyncio.Event()
+    never_finishes = asyncio.Event()
+    drained = False
+
+    def fail_start_draining(_self: Any, _media_server: Any) -> None:
+        raise RuntimeError("media listener close failed")
+
+    async def block_site_stop(_self: Any) -> None:
+        site_stop_entered.set()
+        await never_finishes.wait()
+
+    async def record_drain(
+        _self: Any,
+        _media_server: Any,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        nonlocal drained
+        assert drain_timeout_s >= 0
+        assert force_timeout_s >= 0
+        drained = True
+
+    monkeypatch.setattr(
+        server_module.WebSocketSessionRuntime, "start_draining", fail_start_draining
+    )
+    monkeypatch.setattr(harness.web.TCPSite, "stop", block_site_stop)
+    monkeypatch.setattr(server_module.WebSocketSessionRuntime, "drain", record_drain)
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config)
+        )
+        await harness._started.wait()
+        harness._shutdown.set()
+        await site_stop_entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert drained is True
+    assert harness.web.runner_cleaned is True
+
+
+def test_twilio_drains_sessions_after_media_listener_close_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A media-listener close failure cannot skip TwiML cleanup or the drain."""
+    harness = _ServerHarness(monkeypatch)
+    drained = False
+
+    def fail_media_close(_self: Any, *, close_connections: bool = True) -> None:
+        raise RuntimeError("media listener close failed")
+
+    async def record_drain(
+        _self: Any,
+        _media_server: Any,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        nonlocal drained
+        assert drain_timeout_s >= 0
+        assert force_timeout_s >= 0
+        drained = True
+
+    monkeypatch.setattr(_FakeMediaServer, "close", fail_media_close)
+    monkeypatch.setattr(server_module.WebSocketSessionRuntime, "drain", record_drain)
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config)
+        )
+        await harness._started.wait()
+        harness._shutdown.set()
+        with pytest.raises(RuntimeError, match="media listener close failed"):
+            await task
+
+    asyncio.run(run())
+
+    assert drained is True
+    assert harness.web.site_stopped is True
     assert harness.web.runner_cleaned is True
 
 

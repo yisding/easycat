@@ -589,8 +589,22 @@ class LlamaAgentsBridge:
         running past the timeout is abandoned best-effort.
         """
         task = asyncio.ensure_future(coro)
-        with contextlib.suppress(Exception):
+        caller = asyncio.current_task()
+        cancellation_count = caller.cancelling() if caller is not None else 0
+        try:
             await asyncio.wait_for(asyncio.shield(task), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
+        except asyncio.CancelledError:
+            # A cancellation hook may use CancelledError to report that its
+            # work is already stopped.  It is not a second cancellation of
+            # this bridge turn, so keep the original GeneratorExit / task
+            # cancellation flowing through its caller.  Conversely, never
+            # swallow a new cancellation delivered to the caller while this
+            # bounded cleanup is running.
+            if task.cancelled() and (caller is None or caller.cancelling() == cancellation_count):
+                return
+            raise
+        except Exception:
+            pass
 
     async def _cancel_local_handler(self, handler: Any) -> None:
         cancel_run = getattr(handler, "cancel_run", None)
