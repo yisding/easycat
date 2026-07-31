@@ -14,6 +14,7 @@ import hmac
 import inspect
 import json
 import logging
+import math
 import secrets
 import struct
 import time
@@ -267,8 +268,16 @@ class TwilioTransportConfig:
     def __post_init__(self) -> None:
         if not self.stream_token_parameter:
             raise ValueError("stream_token_parameter must be non-empty")
-        if self.stream_token_validation_timeout_s <= 0:
-            raise ValueError("stream_token_validation_timeout_s must be positive")
+        timeout = self.stream_token_validation_timeout_s
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int | float)
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError(
+                "stream_token_validation_timeout_s must be a positive finite number"
+            )
 
 
 def twilio_websocket_signature_process_request(

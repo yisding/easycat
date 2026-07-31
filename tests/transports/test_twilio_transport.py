@@ -355,10 +355,13 @@ class TestTwilioStreamTokenValidation:
         ("kwargs", "message"),
         [
             ({"stream_token_parameter": ""}, "stream_token_parameter must be non-empty"),
-            (
-                {"stream_token_validation_timeout_s": 0},
-                "stream_token_validation_timeout_s must be positive",
-            ),
+            *[
+                (
+                    {"stream_token_validation_timeout_s": value},
+                    "stream_token_validation_timeout_s must be a positive finite number",
+                )
+                for value in (0, float("nan"), float("inf"), float("-inf"), True)
+            ],
         ],
     )
     def test_config_rejects_invalid_token_validation_settings(
