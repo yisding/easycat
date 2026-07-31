@@ -327,6 +327,61 @@ class TestCartesiaPersistent:
             assert cancel and cancel[0]["cancel"] is True
         await provider.close()
 
+    async def test_cancel_reaches_live_context_after_sibling_completes(self):
+        """A completed context must not hide another live context from cancel()."""
+
+        class _TwoContextWS(FakePersistentWS):
+            def __init__(self):
+                super().__init__()
+                self.requests_sent = asyncio.Event()
+
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if (
+                    "transcript" in msg
+                    and sum("transcript" in json.loads(frame) for frame in self.sent) == 2
+                ):
+                    self.requests_sent.set()
+
+        async def consume(text: str) -> list:
+            return [event async for event in provider.synthesize(text)]
+
+        provider = self._make_provider()
+        fake = _TwoContextWS()
+        with patch.object(provider, "_build_ws", return_value=fake):
+            first = asyncio.create_task(consume("first"))
+            second = asyncio.create_task(consume("second"))
+            try:
+                await asyncio.wait_for(fake.requests_sent.wait(), timeout=1)
+                requests = [
+                    json.loads(message) for message in fake.sent if "transcript" in message
+                ]
+                first_context, second_context = (request["context_id"] for request in requests)
+
+                await fake._queue.put(
+                    json.dumps({"type": "done", "context_id": first_context, "done": True})
+                )
+                await asyncio.wait_for(first, timeout=1)
+                assert not provider.is_active
+                assert not second.done()
+
+                await provider.cancel()
+
+                cancels = [
+                    json.loads(message)
+                    for message in fake.sent
+                    if json.loads(message).get("cancel") is True
+                ]
+                assert cancels == [{"context_id": second_context, "cancel": True}]
+                await asyncio.wait_for(second, timeout=1)
+            finally:
+                for task in (first, second):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(first, second, return_exceptions=True)
+                await provider.close()
+
     async def test_early_consumer_close_cancels_remote_context(self):
         class UnfinishedPersistentWS(FakePersistentWS):
             async def send(self, message: str) -> None:
