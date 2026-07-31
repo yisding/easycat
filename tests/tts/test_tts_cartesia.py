@@ -587,6 +587,22 @@ class TestCartesiaTTS:
         assert provider._pending_request is None
         assert not provider.is_active
 
+    async def test_early_consumer_close_closes_oneshot_socket(self):
+        """Closing the public stream must finalize its delegated generator."""
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[_chunk_msg(_pcm16_bytes(120))])
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            stream = provider.synthesize("abandoned")
+            event = await anext(stream)
+            assert event.type == TTSEventType.AUDIO
+
+            await stream.aclose()
+
+        assert fake_ws._closed
+        assert provider._ws is None
+        assert not provider.is_active
+
     async def test_synthesize_raises_when_stream_ends_before_terminal_response(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS(messages=[_chunk_msg(_pcm16_bytes(100))])

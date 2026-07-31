@@ -411,6 +411,23 @@ class TestElevenLabsTTSHTTP:
                 assert provider.is_active
             assert not provider.is_active
 
+    async def test_early_consumer_close_closes_http_stream(self):
+        provider = self._make_provider()
+        fake_response = FakeHTTPStreamResponse([_pcm16_bytes(480)])
+        client = provider._get_http_client()
+
+        with patch.object(client, "stream", return_value=fake_response):
+            stream = provider.synthesize("abandoned")
+            event = await anext(stream)
+            assert event.type == TTSEventType.AUDIO
+
+            await stream.aclose()
+
+        assert fake_response.is_closed
+        assert provider._response is None
+        assert not provider.is_active
+        await provider.close()
+
     async def test_http_error_propagated(self):
         provider = self._make_provider()
         fake_response = FakeHTTPStreamResponse([], status_code=401)
@@ -696,6 +713,24 @@ class TestElevenLabsTTSWebSocket:
                 pass
 
         assert fake_ws._closed
+
+    async def test_early_consumer_close_closes_oneshot_socket(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[self._audio_message(120)])
+
+        with patch(
+            "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+            return_value=fake_ws,
+        ):
+            stream = provider.synthesize("abandoned")
+            event = await anext(stream)
+            assert event.type == TTSEventType.AUDIO
+
+            await stream.aclose()
+
+        assert fake_ws._closed
+        assert provider._ws is None
+        assert not provider.is_active
 
     async def test_synthesize_ws_reconnects_and_replays_messages_after_send_failure(self):
         provider = self._make_provider()

@@ -423,11 +423,18 @@ class DeepgramSTT(WebSocketSTTBase):
         self._partial_text = ""
 
     async def aclose(self) -> None:
-        """Close a persistent socket during Session teardown."""
-        await self._cancel_keepalive()
-        if self._ws is not None:
-            await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
-        await self._close_active_websocket(close_before_drain=True)
+        """End any logical stream, then release the persistent socket."""
+        try:
+            # ``close_if_supported`` prefers ``aclose`` over ``close``.  Do
+            # not bypass STTBase.close(): doing so left an active logical
+            # stream marked running after its socket had been torn down,
+            # making a later start_stream() fail as "already started".
+            await super().close()
+        finally:
+            await self._cancel_keepalive()
+            if self._ws is not None:
+                await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
+            await self._close_active_websocket(close_before_drain=True)
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         # Deepgram may acknowledge Finalize with a bare

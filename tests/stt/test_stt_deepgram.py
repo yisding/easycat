@@ -559,6 +559,29 @@ async def test_deepgram_warmup_reuses_one_socket_across_turns():
 
 
 @pytest.mark.asyncio
+async def test_deepgram_aclose_ends_active_stream_before_releasing_socket():
+    """aclose() must leave the provider reusable after active-stream teardown."""
+
+    first_socket = PersistentMockWebSocket()
+    second_socket = PersistentMockWebSocket()
+    sockets = [first_socket, second_socket]
+
+    async def mock_connect(url, **kwargs):
+        return sockets.pop(0)
+
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", ws_connect=mock_connect))
+    await stt.start_stream()
+
+    await stt.aclose()
+
+    assert stt._running is False
+    assert first_socket.close_code == 1000
+
+    await stt.start_stream()
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
 async def test_deepgram_warmup_timeout_retries_on_first_stream():
     connect_count = 0
     first_connect_started = asyncio.Event()

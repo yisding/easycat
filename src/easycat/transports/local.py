@@ -146,6 +146,11 @@ class LocalTransport(AudioQueueMixin):
 
         self._event_bus: EventBus | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Sounddevice callbacks run on dedicated audio threads and can already
+        # be queued when a stream is stopped.  Bind each stream pair to a
+        # generation so a late callback from a previous connection cannot put
+        # stale mic audio into, or consume speaker audio from, a later one.
+        self._stream_generation = 0
 
         # Output jitter buffer: the callback emits silence until ``_out_queue``
         # has built up the configured number of pre-roll frames, then drains
@@ -169,6 +174,8 @@ class LocalTransport(AudioQueueMixin):
         if self._connected:
             return
 
+        self._stream_generation += 1
+        stream_generation = self._stream_generation
         self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
         self._aec_ref_queue = thread_queue.Queue(maxsize=self._AEC_REF_QUEUE_MAX)
@@ -206,8 +213,8 @@ class LocalTransport(AudioQueueMixin):
             # ``inbound_queue_full`` TransportDegraded event on overflow, so
             # local mic drops surface in the journal like every other
             # transport.  Schedule it onto the loop from the audio thread.
-            # ``call_soon_threadsafe`` takes no kwargs, so bind ``context``
-            # via ``partial``.
+            # ``call_soon_threadsafe`` takes no kwargs, so bind callback
+            # metadata via ``partial``.
             #
             # The sounddevice audio thread can fire one more callback after the
             # loop has been torn down (e.g. an abrupt Ctrl-C that closes the
@@ -217,7 +224,13 @@ class LocalTransport(AudioQueueMixin):
             if loop.is_closed():
                 return
             try:
-                loop.call_soon_threadsafe(partial(self._enqueue_chunk, chunk, context="mic"))
+                loop.call_soon_threadsafe(
+                    partial(
+                        self._enqueue_input_chunk,
+                        chunk,
+                        stream_generation=stream_generation,
+                    )
+                )
             except RuntimeError:
                 pass
 
@@ -239,7 +252,11 @@ class LocalTransport(AudioQueueMixin):
                 dtype="float32",
                 blocksize=frame_size,
                 device=self._config.output_device,
-                callback=partial(self._output_callback, np),
+                callback=partial(
+                    self._run_output_callback,
+                    np,
+                    stream_generation=stream_generation,
+                ),
             )
             self._output_stream.start()
         except BaseException:
@@ -250,6 +267,38 @@ class LocalTransport(AudioQueueMixin):
             await self.disconnect()
             raise
         self._connected = True
+
+    def _enqueue_input_chunk(self, chunk: AudioChunk, *, stream_generation: int) -> None:
+        """Enqueue mic audio only while its originating stream is still current."""
+        if stream_generation != self._stream_generation or not self._connected:
+            return
+        self._enqueue_chunk(chunk, context="mic")
+
+    def _run_output_callback(
+        self,
+        np: Any,
+        outdata: Any,
+        frames: int,
+        time_info: object,
+        status: object,
+        *,
+        stream_generation: int,
+    ) -> None:
+        """Dispatch one speaker callback only while its stream is current."""
+        if stream_generation != self._stream_generation or not self._connected:
+            # A callback from a stopped stream may arrive after reconnect.
+            # It must not consume the current speaker queue or report delivery
+            # for a different session.
+            outdata[:] = 0
+            return
+        self._output_callback(
+            np,
+            outdata,
+            frames,
+            time_info,
+            status,
+            stream_generation=stream_generation,
+        )
 
     def _push_aec_reference(self, frame: bytes) -> None:
         """Push one far-end reference frame with a drop-oldest overflow policy.
@@ -273,7 +322,14 @@ class LocalTransport(AudioQueueMixin):
                 pass
 
     def _output_callback(
-        self, np: Any, outdata: Any, frames: int, time_info: object, status: object
+        self,
+        np: Any,
+        outdata: Any,
+        frames: int,
+        time_info: object,
+        status: object,
+        *,
+        stream_generation: int | None = None,
     ) -> None:
         """Speaker callback: drain one queued frame per call behind a pre-roll.
 
@@ -332,7 +388,7 @@ class LocalTransport(AudioQueueMixin):
                 ref = pcm[:frame_bytes]
             self._push_aec_reference(ref)
 
-        self._schedule_audio_delivery(queued)
+        self._schedule_audio_delivery(queued, stream_generation=stream_generation)
 
     def _flush_queues(self) -> None:
         """Drain all audio queues synchronously (called from disconnect and teardown)."""
@@ -362,6 +418,11 @@ class LocalTransport(AudioQueueMixin):
         ):
             return
 
+        # Invalidate callback closures before stopping either device.  A native
+        # callback may have already queued work onto the event loop; the
+        # generation check in that work then drops it instead of affecting a
+        # subsequent connection.
+        self._stream_generation += 1
         for stream in (self._input_stream, self._output_stream):
             if stream is not None:
                 try:
@@ -496,12 +557,21 @@ class LocalTransport(AudioQueueMixin):
         """
         return self._out_queue.qsize() * self._config.frame_duration_ms
 
-    def _schedule_audio_delivery(self, queued: _QueuedOutputChunk) -> None:
+    def _schedule_audio_delivery(
+        self,
+        queued: _QueuedOutputChunk,
+        *,
+        stream_generation: int | None = None,
+    ) -> None:
         loop = self._loop
         if self._event_bus is None or loop is None or loop.is_closed():
             return
 
         def _emit() -> None:
+            if stream_generation is not None and (
+                stream_generation != self._stream_generation or not self._connected
+            ):
+                return
             if self._event_bus is None:
                 return
             # Retain the emit task so it is not GC'd mid-flight before the
@@ -520,7 +590,12 @@ class LocalTransport(AudioQueueMixin):
             self._emit_tasks.add(task)
             task.add_done_callback(self._emit_tasks.discard)
 
-        loop.call_soon_threadsafe(_emit)
+        try:
+            loop.call_soon_threadsafe(_emit)
+        except RuntimeError:
+            # Like input callbacks, sounddevice can outlive event-loop teardown
+            # by one callback. Delivery telemetry is best effort.
+            pass
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("local", "sounddevice")
