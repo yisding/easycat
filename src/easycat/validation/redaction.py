@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
+from xml.sax.saxutils import escape as xml_escape
 
 from easycat._provider_domains import sensitive_api_domains
 
@@ -203,7 +204,7 @@ def redact_text(value: str, *, policy: RedactionPolicy = "pii") -> str:
 
 
 def _runtime_secret_text_variants(secrets: Sequence[str] | None) -> tuple[str, ...]:
-    """Return raw and JSON-escaped spellings of configured runtime secrets."""
+    """Return raw, JSON-escaped, and XML-escaped configured secret spellings."""
     variants: set[str] = set()
     for secret in secrets or ():
         if not secret:
@@ -214,6 +215,10 @@ def _runtime_secret_text_variants(secrets: Sequence[str] | None) -> tuple[str, .
         # serialized source text remains available.
         variants.add(json.dumps(secret, ensure_ascii=True)[1:-1])
         variants.add(json.dumps(secret, ensure_ascii=False)[1:-1])
+        # JUnit is XML but is treated as an unstructured validation artifact.
+        # Match its entity-escaped secret spelling before general text policy
+        # runs, or values such as ``token&value`` leak as ``token&amp;value``.
+        variants.add(xml_escape(secret, {'"': "&quot;", "'": "&apos;"}))
     return tuple(sorted(variants, key=len, reverse=True))
 
 

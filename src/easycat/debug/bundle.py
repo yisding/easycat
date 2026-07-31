@@ -304,7 +304,7 @@ class RunBundle:
         # Build journal NDJSON from SQLite
         try:
             conn = sqlite3.connect(sqlite_readonly_uri(journal_path), uri=True)
-        except sqlite3.OperationalError as e:
+        except sqlite3.DatabaseError as e:
             if "database is locked" in str(e):
                 raise BundleInUseError(
                     f"Journal {journal_path} is currently in use. "
@@ -315,7 +315,7 @@ class RunBundle:
 
         try:
             journal_ndjson = _read_journal_ndjson(conn)
-        except sqlite3.OperationalError as e:
+        except sqlite3.DatabaseError as e:
             raise BundleRecoveryError(f"Cannot read journal records: {e}") from e
         finally:
             conn.close()

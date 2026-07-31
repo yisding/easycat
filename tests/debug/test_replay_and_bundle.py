@@ -559,7 +559,7 @@ class TestBundleExport:
         ref = hashlib.sha256(data).hexdigest()
         session = _FakeSession(
             debug="full",
-            journal=_FakeJournal(),
+            journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
             artifact_store=_FakeArtifactStore({ref: data}),
         )
         path = tmp_path / "export.zip"
@@ -660,7 +660,10 @@ class TestBundleExport:
                 nonlocal replacement_ref
                 store.delete(second_ref)
                 replacement_ref = store.put(b"replacement")
-                return []
+                return [
+                    {"sequence": 1, "input_ref": first_ref},
+                    {"sequence": 2, "output_ref": second_ref},
+                ]
 
         path = tmp_path / "memory-artifact-snapshot.zip"
         export_debug_bundle(
@@ -699,7 +702,7 @@ class TestBundleExport:
         export_debug_bundle(
             _FakeSession(
                 debug="full",
-                journal=_FakeJournal(),
+                journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
                 artifact_store=store,
             ),
             path,
@@ -717,7 +720,7 @@ class TestBundleExport:
         export_debug_bundle(
             _FakeSession(
                 debug="full",
-                journal=_FakeJournal(),
+                journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
                 artifact_store=store,
             ),
             path,
@@ -731,7 +734,7 @@ class TestBundleExport:
         import easycat.debug.export as export_module
 
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
-        store.put(b"seventh")
+        ref = store.put(b"seventh")
         monkeypatch.setattr(export_module, "_ARTIFACT_SIZE_CAP", 6)
 
         def fail_if_read(_source):
@@ -744,7 +747,7 @@ class TestBundleExport:
             export_debug_bundle(
                 _FakeSession(
                     debug="full",
-                    journal=_FakeJournal(),
+                    journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
                     artifact_store=store,
                 ),
                 path,
@@ -756,7 +759,7 @@ class TestBundleExport:
     def test_export_rejects_invalid_artifact_ref_before_writing(self, tmp_path):
         session = _FakeSession(
             debug="full",
-            journal=_FakeJournal(),
+            journal=_FakeJournal([{"sequence": 1, "input_ref": "../outside"}]),
             artifact_store=_FakeArtifactStore({"../outside": b"data"}),
         )
         path = tmp_path / "export.zip"
@@ -772,7 +775,7 @@ class TestBundleExport:
         wrong_ref = hashlib.sha256(b"different-data").hexdigest()
         session = _FakeSession(
             debug="full",
-            journal=_FakeJournal(),
+            journal=_FakeJournal([{"sequence": 1, "input_ref": wrong_ref}]),
             artifact_store=_FakeArtifactStore({wrong_ref: data}),
         )
         path = tmp_path / "export.zip"
@@ -808,10 +811,17 @@ class TestBundleExport:
         import easycat.debug.export as export_module
 
         monkeypatch.setattr(export_module, "_INLINE_ARTIFACT_COUNT_CAP", 1)
-        artifacts = {hashlib.sha256(value).hexdigest(): value for value in (b"first", b"second")}
+        first_ref = hashlib.sha256(b"first").hexdigest()
+        second_ref = hashlib.sha256(b"second").hexdigest()
+        artifacts = {first_ref: b"first", second_ref: b"second"}
         session = _FakeSession(
             debug="full",
-            journal=_FakeJournal(),
+            journal=_FakeJournal(
+                [
+                    {"sequence": 1, "input_ref": first_ref},
+                    {"sequence": 2, "output_ref": second_ref},
+                ]
+            ),
             artifact_store=_FakeArtifactStore(artifacts),
         )
 
@@ -819,6 +829,47 @@ class TestBundleExport:
             export_debug_bundle(session, tmp_path / "too-many-inline.zip", inline_artifacts=True)
 
         assert exc_info.value.reason_code == "SIZE_EXCEEDED"
+
+    def test_export_omits_stale_artifacts_after_clean_journal_reuse(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+
+        session_id = "reused-session"
+        artifact_store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+        stale_ref = artifact_store.put(b"prior private audio")
+        prior_journal = SqliteJournal(session_id, data_dir=tmp_path)
+        prior_journal.append(
+            JournalRecordKind.EVENT,
+            "old",
+            session_id,
+            input_ref=stale_ref,
+        )
+        prior_journal.close()
+
+        journal = SqliteJournal(session_id, data_dir=tmp_path)
+        fresh_ref = artifact_store.put(b"fresh audio")
+        journal.append(
+            JournalRecordKind.EVENT,
+            "fresh",
+            session_id,
+            input_ref=fresh_ref,
+        )
+        path = tmp_path / "reused-session.zip"
+        try:
+            export_debug_bundle(
+                _FakeSession(
+                    debug="full",
+                    journal=journal,
+                    artifact_store=artifact_store,
+                ),
+                path,
+            )
+        finally:
+            journal.close()
+
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+        assert f"artifacts/{fresh_ref}.bin" in names
+        assert f"artifacts/{stale_ref}.bin" not in names
 
     def test_export_serializes_nested_enum_values(self, tmp_path):
         record = JournalRecord(

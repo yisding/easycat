@@ -2049,6 +2049,23 @@ def test_bundle_commands_reject_malformed_journal(
 
 
 @pytest.mark.parametrize("command", [["bundles", "show"], ["replay"]])
+def test_bundle_commands_reject_corrupt_sqlite_journal(
+    cli: CliRunner,
+    tmp_path: Path,
+    command: list[str],
+) -> None:
+    corrupt = tmp_path / "corrupt.sqlite"
+    corrupt.write_bytes(b"not an sqlite database")
+
+    result = cli.invoke(app, [*command, str(corrupt), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "corrupt or unreadable" in payload["message"]
+
+
+@pytest.mark.parametrize("command", [["bundles", "show"], ["replay"]])
 @pytest.mark.parametrize(
     ("journal_payload", "message"),
     [

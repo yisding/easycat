@@ -95,6 +95,26 @@ class _QueuedOutboundChunk:
 _DeliveredChunk = tuple[AudioChunk, str | None, str | None, object | None]
 
 
+# Delivery subscribers are application-owned and can suppress cancellation.
+# Timed-out teardown work remains owned here until it eventually settles so
+# neither loop shutdown nor a task exception loses observability.
+_BACKGROUND_EMIT_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _track_background_emit_task(task: asyncio.Task[None]) -> None:
+    _BACKGROUND_EMIT_TASKS.add(task)
+
+    def _finished(done: asyncio.Task[None]) -> None:
+        _BACKGROUND_EMIT_TASKS.discard(done)
+        if not done.cancelled():
+            try:
+                done.exception()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
+
+    task.add_done_callback(_finished)
+
+
 class OutboundAudioSource:
     """Queue-backed source that produces paced 20 ms Opus-compatible frames."""
 
@@ -353,7 +373,7 @@ class OutboundAudioSource:
         if not self._emit_tasks:
             return
         tasks = list(self._emit_tasks)
-        _, pending = await asyncio.wait(tasks, timeout=self._ACLOSE_TIMEOUT_S)
+        done, pending = await asyncio.wait(tasks, timeout=self._ACLOSE_TIMEOUT_S)
         if pending:
             logger.warning(
                 "Delivery-event drain exceeded %.1fs during teardown — cancelling",
@@ -361,6 +381,15 @@ class OutboundAudioSource:
             )
             for task in pending:
                 task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+                _track_background_emit_task(task)
+            # Let cooperative workers observe cancellation without awaiting a
+            # subscriber that deliberately suppresses it.
+            await asyncio.sleep(0)
+        for task in done:
+            if not task.cancelled():
+                try:
+                    task.exception()
+                except Exception:  # pragma: no cover - defensive teardown
+                    pass
         self._emit_queue.clear()
         self._emit_tasks.clear()

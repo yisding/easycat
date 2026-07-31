@@ -89,12 +89,15 @@ def export_debug_bundle(
 
     try:
         journal = _snapshot_journal(journal)
+        # Freeze artifact descriptors before journal streaming can let a
+        # concurrent session mutation replace or delete an in-memory blob.
+        artifact_sources = tuple(_iter_artifacts(session))
         manifest = _capture_manifest(session, journal)
         _write_bundle_archive(
             path,
             manifest=manifest,
             journal=journal,
-            artifacts=_iter_artifacts(session),
+            artifact_sources=artifact_sources,
             inline_artifacts=inline_artifacts,
         )
     except Exception as exc:
@@ -134,8 +137,10 @@ def _capture_manifest(session: object, journal: _JournalReader | None) -> Manife
     )
 
 
-def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
-    """Yield journal records as NDJSON lines from bounded read pages."""
+def _iter_serialized_journal(
+    journal: _JournalReader | None,
+) -> Iterator[tuple[dict[str, Any], bytes]]:
+    """Yield serialized records and their NDJSON lines from bounded read pages."""
     if journal is None:
         return
 
@@ -156,7 +161,7 @@ def _iter_serialized_journal(journal: _JournalReader | None) -> Iterator[bytes]:
                 if snapshot_end is not None and sequence > snapshot_end:
                     return
                 last_sequence = sequence
-            yield json.dumps(serialized, default=str).encode("utf-8")
+            yield serialized, json.dumps(serialized, default=str).encode("utf-8")
 
         if not supports_paging or len(page) != _JOURNAL_PAGE_SIZE:
             return
@@ -322,7 +327,7 @@ def _write_bundle_archive(
     *,
     manifest: Manifest,
     journal: _JournalReader | None,
-    artifacts: Iterable[_ArtifactSource],
+    artifact_sources: Iterable[_ArtifactSource],
     inline_artifacts: bool,
 ) -> None:
     manifest_dict = _manifest_to_dict(manifest)
@@ -333,7 +338,10 @@ def _write_bundle_archive(
         tmp_name = tmp.name
         tmp.close()  # Release the fd; ZipFile will open the path itself.
         with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
-            artifact_iter = iter(artifacts)
+            referenced_artifact_refs = _write_journal_member(zf, journal)
+            artifact_iter = iter(
+                source for source in artifact_sources if source.ref in referenced_artifact_refs
+            )
             first_artifact = next(artifact_iter, None)
             all_artifacts = (
                 chain((first_artifact,), artifact_iter) if first_artifact is not None else iter(())
@@ -342,7 +350,6 @@ def _write_bundle_archive(
                 _write_inline_manifest(zf, manifest_dict, all_artifacts)
             else:
                 zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
-            _write_journal_member(zf, journal)
             if not inline_artifacts and first_artifact is not None:
                 _write_artifact_members(zf, all_artifacts)
         Path(tmp_name).replace(path)
@@ -355,11 +362,12 @@ def _write_bundle_archive(
 def _write_journal_member(
     archive: zipfile.ZipFile,
     journal: _JournalReader | None,
-) -> None:
+) -> set[str]:
     written = 0
     first = True
+    referenced_artifact_refs: set[str] = set()
     with archive.open("journal.ndjson", "w", force_zip64=True) as member:
-        for line in _iter_serialized_journal(journal):
+        for record, line in _iter_serialized_journal(journal):
             prefix_size = 0 if first else 1
             if written + prefix_size + len(line) > _ARTIFACT_SIZE_CAP:
                 raise BundleValidationError(
@@ -372,6 +380,11 @@ def _write_journal_member(
             member.write(line)
             written += len(line)
             first = False
+            for ref_key in ("input_ref", "output_ref"):
+                ref = record.get(ref_key)
+                if isinstance(ref, str) and ref:
+                    referenced_artifact_refs.add(ref)
+    return referenced_artifact_refs
 
 
 def _write_artifact_members(

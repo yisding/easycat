@@ -655,12 +655,17 @@ class TurnRunner:
         await self._stt.await_inflight_commit()
 
         if not await self._stt.await_pending(turn):
+            # A pending-final timeout leaves the provider stream and its event
+            # consumer live. Close both before the caller resets the turn, or
+            # a successor can start a second stream against the same provider.
+            await self._stt.cancel(turn)
             return ""
 
         if stt_needs_close:
             await self._stt.end_stream(turn)
 
         if not await self._stt.await_pending(turn):
+            await self._stt.cancel(turn)
             return ""
 
         transcript = ""

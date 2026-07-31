@@ -38,6 +38,7 @@ from easycat.events import (
     PlaybackMarkAck,
     TransportAudioDelivered,
     TransportDegraded,
+    VADStopSpeaking,
 )
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
@@ -871,12 +872,10 @@ class AudioRouter:
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
         # Stage 3: VAD (optional) via VADStage.
+        deferred_vad_stops: list[VADStopSpeaking] = []
         if self._enable_vad():
             vad_events = await self._vad_stage.execute(chunk, self._run_ctx, turn)
-            for vad_event in vad_events:
-                vad_event = self._with_correlation(vad_event)
-                await self._emit(vad_event)
-                await self._turn_manager.on_vad_event(vad_event)
+            deferred_vad_stops = await self._route_vad_events_before_stt(vad_events)
 
         # TurnManager always sees raw audio frames for pre-roll buffering
         self._turn_manager.on_audio_frame(chunk)
@@ -902,6 +901,29 @@ class AudioRouter:
             if active_turn is not None:
                 active_turn.stt_has_uncommitted_audio = True
             await self._stt_stage.execute(chunk, self._run_ctx, active_turn or self._no_turn)
+
+        # Process a VAD stop only after STT accepted the exact frame that
+        # triggered it. VADStart must remain above so its frame opens/feeds a
+        # fresh stream; only Stop needs this provider-command ordering fence.
+        for vad_event in deferred_vad_stops:
+            await self._emit(vad_event)
+            await self._turn_manager.on_vad_event(vad_event)
+
+    async def _route_vad_events_before_stt(self, vad_events: list[Any]) -> list[VADStopSpeaking]:
+        """Emit VAD starts immediately while deferring stops until STT accepts the frame."""
+        deferred_stops: list[VADStopSpeaking] = []
+        for vad_event in vad_events:
+            vad_event = self._with_correlation(vad_event)
+            # The stop-producing frame must reach STT before a pause can
+            # schedule commit_segment() or end_stream(). Otherwise a
+            # zero-delay commit/end command can overlap the provider's
+            # send_audio() for that final frame.
+            if isinstance(vad_event, VADStopSpeaking):
+                deferred_stops.append(vad_event)
+                continue
+            await self._emit(vad_event)
+            await self._turn_manager.on_vad_event(vad_event)
+        return deferred_stops
 
     # ── Internal: outbound drain ───────────────────────────────
 

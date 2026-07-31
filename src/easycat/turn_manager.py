@@ -520,8 +520,11 @@ class TurnManager:
             reason="vad_silence",
         )
 
-        # Start the end-of-turn silence timer
-        self._silence_timer_task = asyncio.create_task(self._silence_timeout())
+        # Bind the timer to this exact pause. A detector is third-party code
+        # and may suppress cancellation, so state alone cannot distinguish an
+        # old timer from a newer pause after speech resumes.
+        pause_generation = self._pause_generation
+        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause_generation))
         self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
@@ -546,7 +549,7 @@ class TurnManager:
                 break
         return list(window)
 
-    async def _silence_timeout(self) -> None:
+    async def _silence_timeout(self, pause_generation: int) -> None:
         """Wait for end-of-turn silence timeout, then transition to Processing.
 
         When an endpoint detector is configured, it is queried first.  If the
@@ -591,7 +594,10 @@ class TurnManager:
                     else:
                         is_complete = result.prediction == 1
                     if is_complete:
-                        if self._state == TurnManagerState.USER_PAUSED:
+                        if (
+                            self._state == TurnManagerState.USER_PAUSED
+                            and pause_generation == self._pause_generation
+                        ):
                             await self._complete_user_turn("smart_turn_complete")
                         return
                     logger.debug(
@@ -611,7 +617,10 @@ class TurnManager:
             else:
                 punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
-            if self._state == TurnManagerState.USER_PAUSED:
+            if (
+                self._state == TurnManagerState.USER_PAUSED
+                and pause_generation == self._pause_generation
+            ):
                 await self._complete_user_turn(
                     "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
