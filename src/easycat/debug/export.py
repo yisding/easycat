@@ -283,7 +283,15 @@ def _iter_memory_artifacts(store: Mapping[str, bytes | str]) -> Iterator[_Artifa
 
 
 def _iter_filesystem_artifacts(artifact_dir: Path) -> Iterator[_ArtifactSource]:
-    if not artifact_dir.is_dir():
+    try:
+        unsafe_directory = (
+            artifact_dir.is_symlink()
+            or artifact_dir.parent.is_symlink()
+            or not artifact_dir.is_dir()
+        )
+    except OSError:
+        unsafe_directory = True
+    if unsafe_directory:
         return
 
     # New stores are sharded one directory deep. Read those first, then
@@ -304,7 +312,11 @@ def _iter_filesystem_artifacts(artifact_dir: Path) -> Iterator[_ArtifactSource]:
 
 
 def _filesystem_artifact_source(path: Path) -> _ArtifactSource | None:
-    if path.is_symlink() or not path.is_file():
+    try:
+        unsafe_path = path.parent.is_symlink() or path.is_symlink() or not path.is_file()
+    except OSError:
+        return None
+    if unsafe_path:
         return None
     try:
         size = path.stat().st_size
