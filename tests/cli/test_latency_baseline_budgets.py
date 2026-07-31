@@ -405,6 +405,47 @@ def test_latency_runner_reports_unreadable_baseline(tmp_path: Path) -> None:
     assert baseline_failures[0]["failure_class"] == "latency_baseline_error"
 
 
+def test_latency_runner_reports_deeply_nested_baseline(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text("[" * 10_000 + "0" + "]" * 10_000)
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1000.0),
+        baseline_path=baseline_path,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["latency_baseline"] == 1
+    baseline_failures = [
+        failure for failure in report["failures"] if failure["name"] == "latency.baseline"
+    ]
+    assert baseline_failures[0]["failure_class"] == "latency_baseline_error"
+
+
+def test_latency_runner_reports_non_utf8_baseline(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_bytes(b"\xff")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=_baseline_aware_command_runner(1000.0),
+        baseline_path=baseline_path,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["latency_baseline"] == 1
+    assert any(
+        failure["failure_class"] == "latency_baseline_error" for failure in report["failures"]
+    )
+
+
 def test_latency_runner_without_baseline_leaves_not_configured(tmp_path: Path) -> None:
     result = run_latency_validation(
         LatencyMode.SWEEP,

@@ -24,7 +24,7 @@ def load_reliability(
         return None, None
     try:
         samples = load_reliability_samples(path.read_text())
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, RecursionError) as exc:
         return (
             None,
             ValidationFailure(
