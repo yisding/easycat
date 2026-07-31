@@ -842,6 +842,43 @@ async def test_elevenlabs_reconnect_releases_waiting_commit_with_partial_fallbac
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_reconnect_promotes_uncommitted_partial_at_socket_boundary():
+    """A dropped socket cannot carry an old partial into the next audio epoch."""
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "before reconnect"
+
+    await stt._on_reconnect()
+
+    event = stt._event_queue.get_nowait()
+    assert event.type is STTEventType.FINAL
+    assert event.text == "before reconnect"
+    assert stt._partial_text == ""
+    assert not stt._audio_pending_commit
+    assert stt._committed_through_epoch == 1
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_promotes_partial_for_lost_manual_commit():
+    """A non-waiting manual commit also loses its final on a dropped socket."""
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    stt._ws = MockWebSocket([])
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "manual segment"
+
+    assert await stt._send_commit(wait_for_final=False)
+    assert stt._pending_manual_commits
+    await stt._on_reconnect()
+
+    event = stt._event_queue.get_nowait()
+    assert event.type is STTEventType.FINAL
+    assert event.text == "manual segment"
+    assert stt._partial_text == ""
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_promotes_partial_on_commit_timeout(monkeypatch):
     # Server sends only a partial and never the committed transcript, so
     # the end-of-turn commit times out and the latest partial must be
