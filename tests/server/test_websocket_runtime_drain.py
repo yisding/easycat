@@ -168,6 +168,39 @@ async def test_runtime_allows_async_preflight_to_reject_before_session_creation(
     assert runtime.gate.reserved_count == 0
 
 
+async def test_drain_closes_connection_while_async_preflight_is_pending() -> None:
+    """A preflight handler cancellation must not leave an accepted socket open."""
+
+    events: list[str] = []
+    manager = _Manager(events)
+    server = _Server(events)
+    connection = _Connection(events)
+    preflight_started = asyncio.Event()
+    never_finish = asyncio.Event()
+
+    async def slow_preflight(_connection: object) -> _Session:
+        preflight_started.set()
+        await never_finish.wait()
+        return _Session(events)
+
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=slow_preflight,
+    )
+    handler = asyncio.create_task(runtime.handle(connection))
+    await asyncio.wait_for(preflight_started.wait(), timeout=1)
+
+    await asyncio.wait_for(
+        runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0), timeout=2
+    )
+    with contextlib.suppress(asyncio.CancelledError):
+        await handler
+
+    assert connection.close_calls == [(1001, "Server shutdown after drain")]
+    assert runtime.gate.reserved_count == 0
+
+
 async def test_drain_cancels_startup_before_session_becomes_active() -> None:
     events: list[str] = []
     manager = SessionManager[int]()

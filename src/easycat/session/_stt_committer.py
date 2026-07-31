@@ -153,6 +153,12 @@ class STTCommitter:
             or any(
                 not task.done() for task in self._runtime_scope.tasks(self.FINAL_CLOSE_TASK_NAME)
             )
+            # ``schedule_turn_ended`` clears the cached task handle as soon
+            # as it requests cancellation. A cancellation-resistant provider
+            # commit remains owned by RuntimeScope, though, and can still hold
+            # the stream open. Include that authoritative task ledger before
+            # admitting a successor stream.
+            or any(not task.done() for task in self._runtime_scope.tasks("stt_segment_commit"))
         )
 
     def mark_active(self) -> None:
@@ -374,6 +380,18 @@ class STTCommitter:
             name = resolve_provider_name(provider, "stt")
             err = STTTimeoutError(name, timeout or 0.0)
             await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+            self.resolve_pending(turn, "")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The trailing-final waiter belongs to this end_stream attempt.
+            # If a provider close fails, resolve it and surface a typed error
+            # so TurnRunner can reset the turn rather than remaining stuck in
+            # PROCESSING forever.
+            provider = self._stt_getter()
+            name = resolve_provider_name(provider, "stt")
+            logger.debug("STT end_stream failed", exc_info=True)
+            await self._emit(Error(exception=exc, stage=ErrorStage.STT, provider=name))
             self.resolve_pending(turn, "")
 
     # ── Background STT event consumer ─────────────────────────────

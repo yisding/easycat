@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +34,14 @@ logger = logging.getLogger(__name__)
 # module constant is the field's default and remains the monkeypatch
 # seam used by the provider tests.
 _FINAL_TRANSCRIPT_TIMEOUT_S = 5.0
+
+
+@dataclass(slots=True)
+class _PendingManualCommit:
+    """One manual commit awaiting its FIFO committed-transcript response."""
+
+    final_received: asyncio.Event
+    drop_late_final: bool = False
 
 
 @dataclass
@@ -209,6 +218,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # awaiting an ack for. Distinguishes a manual-commit ack from an
         # unsolicited server VAD commit in the committed_transcript handler.
         self._manual_commit_inflight: int = 0
+        # ElevenLabs does not attach a request id to committed transcripts.
+        # Manual commit acknowledgements are ordered on one socket, so retain
+        # a FIFO waiter for each sent commit instead of letting an older final
+        # release a newer end-of-turn waiter.
+        self._pending_manual_commits: deque[_PendingManualCommit] = deque()
         # Latest partial transcript text, promoted to a FINAL if the
         # committed transcript stalls past the timeout.
         self._partial_text: str = ""
@@ -344,6 +358,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._committed_through_epoch = 0
         self._transcribed_through_epoch = 0
         self._manual_commit_inflight = 0
+        self._pending_manual_commits.clear()
         await self._connect_websocket(
             url=self._build_realtime_ws_url(),
             headers=headers,
@@ -370,6 +385,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # as accounted for.
         self._committed_through_epoch = self._audio_epoch
         self._manual_commit_inflight = 0
+        self._pending_manual_commits.clear()
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         payload_audio = self._audio_resampler.process(
@@ -420,6 +436,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return False
 
         final_received = asyncio.Event()
+        pending_commit = _PendingManualCommit(final_received=final_received)
+        # Reserve the FIFO slot before sending. The receive loop can process a
+        # very fast committed_transcript while ``ws.send`` is still suspended.
+        self._pending_manual_commits.append(pending_commit)
+        self._manual_commit_inflight = len(self._pending_manual_commits)
+        # Kept for existing direct users/tests of this private seam. Runtime
+        # acknowledgement routing uses ``_pending_manual_commits`` instead.
         self._final_received = final_received
         # Each fresh commit starts a clean slate — any stale drop flag
         # from a previous commit (e.g. one whose timed-out committed
@@ -438,15 +461,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
         except Exception:
             logger.debug("Error sending realtime commit", exc_info=True)
-            if self._final_received is final_received:
-                self._final_received = None
+            self._discard_pending_manual_commit(pending_commit)
             return False
 
         self._audio_pending_commit = False
         # This commit covers everything streamed so far; its ack is the next
         # committed_transcript we receive while a manual commit is in flight.
         self._committed_through_epoch = self._audio_epoch
-        self._manual_commit_inflight += 1
         if wait_for_final:
             try:
                 await asyncio.wait_for(
@@ -479,7 +500,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
                     # ever arrived, a real ``committed_transcript`` showing up
                     # during the close/drain path is the turn's only
                     # transcript and must not be dropped.
-                    self._dropping_pending_final = True
+                    if self._pending_manual_commit_is_active(pending_commit):
+                        pending_commit.drop_late_final = True
+                        self._dropping_pending_final = True
         return True
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
@@ -512,7 +535,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
         )
 
-    def _reconcile_pending_commit_on_committed(self) -> None:
+    def _reconcile_pending_commit_on_committed(self) -> _PendingManualCommit | None:
         """Clear the pending-commit flag only when the committed transcript
         actually covers the latest audio we've streamed.
 
@@ -522,10 +545,22 @@ class ElevenLabsSTT(WebSocketSTTBase):
         skip the final commit for that newer audio and drop the trailing
         segment.
         """
-        if self._manual_commit_inflight > 0:
+        pending_commit: _PendingManualCommit | None = None
+        if self._pending_manual_commits:
             # Ack of a manual commit we sent. Clear only if no audio was
             # streamed after that commit was requested; otherwise the newer
             # audio is still uncommitted and must be flushed at end-of-turn.
+            pending_commit = self._pending_manual_commits.popleft()
+            self._manual_commit_inflight = len(self._pending_manual_commits)
+            self._final_received = (
+                self._pending_manual_commits[-1].final_received
+                if self._pending_manual_commits
+                else None
+            )
+        elif self._manual_commit_inflight > 0:
+            # Compatibility for custom subclasses/tests that set the legacy
+            # counter and waiter directly. Production commits always take the
+            # FIFO branch above.
             self._manual_commit_inflight -= 1
         else:
             # Unsolicited server VAD commit. It covers what the server has
@@ -536,6 +571,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
         if self._audio_epoch <= self._committed_through_epoch:
             self._audio_pending_commit = False
+        return pending_commit
 
     def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
         text = msg.get("text", "")
@@ -552,12 +588,24 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 min(self._audio_epoch, self._committed_through_epoch + 1),
             )
 
-        self._reconcile_pending_commit_on_committed()
-        if self._dropping_pending_final:
+        pending_commit = self._reconcile_pending_commit_on_committed()
+        if pending_commit is not None and pending_commit.drop_late_final:
             # A previous ``_send_commit`` already gave up on this committed
             # transcript and promoted the accumulated partial to a FINAL, so
             # silently discard this late revision to avoid emitting a second
             # FINAL for the same turn.
+            logger.debug(
+                "Dropping late ElevenLabs committed_transcript (already promoted partial)"
+            )
+            self._dropping_pending_final = any(
+                commit.drop_late_final for commit in self._pending_manual_commits
+            )
+            self._partial_text = ""
+            pending_commit.final_received.set()
+            return
+        if pending_commit is None and self._dropping_pending_final:
+            # Compatibility path for a pre-existing direct waiter with no
+            # FIFO record. Runtime commits always use the branch above.
             logger.debug(
                 "Dropping late ElevenLabs committed_transcript (already promoted partial)"
             )
@@ -582,8 +630,25 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 )
             )
         self._partial_text = ""
-        if self._final_received is not None:
+        if pending_commit is not None:
+            pending_commit.final_received.set()
+        elif self._final_received is not None:
             self._final_received.set()
+
+    def _pending_manual_commit_is_active(self, pending_commit: _PendingManualCommit) -> bool:
+        return any(commit is pending_commit for commit in self._pending_manual_commits)
+
+    def _discard_pending_manual_commit(self, pending_commit: _PendingManualCommit) -> None:
+        for commit in tuple(self._pending_manual_commits):
+            if commit is pending_commit:
+                self._pending_manual_commits.remove(commit)
+                break
+        self._manual_commit_inflight = len(self._pending_manual_commits)
+        self._final_received = (
+            self._pending_manual_commits[-1].final_received
+            if self._pending_manual_commits
+            else None
+        )
 
     # -- Batch (HTTP) mode -------------------------------------------------
 

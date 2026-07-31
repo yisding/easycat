@@ -386,6 +386,11 @@ class TestLocalTransport:
         with pytest.raises(ValueError, match="output_preroll_frames"):
             LocalTransportConfig(output_preroll_frames=value)  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("value", [0, -1, 1.5, True])
+    def test_config_rejects_invalid_frame_duration(self, value: object):
+        with pytest.raises(ValueError, match="frame_duration_ms"):
+            LocalTransportConfig(frame_duration_ms=value)  # type: ignore[arg-type]
+
     def test_config_rejects_preroll_larger_than_bounded_output_queue(self):
         with pytest.raises(ValueError, match="cannot exceed max_pending_out_chunks"):
             LocalTransportConfig(max_pending_out_chunks=2, output_preroll_frames=3)

@@ -11,6 +11,8 @@ import easycat.transports.webtransport as webtransport_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.providers import Transport
 from easycat.transports.webtransport import (
+    _MAX_STREAM_DATA,
+    _OUTBOUND_SEND_BUFFER_HIGH_WATER,
     WebTransportConnectionTransport,
     WebTransportTransport,
     WebTransportTransportConfig,
@@ -21,6 +23,7 @@ from ._webtransport_helpers import (
     _build_connection_transport,
     _FakeH3,
     _FakeQuicProtocol,
+    _FakeStream,
 )
 
 
@@ -218,6 +221,45 @@ class TestWebTransportConnectionTransport:
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert not await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
+        finally:
+            await t.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_large_audio_chunk_cannot_bypass_quic_send_buffer_high_water(self) -> None:
+        """One giant TTS chunk must be fragmented before reaching aioquic.
+
+        Model a stalled peer by retaining every write in the fake stream's
+        private buffer.  Before fragmentation, a single 512 KiB input jumped
+        the nominal 256 KiB high-water mark in one ``send_stream_data`` call.
+        """
+        t = _build_connection_transport()
+        session = t._session  # noqa: SLF001
+        assert session is not None
+        quic = session._quic_protocol._quic  # noqa: SLF001
+        original_send = quic.send_stream_data
+        buffers: dict[int, bytearray] = {}
+        quic._streams = {}  # noqa: SLF001
+
+        def buffered_send(stream_id: int, data: bytes, end_stream: bool = False) -> None:  # noqa: FBT001, FBT002
+            original_send(stream_id, data, end_stream=end_stream)
+            buffer = buffers.setdefault(stream_id, bytearray())
+            buffer.extend(data)
+            quic._streams[stream_id] = _FakeStream(buffer)  # noqa: SLF001
+
+        quic.send_stream_data = buffered_send  # type: ignore[method-assign]
+        await t.connect()
+        try:
+            source = b"\x00\x01" * _OUTBOUND_SEND_BUFFER_HIGH_WATER
+            assert await t.send_audio(AudioChunk(data=source, format=PCM16_MONO_16K))
+            await asyncio.sleep(0.1)
+
+            audio_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            assert audio_sid is not None
+            assert len(buffers[audio_sid]) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER
+            audio_writes = [data for sid, data in quic.sent if sid == audio_sid]
+            # First write carries the WebTransport audio tag + sample rate.
+            assert all(len(data) <= _MAX_STREAM_DATA for data in audio_writes[1:])
+            assert not t._out_queue.empty()  # noqa: SLF001 - stalled peer backpressures writer
         finally:
             await t.disconnect()
 

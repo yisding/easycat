@@ -644,6 +644,40 @@ async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monk
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_old_final_cannot_release_newer_end_commit():
+    # A manual segment commit may still be awaiting its final when end_stream
+    # commits newly arrived audio. Finals are FIFO but carry no request id, so
+    # the older final must not release the newer end-of-turn wait and let the
+    # provider close before the trailing transcript arrives.
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    stt._ws = MockWebSocket([])
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt._send_realtime(chunk)
+    assert await stt._send_commit(wait_for_final=False) is True
+    await stt._send_realtime(chunk)
+
+    end_commit = asyncio.create_task(stt._send_commit(wait_for_final=True))
+    await asyncio.sleep(0)
+    assert stt._manual_commit_inflight == 2
+
+    # This belongs to the earlier non-blocking segment commit.
+    stt._handle_json_message(json.loads(_el_transcript("segment one", is_final=True)))
+    await asyncio.sleep(0)
+    assert not end_commit.done()
+
+    stt._handle_json_message(json.loads(_el_transcript("segment two", is_final=True)))
+    assert await end_commit is True
+
+    finals = []
+    while not stt._event_queue.empty():
+        event = stt._event_queue.get_nowait()
+        if event.type == STTEventType.FINAL:
+            finals.append(event.text)
+    assert finals == ["segment one", "segment two"]
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_vad_commit_keeps_pending_for_trailing_audio():
     # A VAD commit covers only what the server transcribed (up to the last
     # partial). Audio streamed after that must keep pending set so end_stream

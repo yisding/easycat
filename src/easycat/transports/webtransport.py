@@ -163,6 +163,11 @@ _MAX_CONNECTION_DATA = 4 * _MAX_STREAM_DATA
 # Four windows tolerates a healthy bandwidth-delay product while still capping
 # a stalled client at ~256 KiB of buffered TTS.
 _OUTBOUND_SEND_BUFFER_HIGH_WATER = 4 * _MAX_STREAM_DATA
+# Limit each write handed to aioquic to one stream window.  The writer reserves
+# this full amount before dequeuing a fragment, so even an unexpectedly large
+# TTS chunk cannot jump the QUIC send buffer past the high-water mark in one
+# call to ``send_stream_data``.
+_OUTBOUND_SEND_WRITE_MAX_BYTES = _MAX_STREAM_DATA
 # Poll interval while waiting for the per-stream send buffer to drain below
 # the high-water mark.  Short enough to stay responsive to a recovering
 # client; cheap because it only runs while actually backpressured.
@@ -854,8 +859,7 @@ class _WebTransportSession:
         self._quic_protocol.close(error_code=0, reason_phrase=reason)
 
     async def _await_outbound_capacity(self) -> None:
-        """Block while aioquic's per-stream send buffer for the current
-        server→client audio stream is over the high-water mark.
+        """Reserve room for one bounded write in the current audio stream.
 
         ``QuicConnection.send_stream_data`` only appends to that buffer; the
         bytes leave the process only as QUIC flow control / congestion
@@ -895,7 +899,16 @@ class _WebTransportSession:
             if raw_buffer is None:
                 # Stream not yet registered or already finished — legitimate.
                 return
-            if len(raw_buffer) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER:
+            # Each queued fragment is at most ``_OUTBOUND_SEND_WRITE_MAX_BYTES``.
+            # Leave room for that complete write rather than merely checking
+            # whether the buffer has already crossed the high-water mark.  A
+            # producer is free to emit arbitrarily large ``AudioChunk``
+            # objects, so without this reservation one giant chunk could add
+            # megabytes to aioquic in a single call before the next loop gets
+            # a chance to apply backpressure.
+            if len(raw_buffer) <= (
+                _OUTBOUND_SEND_BUFFER_HIGH_WATER - _OUTBOUND_SEND_WRITE_MAX_BYTES
+            ):
                 return
             await asyncio.sleep(_OUTBOUND_BACKPRESSURE_POLL_SEC)
 
@@ -1516,10 +1529,39 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if not self._connected:
             return False
+        # Keep one application queue slot and one aioquic write bounded to a
+        # stream window.  Splitting here (rather than while the writer holds a
+        # chunk) preserves its no-await get→send invariant, so ``clear_audio``
+        # can still synchronously discard every not-yet-written fragment.
+        fragment_count = max(
+            1,
+            (len(chunk.data) + _OUTBOUND_SEND_WRITE_MAX_BYTES - 1)
+            // _OUTBOUND_SEND_WRITE_MAX_BYTES,
+        )
+        available_slots = self._out_queue.maxsize - self._out_queue.qsize()
+        if fragment_count > available_slots:
+            logger.debug("WebTransport outbound queue full — dropping TTS frame")
+            self._emit_degraded(
+                _DEGRADED_OUTBOUND_QUEUE_FULL,
+                f"dropped {len(chunk.data)}-byte TTS frame; outbound queue full",
+            )
+            return False
         try:
-            self._out_queue.put_nowait(chunk)
+            if not chunk.data:
+                self._out_queue.put_nowait(chunk)
+            else:
+                for offset in range(0, len(chunk.data), _OUTBOUND_SEND_WRITE_MAX_BYTES):
+                    self._out_queue.put_nowait(
+                        replace(
+                            chunk,
+                            data=chunk.data[offset : offset + _OUTBOUND_SEND_WRITE_MAX_BYTES],
+                        )
+                    )
             return True
         except asyncio.QueueFull:
+            # ``send_audio`` has no suspension points, so the capacity check
+            # above is atomic with the puts.  Keep this defensive fallback for
+            # alternative queue implementations.
             logger.debug("WebTransport outbound queue full — dropping TTS frame")
             self._emit_degraded(
                 _DEGRADED_OUTBOUND_QUEUE_FULL,

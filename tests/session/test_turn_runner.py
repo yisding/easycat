@@ -380,6 +380,64 @@ async def test_completed_stt_close_does_not_force_successor_teardown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_successor_turn_drains_scoped_segment_commit_before_starting() -> None:
+    """A detached segment commit still owns its prior STT stream."""
+
+    class StreamOwningSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.start_calls = 0
+
+        async def start_stream(self) -> None:
+            self.start_calls += 1
+            if self.stream_open:
+                raise RuntimeError("previous STT stream is still open")
+            self.stream_open = True
+
+    stt = StreamOwningSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    runner = session._turn_runner
+    release = asyncio.Event()
+
+    async def _stubborn_segment_commit() -> None:
+        await release.wait()
+
+    try:
+        await runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+
+        # Model schedule_turn_ended(): it has cancelled the cached handle,
+        # but the runtime still owns an unfinished commit task. Remove the
+        # event-consumer signal so this test specifically exercises the
+        # scoped-commit handoff guard.
+        event_task = session._stt_committer.stt_task
+        assert event_task is not None
+        event_task.cancel()
+        await asyncio.gather(event_task, return_exceptions=True)
+        session._stt_committer._stt_task = None
+        session._stt_committer.mark_inactive()
+        scoped_commit = session._runtime_scope.create_task(
+            "stt_segment_commit", _stubborn_segment_commit()
+        )
+        await asyncio.sleep(0)
+        session._stt_committer._segment_commit_task = None
+
+        assert session._stt_committer.requires_successor_handoff
+        await runner.on_turn_started(TurnStarted(turn_id="successor-turn"))
+
+        assert scoped_commit.cancelled()
+        assert stt.end_stream_calls == 1
+        assert stt.start_calls == 2
+        assert session._turn is not None
+        assert session._turn.id == "successor-turn"
+    finally:
+        release.set()
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
 async def test_on_turn_started_start_failure_tears_down_turn() -> None:
     """If ``start_stream`` fails, the turn is fully torn down.
 

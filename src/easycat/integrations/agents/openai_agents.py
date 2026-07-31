@@ -233,11 +233,25 @@ class OpenAIAgentsBridge:
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
         try:
+            pending_interruption = (
+                self._pending_interruption
+                if self._use_previous_response_id and self._previous_response_id is not None
+                else None
+            )
             input_data = self._build_input(turn_input)
             kwargs = self._build_kwargs()
             if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = list(self._mcp_servers)
             result = Runner.run_streamed(self._agent, input_data, **kwargs)
+            # ``run_streamed`` has accepted the input at this point.  Do not
+            # consume a pending interruption while constructing it: a
+            # synchronous SDK startup failure means the server never saw the
+            # note, and a retry must include it again.
+            if (
+                pending_interruption is not None
+                and self._pending_interruption == pending_interruption
+            ):
+                self._pending_interruption = None
         except Exception as exc:
             if hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = saved_mcp_servers
@@ -571,7 +585,6 @@ class OpenAIAgentsBridge:
             parts.extend(context)
             if self._pending_interruption is not None:
                 parts.append({"role": "developer", "content": self._pending_interruption})
-                self._pending_interruption = None
             parts.append(user_message)
             return parts
         if context or self._message_history:

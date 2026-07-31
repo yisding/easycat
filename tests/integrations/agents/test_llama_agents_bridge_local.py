@@ -328,6 +328,39 @@ class TestLocalLlamaAgentsBridge:
         assert bridge._pending_interruption_note is None
 
     @pytest.mark.asyncio
+    async def test_start_failure_keeps_interruption_note_for_local_retry(
+        self, fake_workflows_modules
+    ):
+        class _FailOnceWorkflow(_LocalWorkflow):
+            def __init__(self) -> None:
+                super().__init__(result="ok")
+                self._fail_once = True
+
+            def run(self, **kwargs: Any):
+                if self._fail_once:
+                    self._fail_once = False
+                    self.calls.append(kwargs)
+                    raise RuntimeError("workflow start failed")
+                return super().run(**kwargs)
+
+        workflow = _FailOnceWorkflow()
+        bridge = LlamaAgentsBridge(workflow=workflow)
+        bridge.append_interruption_note("retry-note")
+
+        with pytest.raises(RuntimeError, match="workflow start failed"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("next"), _recorder()):
+                pass
+
+        assert workflow.calls[0]["easycat_interruption_note"] == "retry-note"
+        assert bridge._pending_interruption_note == "retry-note"
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("next"), _recorder()):
+            pass
+
+        assert workflow.calls[1]["easycat_interruption_note"] == "retry-note"
+        assert bridge._pending_interruption_note is None
+
+    @pytest.mark.asyncio
     async def test_interruption_snapshot_scrubs_context_secrets(self, fake_workflows_modules):
         """An interrupted workflow's Context must not leak credentials into
         the debug-bundle artifact written by record_state_snapshot()."""
