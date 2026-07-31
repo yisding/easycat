@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar
 from uuid import uuid4
 
+from easycat._numeric import is_finite_number
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE, aclose_quietly
 from easycat.integrations.agents.base import (
@@ -112,6 +113,13 @@ class AgentRunnerConfig:
     # Bound restarts when a paused user resumes and produces a longer final
     # transcript before the endpoint is confirmed.
     preemptive_max_retries: int = 3
+
+    def __post_init__(self) -> None:
+        if self.timeout is None:
+            return
+        if not is_finite_number(self.timeout):
+            raise ValueError("AgentRunnerConfig.timeout must be a finite number or None")
+        self.timeout = float(self.timeout)
 
 
 @dataclass

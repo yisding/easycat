@@ -55,6 +55,12 @@ class EchoAgent:
         return f"Echo: {text}"
 
 
+@pytest.mark.parametrize("timeout", [True, float("nan"), float("inf"), float("-inf")])
+def test_config_rejects_nonfinite_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="timeout must be a finite number or None"):
+        AgentRunnerConfig(timeout=timeout)
+
+
 class UpperAgent:
     async def run(self, text: str) -> str:
         return text.upper()
