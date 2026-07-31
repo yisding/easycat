@@ -381,6 +381,32 @@ def test_smart_turn_onnx_rejects_invalid_threshold(value: object) -> None:
         SmartTurnONNX(model_path="unused.onnx", threshold=value)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("field", ["timeout_s", "max_audio_seconds"])
+@pytest.mark.parametrize(
+    "value",
+    [True, False, "1", None, float("nan"), float("inf"), float("-inf"), 10**1000, 0, -1],
+)
+def test_smart_turn_config_rejects_invalid_positive_durations(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=rf"{field} must be a finite positive number"):
+        SmartTurnConfig(**{field: value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field", ["timeout_s", "max_audio_seconds"])
+@pytest.mark.parametrize(
+    "value",
+    [True, False, "1", None, float("nan"), float("inf"), float("-inf"), 10**1000, 0, -1],
+)
+def test_smart_turn_onnx_rejects_invalid_positive_durations(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=rf"{field} must be a finite positive number"):
+        SmartTurnONNX(model_path="unused.onnx", **{field: value})  # type: ignore[arg-type]
+
+
 def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
     """Only the trailing model window should be converted/concatenated."""
 
