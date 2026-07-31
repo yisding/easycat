@@ -425,6 +425,21 @@ class _CancelAwareBridge(_FakeBridge):
         yield AgentBridgeEvent(kind="done", text="bridged")
 
 
+class _CancellationIgnoringBridge(_FakeBridge):
+    def __init__(self):
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        _ = turn_input, recorder, cancel_token
+        self.invoke_called = True
+        self.started.set()
+        await self.release.wait()
+        yield AgentBridgeEvent(kind="text_delta", text="stale")
+        yield AgentBridgeEvent(kind="done", text="stale")
+
+
 @pytest.mark.asyncio
 async def test_agent_runner_wrapping_a_bridge_delegates_invoke():
     inner = _FakeBridge()
@@ -446,6 +461,21 @@ async def test_wrapped_bridge_skips_already_cancelled_turn():
 
     assert events == []
     assert inner.invoke_called is False
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_wrapped_bridge_drops_output_after_cancellation():
+    inner = _CancellationIgnoringBridge()
+    runner = AgentRunner(inner)
+    token = CancelToken()
+    task = asyncio.create_task(_drain(runner, "old", token))
+
+    await asyncio.wait_for(inner.started.wait(), timeout=1)
+    token.cancel()
+    inner.release.set()
+
+    assert await asyncio.wait_for(task, timeout=1) == []
     assert runner.history == []
 
 

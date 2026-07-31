@@ -340,15 +340,13 @@ class AgentRunner:
         timeout = self._config.timeout
         deadline = time.monotonic() + timeout if timeout is not None else None
         inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
-        timed_out = False
         try:
             while True:
                 try:
                     if deadline is not None:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            timed_out = True
-                            break
+                            raise AgentTimeoutError(timeout or 0)
                         event = await _await_with_timeout(inner_iter.__anext__(), remaining)
                     else:
                         event = await inner_iter.__anext__()
@@ -357,8 +355,15 @@ class AgentRunner:
                     recorder.record_framework_error(ErrorInfo.from_exception(error))
                     raise error from exc
                 except TimeoutError:
-                    timed_out = True
-                    break
+                    # Let the inner bridge keep its own partial state; the
+                    # runner never recorded this turn, so its shadow history
+                    # stays in sync without a manual rollback.
+                    raise AgentTimeoutError(timeout or 0) from None
+                # A bridge can yield an event after it has observed neither
+                # the token nor generator closure.  Do not expose that stale
+                # event or mirror it into the runner's advisory history.
+                if cancel_token and cancel_token.is_cancelled:
+                    return
                 kind = getattr(event, "kind", None)
                 text = getattr(event, "text", "") or ""
                 if kind == "text_delta":
@@ -369,11 +374,6 @@ class AgentRunner:
                     yield event
                     return
                 yield event
-            if timed_out:
-                # Let the inner bridge keep its own partial state; the runner
-                # never recorded this turn, so its shadow history stays in
-                # sync without a manual rollback.
-                raise AgentTimeoutError(timeout or 0)
         finally:
             # Closing the runner mid-yield does not automatically close the
             # wrapped bridge. Finish its partial-turn cleanup synchronously so
