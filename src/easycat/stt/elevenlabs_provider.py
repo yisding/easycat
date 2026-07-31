@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from easycat._audio_utils import PCM16StreamResampler
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
@@ -141,6 +142,15 @@ class ElevenLabsSTTConfig:
                 f"(got {self.realtime_commit_strategy!r})"
             )
         self.realtime_commit_strategy = normalized_commit_strategy
+
+        if (
+            not is_finite_number(self.final_transcript_timeout_s)
+            or self.final_transcript_timeout_s <= 0
+        ):
+            raise ValueError(
+                "ElevenLabsSTTConfig.final_transcript_timeout_s must be a finite positive number"
+            )
+        self.final_transcript_timeout_s = float(self.final_transcript_timeout_s)
 
         if self.max_retries < 0:
             raise ValueError(

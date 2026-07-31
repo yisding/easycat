@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from easycat._audio_utils import PCM16StreamResampler
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -92,6 +93,17 @@ class OpenAIRealtimeSTTConfig:
     # OpenAI's commit event clears the input buffer, so a single session can
     # accept the next turn without another connection/session.update handshake.
     persistent_ws: bool = True
+
+    def __post_init__(self) -> None:
+        if (
+            not is_finite_number(self.final_transcript_timeout_s)
+            or self.final_transcript_timeout_s <= 0
+        ):
+            raise ValueError(
+                "OpenAIRealtimeSTTConfig.final_transcript_timeout_s must be a finite "
+                "positive number"
+            )
+        self.final_transcript_timeout_s = float(self.final_transcript_timeout_s)
 
 
 class OpenAIRealtimeSTT(WebSocketSTTBase):
