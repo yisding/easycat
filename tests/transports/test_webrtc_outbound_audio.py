@@ -371,6 +371,31 @@ class TestOutboundAudioAecReference:
                 await asyncio.wait_for(asyncio.shield(closing), timeout=0.5)
 
     @pytest.mark.asyncio
+    async def test_aclose_is_safe_from_delivery_event_subscriber(self):
+        """A delivery callback may tear down its owning transport.
+
+        The outbound delivery worker itself invokes EventBus subscribers, so
+        ``aclose()`` must not wait for or cancel that same worker when a
+        subscriber requests teardown synchronously.
+        """
+        source = OutboundAudioSource()
+        bus = EventBus()
+        closed = asyncio.Event()
+
+        async def _handler(_event):
+            await source.aclose()
+            closed.set()
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+        chunk = AudioChunk(data=b"\x01\x02", format=PCM16_MONO_16K)
+        source._queue_delivery_events([(chunk, None, None, None)])
+
+        await asyncio.wait_for(closed.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert not source._emit_tasks
+
+    @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_disconnect_drains_outbound_emit_tasks(self):
         """WebRTCTransport.disconnect() must drain the outbound source's own
