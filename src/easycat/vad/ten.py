@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from importlib.metadata import version
@@ -88,6 +89,12 @@ class TenVAD(_VADBase):
             audio_time_s = self._advance_audio_time(self._hop_size / _TEN_SAMPLE_RATE)
             for event in self._evaluate_speech(float(speech_prob), audio_time_s):
                 yield event
+
+            # Buffered transports may deliver many model frames in one chunk.
+            # Yield between frames so cancellation and other pipeline work do
+            # not wait for a silent backlog to drain.
+            if len(self._buffer) >= frame_bytes:
+                await asyncio.sleep(0)
 
     def reset(self) -> None:
         """Reset VAD internal state."""

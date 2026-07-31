@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from unittest.mock import MagicMock
 
@@ -65,3 +66,40 @@ async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
 
     assert any(isinstance(e, VADStartSpeaking) for e in events)
     assert mock_instance.process.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ten_vad_yields_to_event_loop_while_draining_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Large silent chunks must not defer cancellation behind the whole backlog."""
+    mock_ten_vad = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.process.return_value = (0.0, 0)
+    mock_ten_vad.TenVad.return_value = mock_instance
+    monkeypatch.setattr(
+        vad_ten_module,
+        "require_module",
+        lambda name, **_kwargs: {
+            "ten_vad": mock_ten_vad,
+            "numpy": types.SimpleNamespace(
+                int16="int16",
+                frombuffer=lambda _data, dtype: types.SimpleNamespace(copy=lambda: object()),
+            ),
+        }[name],
+    )
+
+    vad = TenVAD()
+    observer_ran = False
+
+    async def observe_loop() -> None:
+        nonlocal observer_ran
+        observer_ran = True
+
+    observer = asyncio.create_task(observe_loop())
+    try:
+        events = [event async for event in vad.process(_make_chunk(n_samples=vad._hop_size * 3))]
+        assert events == []
+        assert observer_ran
+    finally:
+        await observer
