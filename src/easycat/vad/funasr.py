@@ -9,7 +9,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
+from easycat._audio_utils import AudioFrameAligner, PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
 from easycat.events import Event
@@ -87,6 +87,7 @@ class FunASROnnxVAD(_VADBase):
         self._model: Any = None
         self._param_dict: dict[str, Any] = {"in_cache": []}
         self._audio_resampler = PCM16StreamResampler(_FUNASR_SAMPLE_RATE)
+        self._source_frame_aligner = AudioFrameAligner()
         self._initialize()
 
     def _initialize(self) -> None:
@@ -151,6 +152,7 @@ class FunASROnnxVAD(_VADBase):
         if self._numpy is None or self._model is None:
             self._initialize()
 
+        chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
 
@@ -207,6 +209,7 @@ class FunASROnnxVAD(_VADBase):
         """Reset adapter state and FunASR streaming caches."""
         super().reset()
         self._audio_resampler.reset()
+        self._source_frame_aligner.reset()
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
@@ -220,6 +223,9 @@ class FunASROnnxVAD(_VADBase):
         audio_resampler = getattr(self, "_audio_resampler", None)
         if audio_resampler is not None:
             audio_resampler.reset()
+        source_frame_aligner = getattr(self, "_source_frame_aligner", None)
+        if source_frame_aligner is not None:
+            source_frame_aligner.reset()
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}

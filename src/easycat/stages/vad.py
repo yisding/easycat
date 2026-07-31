@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from easycat import _observability as observability
-from easycat._audio_utils import to_mono_chunk
+from easycat._audio_utils import AudioFrameAligner, to_mono_chunk
 from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.runtime.context import RunContext
@@ -68,6 +68,27 @@ class VADStage:
         # Most recent VAD decision (last emitted event type), surfaced via
         # ``snapshot_state`` so ``replay_decision`` returns something real.
         self._last_decision: Any = None
+        self._input_frame_aligner = AudioFrameAligner()
+        self._input_frame_turn_id: str | None = None
+
+    def _normalize_audio_input(
+        self,
+        input: Any,
+        turn: TurnContext,
+        *,
+        capture_allowed: bool,
+    ) -> Any:
+        """Frame-align and downmix provider-facing PCM16 audio."""
+        if not isinstance(input, AudioChunk):
+            return input
+        if self._input_frame_turn_id != turn.id:
+            self._input_frame_aligner.reset()
+            self._input_frame_turn_id = turn.id
+        input = self._input_frame_aligner.align(input)
+        if input.format.channels > 1:
+            input = to_mono_chunk(input)
+            set_audio_capture_allowed(input, capture_allowed)
+        return input
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = journal_ctx(ctx, self._journal)
@@ -100,13 +121,16 @@ class VADStage:
             else None
         )
         # VAD backends decode the raw byte stream as flat int16 mono (frame
-        # boundaries are computed as samples*2). Interleaved multi-channel
-        # input would be misread as garbage, so downmix to mono before
-        # handing the chunk to the provider. We do this after capturing the
-        # input_ref artifact so replay still reflects the true raw input.
-        if isinstance(input, AudioChunk) and input.format.channels > 1:
-            input = to_mono_chunk(input)
-            set_audio_capture_allowed(input, capture_allowed)
+        # boundaries are computed as samples*2). Align source frames before
+        # downmixing so a transport split in the middle of an interleaved
+        # frame cannot lose or cross-pair channel samples. We do this after
+        # capturing the input_ref artifact so replay still reflects the true
+        # raw input.
+        input = self._normalize_audio_input(
+            input,
+            turn,
+            capture_allowed=capture_allowed,
+        )
         start_sequence: int | None = None
         if capture_detail:
             start_extra = {

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import struct
 import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_8K, AudioChunk
+from easycat.audio_format import PCM16_MONO_8K, AudioChunk, AudioFormat
 from easycat.events import VADStartSpeaking, VADStopSpeaking
 from easycat.vad import (
     FunASROnnxVAD,
@@ -294,6 +295,29 @@ async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
     assert vad._audio_resampler.source_rate == 8000
     assert model_calls >= 1
     assert len(vad._buffer) < vad._chunk_samples * 2
+
+
+@pytest.mark.asyncio
+async def test_funasr_preserves_stereo_frames_split_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A split interleaved frame must be downmixed only after reassembly."""
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = object()
+        self._model = object()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+    vad = FunASROnnxVAD()
+    fmt = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    data = struct.pack("<6h", 100, 300, 1_000, 2_000, 3_000, 4_000)
+
+    async for _ in vad.process(AudioChunk(data=data[:6], format=fmt)):
+        pass
+    async for _ in vad.process(AudioChunk(data=data[6:], format=fmt)):
+        pass
+
+    assert vad._buffer == struct.pack("<3h", 200, 1_500, 3_500)
 
 
 @pytest.mark.asyncio

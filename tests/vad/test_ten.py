@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 import types
 from unittest.mock import MagicMock
 
 import pytest
 
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import VADStartSpeaking
 from easycat.vad import (
     TenVAD,
@@ -66,6 +68,30 @@ async def test_ten_vad_process_mocked(monkeypatch: pytest.MonkeyPatch):
 
     assert any(isinstance(e, VADStartSpeaking) for e in events)
     assert mock_instance.process.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ten_preserves_stereo_frames_split_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A split interleaved frame must be downmixed only after reassembly."""
+    mock_ten_vad = MagicMock()
+    mock_ten_vad.TenVad.return_value = MagicMock()
+    monkeypatch.setattr(
+        vad_ten_module,
+        "require_module",
+        lambda name, **_kwargs: mock_ten_vad if name == "ten_vad" else object(),
+    )
+    vad = TenVAD()
+    fmt = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    data = struct.pack("<6h", 100, 300, 1_000, 2_000, 3_000, 4_000)
+
+    async for _ in vad.process(AudioChunk(data=data[:6], format=fmt)):
+        pass
+    async for _ in vad.process(AudioChunk(data=data[6:], format=fmt)):
+        pass
+
+    assert vad._buffer == struct.pack("<3h", 200, 1_500, 3_500)
 
 
 @pytest.mark.asyncio

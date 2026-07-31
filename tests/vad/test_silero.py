@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import VADStartSpeaking
 from easycat.vad import (
     SileroVAD,
@@ -393,6 +393,34 @@ async def test_silero_downmixes_stereo_to_mono(monkeypatch: pytest.MonkeyPatch):
 
     # After downmix there are exactly 512 mono samples => one 512-sample frame.
     assert seen == [512]
+
+
+@pytest.mark.asyncio
+async def test_silero_preserves_stereo_frames_split_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A split interleaved frame must be downmixed only after reassembly."""
+    class _FakeOnnxModel:
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+    monkeypatch.setattr(vad_silero_module, "require_module", lambda *_args, **_kwargs: object())
+    vad = SileroVAD()
+    fmt = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    data = struct.pack("<6h", 100, 300, 1_000, 2_000, 3_000, 4_000)
+
+    async for _ in vad.process(AudioChunk(data=data[:6], format=fmt)):
+        pass
+    async for _ in vad.process(AudioChunk(data=data[6:], format=fmt)):
+        pass
+
+    assert vad._buffer == struct.pack("<3h", 200, 1_500, 3_500)
 
 
 @pytest.mark.asyncio
