@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.validate import _format_duration
+from easycat.cli.validate import _format_duration, _read_validation_report
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -156,6 +156,36 @@ def test_validate_report_cli_json_rejects_invalid_json_with_envelope(
     assert payload["report_path"] == str(report_path)
     assert payload["exit_code"] == 2
     assert "invalid validation report JSON" in payload["message"]
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_validate_report_cli_rejects_oversized_json_integer(
+    cli: CliRunner,
+    tmp_path: Path,
+    json_mode: bool,
+) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text("9" * 5000)
+
+    args = ["validate", "report", str(report_path)]
+    if json_mode:
+        args.append("--json")
+    result = cli.invoke(app, args)
+
+    assert result.exit_code == 2
+    if json_mode:
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+        assert "invalid validation report JSON" in payload["message"]
+    else:
+        assert "invalid validation report JSON" in result.stdout
+
+
+def test_read_validation_report_ignores_oversized_json_integer(tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text("9" * 5000)
+
+    assert _read_validation_report(report_path) is None
 
 
 def test_validate_report_cli_rejects_missing_report(cli: CliRunner, tmp_path: Path) -> None:

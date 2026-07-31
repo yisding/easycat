@@ -217,7 +217,7 @@ def _read_validation_report(path: Path) -> dict[str, object] | None:
 
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except (RecursionError, ValueError):
         return None
 
     return payload if isinstance(payload, dict) else None
@@ -864,7 +864,7 @@ def _load_report_payload(path: Path, *, json_output: bool = False) -> dict[str, 
 
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (RecursionError, ValueError) as exc:
         _report_load_error(
             path,
             f"invalid validation report JSON: {path} ({exc})",
