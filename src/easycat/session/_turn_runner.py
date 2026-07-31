@@ -1500,6 +1500,12 @@ class TurnRunner:
         )
         try:
             async for event in stream:
+                # A bridge can ignore the cooperative cancel token and yield
+                # after the application prompt has been cancelled.  Text
+                # turns do not have the voice consumer's cancellation gate,
+                # so stop here before such output can reach text clients.
+                if cancel_token and cancel_token.is_cancelled:
+                    break
                 kind = getattr(event, "kind", None)
                 if kind is None:
                     continue
@@ -1567,14 +1573,15 @@ class TurnRunner:
                 input_role=input_role,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
-            await self._emit(
-                AgentFinal(
-                    text=response,
-                    structured_output=structured_output,
-                    session_id=self._session_id,
-                    turn_id=turn_id,
+            if not (cancel_token and cancel_token.is_cancelled):
+                await self._emit(
+                    AgentFinal(
+                        text=response,
+                        structured_output=structured_output,
+                        session_id=self._session_id,
+                        turn_id=turn_id,
+                    )
                 )
-            )
             if self._journal_enabled:
                 self._journal_sink.append_record(
                     kind=JournalRecordKind.METRIC,

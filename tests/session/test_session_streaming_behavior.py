@@ -228,6 +228,25 @@ class _CancellationResistantPromptBridge(_TestBridgeBase):
             yield AgentBridgeEvent(kind="done")
 
 
+class _CancellationIgnoringPromptBridge(_TestBridgeBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        self.started.set()
+        await self.release.wait()
+        yield AgentBridgeEvent(kind="text_delta", text="stale delta")
+        yield AgentBridgeEvent(kind="done", text="stale final")
+
+
 def _prompt_session(agent: _TestBridgeBase) -> Session:
     return Session(
         SessionConfig(
@@ -313,6 +332,32 @@ async def test_voice_barge_in_does_not_wait_for_resistant_prompt_cleanup():
     bridge.release_cleanup.set()
     await asyncio.gather(prompt, return_exceptions=True)
     await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_silent_prompt_suppresses_late_raw_bridge_output():
+    bridge = _CancellationIgnoringPromptBridge()
+    session = _prompt_session(bridge)
+    emitted: list[Event] = []
+    session.event_bus.subscribe(AgentDelta, emitted.append)
+    session.event_bus.subscribe(AgentFinal, emitted.append)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
+        token = session.cancel_token
+        assert token is not None
+        token.cancel()
+        bridge.release.set()
+
+        assert await asyncio.wait_for(prompt, timeout=1) == ""
+        assert emitted == []
+        assert session._agent_stage._history == []
+    finally:
+        bridge.release.set()
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio
