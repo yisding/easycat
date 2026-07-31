@@ -27,6 +27,7 @@ from easycat.debug.bundle import (
     BundleVersionError,
     RunBundle,
 )
+from easycat.runtime.crash_sweep import crash_dump_artifact_root
 from easycat.validation.redaction import redact_text
 
 
@@ -143,13 +144,16 @@ def _print_wide(renderable: object, width: int) -> None:
 def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
     """Locate the sibling artifact dir for a ``crash-dumps/<id>.sqlite`` file.
 
-    Crash dumps live at ``.easycat/crash-dumps/<session_id>.sqlite`` and
-    their artifacts at ``.easycat/artifacts/<session_id>/`` (see the
-    storage layout in ``runtime/DURABILITY.md``).  Return that directory
-    if it exists, else ``None`` so the journal is loaded without blobs.
+    New crash dumps own a sibling ``<id>.artifacts/`` snapshot.  Its presence
+    deliberately suppresses the legacy shared ``artifacts/<id>/`` fallback:
+    that directory may now belong to a later session that reused the id.
+    Old dumps without the sibling directory retain the legacy lookup.
     """
-    artifact_root = sqlite_path.parent.parent / "artifacts" / sqlite_path.stem
-    return artifact_root if artifact_root.is_dir() else None
+    owned_root = crash_dump_artifact_root(sqlite_path)
+    if owned_root.is_dir():
+        return owned_root if any(owned_root.rglob("*.bin")) else None
+    legacy_root = sqlite_path.parent.parent / "artifacts" / sqlite_path.stem
+    return legacy_root if legacy_root.is_dir() else None
 
 
 def _load_bundle_or_journal(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import select
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -14,12 +15,14 @@ import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
 from easycat.runtime import journal_sql as journal_sql_module
+from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
     _boot_id,
     _copy_journal_to_crash_dump,
     _crashed_state,
     _process_birth_identity,
     _process_start_token,
+    crash_dump_artifact_root,
     is_journal_live,
 )
 from easycat.runtime.records import JournalRecordKind
@@ -39,7 +42,13 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def _crash_one(session_id: str, tmp_path) -> None:
+def _crash_one(
+    session_id: str,
+    tmp_path,
+    *,
+    name: str = "ev",
+    input_ref: str | None = None,
+) -> None:
     """Write a journal with rows and abandon it as a dead foreign process.
 
     Stamps the ``live_pid`` marker with an exited PID so the sweep's
@@ -47,7 +56,12 @@ def _crash_one(session_id: str, tmp_path) -> None:
     runs in a live process whose own PID would otherwise read as alive).
     """
     j = SqliteJournal(session_id, data_dir=tmp_path)
-    j.append(kind=JournalRecordKind.EVENT, name="ev", session_id=session_id)
+    j.append(
+        kind=JournalRecordKind.EVENT,
+        name=name,
+        session_id=session_id,
+        input_ref=input_ref,
+    )
     # append() already committed each record; rewrite the liveness marker to
     # a dead PID, then drop the connection to simulate a crash (no close()).
     j._conn.execute("COMMIT")
@@ -88,6 +102,52 @@ def test_crash_sweep_handles_reserved_uri_characters(tmp_path, directory_name: s
     assert sweep_crashed_journals(data_dir) == 1
     assert (data_dir / "crash-dumps" / "crashed.sqlite").exists()
     assert not (data_dir / "journals" / "crashed.sqlite").exists()
+
+
+def test_crash_dump_snapshots_artifacts_away_from_reused_session(tmp_path) -> None:
+    session_id = "reused"
+    payload = b"prior caller audio"
+    store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    ref = store.put(payload)
+    _crash_one(session_id, tmp_path, input_ref=ref)
+
+    assert sweep_crashed_journals(tmp_path) == 1
+
+    crash_path = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
+    snapshot = crash_dump_artifact_root(crash_path)
+    copied = snapshot / ref[:2] / f"{ref}.bin"
+    assert copied.read_bytes() == payload
+
+    # A future session is free to remove/recreate its own artifact root;
+    # that cannot make this crash dump's post-mortem blobs disappear.
+    shutil.rmtree(tmp_path / "artifacts" / session_id)
+    assert copied.read_bytes() == payload
+
+
+def test_repeated_crashes_for_reused_session_id_keep_each_dump(tmp_path) -> None:
+    _crash_one("reused", tmp_path, name="first")
+    assert sweep_crashed_journals(tmp_path) == 1
+
+    _crash_one("reused", tmp_path, name="second")
+    assert sweep_crashed_journals(tmp_path) == 1
+
+    crash_dir = tmp_path / "crash-dumps"
+    first_dump = crash_dir / "reused.sqlite"
+    second_dump = crash_dir / "reused-1.sqlite"
+    assert first_dump.exists()
+    assert second_dump.exists()
+    assert crash_dump_artifact_root(first_dump).is_dir()
+    assert crash_dump_artifact_root(second_dump).is_dir()
+
+    def event_name(path):
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return conn.execute("SELECT name FROM journal WHERE sequence = 1").fetchone()[0]
+        finally:
+            conn.close()
+
+    assert event_name(first_dump) == "first"
+    assert event_name(second_dump) == "second"
 
 
 def test_sqlite_construction_rescans_root_after_interval_and_finds_later_crash(

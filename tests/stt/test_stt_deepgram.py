@@ -6,6 +6,7 @@ import asyncio
 import json
 
 import pytest
+import websockets
 
 from easycat.events import Error, ErrorStage, EventBus, STTEventType
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
@@ -115,6 +116,34 @@ class BufferedFinalOnCloseWebSocket(PersistentMockWebSocket):
         if self.close_code is None:
             await self.push_result(self._buffered_final, is_final=True, from_finalize=True)
         await super().close()
+
+
+class DropAfterFinalizeWebSocket(PersistentMockWebSocket):
+    """Socket that drops after accepting a Finalize without acknowledging it."""
+
+    _DROP = object()
+
+    def __init__(self) -> None:
+        super().__init__(respond_to_finalize=False)
+        self._dropped = False
+
+    async def send(self, data: bytes | str) -> None:
+        await super().send(data)
+        if self._dropped or not isinstance(data, str):
+            return
+        if json.loads(data).get("type") == "Finalize":
+            self._dropped = True
+            await self._queue.put(self._DROP)
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._DROP:
+            close_frame = websockets.frames.Close(1006, "abnormal")
+            raise websockets.exceptions.ConnectionClosed(close_frame, None)
+        if message is self._STOP:
+            raise StopAsyncIteration
+        assert isinstance(message, (str, bytes))
+        return message
 
 
 def _deepgram_result(
@@ -844,6 +873,92 @@ async def test_deepgram_end_serializes_finalize_for_audio_after_pending_request(
 
     await ws.push_message({"from_finalize": True})
     await asyncio.wait_for(end_task, timeout=0.1)
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_reconnect_discards_stale_finalize_before_next_turn_audio():
+    """A Finalize from a dropped socket cannot suppress the replacement's one."""
+    first_socket = DropAfterFinalizeWebSocket()
+    second_socket = PersistentMockWebSocket()
+    reconnected = asyncio.Event()
+    connect_count = 0
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 2:
+            reconnected.set()
+            return second_socket
+        return first_socket
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    chunks = make_audio_chunks(generate_pcm_sine(duration_ms=200))
+
+    await stt.start_stream()
+    await stt.send_audio(chunks[0])
+    await first_socket.push_result("first socket partial", is_final=False)
+    await asyncio.sleep(0)
+    assert await stt.commit_segment()
+    await asyncio.wait_for(reconnected.wait(), timeout=0.5)
+
+    # The second socket represents a fresh Deepgram session.  Its Finalize
+    # must be sent for audio admitted after reconnect instead of reusing the
+    # stale request from the first socket.
+    await stt.send_audio(chunks[1])
+    await stt.end_stream()
+
+    assert second_socket.finalize_count == 1
+    events = [event async for event in stt.events()]
+    assert [event.text for event in events if event.type == STTEventType.FINAL] == [
+        "first socket partial",
+        "turn 1",
+    ]
+    assert connect_count == 2
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_reconnect_releases_end_wait_for_dropped_finalize():
+    """A reconnect resolves an ending turn's waiter for the dead socket."""
+    first_socket = DropAfterFinalizeWebSocket()
+    second_socket = PersistentMockWebSocket()
+    reconnected = asyncio.Event()
+    connect_count = 0
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 2:
+            reconnected.set()
+            return second_socket
+        return first_socket
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await asyncio.wait_for(reconnected.wait(), timeout=0.5)
+    await asyncio.wait_for(end_task, timeout=0.5)
+
+    # No audio reached the replacement session, so it needs no Finalize. The
+    # original turn was contained at the reconnect boundary instead of
+    # waiting for the full Finalize timeout.
+    assert second_socket.finalize_count == 0
+    assert connect_count == 2
     await stt.aclose()
 
 

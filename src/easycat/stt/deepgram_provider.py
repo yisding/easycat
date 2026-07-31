@@ -181,7 +181,43 @@ class DeepgramSTT(WebSocketSTTBase):
             headers=headers,
             event_bus=self._config.event_bus,
             connect_fn=self._config.ws_connect,
+            on_reconnect=(self._on_persistent_reconnect if self._persistent_enabled() else None),
         )
+
+    async def _on_persistent_reconnect(self) -> None:
+        """Contain unfinalized audio when a reusable socket reconnects.
+
+        Deepgram's ``from_finalize`` acknowledgements carry no request id and
+        are scoped to one physical WebSocket.  A Finalize sent before a drop
+        can therefore never acknowledge audio on the replacement connection.
+        Do not let that stale ledger suppress the replacement connection's
+        next Finalize; close the old audio epoch locally and promote its last
+        partial, if any, into a boundary final.
+        """
+        had_unfinalized_audio = (
+            self._audio_epoch > self._finalized_epoch
+            or bool(self._pending_finalizes)
+            or self._bare_finalize_ack_pending
+        )
+        self._audio_resampler.reset()
+        self._pending_finalizes.clear()
+        self._final_wait_sequence = None
+        self._bare_finalize_ack_pending = False
+        self._finalized_epoch = self._audio_epoch
+
+        if had_unfinalized_audio:
+            logger.warning(
+                "Deepgram reconnected with unfinalized audio; containing the "
+                "prior socket epoch before continuing"
+            )
+            self._promote_partial_to_final()
+
+        # ``end_stream`` may be waiting on a Finalize sent through the dead
+        # socket.  Wake it after the ledger reset so it can either complete
+        # (when no replacement-epoch audio was sent) or issue a fresh
+        # Finalize for audio that arrived after reconnect.
+        if self._final_received is not None:
+            self._final_received.set()
 
     async def _ensure_persistent_connection(self) -> None:
         ws = self._ws

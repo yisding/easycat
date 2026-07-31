@@ -196,6 +196,52 @@ async def test_start_retains_runner_when_setup_and_runner_rollback_both_fail(
     assert server._lifecycle_cleanup_error is None
 
 
+async def test_start_bounds_hung_http_rollback_and_retains_retry_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.voice_server as voice_server_module
+
+    release_cleanup = asyncio.Event()
+
+    async def block_runner_cleanup() -> None:
+        await release_cleanup.wait()
+
+    app = SimpleNamespace(router=SimpleNamespace(add_get=Mock()))
+    runner = SimpleNamespace(
+        setup=AsyncMock(side_effect=OSError("runner setup failed")),
+        cleanup=AsyncMock(side_effect=block_runner_cleanup),
+    )
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(),
+    )
+    monkeypatch.setattr(voice_server_module, "require_module", lambda *_a, **_kw: web)
+    monkeypatch.setattr(voice_server_module, "metrics_middleware", lambda _server: object())
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+
+    with pytest.raises(OSError, match="runner setup failed") as exc_info:
+        await asyncio.wait_for(server.start(), timeout=0.5)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert server._runner is runner
+    assert server._site is None
+    assert server._gate.is_draining is True
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+
+    release_cleanup.set()
+    await asyncio.wait_for(server.stop(force=True), timeout=0.5)
+
+    assert runner.cleanup.await_count == 1
+    assert server._runner is None
+    assert server._gate.is_draining is False
+    assert server._lifecycle_cleanup_error is None
+
+
 async def test_cancelled_internal_startup_rollback_records_retry_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -237,7 +283,7 @@ async def test_cancelled_internal_startup_rollback_records_retry_ownership(
     assert server._site is site
     assert server._runner is runner
     assert server._started is False
-    assert server._gate.is_draining is False
+    assert server._gate.is_draining is True
     assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
 
     site.stop = AsyncMock()
@@ -365,12 +411,61 @@ async def test_cleanup_failure_finishes_stop_and_rejects_queued_start_until_retr
     assert server._runner is None
     assert server._site is site
     assert server._started is False
-    assert server._gate.is_draining is False
+    assert server._gate.is_draining is True
 
     site.stop = AsyncMock()
     await server.stop(force=True)
     site.stop.assert_awaited_once()
     assert server._site is None
+    assert server._lifecycle_cleanup_error is None
+    assert server._gate.is_draining is False
+
+
+async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() -> None:
+    """A stuck listener stop must not strand sessions or reopen admission."""
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    stop_started = asyncio.Event()
+    release_site_stop = asyncio.Event()
+
+    async def stop_site() -> None:
+        stop_started.set()
+        await release_site_stop.wait()
+
+    site = SimpleNamespace(stop=AsyncMock(side_effect=stop_site))
+    runner = SimpleNamespace(cleanup=AsyncMock())
+    session = _FakeSession()
+    key = 23
+    server._site = site
+    server._runner = runner
+    server._started = True
+    server._manager._sessions[key] = session
+    server._active_session_objs[key] = session
+    assert server._gate.try_acquire()
+    server._gate.track(key)
+
+    with pytest.raises(RuntimeError, match="HTTP site stop did not finish"):
+        await asyncio.wait_for(server.stop(force=True), timeout=0.5)
+
+    assert stop_started.is_set()
+    assert session.stopped.is_set()
+    assert server._runner is None
+    assert server._site is site
+    assert server._gate.is_draining is True
+    assert server._gate.try_acquire() is False
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+
+    # The retry observes the already-running site cleanup rather than starting
+    # a second concurrent stop call. Once it finishes, normal reuse is safe.
+    release_site_stop.set()
+    await asyncio.wait_for(server.stop(force=True), timeout=0.5)
+
+    assert site.stop.await_count == 1
+    assert server._site is None
+    assert server._gate.is_draining is False
     assert server._lifecycle_cleanup_error is None
 
 
@@ -436,7 +531,7 @@ async def test_cancelled_stop_publishes_retryable_stopped_state_before_reraising
         await stopping
 
     assert server._started is False
-    assert server._gate.is_draining is False
+    assert server._gate.is_draining is True
     assert server._site is site
     assert server._runner is runner
     assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
