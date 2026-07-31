@@ -351,8 +351,21 @@ class MultiContextWSManager:
                 or self._contexts.get(ctx.context_id) is not ctx
             ):
                 continue
-            with contextlib.suppress(Exception):
+            try:
                 await self._send_frames(pending_frames, ctx=ctx)
+            except Exception:
+                # A context can be cancelled while its replay waits for the
+                # shared send lock. That race no longer needs recovery, but a
+                # real socket/request replay failure must abort transactional
+                # connection installation instead of leaving the context live
+                # forever on an unprimed provider socket.
+                if (
+                    ctx.cancelled
+                    or ctx.done.is_set()
+                    or self._contexts.get(ctx.context_id) is not ctx
+                ):
+                    continue
+                raise
 
     # ── internals ─────────────────────────────────────────────────
 

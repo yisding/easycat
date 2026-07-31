@@ -566,6 +566,8 @@ class TurnRunner:
             # teardown close the surrounding session.
             self._runtime_scope.discard(cast(asyncio.Task[Any], task))
             return
+        current_task = asyncio.current_task()
+        cancellation_requests = current_task.cancelling() if current_task is not None else 0
         if not task.done():
             task.cancel()
         try:
@@ -577,8 +579,7 @@ class TurnRunner:
             # Re-raise the latter so a cancelled host (STT event consumer,
             # ``on_turn_ended``, ``Session.stop``) does not resume past its
             # cancellation point and keep working on a stale turn.
-            current_task = asyncio.current_task()
-            if current_task is not None and current_task.cancelling():
+            if current_task is not None and current_task.cancelling() > cancellation_requests:
                 raise
         finally:
             self._runtime_scope.discard(task)

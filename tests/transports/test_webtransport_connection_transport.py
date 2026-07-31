@@ -280,6 +280,30 @@ class TestWebTransportConnectionTransport:
         assert t._disconnect_cleanup_error is None  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_disconnect_retries_real_protocol_close_failure(self) -> None:
+        t = _build_connection_transport()
+        await t.connect()
+        session = t._session  # noqa: SLF001
+        assert session is not None
+        protocol = session._quic_protocol  # noqa: SLF001
+        protocol.close = Mock(  # type: ignore[method-assign]
+            side_effect=[RuntimeError("QUIC close failed"), None]
+        )
+
+        with pytest.raises(RuntimeError, match="QUIC close failed"):
+            await t.disconnect()
+
+        assert protocol.close.call_count == 1
+        assert t._connection_close_pending is True  # noqa: SLF001
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
+
+        await t.disconnect()
+
+        assert protocol.close.call_count == 2
+        assert t._connection_close_pending is False  # noqa: SLF001
+        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_disconnect_retries_diagnostic_only_cleanup_failure(self) -> None:
         t = _build_connection_transport()
         await t.connect()

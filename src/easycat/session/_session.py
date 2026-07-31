@@ -1407,10 +1407,11 @@ class Session:
                 self._stop_force = True
                 superseded_task.cancel()
                 break
+            cancellation_requests = current_task.cancelling()
             try:
                 await asyncio.shield(active_stop)
             except asyncio.CancelledError:
-                if current_task.cancelling():
+                if current_task.cancelling() > cancellation_requests:
                     raise
                 # The joined stop was superseded by another force caller.
                 # Re-read ownership and join its replacement.

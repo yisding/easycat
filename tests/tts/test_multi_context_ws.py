@@ -358,6 +358,21 @@ class TestMultiContextWSManager:
         assert replayed == [armed.context_id]
         await mgr.aclose()
 
+    async def test_on_reconnect_propagates_live_context_replay_failure(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        frames = [json.dumps({"context_id": ctx.context_id, "transcript": "hi"})]
+        await mgr.send(ctx, frames)
+        ws._fail_send_at.add(2)
+
+        with pytest.raises(RuntimeError, match="send failed"):
+            await mgr._on_reconnect()
+
+        assert mgr._contexts[ctx.context_id] is ctx
+        assert not ctx.done.is_set()
+        await mgr.aclose()
+
     async def test_reconnect_reset_waits_for_buffered_frames_under_backpressure(self):
         ws = FakeMultiContextWS()
         trace: list[str] = []

@@ -851,10 +851,7 @@ class _WebTransportSession:
 
         ``QuicConnectionProtocol.close`` flushes the close frame itself.
         """
-        try:
-            self._quic_protocol.close(error_code=0, reason_phrase=reason)
-        except Exception:
-            logger.debug("Error closing WebTransport QUIC connection", exc_info=True)
+        self._quic_protocol.close(error_code=0, reason_phrase=reason)
 
     async def _await_outbound_capacity(self) -> None:
         """Block while aioquic's per-stream send buffer for the current
