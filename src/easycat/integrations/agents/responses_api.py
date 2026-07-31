@@ -62,6 +62,18 @@ def _response_id_from_event(data: Mapping[str, Any]) -> str | None:
     return response_id
 
 
+def _response_failure_message(data: Mapping[str, Any]) -> str:
+    """Extract a safe failure message from an untrusted SSE payload."""
+    response = data.get("response")
+    if not isinstance(response, Mapping):
+        return "unknown error"
+    error = response.get("error")
+    if not isinstance(error, Mapping):
+        return "unknown error"
+    message = error.get("message")
+    return message if isinstance(message, str) else "unknown error"
+
+
 def _raise_protocol_error(recorder: AgentRecorder, message: str) -> None:
     recorder.record_framework_error(
         ErrorInfo(
@@ -345,8 +357,7 @@ class RemoteResponsesAPIBridge:
                             # event and then report the interrupted turn as
                             # successful.
                             if event_type == "response.failed":
-                                error_info = data.get("response", {}).get("error", {})
-                                error_msg = str(error_info.get("message", "unknown error"))
+                                error_msg = _response_failure_message(data)
                                 recorder.record_framework_error(
                                     ErrorInfo(
                                         type="ResponsesAPIError",
