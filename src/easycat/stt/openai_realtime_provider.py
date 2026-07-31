@@ -255,7 +255,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             headers=headers,
             event_bus=self._config.event_bus,
             connect_fn=self._config.ws_connect,
-            on_reconnect=self._send_session_update,
+            on_reconnect=self._on_reconnect,
         )
         try:
             await self._send_session_update()
@@ -339,6 +339,15 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             },
         }
         await self._ws.send(json.dumps(session_update))
+
+    async def _on_reconnect(self) -> None:
+        """Contain the dropped socket's turn before configuring its replacement."""
+        if self._partial_text:
+            self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+        if self._final_received is not None:
+            self._final_received.set()
+        self._reset_logical_turn_state()
+        await self._send_session_update()
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
         if self._ws is not None:

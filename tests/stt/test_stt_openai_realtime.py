@@ -688,6 +688,40 @@ def test_openai_realtime_config_preserves_legacy_positional_field_order() -> Non
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_reconnect_promotes_partial_and_releases_final_waiter() -> None:
+    class _StubWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ws = _StubWS()  # type: ignore[assignment]
+    stt._partial_text = "before reconnect"
+    stt._audio_pending_commit = True
+    stt._bytes_since_last_commit = stt._COMMIT_MIN_BYTES
+    stt._commit_pending = True
+    final_received = asyncio.Event()
+    stt._final_received = final_received
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+    waiter = asyncio.create_task(stt._await_final(final_received))
+    await asyncio.sleep(0)
+
+    await stt._on_reconnect()
+    await asyncio.wait_for(waiter, timeout=0.1)
+
+    assert [(event.type, event.text) for event in emitted] == [
+        (STTEventType.FINAL, "before reconnect")
+    ]
+    assert stt._partial_text == ""
+    assert not stt._audio_pending_commit
+    assert stt._bytes_since_last_commit == 0
+    assert not stt._commit_pending
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_promotes_partial_on_final_timeout_via_config_field() -> None:
     """The config field — not just the module constant — drives the wait."""
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", final_transcript_timeout_s=0.05)
