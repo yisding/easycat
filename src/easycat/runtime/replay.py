@@ -31,6 +31,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
@@ -1018,6 +1019,29 @@ def _stage_matches(record: dict[str, Any], stage: str) -> bool:
     return data.get("stage") == stage or data.get("observed_stage") == stage
 
 
+def _audio_metadata_int(data: dict[str, Any], key: str) -> int:
+    """Safely coerce optional integer audio metadata from a bundle."""
+    value = data.get(key)
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _audio_metadata_float(data: dict[str, Any], key: str) -> float:
+    """Safely coerce optional finite float audio metadata from a bundle."""
+    value = data.get(key)
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return result if math.isfinite(result) else 0.0
+
+
 def replay_stt_audio(
     bundle: RunBundle,
     *,
@@ -1067,9 +1091,9 @@ def replay_stt_audio(
             ReplayAudioChunk(
                 sequence=sequence,
                 data=blob,
-                sample_rate=int(data.get("sample_rate") or 0),
-                channels=int(data.get("channels") or 0),
-                sample_width=int(data.get("sample_width") or 0),
+                sample_rate=_audio_metadata_int(data, "sample_rate"),
+                channels=_audio_metadata_int(data, "channels"),
+                sample_width=_audio_metadata_int(data, "sample_width"),
                 encoding=str(data.get("encoding") or ""),
                 duration_ms=0.0,
                 turn_id=record.get("turn_id"),
@@ -1127,11 +1151,11 @@ def replay_audio(
             ReplayAudioChunk(
                 sequence=sequence,
                 data=blob,
-                sample_rate=int(data.get("sample_rate") or 0),
-                channels=int(data.get("channels") or 0),
-                sample_width=int(data.get("sample_width") or 0),
+                sample_rate=_audio_metadata_int(data, "sample_rate"),
+                channels=_audio_metadata_int(data, "channels"),
+                sample_width=_audio_metadata_int(data, "sample_width"),
                 encoding=str(data.get("encoding") or ""),
-                duration_ms=float(data.get("duration_ms") or 0.0),
+                duration_ms=_audio_metadata_float(data, "duration_ms"),
                 turn_id=record.get("turn_id"),
                 bypass_gate=False,
             )

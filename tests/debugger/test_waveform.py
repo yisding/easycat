@@ -5,10 +5,17 @@ import zlib
 from array import array
 
 from easycat.debug._pcm import full_scale, is_supported_width
+from easycat.debugger._audio import _safe_audio_format_from_metadata
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 
 _CLIP_RGB = bytes((224, 99, 90))
 _WAVE_RGB = bytes((110, 168, 254))
+
+
+def test_safe_audio_format_defaults_nonfinite_sample_rate():
+    assert _safe_audio_format_from_metadata(
+        {"sample_rate": float("inf"), "channels": 1, "sample_width": 2}
+    ) == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
 
 
 def _scanline_pixel(raw: bytes, *, x: int, y: int, width: int) -> bytes:

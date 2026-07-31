@@ -80,6 +80,60 @@ def _spec(**overrides) -> ReplaySpec:
     return ReplaySpec(**overrides)
 
 
+@pytest.mark.parametrize("sample_rate", [[16000], float("inf")])
+def test_audio_replay_coerces_malformed_pcm_metadata(tmp_path, sample_rate):
+    """Optional audio metadata cannot make either replay path crash."""
+    audio = b"audio"
+    audio_ref = _sha256(audio)
+    for name, stage, ref_key, method in (
+        ("stage_start", "stt", "input_ref", "replay_stt_audio"),
+        ("tts_frame", "tts", "output_ref", "replay_audio"),
+    ):
+        bundle = RunBundle.load(
+            _write_bundle(
+                tmp_path,
+                records=[
+                    {
+                        "sequence": 1,
+                        "name": name,
+                        "data": {"stage": stage, "sample_rate": sample_rate},
+                        ref_key: audio_ref,
+                    }
+                ],
+                artifacts={audio_ref: audio},
+            )
+        )
+
+        chunks = getattr(bundle, method)()
+
+        assert len(chunks) == 1
+        assert chunks[0].sample_rate == 0
+
+
+def test_tts_audio_replay_coerces_nonfinite_duration(tmp_path):
+    """Duration metadata remains safe for callers that schedule replay chunks."""
+    audio = b"audio"
+    audio_ref = _sha256(audio)
+    bundle = RunBundle.load(
+        _write_bundle(
+            tmp_path,
+            records=[
+                {
+                    "sequence": 1,
+                    "name": "tts_frame",
+                    "data": {"stage": "tts", "duration_ms": float("inf")},
+                    "output_ref": audio_ref,
+                }
+            ],
+            artifacts={audio_ref: audio},
+        )
+    )
+
+    chunks = bundle.replay_audio()
+
+    assert chunks[0].duration_ms == 0.0
+
+
 # ── mask_nondeterministic ────────────────────────────────────────
 
 

@@ -590,7 +590,12 @@ def test_collect_audio_frames_drops_untrusted_resample_metadata(monkeypatch):
             "name": "stage_start",
             "turn_id": "t1",
             "input_ref": "a",
-            "data": {"stage": "stt", "sample_rate": 200_000_000, "channels": 1, "sample_width": 2},
+            "data": {
+                "stage": "stt",
+                "sample_rate": float("inf"),
+                "channels": 1,
+                "sample_width": 2,
+            },
         },
         {
             "sequence": 2,

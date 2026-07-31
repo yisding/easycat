@@ -132,7 +132,7 @@ def _audio_metadata_int(data: dict[str, Any], key: str, default: int = 0) -> int
     """Parse one integer PCM metadata field from untrusted journal data."""
     try:
         return int(data.get(key) or default)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
