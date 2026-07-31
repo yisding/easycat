@@ -182,15 +182,18 @@ class DTMFAggregator:
         """Wait for the idle timeout, then emit."""
         try:
             await asyncio.sleep(self._config.timeout_ms / 1000.0)
-            # Clear self-reference before emitting so _emit()'s
-            # _cancel_timer() doesn't cancel this (the current) task.
-            self._timer_task = None
             if self._buffer:
                 await self._emit()
         except asyncio.CancelledError:
             # Cancellation is expected when a new DTMF digit arrives or the
             # aggregator is stopped; we deliberately ignore it.
             pass
+        finally:
+            # Keep the task reachable through its aggregate emission. A
+            # synchronous stop() can then still cancel a blocked subscriber
+            # instead of allowing a stale DTMFAggregated event after teardown.
+            if self._timer_task is asyncio.current_task():
+                self._timer_task = None
 
     async def _emit(self) -> None:
         """Emit the aggregated sequence and reset."""
@@ -202,6 +205,14 @@ class DTMFAggregator:
         await self._event_bus.emit(DTMFAggregated(sequence=sequence))
 
     def _cancel_timer(self) -> None:
-        if self._timer_task and not self._timer_task.done():
-            self._timer_task.cancel()
+        task = self._timer_task
+        if task is None:
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current and not task.done():
+            task.cancel()
+        if task is not current:
             self._timer_task = None

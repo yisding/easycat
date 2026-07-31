@@ -12,6 +12,7 @@ import contextlib
 import logging
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,16 @@ from websockets.asyncio.client import ClientConnection
 from easycat._numeric import is_finite_number
 
 logger = logging.getLogger(__name__)
+
+# A reconnect callback must be able to send its protocol-primer frames while
+# ordinary writers remain fenced behind the connection-ready event.  A
+# ContextVar scopes that narrow exemption to the callback task (and work it
+# deliberately spawns) instead of briefly publishing a half-primed socket to
+# every concurrent producer.
+_RECONNECT_CALLBACK_SOCKET: ContextVar[ReconnectingWebSocket | None] = ContextVar(
+    "reconnect_callback_socket",
+    default=None,
+)
 
 # Callback types for connection lifecycle hooks.
 ReconnectCallback = Callable[[], Coroutine[Any, Any, None] | None]
@@ -298,10 +309,22 @@ class ReconnectingWebSocket:
         )
         self._ws = candidate
         logger.debug("WebSocket connected to %s (attempt %d)", self._url, attempt + 1)
-        self._connected.set()
+        # A dropped connection normally clears this already, but manual
+        # reconnect callers can arrive with a stale set event. Do not let that
+        # publish the replacement while its protocol-primer callback runs.
+        self._connected.clear()
         try:
             if (notify_reconnect or attempt > 0) and self._on_reconnect:
-                await self._invoke_callback(self._on_reconnect)
+                callback_token = _RECONNECT_CALLBACK_SOCKET.set(self)
+                try:
+                    await self._invoke_callback(self._on_reconnect)
+                finally:
+                    _RECONNECT_CALLBACK_SOCKET.reset(callback_token)
+            # The callback may need to replay session configuration or an
+            # in-flight request. Only release ordinary send()/recv() callers
+            # once that primer has completed, otherwise a concurrent frame
+            # can overtake it on the fresh socket.
+            self._connected.set()
             await self._emit_reconnect_success()
             if self._closed:
                 raise ConnectionError("WebSocket closed during reconnect")
@@ -454,6 +477,35 @@ class ReconnectingWebSocket:
         self._reconnect_attempts_exhausted = attempts
         self._reconnect_exhaustion_reason = reason
 
+    def _reconnect_callback_connection(self) -> ClientConnection | None:
+        """Return the candidate socket only to its active primer callback."""
+        if _RECONNECT_CALLBACK_SOCKET.get() is self:
+            return self._ws
+        return None
+
+    async def _wait_until_connected(self) -> None:
+        """Wait briefly for a reconnect to publish a fully primed socket."""
+        if self._connected.is_set():
+            return
+        # Only wait if a reconnect could plausibly restore the socket.
+        # A socket that has never connected fails fast. A socket whose
+        # ``_ws`` has been nulled with no reconnect in flight is terminally
+        # dead (e.g. recv_iter gave up after a failed reconnect): fast-fail
+        # rather than burning the full wait timeout on a known-dead socket.
+        if not self._ever_connected:
+            raise RuntimeError("WebSocket is not connected")
+        if self._ws is None and not self._connect_lock.locked():
+            # A closed socket always reports "closed" regardless of where in
+            # this method the caller happens to observe it (the exact point
+            # is scheduling-dependent across Python versions).
+            if self._closed:
+                raise RuntimeError("WebSocket has been closed")
+            raise RuntimeError("WebSocket is not connected")
+        try:
+            await asyncio.wait_for(self._connected.wait(), timeout=self._send_wait_timeout)
+        except TimeoutError as exc:
+            raise RuntimeError("WebSocket is not connected") from exc
+
     async def _await_connected(self) -> ClientConnection:
         """Wait for a live socket, snapshot it, and return it.
 
@@ -465,29 +517,18 @@ class ReconnectingWebSocket:
         """
         if self._closed:
             raise RuntimeError("WebSocket has been closed")
-        if not self._connected.is_set():
-            # Only wait if a reconnect could plausibly restore the socket.
-            # A socket that has never connected fails fast. A socket whose
-            # ``_ws`` has been nulled with no reconnect in flight is terminally
-            # dead (e.g. recv_iter gave up after a failed reconnect): fast-fail
-            # rather than burning the full wait timeout on a known-dead socket.
-            if not self._ever_connected:
-                raise RuntimeError("WebSocket is not connected")
-            if self._ws is None and not self._connect_lock.locked():
-                # A closed socket always reports "closed" regardless of where in
-                # this method the caller happens to observe it (the exact point
-                # is scheduling-dependent across Python versions).
-                if self._closed:
-                    raise RuntimeError("WebSocket has been closed")
-                raise RuntimeError("WebSocket is not connected")
-            try:
-                await asyncio.wait_for(self._connected.wait(), timeout=self._send_wait_timeout)
-            except TimeoutError as exc:
-                raise RuntimeError("WebSocket is not connected") from exc
-            # close() (and other paths) may wake us by setting ``_connected``;
-            # re-check the closed flag before snapshotting a now-closing socket.
-            if self._closed:
-                raise RuntimeError("WebSocket has been closed")
+        # ``_install_connection`` deliberately keeps ordinary writers fenced
+        # until its reconnect callback finishes. The callback itself still has
+        # to send the provider's primer on this exact candidate, so grant it a
+        # task-local bypass without exposing the half-primed socket globally.
+        callback_ws = self._reconnect_callback_connection()
+        if callback_ws is not None:
+            return callback_ws
+        await self._wait_until_connected()
+        # close() (and other paths) may wake us by setting ``_connected``;
+        # re-check the closed flag before snapshotting a now-closing socket.
+        if self._closed:
+            raise RuntimeError("WebSocket has been closed")
         ws = self._ws
         if ws is None:
             if self._closed:

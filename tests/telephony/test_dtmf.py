@@ -278,6 +278,29 @@ class TestDTMFAggregator:
         # Timer was cancelled, so no aggregated event
         assert len(aggregated) == 0
 
+    async def test_stop_cancels_timeout_while_aggregate_subscriber_is_blocked(self) -> None:
+        bus = EventBus()
+        aggregate_started = asyncio.Event()
+        allow_aggregate_finish = asyncio.Event()
+        aggregated: list[DTMFAggregated] = []
+
+        async def block_aggregate(event: DTMFAggregated) -> None:
+            aggregate_started.set()
+            await allow_aggregate_finish.wait()
+            aggregated.append(event)
+
+        bus.subscribe(DTMFAggregated, block_aggregate)
+        agg = DTMFAggregator(bus, DTMFAggregatorConfig(timeout_ms=1))
+        agg.start()
+
+        await bus.emit(DTMF(digit="1"))
+        await asyncio.wait_for(aggregate_started.wait(), timeout=1)
+        agg.stop()
+        allow_aggregate_finish.set()
+        await asyncio.sleep(0)
+
+        assert aggregated == []
+
     async def test_stop_clears_buffer(self) -> None:
         bus = EventBus()
         config = DTMFAggregatorConfig(timeout_ms=5000)

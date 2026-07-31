@@ -436,8 +436,14 @@ def _create_debug_resources(
 
 
 def _register_close(rollback: ExitStack, resource: Any) -> Any:
+    """Register a synchronous close hook for factory rollback.
+
+    Session construction is synchronous, so rollback can only run immediate
+    closers. Async provider shutdown remains owned by ``Session.stop()`` once
+    a session has been assembled.
+    """
     close = getattr(resource, "close", None)
-    if callable(close):
+    if callable(close) and not inspect.iscoroutinefunction(close):
         rollback.callback(close)
     return resource
 
@@ -469,6 +475,8 @@ def _resolve_audio_pipeline(
             if config.enable_noise_reduction or config.noise_reduction is not None
             else None
         )
+        if noise_reducer is not None:
+            _register_close(rollback, noise_reducer)
         # EasyConfig fills this default while preserving pre-built providers.
         echo_config_or_provider = (
             config.echo_cancellation
@@ -476,7 +484,10 @@ def _resolve_audio_pipeline(
             else inject_event_bus(config.echo_cancellation, event_bus)
         )
         assert echo_config_or_provider is not None
-        echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
+        echo_canceller = _register_close(
+            rollback,
+            _resolve_echo_canceller(echo_config_or_provider),
+        )
         enable_echo_cancellation = (
             echo_config_or_provider.enabled
             if isinstance(echo_config_or_provider, EchoCancellationConfig)
@@ -655,8 +666,9 @@ def _build_audio_session(
         handler_error_policy=config.handler_error_policy,
     )
     audio = _resolve_audio_pipeline(config, event_bus)
-    if audio.vad is not None:
-        _register_close(rollback, audio.vad)
+    for resource in (audio.vad, audio.noise_reducer, audio.echo_canceller):
+        if resource is not None:
+            _register_close(rollback, resource)
     mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
     agent = _resolve_agent(config, mcp_servers)
     if debug.journal is not None:

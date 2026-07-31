@@ -312,7 +312,15 @@ class SmartTurnONNX:
             return SmartTurnResult(prediction=0, probability=0.0)
 
         loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(None, self._detect_sync, list(audio_chunks))
+        try:
+            future = loop.run_in_executor(None, self._detect_sync, list(audio_chunks))
+        except BaseException:
+            # Scheduling can fail synchronously (for example when the default
+            # executor has already shut down).  The slot was acquired above,
+            # but the normal try/finally below has not started yet, so release
+            # it here rather than permanently skipping every later detection.
+            self._detect_semaphore.release()
+            raise
         release_now = True
         try:
             return await asyncio.wait_for(asyncio.shield(future), timeout=self._timeout_s)

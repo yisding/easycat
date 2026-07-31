@@ -11,6 +11,76 @@ from easycat.config import TextSessionConfig, _factory
 from tests.config._helpers import _DummyAgent, _stub_audio_backends
 
 
+class _RollbackSTT:
+    async def start_stream(self) -> None:
+        pass
+
+    async def send_audio(self, _chunk: object) -> None:
+        pass
+
+    async def commit_segment(self) -> None:
+        pass
+
+    async def end_stream(self) -> None:
+        pass
+
+    async def events(self):
+        if False:
+            yield None
+
+
+class _RollbackTTS:
+    async def synthesize(self, _text: str):
+        if False:
+            yield None
+
+    async def stop(self) -> None:
+        pass
+
+    async def cancel(self) -> None:
+        pass
+
+
+class _ClosableVAD:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def configure(self, **_kwargs: object) -> None:
+        pass
+
+    async def process(self, _chunk: object):
+        if False:
+            yield None
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class _ClosableNoiseReducer:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def process(self, chunk: object) -> object:
+        return chunk
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class _ClosableEchoCanceller:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def process(self, chunk: object) -> object:
+        return chunk
+
+    def feed_reference(self, _chunk: object) -> None:
+        pass
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 def _tracked_journal(monkeypatch: pytest.MonkeyPatch) -> Mock:
     journal = Mock()
     monkeypatch.setattr(_factory, "create_journal", lambda *_args, **_kwargs: journal)
@@ -92,6 +162,37 @@ def test_build_failure_rolls_back_acquired_journal(
         create_session(EasyConfig(openai_api_key="test-key", agent=_DummyAgent(), debug="light"))
 
     journal.close.assert_called_once_with()
+
+
+def test_audio_pipeline_failure_closes_sync_noise_and_echo_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Later construction failures cannot leak already-created DSP resources."""
+    vad = _ClosableVAD()
+    noise_reducer = _ClosableNoiseReducer()
+    echo_canceller = _ClosableEchoCanceller()
+
+    def fail_transport(_config: object, _event_bus: object) -> object:
+        raise RuntimeError("transport build failed")
+
+    monkeypatch.setattr(_factory, "_create_transport", fail_transport)
+
+    with pytest.raises(RuntimeError, match="transport build failed"):
+        _factory._resolve_audio_pipeline(
+            EasyConfig(
+                stt=_RollbackSTT(),
+                tts=_RollbackTTS(),
+                vad=vad,
+                noise_reduction=noise_reducer,
+                echo_cancellation=echo_canceller,
+                agent=_DummyAgent(),
+            ),
+            _factory.EventBus(),
+        )
+
+    assert vad.close_calls == 1
+    assert noise_reducer.close_calls == 1
+    assert echo_canceller.close_calls == 1
 
 
 def test_text_build_failure_rolls_back_acquired_journal(
