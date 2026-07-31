@@ -124,7 +124,17 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         so it is closed first; ``_close_ws`` is then a no-op (``self._ws`` is
         ``None`` in persistent mode).
         """
-        if self._mgr is not None:
-            await self._mgr.aclose()
-        await self._close_ws()
-        await self._drain_emit_tasks()
+        try:
+            if self._mgr is not None:
+                await self._mgr.aclose()
+            await self._close_ws()
+        finally:
+            await self._drain_emit_tasks()
+
+    def _require_terminal_response(self, terminal_received: bool, *, terminal_label: str) -> None:
+        """Reject provider EOF before a terminal response unless cancelled."""
+        if not self._cancelled and not terminal_received:
+            raise ConnectionError(
+                f"{self._provider_log_label} TTS stream ended before a terminal "
+                f"{terminal_label} response"
+            )

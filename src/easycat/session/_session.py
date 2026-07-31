@@ -1365,8 +1365,26 @@ class Session:
         # Serialize the startup transaction against teardown, but release the
         # lock before the potentially long stop body so a force caller can
         # still supersede a graceful owner through the existing stop protocol.
-        async with self._start_lock:
+        if force:
+            # Close admission before cancellation so a not-yet-started caller
+            # that acquires the lock next fails its startup pre-check.
             self._stopping = True
+            start_task = self._start_task
+            if start_task is not None and not start_task.done():
+                start_task.cancel()
+            try:
+                await asyncio.wait_for(self._start_lock.acquire(), timeout=0.5)
+            except TimeoutError:
+                # Force teardown must not hang forever behind startup code that
+                # ignores cancellation. Cleanup below proceeds with the
+                # session marked stopping; the startup task retains its own
+                # rollback obligation if it eventually unwinds.
+                logger.warning("Session.start() ignored cancellation; continuing force teardown")
+            else:
+                self._start_lock.release()
+        else:
+            async with self._start_lock:
+                self._stopping = True
 
         # Idempotent callers join the active teardown. A force request may take
         # ownership from a graceful stop: cancel the old caller task, wait a

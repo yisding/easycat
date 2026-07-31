@@ -59,7 +59,6 @@ async def test_rnnoise_process_mocked():
     assert mock_rnnoise.process_mono_frame.called
 
 
-@pytest.mark.asyncio
 async def test_rnnoise_downmixes_stereo_before_mono_filtering():
     np = pytest.importorskip("numpy")
     seen_frames: list = []
@@ -92,7 +91,6 @@ async def test_rnnoise_downmixes_stereo_before_mono_filtering():
     )
 
 
-@pytest.mark.asyncio
 async def test_rnnoise_preserves_buffered_mono_audio_across_channel_transition():
     pytest.importorskip("numpy")
     mock_rnnoise = MagicMock()
@@ -121,7 +119,6 @@ async def test_rnnoise_preserves_buffered_mono_audio_across_channel_transition()
     assert mock_rnnoise.process_mono_frame.call_count == 1
 
 
-@pytest.mark.asyncio
 async def test_rnnoise_carries_split_multichannel_frame_before_downmix():
     pytest.importorskip("numpy")
     mock_rnnoise = MagicMock()
@@ -145,7 +142,6 @@ async def test_rnnoise_carries_split_multichannel_frame_before_downmix():
     assert reducer._source_frame_carry == b""
 
 
-@pytest.mark.asyncio
 async def test_rnnoise_discards_partial_source_frame_on_format_change_and_flush():
     pytest.importorskip("numpy")
     mock_rnnoise = MagicMock()
@@ -172,7 +168,6 @@ async def test_rnnoise_discards_partial_source_frame_on_format_change_and_flush(
     assert reducer._source_format is None
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fmt",
     [

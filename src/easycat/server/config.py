@@ -23,6 +23,7 @@ from easycat._numeric import is_finite_number
 # ``is_loopback_host`` from ``easycat._net``), so importing it at module load
 # does not pull aiohttp or any heavy SDK and keeps ``import easycat.server`` light.
 from easycat.server.auth import AuthPolicy
+from easycat.server.transports import _validate_max_sessions
 
 
 @dataclass
@@ -76,10 +77,7 @@ class VoiceServerConfig:
     profile: str = "default"
 
     def __post_init__(self) -> None:
-        if isinstance(self.max_sessions, bool) or not isinstance(self.max_sessions, int):
-            raise ValueError("max_sessions must be an integer >= 1")
-        if self.max_sessions < 1:
-            raise ValueError("max_sessions must be >= 1")
+        _validate_max_sessions(self.max_sessions)
         for name, value in (
             ("drain_timeout_s", self.drain_timeout_s),
             ("force_shutdown_timeout_s", self.force_shutdown_timeout_s),

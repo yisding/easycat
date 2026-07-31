@@ -1223,7 +1223,9 @@ class TestBundlePartialJournal:
     def test_from_partial_current_journal_normalizes_deep_error_children(
         self,
         tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        import easycat.debug.bundle as bundle_module
         from easycat.runtime import SqliteJournal
 
         journal = SqliteJournal("deep-corrupt-errors", data_dir=tmp_path)
@@ -1235,7 +1237,7 @@ class TestBundlePartialJournal:
         )
         journal.close()
         db_path = tmp_path / "journals" / "deep-corrupt-errors.sqlite"
-        deeply_nested_json = ("[" * 10_000) + "0" + ("]" * 10_000)
+        deeply_nested_json = "[[0]]"
         conn = sqlite3.connect(db_path)
         conn.execute(
             "UPDATE journal SET error_children = ? WHERE sequence = ?",
@@ -1244,6 +1246,15 @@ class TestBundlePartialJournal:
         conn.commit()
         conn.close()
 
+        def raise_recursion_error(value: object) -> object:
+            assert value == deeply_nested_json
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(
+            bundle_module,
+            "json",
+            types.SimpleNamespace(loads=raise_recursion_error, dumps=json.dumps),
+        )
         with pytest.raises(
             BundleValidationError,
             match="error_children is not valid JSON",
@@ -1289,6 +1300,32 @@ class TestBundlePartialJournal:
 
         assert recovered[0]["sequence"] == sequence
         assert recovered[0]["data"] == expected
+
+    def test_from_partial_current_journal_ignores_non_string_tags(
+        self,
+        tmp_path,
+    ) -> None:
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("corrupt-tags", data_dir=tmp_path)
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="partial_write",
+            session_id="corrupt-tags",
+        )
+        journal.close()
+        db_path = tmp_path / "journals" / "corrupt-tags.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE journal SET tags = ? WHERE sequence = ?",
+            (sqlite3.Binary(b"legacy"), sequence),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())[0]
+
+        assert "tags" not in recovered
 
     def test_from_partial_legacy_journal_table_without_optional_columns(self, tmp_path):
         db_path = tmp_path / "legacy.sqlite"
@@ -1401,11 +1438,29 @@ class TestBundlePartialJournal:
         )
         conn.commit()
         conn.close()
+        artifact_root = tmp_path / "artifacts"
+        artifact_root.mkdir()
 
         with pytest.raises(BundleValidationError) as exc_info:
-            RunBundle.from_partial_journal(db_path)
+            RunBundle.from_partial_journal(db_path, artifact_root=artifact_root)
 
         assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+
+    def test_from_partial_journal_allows_unresolved_refs_without_artifact_root(self, tmp_path):
+        db_path = tmp_path / "dangling.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        ref = "a" * 64
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, json.dumps({"sequence": 1, "output_ref": ref})),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())
+
+        assert recovered[0]["output_ref"] == ref
 
     def test_from_partial_journal_with_sharded_artifacts(self, tmp_path):
         db_path = tmp_path / "test.sqlite"

@@ -6,7 +6,7 @@ import logging
 import struct
 from collections.abc import AsyncIterator
 
-from easycat._audio_utils import PCM16StreamResampler, to_mono
+from easycat._audio_utils import PCM16StreamResampler, to_mono, validate_pcm16_format
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.input import TTSInput, TTSInputPolicy
@@ -40,17 +40,7 @@ class TTSBase:
 
     @staticmethod
     def _validate_pcm16_format(name: str, fmt: AudioFormat) -> None:
-        if fmt.encoding != "pcm" or fmt.sample_width != 2:
-            raise ValueError(
-                f"{name} must be PCM16 audio "
-                f"(got encoding={fmt.encoding!r}, sample_width={fmt.sample_width!r})"
-            )
-        if (
-            isinstance(fmt.channels, bool)
-            or not isinstance(fmt.channels, int)
-            or fmt.channels <= 0
-        ):
-            raise ValueError(f"{name}.channels must be a positive integer (got {fmt.channels!r})")
+        validate_pcm16_format(name, fmt)
 
     def _upmix_to_output_channels(self, data: bytes) -> bytes:
         channels = self._output_format.channels

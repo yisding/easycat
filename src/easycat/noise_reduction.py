@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from easycat._audio_utils import PCM16StreamResampler, to_mono
+from easycat._audio_utils import PCM16StreamResampler, to_mono, validate_pcm16_format
 from easycat._extras import require_module
 from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk, AudioFormat
@@ -156,19 +156,7 @@ class RNNoiseReducer:
         to drain a trailing partial frame at end-of-stream.
         """
         fmt = chunk.format
-        if fmt.encoding != "pcm" or fmt.sample_width != 2:
-            raise ValueError(
-                "RNNoiseReducer supports only PCM16 audio "
-                f"(got encoding={fmt.encoding!r}, sample_width={fmt.sample_width!r})"
-            )
-        if (
-            isinstance(fmt.channels, bool)
-            or not isinstance(fmt.channels, int)
-            or fmt.channels <= 0
-        ):
-            raise ValueError(
-                f"RNNoiseReducer requires a positive integer channel count (got {fmt.channels!r})"
-            )
+        validate_pcm16_format("RNNoiseReducer input", fmt)
 
         original_rate = fmt.sample_rate
         if self._source_format != fmt:

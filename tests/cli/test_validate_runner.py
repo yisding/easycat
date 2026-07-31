@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from easycat.validation._environment import runtime_secret_values
+from easycat.validation._environment import RUNTIME_SECRET_ENV_VARS, runtime_secret_values
 from easycat.validation.latency import (
     LatencySample,
     LatencyStageDurations,
@@ -180,25 +180,7 @@ def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "runtime_secret_env_var",
-    [
-        "OPENAI_API_KEY",
-        "DEEPGRAM_API_KEY",
-        "ELEVENLABS_API_KEY",
-        "CARTESIA_API_KEY",
-        "EASYCAT_LIBSQL_AUTH_TOKEN",
-        "EASYCAT_REMOTE_AGENT_API_KEY",
-        "EASYCAT_SERVE_TOKEN",
-        "EASYCAT_SUPERVISOR_TOKEN",
-        "EASYCAT_WS_TOKEN",
-        "LITESTREAM_SECRET_ACCESS_KEY",
-        "SIGNALING_AUTH_TOKEN",
-        "TURN_CREDENTIAL",
-        "TURN_PASSWORD",
-        "TWILIO_AUTH_TOKEN",
-        "TWILIO_CALL_API_TOKEN",
-        "TWILIO_STREAM_TOKEN_SECRET",
-        "WEBRTC_SIGNALING_TOKEN",
-    ],
+    RUNTIME_SECRET_ENV_VARS,
 )
 def test_validation_runner_redacts_exact_runtime_secret_values(
     tmp_path: Path,

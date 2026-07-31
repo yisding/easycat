@@ -336,13 +336,14 @@ def _iter_journal_records(journal_ndjson: bytes) -> Iterator[dict[str, Any]]:
                 "or the journal_degraded sentinel",
                 reason_code="INVALID_JOURNAL",
             )
-        if previous_sequence is not None and sequence <= previous_sequence:
-            raise BundleValidationError(
-                f"Bundle journal line {line_number} sequence {sequence} must be "
-                f"strictly greater than previous sequence {previous_sequence}",
-                reason_code="INVALID_JOURNAL",
-            )
-        previous_sequence = sequence
+        if not is_degraded_sentinel:
+            if previous_sequence is not None and sequence <= previous_sequence:
+                raise BundleValidationError(
+                    f"Bundle journal line {line_number} sequence {sequence} must be "
+                    f"strictly greater than previous sequence {previous_sequence}",
+                    reason_code="INVALID_JOURNAL",
+                )
+            previous_sequence = sequence
         yield record
 
 

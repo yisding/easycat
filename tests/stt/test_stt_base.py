@@ -184,7 +184,7 @@ async def test_cancelled_partial_start_closes_resources_before_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_start_cleanup_preserves_primary_error_under_repeated_cancellation() -> None:
+async def test_failed_start_cleanup_preserves_caller_cancellation_after_cleanup() -> None:
     primary = RuntimeError("startup failed")
 
     class SlowCleanupSTT(STTBase):
@@ -210,10 +210,10 @@ async def test_failed_start_cleanup_preserves_primary_error_under_repeated_cance
     start.cancel()
     stt.release_cleanup.set()
 
-    with pytest.raises(RuntimeError, match="startup failed") as exc_info:
+    with pytest.raises(asyncio.CancelledError) as exc_info:
         await start
 
-    assert exc_info.value is primary
+    assert exc_info.value.__cause__ is primary
     assert stt.cleanup_finished is True
     assert stt._running is False
 

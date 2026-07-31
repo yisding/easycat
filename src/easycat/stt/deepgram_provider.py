@@ -510,7 +510,8 @@ class DeepgramSTT(WebSocketSTTBase):
             params.update(
                 {
                     "language": self._config.language,
-                    "channels": str(self._config.channels),
+                    # WebSocketSTTBase normalizes streaming payloads to mono.
+                    "channels": "1",
                     "punctuate": str(self._config.punctuate).lower(),
                     "interim_results": str(self._config.interim_results).lower(),
                     "smart_format": str(self._config.smart_format).lower(),

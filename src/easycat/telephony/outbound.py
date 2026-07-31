@@ -387,6 +387,9 @@ class OutboundCallManager:
         if not self._placement_epoch_is_current(placement_epoch):
             # A stop while awaiting a DNC store invalidates the transaction
             # before it reaches Twilio, so no provider reconciliation is needed.
+            # Keep this lifecycle error in the create_error tuple slot:
+            # place_call must route it through _finish_call_placement instead
+            # of the stale-call path, which requires a provider call SID.
             return None, None, self._lifecycle_changed_error(), None, None
 
         # ``asyncio.to_thread`` cannot stop its worker when the awaiting

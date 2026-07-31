@@ -44,6 +44,8 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+_COMPLETED_STREAM_DRAIN_TIMEOUT_S = 0.05
+
 
 class _ResponseStreamCancelled(Exception):
     """Internal control flow for cooperative cancellation of an idle SSE read."""
@@ -164,7 +166,7 @@ async def _aiter_lines_with_cancellation(
                     return
             else:
                 try:
-                    line = next_line.result()
+                    line = await next_line
                 except StopAsyncIteration:
                     exhausted = True
                     return
@@ -189,6 +191,18 @@ async def _aiter_lines_with_cancellation(
             if aclose is not None:
                 with contextlib.suppress(Exception):
                     await aclose()
+
+
+async def _drain_completed_stream(lines: AsyncIterator[str]) -> None:
+    """Bound normal terminal cleanup while giving the HTTP stream a chance to reach EOF."""
+    try:
+        async with asyncio.timeout(_COMPLETED_STREAM_DRAIN_TIMEOUT_S):
+            async for _ in lines:
+                pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
 
 
 class RemoteResponsesAPIBridge:
@@ -418,6 +432,8 @@ class RemoteResponsesAPIBridge:
                                     accumulated_items.append(dict(item))
                             if bridge_ev is not None:
                                 yield bridge_ev
+                        if completed:
+                            await _drain_completed_stream(lines)
                 except _ResponseStreamCancelled:
                     interrupted = True
 

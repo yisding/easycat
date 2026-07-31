@@ -298,12 +298,6 @@ class DeepgramTTS(_WSTTSBase):
             return event, None
         return None, self._terminal_cycle_state(self._handle_control(message))
 
-    def _require_terminal_cycle(self, terminal_received: bool) -> None:
-        if not self._cancelled and not terminal_received:
-            raise ConnectionError(
-                "Deepgram TTS stream ended before a terminal Flushed/Error response"
-            )
-
     async def _synthesize_locked(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Run one serialized Speak/Flush cycle."""
         if not self._config.persistent_ws:
@@ -354,7 +348,10 @@ class DeepgramTTS(_WSTTSBase):
                     terminal_received = True
                     cycle_completed = terminal
                     break
-            self._require_terminal_cycle(terminal_received)
+            self._require_terminal_response(
+                terminal_received,
+                terminal_label="Flushed/Error",
+            )
             tail = self._finish_audio_event(emit=cycle_completed)
             if tail is not None:
                 yield tail

@@ -33,7 +33,7 @@ from easycat.telephony.call_state import (
 )
 from easycat.telephony.dtmf import DTMFAggregator
 from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
-from easycat.telephony.outbound import OutboundCallManager, OutboundCallManagerState
+from easycat.telephony.outbound import OutboundCallManagerState
 from easycat.telephony.screening import (
     CallScreeningDetector,
     ScreeningResponse,
@@ -47,6 +47,7 @@ from easycat.telephony.voicemail import (
     VoicemailPolicyHandler,
     classify_greeting,
 )
+from tests.telephony.test_outbound import _make_bare_manager
 
 
 def _generate_tone(frequency: float, duration_s: float, sample_rate: int = 16000) -> bytes:
@@ -610,15 +611,11 @@ class TestBotToBotDetection:
         bus = EventBus()
         changes: list[CallStateChanged] = []
         bus.subscribe(CallStateChanged, changes.append)
-        manager = OutboundCallManager.__new__(OutboundCallManager)
-        manager._event_bus = bus
+        manager = _make_bare_manager(
+            _event_bus=bus,
+            _owned_call_sids={"CA1"},
+        )
         manager._client = MagicMock()
-        manager._state = OutboundCallManagerState.IDLE
-        manager._active_call_sid = None
-        manager._owned_call_sids = {"CA1"}
-        manager._pending_cleanup_call_sids = set()
-        manager._started = False
-        manager._lifecycle_epoch = 0
         call_resource = MagicMock()
         manager._client.calls.return_value = call_resource
         sm = OutboundCallStateMachine(

@@ -122,6 +122,35 @@ class TestWebTransportConnectionTransport:
         assert t._disconnect_cleanup_error is None  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_connect_rollback_preserves_new_caller_cancellation(self) -> None:
+        t = _build_connection_transport()
+        session = t._session  # noqa: SLF001
+        assert session is not None
+        startup_error = OSError("writer startup failed")
+        cleanup_entered = asyncio.Event()
+        release_cleanup = asyncio.Event()
+
+        async def block_stop() -> None:
+            cleanup_entered.set()
+            await release_cleanup.wait()
+
+        session.start = AsyncMock(side_effect=startup_error)  # type: ignore[method-assign]
+        session.stop = AsyncMock(side_effect=block_stop)  # type: ignore[method-assign]
+        session.close_connection = Mock()  # type: ignore[method-assign]
+
+        connecting = asyncio.create_task(t.connect())
+        await cleanup_entered.wait()
+        connecting.cancel()
+        release_cleanup.set()
+
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await connecting
+
+        assert exc_info.value.__cause__ is startup_error
+        assert t._session_stop_pending is False  # noqa: SLF001
+        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_disconnect_preserves_caller_cancellation_while_reaping_writer(self) -> None:
         t = _build_connection_transport()
         session = t._session  # noqa: SLF001

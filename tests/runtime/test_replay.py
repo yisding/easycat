@@ -735,35 +735,13 @@ class TestToolPolicyEnforcement:
                     "tool_name": "get_weather",
                     "tool_call_id": "c1",
                 },
-            },
-            {
-                "sequence": 3,
-                "kind": "framework_transition",
-                "name": "tool_call",
-                "data": {
-                    "phase": "start",
-                    "tool_name": "in_range",
-                    "tool_call_id": "c2",
-                },
-            },
-            {
-                "sequence": 5,
-                "kind": "framework_transition",
-                "name": "tool_call",
-                "data": {
-                    "phase": "start",
-                    "tool_name": "out_of_range",
-                    "tool_call_id": "c3",
-                },
-            },
+            }
         ]
-        executed_records = []
 
         with pytest.raises(BundleValidationError) as exc_info:
             RunBundle.load(_write_bundle(tmp_path, records=records))
 
         assert exc_info.value.reason_code == "INVALID_JOURNAL"
-        assert executed_records == []
 
 
 # ── Cassette behaviour (stand-alone, not via runner) ─────────────

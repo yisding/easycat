@@ -281,3 +281,33 @@ def test_loader_accepts_recovery_sequence_zero_followed_by_live_records(tmp_path
         0,
         1,
     ]
+
+
+@pytest.mark.parametrize(
+    "journal_payload",
+    [
+        (
+            b'{"sequence": -1, "kind": "degraded", "name": "journal_degraded"}\n'
+            b'{"sequence": 0, "kind": "event"}\n'
+        ),
+        (
+            b'{"sequence": 0, "kind": "event"}\n'
+            b'{"sequence": -1, "kind": "degraded", "name": "journal_degraded"}\n'
+            b'{"sequence": 1, "kind": "event"}\n'
+        ),
+    ],
+)
+def test_loader_accepts_degraded_sentinel_outside_live_sequence_order(
+    tmp_path: Path,
+    journal_payload: bytes,
+) -> None:
+    path = tmp_path / "degraded-sequence.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", journal_payload)
+
+    records = list(bundle_facade.RunBundle.load(path).records())
+
+    assert [record["sequence"] for record in records] == [
+        json.loads(line)["sequence"] for line in journal_payload.splitlines()
+    ]

@@ -25,16 +25,13 @@ from easycat.validation._runner_support import (
     CommandResult,
     CommandRunner,
     pytest_command_prefix,
+    redact_validation_artifacts,
     run_subprocess,
     run_timed_command,
     validation_exit_code_from_pytest,
     validation_test_paths,
 )
-from easycat.validation.redaction import (
-    ArtifactRedactionError,
-    TextArtifactFormat,
-    redact_runtime_secrets_in_file,
-)
+from easycat.validation.redaction import TextArtifactFormat
 from easycat.validation.report import (
     ArtifactRef,
     ValidationCheck,
@@ -127,32 +124,12 @@ class _SlicePaths:
         """Persist streams and scrub every validation-owned text artifact."""
         self.stdout.write_text(redact_runtime_secrets(result.stdout, secrets))
         self.stderr.write_text(redact_runtime_secrets(result.stderr, secrets))
-        failures: dict[str, ValidationFailure] = {}
         artifact_specs: tuple[tuple[str, Path, TextArtifactFormat], ...] = (
             ("junit", self.junit, "text"),
             ("reliability", self.reliability_samples, "json"),
             ("webrtc_stats", self.webrtc_stats, "jsonl"),
         )
-        for name, path, artifact_format in artifact_specs:
-            try:
-                redact_runtime_secrets_in_file(
-                    path,
-                    secrets,
-                    artifact_format=artifact_format,
-                    raise_on_error=True,
-                )
-            except (ArtifactRedactionError, OSError) as exc:
-                safe_path = redact_runtime_secrets(str(path), secrets)
-                failures[name] = ValidationFailure(
-                    name=f"artifact_redaction.{name}",
-                    message=redact_runtime_secrets(
-                        f"could not safely redact validation artifact {path}: {exc}",
-                        secrets,
-                    ),
-                    failure_class="artifact_redaction_error",
-                    details={"path": safe_path},
-                )
-        return failures
+        return redact_validation_artifacts(artifact_specs, secrets)
 
     def check_artifacts(
         self,

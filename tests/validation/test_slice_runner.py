@@ -122,15 +122,18 @@ def test_slice_runner_redacts_structured_secondary_artifacts_before_loading(
     assert json.loads(webrtc_stats)["credential_echo"] == "[REDACTED_SECRET]"
 
 
-def test_slice_runner_scrubs_secret_bytes_from_non_utf8_artifact(
+def test_slice_runner_excludes_non_utf8_artifact_after_scrubbing_secret_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret = "plain-runtime-token-value"
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", secret)
+    stats_path: Path | None = None
 
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
-        Path(env["EASYCAT_WEBRTC_STATS_PATH"]).write_bytes(b"\xffcredential=" + secret.encode())
+        nonlocal stats_path
+        stats_path = Path(env["EASYCAT_WEBRTC_STATS_PATH"])
+        stats_path.write_bytes(b"\xffcredential=" + secret.encode())
         return CommandResult(exit_code=0)
 
     result = run_validation_slice(
@@ -140,7 +143,16 @@ def test_slice_runner_scrubs_secret_bytes_from_non_utf8_artifact(
         started_at=datetime(2026, 7, 11, 12, 0, tzinfo=UTC),
     )
 
-    artifact = Path(result.run.artifacts["webrtc_stats"].path).read_bytes()
+    assert result.exit_code == 1
+    assert "webrtc_stats" not in result.run.artifacts
+    assert result.run.tool_exit_codes["artifact_redaction"] == 1
+    assert any(
+        failure.name == "artifact_redaction.webrtc_stats"
+        and failure.failure_class == "artifact_redaction_error"
+        for failure in result.run.failures
+    )
+    assert stats_path is not None
+    artifact = stats_path.read_bytes()
     assert secret.encode() not in artifact
     assert b"[REDACTED_SECRET]" in artifact
 

@@ -431,6 +431,12 @@ def test_deepgram_build_url():
     assert "interim_results=true" in url
 
 
+def test_deepgram_build_url_advertises_mono_wire_payload_after_downmix():
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", channels=2))
+
+    assert "channels=1" in stt._build_url()
+
+
 def test_deepgram_flux_build_url_uses_v2_without_legacy_params():
     config = DeepgramSTTConfig(
         api_key="k",

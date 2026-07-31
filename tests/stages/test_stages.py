@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import struct
 from collections.abc import AsyncIterator
 
@@ -1253,7 +1254,14 @@ class TestReplayDecision:
         complete = next(r for r in journal.read() if r.name == "stage_complete")
         state_after = complete.data.get("state_after")
         assert isinstance(state_after, str)
-        assert "'decision': 1" in state_after
+        snapshot_expr = ast.parse(state_after, mode="eval").body
+        assert isinstance(snapshot_expr, ast.Call)
+        fields_expr = next(
+            keyword.value for keyword in snapshot_expr.keywords if keyword.arg == "fields"
+        )
+        fields = ast.literal_eval(fields_expr)
+        assert isinstance(fields, dict)
+        assert fields["decision"] == 1
 
     async def test_turn_stage_records_dataclass_result(self):
         """``detect`` may return a dataclass; ``stage_complete`` still records
