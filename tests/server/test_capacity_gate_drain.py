@@ -526,6 +526,147 @@ async def test_cancelled_webrtc_offer_disconnects_and_releases_capacity(
     assert gate.try_acquire() is True
 
 
+async def test_webrtc_offer_crossing_drain_during_negotiation_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.transports.webrtc as webrtc_module
+
+    negotiation_started = asyncio.Event()
+    allow_negotiation = asyncio.Event()
+
+    class _OfferResponse:
+        status = 200
+
+    class _DrainingResponse:
+        def __init__(self, **kwargs: object) -> None:
+            self.status = kwargs["status"]
+
+    class _Web:
+        Response = _DrainingResponse
+
+    class _PausedOfferTransport:
+        instance: _PausedOfferTransport | None = None
+
+        def __init__(self, _config: object) -> None:
+            self.disconnected = False
+            type(self).instance = self
+
+        def _prepare_external_signaling(self, _web: object) -> None:
+            pass
+
+        async def _handle_offer(self, _request: object) -> _OfferResponse:
+            negotiation_started.set()
+            await allow_negotiation.wait()
+            return _OfferResponse()
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    monkeypatch.setattr(webrtc_module, "WebRTCTransport", _PausedOfferTransport)
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+    manager: SessionManager[int] = SessionManager()
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=gate,
+        manager=manager,
+        runtime_feedback=False,
+    )
+    routes._web = _Web()
+    routes._auth_reason = lambda _request: "allowed"  # type: ignore[method-assign]
+    routes._cors_headers = lambda _request: {}  # type: ignore[method-assign]
+
+    offer = asyncio.create_task(routes.handle_offer(object()))
+    await negotiation_started.wait()
+    gate.start_draining()
+    allow_negotiation.set()
+
+    response = await offer
+    transport = _PausedOfferTransport.instance
+    assert response.status == 503
+    assert transport is not None and transport.disconnected is True
+    assert manager.active_keys() == ()
+    assert gate.active_keys() == ()
+    assert gate.reserved_count == 0
+
+
+async def test_webrtc_offer_crossing_drain_during_session_start_is_rolled_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.transports.webrtc as webrtc_module
+
+    session_started = asyncio.Event()
+    allow_start = asyncio.Event()
+
+    class _StartingSession:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def start(self) -> None:
+            session_started.set()
+            await allow_start.wait()
+
+        async def stop(self, *, force: bool = False) -> None:
+            self.stopped = True
+
+    class _OfferResponse:
+        status = 200
+
+    class _DrainingResponse:
+        def __init__(self, **kwargs: object) -> None:
+            self.status = kwargs["status"]
+
+    class _Web:
+        Response = _DrainingResponse
+
+    class _StartedOfferTransport:
+        instance: _StartedOfferTransport | None = None
+
+        def __init__(self, _config: object) -> None:
+            self.disconnected = False
+            type(self).instance = self
+
+        def _prepare_external_signaling(self, _web: object) -> None:
+            pass
+
+        async def _handle_offer(self, _request: object) -> _OfferResponse:
+            return _OfferResponse()
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    session = _StartingSession()
+    monkeypatch.setattr(webrtc_module, "WebRTCTransport", _StartedOfferTransport)
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+    manager: SessionManager[int] = SessionManager()
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: session,  # type: ignore[arg-type]
+        gate=gate,
+        manager=manager,
+        runtime_feedback=False,
+    )
+    routes._web = _Web()
+    routes._auth_reason = lambda _request: "allowed"  # type: ignore[method-assign]
+    routes._cors_headers = lambda _request: {}  # type: ignore[method-assign]
+
+    offer = asyncio.create_task(routes.handle_offer(object()))
+    await session_started.wait()
+    gate.start_draining()
+    allow_start.set()
+
+    response = await offer
+    transport = _StartedOfferTransport.instance
+    assert response.status == 503
+    assert session.stopped is True
+    assert transport is not None and transport.disconnected is True
+    assert manager.active_keys() == ()
+    assert gate.active_keys() == ()
+    assert gate.reserved_count == 0
+
+
 async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> None:
     session = _ManagedGuardedSession()
     manager: SessionManager[int] = SessionManager()

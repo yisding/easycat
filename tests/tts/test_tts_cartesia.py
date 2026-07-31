@@ -327,6 +327,39 @@ class TestCartesiaPersistent:
             assert cancel and cancel[0]["cancel"] is True
         await provider.close()
 
+    async def test_early_consumer_close_cancels_remote_context(self):
+        class UnfinishedPersistentWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if "transcript" not in msg:
+                    return
+                await self._queue.put(
+                    json.dumps(
+                        {
+                            "type": "chunk",
+                            "context_id": msg["context_id"],
+                            "data": base64.b64encode(_pcm16_bytes(120)).decode("ascii"),
+                            "done": False,
+                        }
+                    )
+                )
+
+        provider = self._make_provider()
+        fake = UnfinishedPersistentWS()
+        with patch.object(provider, "_build_ws", return_value=fake):
+            stream = provider.synthesize("long text")
+            event = await anext(stream)
+            assert event.type == TTSEventType.AUDIO
+            await stream.aclose()
+
+            requests = [json.loads(message) for message in fake.sent]
+            request = next(message for message in requests if "transcript" in message)
+            cancels = [message for message in requests if message.get("cancel") is True]
+            assert cancels == [{"context_id": request["context_id"], "cancel": True}]
+            assert not fake.closed
+        await provider.close()
+
     async def test_cancel_send_failure_falls_back_to_socket_close(self):
         provider = self._make_provider()
         # First send (the transcript) succeeds; the cancel frame send fails.

@@ -308,6 +308,30 @@ class TestMultiContextWSManager:
         assert got == []
         await mgr.aclose()
 
+    async def test_finish_context_drops_late_frame_without_stalling_successor(self):
+        # A full finished-context queue can have a late frame waiting in the
+        # reader when provider teardown runs. That late put must lose to done,
+        # otherwise the shared reader stays blocked and strands later contexts.
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws, context_queue_maxsize=1))
+        finished = await mgr.open_context()
+        successor = await mgr.open_context()
+        ws._script = [
+            _chunk(finished.context_id, done=True),
+            _chunk(finished.context_id),
+            _chunk(successor.context_id, done=True),
+        ]
+        await mgr._cancel_background_tasks()
+        ws._gate = asyncio.Event()
+        mgr._reader_task = asyncio.create_task(mgr._reader_loop())
+
+        assert (await anext(finished.frames()))["done"] is True
+        mgr.finish_context(finished)
+
+        successor_frame = await asyncio.wait_for(anext(successor.frames()), timeout=1)
+        assert successor_frame["done"] is True
+        await mgr.aclose()
+
     async def test_send_lock_serializes_concurrent_sends(self):
         order: list[str] = []
 

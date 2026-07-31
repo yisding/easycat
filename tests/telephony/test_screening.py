@@ -319,6 +319,18 @@ class TestCallScreeningDetector:
         assert detector.state == ScreeningState.WAITING
 
     @pytest.mark.asyncio
+    async def test_repeated_start_does_not_leave_a_subscription_after_stop(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(bus)
+
+        detector.start()
+        detector.start()
+        detector.stop()
+        await bus.emit(CallAnswered(call_sid="CA1"))
+
+        assert not detector._call_answered
+
+    @pytest.mark.asyncio
     async def test_reset_allows_re_detection(self) -> None:
         bus = EventBus()
         received: list[CallScreening] = []

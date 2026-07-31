@@ -198,6 +198,39 @@ async def _start_twiml_http_listener(
     return runner, site
 
 
+async def _shutdown_twilio_voice_app(
+    *,
+    runtime: Any,
+    media_server: Any,
+    site: Any,
+    runner: Any,
+    config: TwilioVoiceServerConfig,
+) -> None:
+    """Drain media sessions even when the TwiML listener cleanup fails."""
+    runtime.start_draining(media_server)
+    listener_error: BaseException | None = None
+    try:
+        await site.stop()
+    except BaseException as exc:
+        listener_error = exc
+    try:
+        await runner.cleanup()
+    except BaseException as exc:
+        if listener_error is None:
+            listener_error = exc
+        else:
+            logger.warning("Twilio HTTP runner cleanup also failed", exc_info=True)
+    try:
+        await runtime.drain(
+            media_server,
+            drain_timeout_s=config.drain_timeout_s,
+            force_timeout_s=config.force_shutdown_timeout_s,
+        )
+    finally:
+        if listener_error is not None:
+            raise listener_error
+
+
 async def serve_twilio_voice_app(
     config_factory: Callable[[Any], EasyConfig],
     config: TwilioVoiceServerConfig,
@@ -315,13 +348,12 @@ async def serve_twilio_voice_app(
     try:
         await event.wait()
     finally:
-        runtime.start_draining(media_server)
-        await site.stop()
-        await runner.cleanup()
-        await runtime.drain(
-            media_server,
-            drain_timeout_s=config.drain_timeout_s,
-            force_timeout_s=config.force_shutdown_timeout_s,
+        await _shutdown_twilio_voice_app(
+            runtime=runtime,
+            media_server=media_server,
+            site=site,
+            runner=runner,
+            config=config,
         )
 
 

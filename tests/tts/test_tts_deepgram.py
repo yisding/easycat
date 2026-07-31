@@ -203,6 +203,49 @@ class TestDeepgramPersistent:
         assert fake._closed
         assert provider._ws is None
 
+    async def test_cancel_during_blocked_speak_discards_socket_before_next_turn(self):
+        class BlockingSpeakSocket(QueueDeepgramSocket):
+            def __init__(self) -> None:
+                super().__init__(audio=b"old-audio!")
+                self.speak_started = asyncio.Event()
+                self.release_speak = asyncio.Event()
+                self._first_speak = True
+
+            async def send(self, message: str | bytes) -> None:
+                frame = json.loads(message)
+                if frame["type"] == "Speak" and self._first_speak:
+                    self._first_speak = False
+                    self.speak_started.set()
+                    await self.release_speak.wait()
+                await super().send(message)
+
+        provider = self._make_provider()
+        blocked = BlockingSpeakSocket()
+        fresh = QueueDeepgramSocket(audio=b"new-audio!")
+        factory = MagicMock(side_effect=[blocked, fresh])
+
+        async def consume_first() -> list:
+            return [event async for event in provider.synthesize("first")]
+
+        with patch.object(provider, "_create_ws", factory):
+            first = asyncio.create_task(consume_first())
+            await blocked.speak_started.wait()
+            cancelling = asyncio.create_task(provider.cancel())
+            await asyncio.sleep(0)
+            blocked.release_speak.set()
+            await asyncio.wait_for(cancelling, timeout=1)
+            assert await first == []
+
+            next_events = [event async for event in provider.synthesize("second")]
+
+        audio = [
+            bytes(event.audio.data) for event in next_events if event.type == TTSEventType.AUDIO
+        ]
+        assert audio == [b"new-audio!"]
+        assert blocked._closed is True
+        assert factory.call_count == 2
+        await provider.close()
+
     async def test_early_exit_closes_inner_cycle_before_next_synthesis(self):
         provider = self._make_provider()
         abandoned = QueueDeepgramSocket(audio=_pcm16_bytes(120), hold_first_flush=True)

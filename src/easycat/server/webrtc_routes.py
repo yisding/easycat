@@ -340,12 +340,7 @@ class WebRTCRoutes:
             return self._unauthorized_response(request)
         if self._gate.is_draining:
             self._record_rejection(server_state="draining")
-            return web.Response(
-                status=503,
-                text=json.dumps({"error": "Server is shutting down"}),
-                content_type="application/json",
-                headers=self._cors_headers(request),
-            )
+            return self._draining_response(request)
         if not self._gate.try_acquire():
             # ``try_acquire`` only fails for capacity here (draining handled above).
             self._record_rejection(server_state="serving")
@@ -370,7 +365,12 @@ class WebRTCRoutes:
                 return response
 
             transport._offer_request = request
-            await self._register_session(key, transport)
+            # Negotiation may suspend for long enough that shutdown starts after
+            # the admission check above. Do not start a session that was absent
+            # from the drain snapshot; _register_session has a second fence
+            # around the asynchronous Session.start() window.
+            if self._gate.is_draining or not await self._register_session(key, transport):
+                return await self._reject_draining_offer(request, transport)
             session_started = True
             return response
         except BaseException:
@@ -399,12 +399,14 @@ class WebRTCRoutes:
             self._gate.release()
             raise
 
-    async def _register_session(self, key: int, transport: WebRTCTransport) -> None:
+    async def _register_session(self, key: int, transport: WebRTCTransport) -> bool:
         """Build + start + track the session for an accepted per-offer transport.
 
         Awaits ``manager.add`` (which starts the session) before returning so a
         successful ``/offer`` response only follows a started session — matching
-        the old serve helper.
+        the old serve helper. Returns ``False`` when draining starts while
+        ``manager.add`` is suspended; the caller then tears down the negotiated
+        peer and returns a 503 response.
         """
         from easycat.config import create_session
 
@@ -418,6 +420,12 @@ class WebRTCRoutes:
 
             attach_runtime_feedback(session)
         await self._manager.add(key, session)
+        # There is no await between this fence and ``gate.track`` below. If a
+        # drain began during Session.start(), remove the just-started session
+        # before it can miss the drain's active-session snapshot.
+        if self._gate.is_draining:
+            await self._manager.remove(key)
+            return False
         # ``manager.add`` already STARTED the session. ``handle_offer``'s except
         # only runs its unregister when ``session_started`` is True, and that flag
         # is set by the caller AFTER this method returns — so any failure wiring up
@@ -437,12 +445,29 @@ class WebRTCRoutes:
             self._cleanup_tasks.add(task)
             self._cleanup_task_keys[task] = key
             task.add_done_callback(self._cleanup_task_done)
+            return True
         except Exception:
             # Stop + drop the started session (``manager.remove`` stops it) and
             # clear any partial gate/active-map bookkeeping. The gate reservation
             # itself is released by ``handle_offer``'s except (no cleanup task ran).
             await self._unregister_session(key)
             raise
+
+    def _draining_response(self, request: Any) -> Any:
+        """Build the standard 503 response for an offer crossing shutdown."""
+        return self._web.Response(
+            status=503,
+            text=json.dumps({"error": "Server is shutting down"}),
+            content_type="application/json",
+            headers=self._cors_headers(request),
+        )
+
+    async def _reject_draining_offer(self, request: Any, transport: WebRTCTransport) -> Any:
+        """Release a negotiated peer that crossed the server drain boundary."""
+        self._record_rejection(server_state="draining")
+        await transport.disconnect()
+        self._gate.release()
+        return self._draining_response(request)
 
     async def _unregister_session(self, key: int) -> None:
         """Untrack a session that failed after being registered."""
@@ -544,6 +569,58 @@ class WebRTCRoutes:
         return await self._signaling().handle_cors_preflight(request)
 
 
+async def _shutdown_standalone_webrtc(
+    *,
+    site: Any,
+    runner: Any,
+    gate: CapacityGate[int],
+    active_sessions: dict[int, Any],
+    routes: WebRTCRoutes,
+    manager: SessionManager[int],
+    drain_timeout_s: float,
+    force_shutdown_timeout_s: float,
+) -> None:
+    """Drain sessions even when the standalone HTTP listener fails to stop."""
+    gate.start_draining()
+    listener_error: BaseException | None = None
+    try:
+        await site.stop()
+    except BaseException as exc:
+        listener_error = exc
+    try:
+        await runner.cleanup()
+    except BaseException as exc:
+        if listener_error is None:
+            listener_error = exc
+        else:
+            logger.warning("Standalone WebRTC runner cleanup also failed", exc_info=True)
+    try:
+        await gate.drain(
+            lambda: tuple(active_sessions.items()),
+            drain_timeout_s=max(drain_timeout_s, 0.0),
+            force_after=True,
+            force_timeout_s=max(force_shutdown_timeout_s, 0.0),
+            stop_for_key=routes._stop_managed_session,
+        )
+    finally:
+        try:
+            await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
+        finally:
+            try:
+                swept = await _await_with_hard_timeout(
+                    manager.stop_all(force=True),
+                    timeout_s=max(force_shutdown_timeout_s, 0.0),
+                )
+                if not swept:
+                    logger.warning(
+                        "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
+                        force_shutdown_timeout_s,
+                    )
+            finally:
+                if listener_error is not None:
+                    raise listener_error
+
+
 async def serve_webrtc_config_sessions(
     config_factory: WebRTCConfigFactory,
     config: WebRTCTransportConfig | None = None,
@@ -607,26 +684,16 @@ async def serve_webrtc_config_sessions(
     try:
         await event.wait()
     finally:
-        gate.start_draining()
-        await site.stop()
-        await runner.cleanup()
-        await gate.drain(
-            lambda: tuple(active_sessions.items()),
-            drain_timeout_s=max(drain_timeout_s, 0.0),
-            force_after=True,
-            force_timeout_s=max(force_shutdown_timeout_s, 0.0),
-            stop_for_key=routes._stop_managed_session,
+        await _shutdown_standalone_webrtc(
+            site=site,
+            runner=runner,
+            gate=gate,
+            active_sessions=active_sessions,
+            routes=routes,
+            manager=manager,
+            drain_timeout_s=drain_timeout_s,
+            force_shutdown_timeout_s=force_shutdown_timeout_s,
         )
-        await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
-        swept = await _await_with_hard_timeout(
-            manager.stop_all(force=True),
-            timeout_s=max(force_shutdown_timeout_s, 0.0),
-        )
-        if not swept:
-            logger.warning(
-                "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
-                force_shutdown_timeout_s,
-            )
 
 
 def run_webrtc_config_server(
