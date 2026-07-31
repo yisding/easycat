@@ -84,6 +84,54 @@ class TestSqliteJournalBasics:
 
         assert not (tmp_path.parent / "escape.sqlite").exists()
 
+    def test_rejects_symlinked_journal_directory_without_touching_target(self, tmp_path):
+        target = tmp_path / "outside-journals"
+        target.mkdir()
+        os.chmod(target, 0o755)
+        (tmp_path / "journals").symlink_to(target, target_is_directory=True)
+
+        journal: SqliteJournal | None = None
+        try:
+            with pytest.raises(OSError, match="symlink"):
+                journal = SqliteJournal("linked", data_dir=tmp_path)
+        finally:
+            if journal is not None:
+                journal.close()
+
+        assert _mode(target) == 0o755
+        assert not (target / "linked.sqlite").exists()
+
+    def test_rejects_symlinked_journal_file_without_touching_target(self, tmp_path):
+        target = tmp_path / "outside.sqlite"
+        conn = sqlite3.connect(target)
+        try:
+            conn.execute("CREATE TABLE preserved (value TEXT)")
+            conn.commit()
+        finally:
+            conn.close()
+        os.chmod(target, 0o640)
+
+        journals = tmp_path / "journals"
+        journals.mkdir()
+        (journals / "linked.sqlite").symlink_to(target)
+
+        journal: SqliteJournal | None = None
+        try:
+            with pytest.raises(OSError, match="symlink"):
+                journal = SqliteJournal("linked", data_dir=tmp_path)
+        finally:
+            if journal is not None:
+                journal.close()
+
+        assert _mode(target) == 0o640
+        conn = sqlite3.connect(target)
+        try:
+            assert conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall() == [("preserved",)]
+        finally:
+            conn.close()
+
     def test_append_and_read(self, journal):
         seq = journal.append(
             kind=JournalRecordKind.EVENT,

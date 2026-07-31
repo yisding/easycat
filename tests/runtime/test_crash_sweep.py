@@ -518,6 +518,37 @@ def test_sweep_skips_malformed_sqlite_without_raising(tmp_path) -> None:
     assert bad.exists()
 
 
+def test_sweep_ignores_symlinked_journal_file(tmp_path) -> None:
+    outside_root = tmp_path / "outside"
+    _crash_one("target", outside_root)
+    target = outside_root / "journals" / "target.sqlite"
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    linked = journals / "linked.sqlite"
+    linked.symlink_to(target)
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert linked.is_symlink()
+    assert target.exists()
+    assert not (tmp_path / "crash-dumps").exists()
+
+
+def test_sweep_refuses_symlinked_crash_dump_directory(tmp_path) -> None:
+    _crash_one("orphan", tmp_path)
+    source = tmp_path / "journals" / "orphan.sqlite"
+    target = tmp_path / "outside-dumps"
+    target.mkdir()
+    os.chmod(target, 0o755)
+    crash_dumps = tmp_path / "crash-dumps"
+    crash_dumps.symlink_to(target, target_is_directory=True)
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert source.exists()
+    assert crash_dumps.is_symlink()
+    assert target.stat().st_mode & 0o777 == 0o755
+    assert list(target.iterdir()) == []
+
+
 def test_sqlite_journal_open_ignores_malformed_sibling_journal(tmp_path) -> None:
     journals = tmp_path / "journals"
     journals.mkdir()
