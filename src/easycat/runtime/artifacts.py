@@ -260,9 +260,19 @@ class FilesystemArtifactStore:
                 return ""
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
+                if self._dir.is_symlink():
+                    logger.warning(
+                        "Artifact write refused for ref=%s: session directory is a symlink", ref
+                    )
+                    return ""
                 os.chmod(self._dir, 0o700)
                 path = self._ref_path(ref)
                 path.parent.mkdir(parents=True, exist_ok=True)
+                if path.parent.is_symlink():
+                    logger.warning(
+                        "Artifact write refused for ref=%s: shard directory is a symlink", ref
+                    )
+                    return ""
                 os.chmod(path.parent, 0o700)
                 tmp = path.with_suffix(".tmp")
                 tmp.write_bytes(payload)
@@ -306,9 +316,16 @@ class FilesystemArtifactStore:
     def delete(self, ref: str) -> None:
         if not _is_sha256_ref(ref):
             return
+        if self._dir.is_symlink():
+            return
         with self._lock:
             for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
                 try:
+                    if path.parent.is_symlink():
+                        continue
+                    if path.is_symlink():
+                        path.unlink()
+                        continue
                     size = path.stat().st_size
                     path.unlink()
                 except FileNotFoundError:
@@ -329,14 +346,16 @@ class FilesystemArtifactStore:
     def _existing_ref_path(self, ref: str) -> Path | None:
         if not _is_sha256_ref(ref):
             return None
+        if self._dir.is_symlink():
+            return None
         sharded = self._ref_path(ref)
-        if sharded.is_file():
+        if not sharded.parent.is_symlink() and not sharded.is_symlink() and sharded.is_file():
             return sharded
         legacy = self._legacy_ref_path(ref)
-        return legacy if legacy.is_file() else None
+        return legacy if not legacy.is_symlink() and legacy.is_file() else None
 
     def _stored_bytes(self) -> int:
-        if not self._dir.is_dir():
+        if self._dir.is_symlink() or not self._dir.is_dir():
             return 0
         total = 0
         try:

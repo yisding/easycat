@@ -178,6 +178,67 @@ class TestFilesystemArtifactStore:
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         assert store.get("nonexistent") is None
 
+    def test_symlinked_blob_is_not_read_or_treated_as_a_dedup_hit(self, tmp_path):
+        """Artifact refs must never follow an injected symlink outside the store."""
+        payload = b"trusted payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        shard = tmp_path / "artifacts" / "sess" / ref[:2]
+        shard.mkdir(parents=True)
+        victim = tmp_path / "outside.bin"
+        victim.write_bytes(b"outside data")
+        artifact_path = shard / f"{ref}.bin"
+        try:
+            artifact_path.symlink_to(victim)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.get(ref) is None
+        assert store.has(ref) is False
+        assert store.put(payload) == ref
+        assert artifact_path.is_symlink() is False
+        assert artifact_path.read_bytes() == payload
+        assert victim.read_bytes() == b"outside data"
+
+    def test_shard_symlink_is_not_followed_for_writes(self, tmp_path):
+        """Writes must not escape through an injected shard-directory symlink."""
+        payload = b"trusted payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        session_dir = tmp_path / "artifacts" / "sess"
+        session_dir.mkdir(parents=True)
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        shard = session_dir / ref[:2]
+        try:
+            shard.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ""
+        assert not (outside_dir / f"{ref}.bin").exists()
+
+    def test_session_symlink_is_not_followed_for_writes(self, tmp_path):
+        """Writes must not escape through an injected session-directory symlink."""
+        payload = b"trusted payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        session_dir = artifacts_dir / "sess"
+        try:
+            session_dir.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ""
+        assert not (outside_dir / ref[:2] / f"{ref}.bin").exists()
+
     def test_get_head_tail_reads_bounded_window(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         payload = b"a" * 10 + b"middle" * 20 + b"z" * 10
