@@ -1854,6 +1854,25 @@ class TestLibsqlJournal:
 
         assert probe.violations == []
 
+    def test_rejects_second_live_writer_for_same_local_replica(self, tmp_path: Path) -> None:
+        """A second local libSQL writer would reuse the same sequence counter."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            first = LibsqlJournal("single-writer", data_dir=tmp_path)
+            try:
+                with pytest.raises(RuntimeError, match="Journal is already active"):
+                    LibsqlJournal("single-writer", data_dir=tmp_path)
+            finally:
+                first.close()
+
+            # Releasing the first owner permits a later replica instance.
+            reopened = LibsqlJournal("single-writer", data_dir=tmp_path)
+            reopened.close()
+
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""
         with mock.patch.dict("sys.modules", {"libsql_experimental": None}):
