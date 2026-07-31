@@ -26,6 +26,7 @@ from easycat.tts._multi_context_ws import (
     validate_context_queue_maxsize,
 )
 from easycat.tts._ws_base import _WSTTSBase
+from easycat.tts.base import _AudioConversionState
 from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,7 @@ class ElevenLabsTTS(_WSTTSBase):
         # emitted before the drop is re-emitted (audible repetition), not a
         # seamless resume.
         self._pending_messages: tuple[str, ...] | None = None
+        self._persistent_audio_states: dict[str, _AudioConversionState] = {}
 
     def _voice_settings(self) -> dict[str, float | bool]:
         """The voice_settings payload shared by the HTTP and WebSocket paths."""
@@ -505,7 +507,7 @@ class ElevenLabsTTS(_WSTTSBase):
                 context_cancel_frames=lambda ctx_id: [
                     json.dumps({"context_id": ctx_id, "close_context": True})
                 ],
-                on_context_replay=lambda _ctx_id: self._reset_audio_alignment(),
+                on_context_replay=self._reset_persistent_audio_alignment,
                 socket_close_frames=lambda: [json.dumps({"close_socket": True})],
                 on_global_frame=self._on_global_frame,
                 context_queue_maxsize=self._config.context_queue_maxsize,
@@ -526,7 +528,22 @@ class ElevenLabsTTS(_WSTTSBase):
         if message:
             self._emit_provider_error(RuntimeError(f"ElevenLabs TTS error: {message}"))
 
-    def _decode_message(self, data: dict[str, Any]) -> tuple[list[TTSEvent], bool]:
+    def _reset_persistent_audio_alignment(self, context_id: str) -> None:
+        state = self._persistent_audio_states.get(context_id)
+        if state is not None:
+            self._reset_audio_alignment(state=state)
+
+    def _discard_persistent_audio_state(self, context_id: str) -> None:
+        state = self._persistent_audio_states.pop(context_id, None)
+        if state is not None:
+            self._reset_audio_alignment(state=state)
+
+    def _decode_message(
+        self,
+        data: dict[str, Any],
+        *,
+        state: _AudioConversionState | None = None,
+    ) -> tuple[list[TTSEvent], bool]:
         """Decode one parsed ElevenLabs message into (events, is_terminal).
 
         Shared by the one-shot and persistent paths so their wire decoding
@@ -541,7 +558,11 @@ class ElevenLabsTTS(_WSTTSBase):
         if data.get("audio"):
             audio_bytes = base64.b64decode(data["audio"])
             if audio_bytes:
-                event = self._make_audio_event(audio_bytes, self._source_format)
+                event = self._make_audio_event(
+                    audio_bytes,
+                    self._source_format,
+                    state=state,
+                )
                 if event is not None:
                     events.append(event)
         if data.get("alignment"):
@@ -565,8 +586,11 @@ class ElevenLabsTTS(_WSTTSBase):
         # first connect must still emit the provider error and run
         # _end_synthesis() (clearing is_active), like the one-shot path.
         ctx: _Context | None = None
+        audio_state: _AudioConversionState | None = None
         try:
             ctx = await mgr.open_context()
+            audio_state = self._new_audio_conversion_state()
+            self._persistent_audio_states[ctx.context_id] = audio_state
             pending = [
                 self._context_init_frame(ctx.context_id),
                 json.dumps({"text": text, "context_id": ctx.context_id}),
@@ -574,9 +598,9 @@ class ElevenLabsTTS(_WSTTSBase):
             ]
             await mgr.send(ctx, pending)
 
-            async for event in self._decode_persistent_frames(ctx):
+            async for event in self._decode_persistent_frames(ctx, audio_state):
                 yield event
-            tail = self._finish_audio_event()
+            tail = self._finish_audio_event(state=audio_state)
             if tail is not None:
                 yield tail
 
@@ -588,16 +612,23 @@ class ElevenLabsTTS(_WSTTSBase):
                 raise
         finally:
             if ctx is not None:
-                if ctx.cancelled:
-                    mgr.finish_context(ctx)
-                else:
-                    # ElevenLabs recommends closing completed contexts
-                    # promptly; otherwise rapid turns can leave up to the
-                    # inactivity timeout's worth of server-side contexts open.
-                    await mgr.cancel_context(ctx)
+                try:
+                    if ctx.cancelled:
+                        mgr.finish_context(ctx)
+                    else:
+                        # ElevenLabs recommends closing completed contexts
+                        # promptly; otherwise rapid turns can leave up to the
+                        # inactivity timeout's worth of server-side contexts open.
+                        await mgr.cancel_context(ctx)
+                finally:
+                    self._discard_persistent_audio_state(ctx.context_id)
             self._end_synthesis()
 
-    async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:
+    async def _decode_persistent_frames(
+        self,
+        ctx: _Context,
+        audio_state: _AudioConversionState,
+    ) -> AsyncIterator[TTSEvent]:
         """Decode one context's already-parsed frames into TTSEvents.
 
         Decoding (incl. context-scoped error surfacing) is shared with the
@@ -612,7 +643,7 @@ class ElevenLabsTTS(_WSTTSBase):
             # Drop frames for a different context.
             if data.get("contextId") not in (None, ctx.context_id):
                 continue
-            events, terminal = self._decode_message(data)
+            events, terminal = self._decode_message(data, state=audio_state)
             for event in events:
                 yield event
             if terminal:

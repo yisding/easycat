@@ -156,6 +156,36 @@ class FakePersistentWS:
         await self._queue.put(None)
 
 
+class InterleavedPersistentWS(FakePersistentWS):
+    """Persistent socket that waits for the test to supply interleaved audio."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts_ready = asyncio.Event()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+        msg = json.loads(message)
+        request_count = sum("transcript" in json.loads(frame) for frame in self.sent)
+        if "transcript" in msg and request_count == 2:
+            self.contexts_ready.set()
+
+
+async def _collect_persistent_audio(provider: CartesiaTTS, text: str) -> bytes:
+    chunks = []
+    async for event in provider.synthesize(text):
+        if event.type == TTSEventType.AUDIO and event.audio is not None:
+            chunks.append(bytes(event.audio.data))
+    return b"".join(chunks)
+
+
+async def _cancel_tasks(*tasks) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class TestCartesiaPersistent:
     def _make_provider(self, **kwargs) -> CartesiaTTS:
         return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=True, **kwargs))
@@ -380,6 +410,41 @@ class TestCartesiaPersistent:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(first, second, return_exceptions=True)
+                await provider.close()
+
+    async def test_concurrent_contexts_keep_audio_alignment_isolated(self):
+        """Interleaved persistent frames cannot share half-samples between contexts."""
+
+        provider = self._make_provider()
+        fake = InterleavedPersistentWS()
+        with patch.object(provider, "_build_ws", return_value=fake):
+            first = asyncio.create_task(_collect_persistent_audio(provider, "first"))
+            second = asyncio.create_task(_collect_persistent_audio(provider, "second"))
+            try:
+                await asyncio.wait_for(fake.contexts_ready.wait(), timeout=1)
+                contexts = {
+                    request["transcript"]: request["context_id"]
+                    for request in (json.loads(message) for message in fake.sent)
+                    if "transcript" in request
+                }
+                first_context = contexts["first"]
+                second_context = contexts["second"]
+
+                for message in (
+                    {"type": "chunk", "context_id": first_context, "data": "AQ=="},
+                    {"type": "chunk", "context_id": second_context, "data": "AgA="},
+                    {"type": "chunk", "context_id": first_context, "data": "AA=="},
+                    {"type": "done", "context_id": first_context, "done": True},
+                    {"type": "done", "context_id": second_context, "done": True},
+                ):
+                    await fake._queue.put(json.dumps(message))
+
+                first_audio, second_audio = await asyncio.gather(first, second)
+                assert first_audio == b"\x01\x00"
+                assert second_audio == b"\x02\x00"
+                assert provider._persistent_audio_states == {}
+            finally:
+                await _cancel_tasks(first, second)
                 await provider.close()
 
     async def test_early_consumer_close_cancels_remote_context(self):

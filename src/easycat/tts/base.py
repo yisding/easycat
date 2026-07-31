@@ -14,6 +14,20 @@ from easycat.tts.input import TTSInput, TTSInputPolicy
 logger = logging.getLogger(__name__)
 
 
+class _AudioConversionState:
+    """Frame-alignment and resampling state for one streaming audio source."""
+
+    def __init__(self, output_sample_rate: int) -> None:
+        self.sample_carry = b""
+        self.sample_carry_format: AudioFormat | None = None
+        self.resampler = PCM16StreamResampler(output_sample_rate)
+
+    def reset(self) -> None:
+        self.sample_carry = b""
+        self.sample_carry_format = None
+        self.resampler.reset()
+
+
 class TTSBase:
     """Concrete base class for TTS providers.
 
@@ -29,14 +43,41 @@ class TTSBase:
         self._output_format = output_format
         self._cancelled = False
         self._active = False
-        # Leftover sub-frame bytes carried across _make_audio_event calls so
-        # every emitted AudioChunk is frame-aligned, even when a streaming
-        # transport splits an interleaved multichannel frame. The format is
-        # retained with the carry so bytes from one source format can never be
-        # prepended to a different format after an upstream transition.
-        self._sample_carry = b""
-        self._sample_carry_format: AudioFormat | None = None
-        self._resampler = PCM16StreamResampler(self._output_format.sample_rate)
+        self._default_audio_state = self._new_audio_conversion_state()
+
+    def _new_audio_conversion_state(self) -> _AudioConversionState:
+        """Create isolated alignment state for one provider stream/context."""
+        return _AudioConversionState(self._output_format.sample_rate)
+
+    @property
+    def _sample_carry(self) -> bytes:
+        return self._default_audio_state.sample_carry
+
+    @_sample_carry.setter
+    def _sample_carry(self, value: bytes) -> None:
+        self._default_audio_state.sample_carry = value
+
+    @property
+    def _sample_carry_format(self) -> AudioFormat | None:
+        return self._default_audio_state.sample_carry_format
+
+    @_sample_carry_format.setter
+    def _sample_carry_format(self, value: AudioFormat | None) -> None:
+        self._default_audio_state.sample_carry_format = value
+
+    @property
+    def _resampler(self) -> PCM16StreamResampler:
+        return self._default_audio_state.resampler
+
+    @_resampler.setter
+    def _resampler(self, value: PCM16StreamResampler) -> None:
+        self._default_audio_state.resampler = value
+
+    def _audio_state(self, state: _AudioConversionState | None) -> _AudioConversionState:
+        return self._default_audio_state if state is None else state
+
+    def _reset_audio_state(self, state: _AudioConversionState | None = None) -> None:
+        self._audio_state(state).reset()
 
     @staticmethod
     def _validate_pcm16_format(name: str, fmt: AudioFormat) -> None:
@@ -63,9 +104,7 @@ class TTSBase:
         """Mark synthesis as active and reset cancellation state."""
         self._cancelled = False
         self._active = True
-        self._sample_carry = b""
-        self._sample_carry_format = None
-        self._resampler.reset()
+        self._reset_audio_state()
 
     def _end_synthesis(self) -> None:
         """Mark synthesis as complete and discard unfinished conversion state.
@@ -81,12 +120,10 @@ class TTSBase:
         error, cancellation, and early-generator-close paths intentionally
         discard any delayed resampler output here.
         """
-        self._sample_carry = b""
-        self._sample_carry_format = None
-        self._resampler.reset()
+        self._reset_audio_state()
         self._active = False
 
-    def _reset_audio_alignment(self) -> None:
+    def _reset_audio_alignment(self, *, state: _AudioConversionState | None = None) -> None:
         """Discard any held sub-sample remainder so the next chunk re-aligns.
 
         WebSocket providers replay the request on a mid-stream reconnect,
@@ -99,11 +136,15 @@ class TTSBase:
         the top of their ``_replay_request`` hook, mirroring the carry reset
         ``_start_synthesis``/``_end_synthesis`` perform around a synthesis run.
         """
-        self._sample_carry = b""
-        self._sample_carry_format = None
-        self._resampler.reset()
+        self._reset_audio_state(state)
 
-    def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent | None:
+    def _make_audio_event(
+        self,
+        data: bytes,
+        fmt: AudioFormat | None = None,
+        *,
+        state: _AudioConversionState | None = None,
+    ) -> TTSEvent | None:
         """Create a non-empty TTSEvent with AUDIO type.
 
         Streaming sources (WebSocket / chunked HTTP) can split a single
@@ -117,22 +158,23 @@ class TTSBase:
         """
         source_format = fmt if fmt is not None else self._output_format
         self._validate_pcm16_format("source_format", source_format)
-        if self._sample_carry_format != source_format:
-            self._sample_carry = b""
-            self._sample_carry_format = None
+        audio_state = self._audio_state(state)
+        if audio_state.sample_carry_format != source_format:
+            audio_state.sample_carry = b""
+            audio_state.sample_carry_format = None
 
         frame_size = source_format.frame_size
         if frame_size > 1:
-            data = self._sample_carry + data
+            data = audio_state.sample_carry + data
             remainder = len(data) % frame_size
             if remainder:
-                self._sample_carry = data[-remainder:]
-                self._sample_carry_format = source_format
+                audio_state.sample_carry = data[-remainder:]
+                audio_state.sample_carry_format = source_format
                 data = data[:-remainder]
             else:
-                self._sample_carry = b""
-                self._sample_carry_format = None
-        data = self._normalize_audio(data, source_format)
+                audio_state.sample_carry = b""
+                audio_state.sample_carry_format = None
+        data = self._normalize_audio(data, source_format, state=audio_state)
         # Quality streaming resamplers can retain an initial filter window.
         # Do not let that implementation detail masquerade as first audio to
         # timeout, observability, or playback accounting downstream.
@@ -141,14 +183,20 @@ class TTSBase:
         chunk = AudioChunk(data=data, format=self._output_format)
         return TTSEvent(type=TTSEventType.AUDIO, audio=chunk)
 
-    def _finish_audio_event(self, *, emit: bool = True) -> TTSEvent | None:
+    def _finish_audio_event(
+        self,
+        *,
+        emit: bool = True,
+        state: _AudioConversionState | None = None,
+    ) -> TTSEvent | None:
         """Flush delayed output after success, or discard it after cancellation."""
-        self._sample_carry = b""
-        self._sample_carry_format = None
+        audio_state = self._audio_state(state)
+        audio_state.sample_carry = b""
+        audio_state.sample_carry_format = None
         if not emit or self._cancelled:
-            self._resampler.reset()
+            audio_state.resampler.reset()
             return None
-        data = self._upmix_to_output_channels(self._resampler.finish())
+        data = self._upmix_to_output_channels(audio_state.resampler.finish())
         if not data:
             return None
         chunk = AudioChunk(data=data, format=self._output_format)
@@ -165,7 +213,13 @@ class TTSBase:
         """
         return TTSEvent(type=TTSEventType.MARKERS, markers=markers)
 
-    def _normalize_audio(self, data: bytes, source_format: AudioFormat) -> bytes:
+    def _normalize_audio(
+        self,
+        data: bytes,
+        source_format: AudioFormat,
+        *,
+        state: _AudioConversionState | None = None,
+    ) -> bytes:
         """Convert audio data to match the target output format.
 
         Preserves exact-format PCM16 data unchanged. Other channel layouts are
@@ -175,11 +229,12 @@ class TTSBase:
         Assumes PCM16 encoding throughout.
         """
         self._validate_pcm16_format("source_format", source_format)
+        audio_state = self._audio_state(state)
         if source_format == self._output_format:
             # A previous non-exact segment may still have delayed resampler
             # output. Emit that tail before the first direct-format samples so
             # a source-format transition cannot reorder audio.
-            return self._upmix_to_output_channels(self._resampler.finish()) + data
+            return self._upmix_to_output_channels(audio_state.resampler.finish()) + data
 
         if source_format.channels > 1:
             data = to_mono(data, source_format.channels)
@@ -188,7 +243,7 @@ class TTSBase:
         # incomplete source frame before calling here. Route same-rate chunks
         # through the stream converter too so a mid-stream source-rate change
         # flushes the prior segment before pass-through.
-        data = self._resampler.process(data, source_format.sample_rate)
+        data = audio_state.resampler.process(data, source_format.sample_rate)
 
         return self._upmix_to_output_channels(data)
 

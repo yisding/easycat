@@ -24,6 +24,7 @@ from easycat.tts._multi_context_ws import (
     validate_context_queue_maxsize,
 )
 from easycat.tts._ws_base import _WSTTSBase
+from easycat.tts.base import _AudioConversionState
 from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,7 @@ class CartesiaTTS(_WSTTSBase):
         # is re-emitted after the restart (audible repetition), not a seamless
         # resume.
         self._pending_request: str | None = None
+        self._persistent_audio_states: dict[str, _AudioConversionState] = {}
 
     def _create_ws(self) -> ReconnectingWebSocket:
         return self._build_ws(self._replay_request)
@@ -181,7 +183,7 @@ class CartesiaTTS(_WSTTSBase):
                 context_cancel_frames=lambda ctx_id: [
                     json.dumps({"context_id": ctx_id, "cancel": True})
                 ],
-                on_context_replay=lambda _ctx_id: self._reset_audio_alignment(),
+                on_context_replay=self._reset_persistent_audio_alignment,
                 socket_close_frames=lambda: [],
                 on_global_frame=self._on_global_frame,
                 context_queue_maxsize=self._config.context_queue_maxsize,
@@ -211,7 +213,22 @@ class CartesiaTTS(_WSTTSBase):
         if isinstance(parsed, dict) and parsed.get("type") == "error":
             self._emit_provider_error_from_msg(parsed)
 
-    def _decode_message(self, msg: dict[str, Any]) -> tuple[list[TTSEvent], bool]:
+    def _reset_persistent_audio_alignment(self, context_id: str) -> None:
+        state = self._persistent_audio_states.get(context_id)
+        if state is not None:
+            self._reset_audio_alignment(state=state)
+
+    def _discard_persistent_audio_state(self, context_id: str) -> None:
+        state = self._persistent_audio_states.pop(context_id, None)
+        if state is not None:
+            self._reset_audio_alignment(state=state)
+
+    def _decode_message(
+        self,
+        msg: dict[str, Any],
+        *,
+        state: _AudioConversionState | None = None,
+    ) -> tuple[list[TTSEvent], bool]:
         """Decode one parsed Cartesia message into (events, is_terminal).
 
         Single source of the chunk/timestamps/done/error wire decoding, shared
@@ -225,7 +242,11 @@ class CartesiaTTS(_WSTTSBase):
             if data_b64:
                 audio_bytes = base64.b64decode(data_b64)
                 if audio_bytes:
-                    event = self._make_audio_event(audio_bytes, self._source_format)
+                    event = self._make_audio_event(
+                        audio_bytes,
+                        self._source_format,
+                        state=state,
+                    )
                     if event is not None:
                         events.append(event)
             return events, bool(msg.get("done"))
@@ -393,9 +414,12 @@ class CartesiaTTS(_WSTTSBase):
         # still emit the provider error and run _end_synthesis() (clearing
         # is_active), exactly like the one-shot path.
         ctx: _Context | None = None
+        audio_state: _AudioConversionState | None = None
         terminal_received = False
         try:
             ctx = await mgr.open_context()
+            audio_state = self._new_audio_conversion_state()
+            self._persistent_audio_states[ctx.context_id] = audio_state
             await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
 
             # Frames arrive already parsed (the manager parses once); decode is
@@ -408,13 +432,13 @@ class CartesiaTTS(_WSTTSBase):
                 msg = self._context_frame(msg, ctx.context_id)
                 if msg is None:
                     continue
-                events, terminal = self._decode_message(msg)
+                events, terminal = self._decode_message(msg, state=audio_state)
                 for event in events:
                     yield event
                 if terminal:
                     terminal_received = True
                     break
-            tail = self._finish_audio_event()
+            tail = self._finish_audio_event(state=audio_state)
             if tail is not None:
                 yield tail
 
@@ -425,7 +449,10 @@ class CartesiaTTS(_WSTTSBase):
                 raise
         finally:
             if ctx is not None:
-                await self._finish_persistent_context(mgr, ctx, terminal_received)
+                try:
+                    await self._finish_persistent_context(mgr, ctx, terminal_received)
+                finally:
+                    self._discard_persistent_audio_state(ctx.context_id)
             self._end_synthesis()
 
     async def _finish_persistent_context(
