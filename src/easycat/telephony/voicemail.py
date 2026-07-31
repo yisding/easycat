@@ -811,6 +811,7 @@ class STTAMDFusionClassifier:
         self._call_answered = False
         self._screening_active = False
         self._tasks = BackgroundTaskScope()
+        self._timeout_task: asyncio.Task[None] | None = None
 
     @property
     def amd_result(self) -> str | None:
@@ -857,7 +858,19 @@ class STTAMDFusionClassifier:
         self._call_sid = event.call_sid
 
     def _cancel_timeout(self) -> None:
+        task = self._timeout_task
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is current:
+            # The timeout owns its own fusion emission. Keep it registered
+            # until that emission settles so stop() can still cancel a blocked
+            # subscriber instead of permitting a stale post-stop result.
+            return
         self._tasks.cancel(_STT_AMD_TIMEOUT_TASK)
+        if self._timeout_task is task:
+            self._timeout_task = None
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
         if event.call_sid:
@@ -941,11 +954,17 @@ class STTAMDFusionClassifier:
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._tasks.create_task(
+        task = self._tasks.create_task(
             _STT_AMD_TIMEOUT_TASK,
             self._timeout_coro(),
             replace=True,
         )
+        self._timeout_task = task
+        task.add_done_callback(self._clear_timeout_task)
+
+    def _clear_timeout_task(self, task: asyncio.Task[None]) -> None:
+        if self._timeout_task is task:
+            self._timeout_task = None
 
     async def _timeout_coro(self) -> None:
         """Timeout waiting for STT — use AMD result alone."""

@@ -292,6 +292,14 @@ class _SqlJournalBase:
                 input_ref,
                 output_ref,
             )
+            # ``close()`` can begin after the inexpensive check above but
+            # before a concurrent writer acquires its connection lock.  The
+            # connection-specific writer rechecks its state under that lock
+            # and returns this normal drop sentinel rather than attempting a
+            # write against a closed connection (which must not degrade a
+            # cleanly shut-down journal).
+            if sequence < 0:
+                return -1
             result = "pass"
             return sequence
         except Exception as exc:
@@ -780,6 +788,8 @@ class SqliteJournal(_SqlJournalBase):
         now_cpu = time.process_time_ns()
 
         with self._lock:
+            if self._closed or self._degraded:
+                return -1
             clear_clean_close = self._clean_close_marked
             previous_seq = self._seq
             if clear_clean_close:
@@ -1361,17 +1371,21 @@ class LibsqlJournal(_SqlJournalBase):
         if self._sync_thread is not None:
             self._sync_thread.join(timeout=5)
 
-        # Final sync.
-        try:
-            self._conn.sync()
-            harden_sqlite_files(self._db_path)
-        except Exception:
-            logger.debug("libsql final sync failed on close", exc_info=True)
+        # Serialize the final sync and connection close with an append that
+        # started just before ``_closed`` was set.  Unlike the periodic sync
+        # path, this used to touch the connection without the writer lock,
+        # allowing teardown to close it underneath an in-flight commit.
+        with self._lock:
+            try:
+                self._conn.sync()
+                harden_sqlite_files(self._db_path)
+            except Exception:
+                logger.debug("libsql final sync failed on close", exc_info=True)
 
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
 
     # ── Internals ────────────────────────────────────────────────
 
@@ -1391,6 +1405,8 @@ class LibsqlJournal(_SqlJournalBase):
         now_mono = time.monotonic_ns()
         now_cpu = time.process_time_ns()
         with self._lock:
+            if self._closed or self._degraded:
+                return -1
             previous_seq = self._seq
             self._seq = previous_seq + 1
             seq = self._seq

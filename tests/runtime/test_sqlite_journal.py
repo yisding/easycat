@@ -509,6 +509,56 @@ class TestSqliteJournalLifecycle:
         j.close()
         j.close()  # should not raise
 
+    def test_append_started_before_close_is_dropped_without_degrading(self, tmp_path):
+        """A writer that loses the close race is not a storage failure.
+
+        ``append()`` performs its inexpensive closed-state check before
+        entering the SQLite writer lock.  Hold it immediately after that
+        check, close the journal, then let it enter the writer implementation
+        to exercise the otherwise narrow interleave deterministically.
+        """
+        journal = SqliteJournal("close-race", data_dir=tmp_path)
+        append_entered = threading.Event()
+        allow_append = threading.Event()
+        results: list[int] = []
+        errors: list[BaseException] = []
+        original_do_append = journal._do_append
+
+        def _paused_do_append(*args, **kwargs):
+            append_entered.set()
+            assert allow_append.wait(timeout=1)
+            return original_do_append(*args, **kwargs)
+
+        def _append() -> None:
+            try:
+                results.append(
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="late",
+                        session_id="close-race",
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - regression assertion below
+                errors.append(exc)
+
+        journal._do_append = _paused_do_append
+        worker = threading.Thread(target=_append)
+        worker.start()
+        try:
+            assert append_entered.wait(timeout=1)
+            journal.close()
+            allow_append.set()
+            worker.join(timeout=1)
+
+            assert not worker.is_alive()
+            assert errors == []
+            assert results == [-1]
+            assert journal.degraded is False
+        finally:
+            allow_append.set()
+            worker.join(timeout=1)
+            journal.close()
+
     def test_wal_mode_enabled(self, tmp_path):
         j = SqliteJournal("sess", data_dir=tmp_path)
         # Check via a second connection.
@@ -1741,6 +1791,20 @@ class TestLibsqlJournal:
             assert probe.rollbacks == 1
             probe.journal = None
             journal.close()
+
+    def test_close_serializes_final_sync_with_writer_lock(self, tmp_path: Path) -> None:
+        """Close must not sync or close a libSQL connection beside a writer."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            journal = LibsqlJournal("close-lock", data_dir=tmp_path)
+            probe.journal = journal
+            journal.close()
+
+        assert probe.violations == []
 
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""

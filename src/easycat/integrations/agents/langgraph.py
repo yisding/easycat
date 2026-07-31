@@ -602,6 +602,7 @@ class LangGraphBridge:
         if self._include_types is not None:
             stream_kwargs["include_types"] = self._include_types
 
+        stream: AsyncIterator[dict[str, Any]] | None = None
         try:
             stream = self._graph.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
@@ -691,6 +692,12 @@ class LangGraphBridge:
                 self._turn_produced_no_assistant = True
             await self._purge_transient_context(recorder)
             raise
+        finally:
+            # Like LangChain, a consumer's ``aclose()`` only reaches this
+            # driver. Explicitly close the graph-owned iterator as well so
+            # its callback tasks and transports do not outlive the cancelled
+            # voice turn.
+            await aclose_quietly(stream)
 
     async def _finalize_done(
         self,

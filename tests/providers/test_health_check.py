@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 
 import pytest
@@ -123,6 +124,53 @@ class TestPeriodicHealthChecker:
         finally:
             await checker.stop()
         assert not checker.is_running
+
+    def test_start_without_running_loop_leaves_no_task_or_coroutine_warning(
+        self,
+        recwarn: pytest.WarningsRecorder,
+    ) -> None:
+        checker = PeriodicHealthChecker(HealthyProvider(), provider_name="test")
+
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            checker.start()
+        gc.collect()
+
+        assert checker.is_running is False
+        assert checker._task is None
+        assert not [warning for warning in recwarn if issubclass(warning.category, RuntimeWarning)]
+
+    async def test_stop_preserves_caller_cancellation_and_retains_pending_task(self):
+        """Cancelling the owner must not be swallowed as the child's stop signal."""
+        checker = PeriodicHealthChecker(HealthyProvider(), provider_name="test")
+        release = asyncio.Event()
+        child_cancelled = asyncio.Event()
+
+        async def cancellation_resistant_task() -> None:
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    child_cancelled.set()
+
+        child = asyncio.create_task(cancellation_resistant_task())
+        checker._running = True
+        checker._task = child
+        stopping = asyncio.create_task(checker.stop())
+        await child_cancelled.wait()
+
+        try:
+            stopping.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stopping
+
+            assert checker._task is child
+            assert checker.is_running is False
+        finally:
+            release.set()
+            await child
+
+        await checker.stop()
+        assert checker._task is None
 
     async def test_periodic_detects_stale_connection(self):
         """Start a periodic checker that detects a stale (unhealthy) provider."""

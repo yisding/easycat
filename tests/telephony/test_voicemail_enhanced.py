@@ -433,3 +433,34 @@ class TestEnhancedVoicemailIntegration:
             assert classifier._tasks.empty
         finally:
             classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_timeout_while_fused_event_subscriber_is_blocked(self) -> None:
+        """A timeout-owned fusion result cannot leak after classifier teardown."""
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.01)
+        fusion_started = asyncio.Event()
+        allow_fusion_finish = asyncio.Event()
+        fused_results: list[VoicemailDetected] = []
+
+        async def block_fused(event: VoicemailDetected) -> None:
+            if event.source != "fusion":
+                return
+            fusion_started.set()
+            await allow_fusion_finish.wait()
+            fused_results.append(event)
+
+        classifier.start()
+        bus.subscribe(VoicemailDetected, block_fused)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await asyncio.wait_for(fusion_started.wait(), timeout=0.5)
+
+            classifier.stop()
+            allow_fusion_finish.set()
+            await asyncio.sleep(0)
+
+            assert fused_results == []
+        finally:
+            classifier.stop()

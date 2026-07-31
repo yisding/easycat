@@ -10,6 +10,7 @@ if a downstream test drifts.
 from __future__ import annotations
 
 import asyncio
+import gc
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,6 +108,19 @@ async def test_emit_is_noop_without_bus():
     per_conn = _PerConnectionProbe()  # _provider_event_bus left None
     per_conn._emit_provider_error(RuntimeError("boom"))
     assert per_conn._emit_tasks == set()
+
+
+def test_emit_with_bus_outside_running_loop_does_not_leak_a_coroutine(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    """The documented no-loop path is a quiet no-op, not an unawaited emit."""
+    probe = _ConfigProbe(_Config(event_bus=_RecordingBus()))
+
+    probe._emit_provider_error(RuntimeError("boom"))
+    gc.collect()
+
+    assert probe._emit_tasks == set()
+    assert not [warning for warning in recwarn if issubclass(warning.category, RuntimeWarning)]
 
 
 @pytest.mark.asyncio

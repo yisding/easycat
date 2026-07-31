@@ -295,3 +295,52 @@ async def test_generator_close_cancels_run(monkeypatch):
 
     assert result.cancel_calls == ["immediate"]
     assert result.side_effects == []
+
+
+@pytest.mark.asyncio
+async def test_generator_close_closes_sdk_event_stream(monkeypatch):
+    """A hard barge-in closes the SDK event iterator after cancelling it."""
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    agent = _Agent()
+
+    class _CloseAwareEvents:
+        def __init__(self) -> None:
+            self.closed = False
+            self._events = iter([_text_event("Hel")])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> Any:
+            try:
+                return next(self._events)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    class _CloseAwareRunResult(_CancellableRunResult):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.events_stream = _CloseAwareEvents()
+
+        def stream_events(self) -> _CloseAwareEvents:
+            return self.events_stream
+
+    result = _CloseAwareRunResult(
+        last_agent=agent,
+        settled_input=[{"role": "user", "content": "hi"}],
+        events=[],
+    )
+    monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner(result))
+    bridge = OpenAIAgentsBridge(agent)
+
+    stream = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+    first = await anext(stream)
+    assert first.kind == "text_delta"
+    await stream.aclose()
+
+    assert result.cancel_calls == ["immediate"]
+    assert result.events_stream.closed

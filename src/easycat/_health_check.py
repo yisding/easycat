@@ -81,18 +81,33 @@ class PeriodicHealthChecker:
         """Start the periodic health check loop."""
         if self._running:
             return
+        # Resolve the running loop before constructing ``self._run()``. Calling
+        # ``asyncio.create_task(self._run())`` first creates a coroutine that
+        # leaks a RuntimeWarning when an owner accidentally starts us from
+        # synchronous code.
+        loop = asyncio.get_running_loop()
         self._running = True
-        self._task = asyncio.create_task(self._run())
+        self._task = loop.create_task(self._run())
 
     async def stop(self) -> None:
         """Stop the periodic health check loop."""
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task and not task.done():
+            current = asyncio.current_task()
+            cancellation_requests = current.cancelling() if current is not None else 0
+            task.cancel()
             try:
-                await self._task
+                # A caller abandoning its wait must not issue another
+                # cancellation to the owned checker task, nor be mistaken for
+                # the expected cancellation of that task.
+                await asyncio.shield(task)
             except asyncio.CancelledError:
-                pass  # Expected: we just cancelled the task above
+                if current is not None and current.cancelling() > cancellation_requests:
+                    # Keep ``_task`` reachable so a later stop can finish the
+                    # cancellation-resistant checker rather than orphaning it.
+                    raise
+                # Expected: the checker task acknowledged our cancellation.
         self._task = None
 
     async def check_once(self) -> bool:
