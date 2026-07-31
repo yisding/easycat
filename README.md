@@ -99,7 +99,7 @@ Prefer exported shell variables? `uv run easycat doctor` and
 | Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
 | Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
 | Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |
-| Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](docs/validation.md) | `uv run easycat validate quick` |
+| Contribute or validate a change | [Developer textbook](docs/development/) and [Contributing](CONTRIBUTING.md) | Read the system map, then use the [validation workflow](docs/validation.md) and run `uv run easycat validate quick` |
 | Maintain architecture, package boundaries, or coding-agent context | [Architecture map](CLAUDE.md) and [agent guide](AGENTS.md) | Review provider registries, session lifecycle, `uv run easycat docs --audience maintainers`, and `uv run easycat docs --audience coding-agents` |
 | Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Run `easycat bundles list`; add `uv sync --extra debugger --group dev` for the UI |
 

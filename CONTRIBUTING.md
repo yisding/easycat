@@ -2,7 +2,10 @@
 
 Thanks for improving EasyCat. This guide focuses on **testing and validation** —
 how to run each test slice, what the markers mean, and how to keep the suite
-green. For architecture, see [`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md).
+green. New maintainers should first follow the
+[`developer textbook`](docs/development/) for the guided architecture and
+source tour. For compact architecture and repository rules, see
+[`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md).
 
 ## Quick start
 
