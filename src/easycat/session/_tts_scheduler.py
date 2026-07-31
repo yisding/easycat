@@ -194,11 +194,13 @@ class TTSScheduler:
         so the barge-in / clear semantics live in exactly one place.
 
         Drains pending session actions (end_call, transfer) *before*
-        transitioning the turn manager to IDLE so no new turn can sneak
-        in. When ``should_stop`` is signalled the outbound audio is
-        drained before stopping; otherwise the manager stops first and the
-        queued tail audio is drained afterwards so the router can still
-        record sent bytes and emit playback marks.
+        transitioning the turn manager to IDLE. Since that drain can yield
+        to cancellation-resistant application cleanup, every later manager
+        transition is guarded against a barge-in successor. When
+        ``should_stop`` is signalled the outbound audio is drained before
+        stopping; otherwise the manager stops first and the queued tail
+        audio is drained afterwards so the router can still record sent
+        bytes and emit playback marks.
 
         The turn pointer is only cleared when the same turn (matched by
         identity *and*, when supplied, ``turn_generation``) is still
@@ -210,28 +212,37 @@ class TTSScheduler:
         """
         should_stop = await self._drain_session_actions()
         try:
+            if not self._turn_is_current(turn, turn_generation):
+                return should_stop
             if should_stop:
                 await self._audio_router.await_drain()
-                await self._turn_manager.bot_stopped_speaking()
+                if self._turn_is_current(turn, turn_generation):
+                    await self._turn_manager.bot_stopped_speaking()
             else:
                 await self._turn_manager.bot_stopped_speaking()
-                await self._audio_router.await_drain()
+                if self._turn_is_current(turn, turn_generation):
+                    await self._audio_router.await_drain()
         finally:
             actions = self._session_actions()
             if actions is not None:
                 actions.clear_no_interrupt()
-        turn_still_current = self._current_turn() is turn and (
-            turn_generation is None or (turn is not None and turn.generation == turn_generation)
-        )
+        turn_still_current = self._turn_is_current(turn, turn_generation)
         if turn_still_current:
             await self._audio_router.flush_trailing_playback_mark(turn)
-            turn_still_current = self._current_turn() is turn and (
-                turn_generation is None
-                or (turn is not None and turn.generation == turn_generation)
-            )
+            turn_still_current = self._turn_is_current(turn, turn_generation)
             if turn_still_current:
                 self._clear_turn()
         return should_stop
+
+    def _turn_is_current(
+        self,
+        turn: TurnContext | None,
+        turn_generation: int | None,
+    ) -> bool:
+        """Whether a finalizer still owns the active turn pointer."""
+        return self._current_turn() is turn and (
+            turn_generation is None or (turn is not None and turn.generation == turn_generation)
+        )
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
