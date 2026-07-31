@@ -30,6 +30,7 @@ from websockets.http11 import Request, Response
 
 from easycat._audio_utils import PCM16StreamResampler, resample
 from easycat._net import is_loopback_host
+from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
     CallAnswered,
@@ -102,12 +103,12 @@ class TwilioStreamTokenStore:
         ttl_s: float = 300.0,
         now: Callable[[], float] = time.time,
     ) -> None:
-        if ttl_s <= 0:
-            raise ValueError("ttl_s must be positive")
+        if not is_finite_number(ttl_s) or ttl_s <= 0:
+            raise ValueError("ttl_s must be a finite positive number")
         if secret is None:
             secret = secrets.token_urlsafe(32)
         self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
-        self._ttl_s = ttl_s
+        self._ttl_s = float(ttl_s)
         self._now = now
         self._pending: dict[str, _TwilioStreamGrant] = {}
         self._idempotent: dict[str, _TwilioStreamGrant] = {}

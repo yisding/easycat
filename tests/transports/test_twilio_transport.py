@@ -211,6 +211,11 @@ class _MalformedTrickleWebSocket(_ScriptedTwilioWebSocket):
 
 
 class TestTwilioStreamTokenStore:
+    @pytest.mark.parametrize("ttl_s", [True, 0, -1, float("nan"), float("inf")])
+    def test_rejects_invalid_ttl(self, ttl_s: float) -> None:
+        with pytest.raises(ValueError, match="ttl_s must be a finite positive number"):
+            TwilioStreamTokenStore("secret", ttl_s=ttl_s)
+
     def test_consumes_token_once(self) -> None:
         store = TwilioStreamTokenStore("secret")
         token = store.issue()
