@@ -1222,6 +1222,7 @@ class Session:
             # — dropping frame" and discarding the first seconds of capture.
             # None of these hooks need the transport connected.
             await self._warmup.run(select=lambda name: name != "transport")
+            self._raise_if_start_interrupted()
 
             # Telephony helpers subscribe to lifecycle events emitted while a
             # preflighted transport applies its deferred start frame.
@@ -1230,12 +1231,14 @@ class Session:
 
             await self.transport.connect()
             transport_connected = True
+            self._raise_if_start_interrupted()
 
             # The transport's own warmup runs AFTER connect (and before
             # ingress) so a transport ``warmup()`` may prime resources that
             # ``connect()`` initializes (socket/client handles, per-connection
             # queues).  No-op for transports without a warmup hook.
             await self._warmup.run(select=lambda name: name == "transport")
+            self._raise_if_start_interrupted()
 
             if not self._outbound_queue_external:
                 self._outbound_queue = BoundedAudioQueue(
@@ -1297,6 +1300,18 @@ class Session:
                 self._stopping = True
                 raise startup_error from cleanup_error
             raise
+
+    def _raise_if_start_interrupted(self) -> None:
+        """Abort startup if force teardown took ownership mid-await.
+
+        A provider may suppress the cancellation delivered by
+        ``stop(force=True)`` and return normally from a startup await. The
+        stop path is then allowed to finish independently, so startup must
+        turn that lost cancellation into its ordinary rollback path rather
+        than resurrecting the closed session.
+        """
+        if self._closed or self._stopping:
+            raise asyncio.CancelledError("Session startup was interrupted by stop()")
 
     async def _finish_interrupted_start(
         self,
