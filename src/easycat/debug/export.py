@@ -343,6 +343,7 @@ def _write_bundle_archive(
     inline_artifacts: bool,
 ) -> None:
     manifest_dict = _manifest_to_dict(manifest)
+    artifact_sources = tuple(artifact_sources)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_name: str | None = None
     try:
@@ -351,6 +352,10 @@ def _write_bundle_archive(
         tmp.close()  # Release the fd; ZipFile will open the path itself.
         with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
             referenced_artifact_refs = _write_journal_member(zf, journal)
+            _require_referenced_artifacts(
+                referenced_artifact_refs,
+                {source.ref for source in artifact_sources},
+            )
             artifact_iter = iter(
                 source for source in artifact_sources if source.ref in referenced_artifact_refs
             )
@@ -392,11 +397,35 @@ def _write_journal_member(
             member.write(line)
             written += len(line)
             first = False
-            for ref_key in ("input_ref", "output_ref"):
-                ref = record.get(ref_key)
-                if isinstance(ref, str) and ref:
-                    referenced_artifact_refs.add(ref)
+            referenced_artifact_refs.update(_record_artifact_refs(record))
     return referenced_artifact_refs
+
+
+def _record_artifact_refs(record: Mapping[str, Any]) -> Iterator[str]:
+    """Yield valid journal artifact refs, matching the bundle loader contract."""
+    for ref_key in ("input_ref", "output_ref"):
+        ref = record.get(ref_key)
+        if ref is None:
+            continue
+        if not isinstance(ref, str) or not _SHA256_REF.fullmatch(ref):
+            raise BundleValidationError(
+                f"Journal {ref_key} must be a SHA-256 artifact ref or null",
+                reason_code="INVALID_REF",
+            )
+        yield ref
+
+
+def _require_referenced_artifacts(
+    referenced_artifact_refs: set[str],
+    available_artifact_refs: set[str],
+) -> None:
+    """Reject exports that would otherwise produce an unloadable bundle."""
+    missing_refs = referenced_artifact_refs - available_artifact_refs
+    if missing_refs:
+        raise BundleValidationError(
+            "Journal references missing artifact(s): " + ", ".join(sorted(missing_refs)),
+            reason_code="MISSING_ARTIFACT",
+        )
 
 
 def _write_artifact_members(
