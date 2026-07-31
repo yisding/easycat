@@ -22,7 +22,12 @@ parity test keeps them in lockstep.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +61,13 @@ MAX_SIDECAR_BYTES = 5 * 1024 * 1024
 # Valid score band (inclusive).  ``None`` means "no score given".
 _SCORE_MIN = 1
 _SCORE_MAX = 5
+
+# ``flock`` semantics are platform-specific for multiple descriptors opened
+# by one process.  Serialize local writers explicitly and layer a separate
+# lock file on top for writers in other debugger processes.  The lock must
+# not be the sidecar itself: every save atomically replaces that file.
+_LOCAL_WRITE_LOCK = threading.RLock()
+_READ_CHUNK_SIZE = 64 * 1024
 
 
 class AnnotationError(ValueError):
@@ -122,6 +134,103 @@ def sidecar_path(bundle_path: str | Path) -> Path:
     return path.with_name(path.name + ".annotations.json")
 
 
+def _read_sidecar_text(path: Path) -> str | None:
+    """Read a bounded regular sidecar without following symlinks.
+
+    Annotation sidecars are advisory, so an unusual filesystem object is
+    treated like corrupt input rather than allowed to stall a debugger route.
+    Check both the path and the opened descriptor to close the common
+    check-then-open race.
+    """
+    try:
+        initial = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_SIDECAR_BYTES:
+        return None
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size > MAX_SIDECAR_BYTES
+            or (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino)
+        ):
+            return None
+
+        data = bytearray()
+        while len(data) <= MAX_SIDECAR_BYTES:
+            chunk = os.read(
+                fd,
+                min(_READ_CHUNK_SIZE, MAX_SIDECAR_BYTES + 1 - len(data)),
+            )
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > MAX_SIDECAR_BYTES:
+            return None
+        return data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(fd)
+
+
+def _lock_file(lock_file: Any) -> None:
+    """Acquire an exclusive advisory lock for the open lock file."""
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        lock_file.write(b"\0")
+        lock_file.flush()
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(lock_file: Any) -> None:
+    """Release an exclusive advisory lock acquired by :func:`_lock_file`."""
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _sidecar_write_lock(path: Path) -> Iterator[None]:
+    """Serialize a sidecar read-modify-write across threads and processes."""
+    lock_path = path.with_name(path.name + ".lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with _LOCAL_WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, flags, 0o600)
+        with os.fdopen(fd, "r+b") as lock_file:
+            if not stat.S_ISREG(os.fstat(lock_file.fileno()).st_mode):
+                raise OSError("annotation sidecar lock is not a regular file")
+            _lock_file(lock_file)
+            try:
+                yield
+            finally:
+                _unlock_file(lock_file)
+
+
 def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     """Load the ``{turn_id: record}`` map for *bundle_path*.
 
@@ -130,11 +239,8 @@ def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     must never break ``bundles show`` or the debugger UI.
     """
     path = sidecar_path(bundle_path)
-    try:
-        if path.stat().st_size > MAX_SIDECAR_BYTES:
-            return {}
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    raw = _read_sidecar_text(path)
+    if raw is None:
         return {}
     try:
         payload = json.loads(raw)
@@ -175,32 +281,32 @@ def save_annotation(
         raise AnnotationError(f"turn_id does not exist in bundle: {annotation.turn_id!r}")
 
     path = sidecar_path(bundle_path)
-    existing = load_annotations(bundle_path)
-    is_new_turn = annotation.turn_id not in existing
-    if is_new_turn and len(existing) >= MAX_ANNOTATIONS:
-        raise AnnotationError(f"annotation sidecar is limited to {MAX_ANNOTATIONS} turns")
-    record = annotation.to_record()
-    record["updated_at"] = datetime.now(UTC).isoformat()
-    existing[annotation.turn_id] = record
-    payload = {"schema_version": SCHEMA_VERSION, "annotations": existing}
-    serialized = json.dumps(payload, indent=2)
-    if len(serialized.encode("utf-8")) > MAX_SIDECAR_BYTES:
-        raise AnnotationError(f"annotation sidecar is limited to {MAX_SIDECAR_BYTES} bytes")
+    with _sidecar_write_lock(path):
+        existing = load_annotations(bundle_path)
+        is_new_turn = annotation.turn_id not in existing
+        if is_new_turn and len(existing) >= MAX_ANNOTATIONS:
+            raise AnnotationError(f"annotation sidecar is limited to {MAX_ANNOTATIONS} turns")
+        record = annotation.to_record()
+        record["updated_at"] = datetime.now(UTC).isoformat()
+        existing[annotation.turn_id] = record
+        payload = {"schema_version": SCHEMA_VERSION, "annotations": existing}
+        serialized = json.dumps(payload, indent=2)
+        if len(serialized.encode("utf-8")) > MAX_SIDECAR_BYTES:
+            raise AnnotationError(f"annotation sidecar is limited to {MAX_SIDECAR_BYTES} bytes")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_name: str | None = None
-    try:
-        tmp = tempfile.NamedTemporaryFile(
-            dir=path.parent, suffix=".tmp", delete=False, mode="w", encoding="utf-8"
-        )
-        tmp_name = tmp.name
+        tmp_name: str | None = None
         try:
-            tmp.write(serialized)
-        finally:
-            tmp.close()
-        Path(tmp_name).replace(path)
-    except Exception:
-        if tmp_name and Path(tmp_name).exists():
-            Path(tmp_name).unlink()
-        raise
+            tmp = tempfile.NamedTemporaryFile(
+                dir=path.parent, suffix=".tmp", delete=False, mode="w", encoding="utf-8"
+            )
+            tmp_name = tmp.name
+            try:
+                tmp.write(serialized)
+            finally:
+                tmp.close()
+            Path(tmp_name).replace(path)
+        except Exception:
+            if tmp_name and Path(tmp_name).exists():
+                Path(tmp_name).unlink()
+            raise
     return record

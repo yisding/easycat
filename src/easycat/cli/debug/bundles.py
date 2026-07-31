@@ -448,6 +448,9 @@ def serve_debugger_ui(
         serve_run_bundle(
             bundle,
             label=bundle_path.name,
+            # SQLite journals are pathless ``RunBundle`` views for debugger
+            # purposes; only an immutable ZIP bundle has a sidecar surface.
+            annotate_path=bundle_path if bundle_path.suffix != ".sqlite" else None,
             host=host,
             port=port,
             open_browser=open_browser,
