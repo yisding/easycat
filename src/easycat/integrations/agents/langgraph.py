@@ -84,6 +84,14 @@ _DEFAULT_STREAM_MODES: tuple[str, ...] = ("custom", "updates")
 logger = logging.getLogger(__name__)
 
 
+def _stream_event_object(event: Any) -> dict[str, Any] | None:
+    """Return a stream event object, dropping malformed provider items."""
+    if isinstance(event, dict):
+        return event
+    logger.warning("Ignoring malformed LangGraph stream event: expected an object")
+    return None
+
+
 # No default ``include_types`` filter.  LangChain's ``astream_events``
 # filter keys ``on_custom_event`` on the *custom event's name* (not a
 # runnable ``run_type``), so any non-``None`` ``include_types`` silently
@@ -631,8 +639,12 @@ class LangGraphBridge:
                         self._turn_produced_no_assistant = True
                     break
 
-                graph_chunk = self._extract_graph_stream_chunk(event)
-                if graph_chunk is not None:
+                # ``astream_events`` is a third-party streaming boundary;
+                # graph-chunk extraction and lifecycle helpers expect objects.
+                if (event := _stream_event_object(event)) is None:
+                    continue
+
+                if graph_chunk := self._extract_graph_stream_chunk(event):
                     mode_name, payload = graph_chunk
                     for bridge_event in self._handle_graph_stream_chunk(
                         mode_name, payload, recorder

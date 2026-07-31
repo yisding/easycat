@@ -134,6 +134,25 @@ class TestLangGraphBridgeInvoke:
         assert {r.data["display_name"] for r in workflow_nodes} == {"research", "write"}
 
     @pytest.mark.asyncio
+    async def test_ignores_non_mapping_stream_events(self):
+        """A malformed provider event must not abort a later valid response."""
+        graph = _MockCompiledGraph(
+            [
+                ["not an event object"],
+                _model_stream("still works"),
+            ]
+        )
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(event)
+
+        text = "".join(event.text for event in events if event.kind == "text_delta")
+        assert text == "still works"
+        assert [event.kind for event in events][-1] == "done"
+
+    @pytest.mark.asyncio
     async def test_agent_runner_timeout_closes_open_cursors(self):
         """The default ``AgentRunner`` enforces its timeout by
         cancelling the bridge's pending ``__anext__``
