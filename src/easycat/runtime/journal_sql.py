@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
+from easycat._numeric import is_finite_number
 from easycat._observability import observe_gauge, record_histogram
 from easycat._session_id import validate_persistent_session_id
 from easycat.runtime._journal_codec import (
@@ -1220,6 +1221,20 @@ class LitestreamSqliteJournal:
 # ── libSQL adapter ──────────────────────────────────────────────
 
 
+def _resolve_libsql_sync_interval(sync_interval_s: object | None) -> float:
+    """Return a finite positive sync interval from config or the environment."""
+    value = sync_interval_s
+    if value is None:
+        raw = os.environ.get("EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S", "10")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sync_interval_s must be a finite positive number") from exc
+    if not is_finite_number(value) or value <= 0:
+        raise ValueError("sync_interval_s must be a finite positive number")
+    return float(value)
+
+
 class LibsqlJournal(_SqlJournalBase):
     """Journal backend using the libSQL embedded-replica SDK.
 
@@ -1249,6 +1264,7 @@ class LibsqlJournal(_SqlJournalBase):
         import libsql_experimental as libsql  # noqa: F811 — intentional conditional import
 
         self._libsql = libsql
+        self._sync_interval = _resolve_libsql_sync_interval(sync_interval_s)
 
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         journals_dir = root / "journals"
@@ -1282,13 +1298,6 @@ class LibsqlJournal(_SqlJournalBase):
                 self._release_live_journal()
                 self._conn.close()
                 raise
-
-        # Periodic sync configuration.
-        self._sync_interval = sync_interval_s
-        if self._sync_interval is None:
-            self._sync_interval = float(
-                os.environ.get("EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S", "10")
-            )
 
         self._sync_stop = threading.Event()
         self._sync_thread: threading.Thread | None = None
