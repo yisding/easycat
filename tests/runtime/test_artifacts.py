@@ -239,6 +239,45 @@ class TestFilesystemArtifactStore:
         assert store.put(payload) == ""
         assert not (outside_dir / ref[:2] / f"{ref}.bin").exists()
 
+    def test_artifact_root_symlink_is_not_followed_for_writes(self, tmp_path):
+        """Writes must not escape through an injected artifacts-root symlink."""
+        payload = b"trusted payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        artifacts_dir = tmp_path / "artifacts"
+        try:
+            artifacts_dir.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ""
+        assert not (outside_dir / "sess" / ref[:2] / f"{ref}.bin").exists()
+
+    def test_artifact_root_symlink_is_not_read_or_deleted(self, tmp_path):
+        """Parent links must not expose or delete blobs outside the store."""
+        payload = b"outside payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        outside_dir = tmp_path / "outside"
+        outside_path = outside_dir / "sess" / ref[:2] / f"{ref}.bin"
+        outside_path.parent.mkdir(parents=True)
+        outside_path.write_bytes(payload)
+        artifacts_dir = tmp_path / "artifacts"
+        try:
+            artifacts_dir.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store._current_bytes == 0
+        assert store.get(ref) is None
+        assert store.has(ref) is False
+        store.delete(ref)
+        assert outside_path.read_bytes() == payload
+
     def test_get_head_tail_reads_bounded_window(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         payload = b"a" * 10 + b"middle" * 20 + b"z" * 10

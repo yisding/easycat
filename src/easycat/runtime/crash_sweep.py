@@ -179,8 +179,18 @@ def snapshot_crash_dump_artifacts(
     if not refs:
         return
 
-    source_root = root / "artifacts" / db_path.stem
-    if not source_root.is_dir():
+    artifacts_dir = root / "artifacts"
+    source_root = artifacts_dir / db_path.stem
+    try:
+        unsafe_source = (
+            artifact_root.is_symlink()
+            or artifacts_dir.is_symlink()
+            or source_root.is_symlink()
+            or not source_root.is_dir()
+        )
+    except OSError:
+        unsafe_source = True
+    if unsafe_source:
         return
 
     sources: list[tuple[str, Path]] = []
@@ -242,7 +252,13 @@ def _referenced_artifact_refs(db_path: Path) -> set[str]:
 def _artifact_source_path(source_root: Path, ref: str) -> Path | None:
     """Find one non-symlink artifact in sharded or legacy-flat storage."""
     for path in (source_root / ref[:2] / f"{ref}.bin", source_root / f"{ref}.bin"):
-        if path.is_file() and not path.is_symlink():
+        try:
+            valid_source = (
+                not path.parent.is_symlink() and path.is_file() and not path.is_symlink()
+            )
+        except OSError:
+            continue
+        if valid_source:
             return path
     return None
 

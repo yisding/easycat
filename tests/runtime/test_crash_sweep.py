@@ -124,6 +124,27 @@ def test_crash_dump_snapshots_artifacts_away_from_reused_session(tmp_path) -> No
     assert copied.read_bytes() == payload
 
 
+def test_crash_dump_does_not_snapshot_artifacts_through_parent_symlink(tmp_path) -> None:
+    session_id = "orphan"
+    payload = b"outside artifact"
+    outside_root = tmp_path / "outside"
+    outside_store = FilesystemArtifactStore(session_id, data_dir=outside_root)
+    ref = outside_store.put(payload)
+    _crash_one(session_id, tmp_path, input_ref=ref)
+    artifacts = tmp_path / "artifacts"
+    try:
+        artifacts.symlink_to(outside_root / "artifacts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+
+    assert sweep_crashed_journals(tmp_path) == 1
+
+    crash_path = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
+    copied = crash_dump_artifact_root(crash_path) / ref[:2] / f"{ref}.bin"
+    assert not copied.exists()
+    assert outside_store.get(ref) == payload
+
+
 def test_repeated_crashes_for_reused_session_id_keep_each_dump(tmp_path) -> None:
     _crash_one("reused", tmp_path, name="first")
     assert sweep_crashed_journals(tmp_path) == 1

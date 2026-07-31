@@ -227,7 +227,8 @@ class FilesystemArtifactStore:
     ) -> None:
         validate_persistent_session_id(session_id)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
-        self._dir = root / "artifacts" / session_id
+        self._artifacts_dir = root / "artifacts"
+        self._dir = self._artifacts_dir / session_id
         self._lock = threading.Lock()
         self._max_bytes = max_bytes
         self._current_bytes = self._stored_bytes()
@@ -244,6 +245,12 @@ class FilesystemArtifactStore:
         if existing is not None:
             return ref
         with self._lock:
+            if self._directory_hierarchy_is_symlinked():
+                logger.warning(
+                    "Artifact write refused for ref=%s: artifact directory hierarchy is a symlink",
+                    ref,
+                )
+                return ""
             if self._existing_ref_path(ref) is not None:
                 return ref
             if self._current_bytes + len(payload) > self._max_bytes:
@@ -260,9 +267,11 @@ class FilesystemArtifactStore:
                 return ""
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
-                if self._dir.is_symlink():
+                if self._directory_hierarchy_is_symlinked():
                     logger.warning(
-                        "Artifact write refused for ref=%s: session directory is a symlink", ref
+                        "Artifact write refused for ref=%s: "
+                        "artifact directory hierarchy is a symlink",
+                        ref,
                     )
                     return ""
                 os.chmod(self._dir, 0o700)
@@ -316,7 +325,7 @@ class FilesystemArtifactStore:
     def delete(self, ref: str) -> None:
         if not _is_sha256_ref(ref):
             return
-        if self._dir.is_symlink():
+        if self._directory_hierarchy_is_symlinked():
             return
         with self._lock:
             for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
@@ -346,7 +355,7 @@ class FilesystemArtifactStore:
     def _existing_ref_path(self, ref: str) -> Path | None:
         if not _is_sha256_ref(ref):
             return None
-        if self._dir.is_symlink():
+        if self._directory_hierarchy_is_symlinked():
             return None
         sharded = self._ref_path(ref)
         if not sharded.parent.is_symlink() and not sharded.is_symlink() and sharded.is_file():
@@ -355,7 +364,7 @@ class FilesystemArtifactStore:
         return legacy if not legacy.is_symlink() and legacy.is_file() else None
 
     def _stored_bytes(self) -> int:
-        if self._dir.is_symlink() or not self._dir.is_dir():
+        if self._directory_hierarchy_is_symlinked() or not self._dir.is_dir():
             return 0
         total = 0
         try:
@@ -370,3 +379,9 @@ class FilesystemArtifactStore:
         except OSError:
             return total
         return total
+
+    def _directory_hierarchy_is_symlinked(self) -> bool:
+        try:
+            return self._artifacts_dir.is_symlink() or self._dir.is_symlink()
+        except OSError:
+            return True
