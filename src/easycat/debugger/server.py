@@ -108,6 +108,15 @@ def _record_sequence(record: dict[str, Any]) -> int | None:
     return seq
 
 
+def _websocket_control_payload(message: str) -> dict[str, Any] | None:
+    """Decode one optional JSON WebSocket control object."""
+    try:
+        payload = json.loads(message)
+    except (RecursionError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _collect_audio_frames(
     source: DebuggerSource, turn_id: str, *, track: str
 ) -> tuple[list[bytes], dict[str, int]]:
@@ -880,7 +889,7 @@ class _DebuggerRoutes:
             return web.Response(status=405, text="this source does not support replay")
         try:
             payload = await request.json()
-        except json.JSONDecodeError:
+        except (RecursionError, ValueError):
             return web.Response(status=400, text="body must be JSON")
         if not isinstance(payload, dict):
             return web.Response(status=400, text="body must be a JSON object")
@@ -1224,11 +1233,8 @@ class _DebuggerRoutes:
                 with contextlib.suppress(asyncio.TimeoutError):
                     msg = await asyncio.wait_for(ws.receive(), timeout=0.5)
                     if msg.type == ws_msg_type.TEXT:
-                        try:
-                            req = json.loads(msg.data)
-                        except json.JSONDecodeError:
-                            continue
-                        if req.get("action") == "ping":
+                        req = _websocket_control_payload(msg.data)
+                        if req is not None and req.get("action") == "ping":
                             await ws.send_json({"type": "pong"})
                     elif msg.type in (
                         ws_msg_type.CLOSE,

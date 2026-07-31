@@ -191,7 +191,7 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     """
     from easycat.runtime.replay import _STAGE_NAMES
 
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = _validated_replay_timing(kwargs)
     if "force" in kwargs:
         value = kwargs["force"]
         if not isinstance(value, bool):
@@ -218,6 +218,15 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _validated_replay_timing(kwargs: dict[str, Any]) -> dict[str, str]:
+    if "timing" not in kwargs:
+        return {}
+    value = kwargs["timing"]
+    if not isinstance(value, str) or value not in {"fast", "wall"}:
+        raise ValueError("timing must be 'fast' or 'wall'")
+    return {"timing": value}
+
+
 def _run_bundle_source(
     bundle: RunBundle, *, label: str, annotate_path: Path | None = None
 ) -> DebuggerSource:
@@ -236,10 +245,10 @@ def _run_bundle_source(
             ToolReplayPolicy,
         )
 
-        fidelity = ReplayFidelity(kwargs.get("fidelity", "artifact"))
-        timing = kwargs.get("timing", "fast")
-        tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
         validated = _validated_replay_kwargs(kwargs)
+        fidelity = ReplayFidelity(kwargs.get("fidelity", "artifact"))
+        timing = validated.get("timing", "fast")
+        tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
         force = validated.get("force", False)
         spec = ReplaySpec(
             fidelity=fidelity,

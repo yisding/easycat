@@ -302,6 +302,8 @@ async def test_websocket_responds_to_ping_with_pong():
         async with client.ws_connect("/ws") as ws:
             # First message is the snapshot.
             await asyncio.wait_for(ws.receive(), timeout=2.0)
+            await ws.send_str('{"action":' + "9" * 5000 + "}")
+            await ws.send_str("[]")
             await ws.send_json({"action": "ping"})
             # Pong arrives, possibly after another snapshot.
             saw_pong = False
