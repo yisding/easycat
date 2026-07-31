@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import mkdir_private, private_tar_filter
 from easycat.runtime.crash_sweep import is_journal_live
 
@@ -162,10 +163,24 @@ class _RetentionSweep:
         if unavailable:
             self._total_bytes -= fsize
             return False
-        if self._mode == "archive" and not _archive_session(self._root, oldest):
-            return False
-        if not _remove_session(self._root, oldest):
-            return False
+        with journal_file_claim(oldest, blocking=False) as claimed:
+            if not claimed:
+                self._protected_count += 1
+                return False
+            if self._is_protected(oldest):
+                self._protected_count += 1
+                return False
+            try:
+                unavailable = oldest.is_symlink() or not oldest.exists()
+            except OSError:
+                unavailable = True
+            if unavailable:
+                self._total_bytes -= fsize
+                return False
+            if self._mode == "archive" and not _archive_session(self._root, oldest):
+                return False
+            if not _remove_session(self._root, oldest):
+                return False
 
         self._total_bytes -= fsize
         self.removed += 1

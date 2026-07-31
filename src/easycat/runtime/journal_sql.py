@@ -35,6 +35,7 @@ from easycat.runtime._journal_codec import (
     _persist_degraded_marker,
     _row_to_record,
 )
+from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import (
     harden_sqlite_files,
     mkdir_private,
@@ -435,15 +436,6 @@ class SqliteJournal(_SqlJournalBase):
         journals_dir = root / "journals"
         mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
-
-        # Sweep crashed-but-unswept prior journals (different session ids whose
-        # process died without a clean close) before we open our own file.  The
-        # same-id recovery path below only fires when *this* session's id is
-        # reused; orphaned ids never reopen, so the sweep is what promotes them
-        # to crash-dumps/.  Best-effort: never block or fail journal startup.
-        _sweep_crashed_journals_if_due(root, skip=self._db_path)
-
-        touch_private_file(self._db_path)
         self._session_id = session_id
         self._lock = threading.Lock()
         self._seq = 0
@@ -457,21 +449,37 @@ class SqliteJournal(_SqlJournalBase):
         self._batch_generation = 0
         self._batch_deadline: float | None = None
 
-        # ── Check for prior unclean shutdown ─────────────────────
-        existed = self._db_path.exists()
+        # The claim is deliberately acquired before a session opens its
+        # SQLite connection and held until ``live_pid`` is committed below.
+        # A crash/retention sweep uses the same claim for final revalidation
+        # and removal, preventing it from unlinking a just-opened database.
+        with journal_file_claim(self._db_path, blocking=True) as claimed:
+            assert claimed
+            # Sweep crashed-but-unswept prior journals (different session ids
+            # whose process died without a clean close) before we open our own
+            # file. The same-id recovery path below only fires when *this*
+            # session's id is reused; orphaned ids never reopen, so the sweep
+            # is what promotes them to crash-dumps/. Best-effort: never block
+            # or fail journal startup.
+            _sweep_crashed_journals_if_due(root, skip=self._db_path)
 
-        # Eager warmup — open DB and apply PRAGMAs now.
-        self._conn = self._open_connection()
-        self._conn.executescript(_SQLITE_SCHEMA)
-        _ensure_journal_schema(self._conn)
+            touch_private_file(self._db_path)
 
-        self._claim_live_journal()
-        try:
-            self._initialize_live_journal(session_id, existed=existed)
-        except BaseException:
-            self._release_live_journal()
-            self._conn.close()
-            raise
+            # ── Check for prior unclean shutdown ─────────────────
+            existed = self._db_path.exists()
+
+            # Eager warmup — open DB and apply PRAGMAs now.
+            self._conn = self._open_connection()
+            self._conn.executescript(_SQLITE_SCHEMA)
+            _ensure_journal_schema(self._conn)
+
+            self._claim_live_journal()
+            try:
+                self._initialize_live_journal(session_id, existed=existed)
+            except BaseException:
+                self._release_live_journal()
+                self._conn.close()
+                raise
 
     # ── Startup phases ────────────────────────────────────────────
 

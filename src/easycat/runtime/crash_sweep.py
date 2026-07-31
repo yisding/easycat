@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import (
     chmod_private_file,
     mkdir_private,
@@ -500,19 +501,22 @@ def _promote_one(root: Path, db_path: Path) -> bool:
     crash_path: Path | None = None
     artifact_root: Path | None = None
     try:
-        if db_path.is_symlink():
-            return False
-        crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
-        _copy_journal_to_crash_dump(db_path, crash_path)
-        snapshot_crash_dump_artifacts(root, db_path, artifact_root)
+        with journal_file_claim(db_path, blocking=False) as claimed:
+            if not claimed or _crashed_state(db_path) != "crashed":
+                return False
+            if db_path.is_symlink():
+                return False
+            crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
+            _copy_journal_to_crash_dump(db_path, crash_path)
+            snapshot_crash_dump_artifacts(root, db_path, artifact_root)
+            if _remove_journal(db_path):
+                logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
+                return True
     except (OSError, sqlite3.DatabaseError):
         if crash_path is not None and artifact_root is not None:
             discard_crash_dump(crash_path, artifact_root)
         logger.warning("Failed to promote crashed journal %s", db_path, exc_info=True)
         return False
-    if _remove_journal(db_path):
-        logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
-        return True
     return False
 
 

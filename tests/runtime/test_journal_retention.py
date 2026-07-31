@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
 from easycat.runtime import SqliteJournal, run_retention
+from easycat.runtime import journal_retention as journal_retention_module
 from easycat.runtime.records import JournalRecordKind
 
 
@@ -354,6 +357,49 @@ def test_retention_still_removes_genuinely_stale_clean_journal(tmp_path):
 
     assert removed == 1
     assert not stale.exists()
+
+
+def test_retention_rechecks_liveness_after_acquiring_journal_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A newly opened journal must not be archived or removed mid-startup."""
+    db_path = _seed_journal(tmp_path, "victim")
+    _backdate(db_path, age_days=30)
+    entered_claim = threading.Event()
+    release_claim = threading.Event()
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def delayed_claim(path, *, blocking):
+        if path == db_path and not blocking:
+            entered_claim.set()
+            assert release_claim.wait(2)
+        with original_claim(path, blocking=blocking) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", delayed_claim)
+    removed: list[int] = []
+    retention_thread = threading.Thread(
+        target=lambda: removed.append(
+            run_retention(tmp_path, max_age_days=14, mode="archive")
+        ),
+    )
+    retention_thread.start()
+    assert entered_claim.wait(2)
+
+    live = SqliteJournal("victim", data_dir=tmp_path)
+    try:
+        release_claim.set()
+        retention_thread.join(2)
+        assert not retention_thread.is_alive()
+        assert removed == [0]
+        assert db_path.exists()
+        live.append(kind=JournalRecordKind.EVENT, name="live", session_id="victim")
+    finally:
+        release_claim.set()
+        retention_thread.join(2)
+        live.close()
 
 
 def test_retention_never_sweeps_callers_own_db_even_if_oldest(tmp_path):

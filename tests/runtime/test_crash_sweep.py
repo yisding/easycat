@@ -10,10 +10,12 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
+from easycat.runtime import crash_sweep as crash_sweep_module
 from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
@@ -394,6 +396,47 @@ def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
     assert crash.exists()
     # The source is removed so it stops accumulating in journals/.
     assert not journal.exists()
+
+
+def test_sweep_rechecks_liveness_after_acquiring_journal_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session opening after classification must win before destructive sweep work."""
+    _crash_one("victim", tmp_path)
+    db_path = tmp_path / "journals" / "victim.sqlite"
+    entered_claim = threading.Event()
+    release_claim = threading.Event()
+    original_claim = crash_sweep_module.journal_file_claim
+
+    @contextmanager
+    def delayed_claim(path, *, blocking):
+        if path == db_path and not blocking:
+            entered_claim.set()
+            assert release_claim.wait(2)
+        with original_claim(path, blocking=blocking) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(crash_sweep_module, "journal_file_claim", delayed_claim)
+    promoted: list[int] = []
+    sweep_thread = threading.Thread(
+        target=lambda: promoted.append(sweep_crashed_journals(tmp_path)),
+    )
+    sweep_thread.start()
+    assert entered_claim.wait(2)
+
+    live = SqliteJournal("victim", data_dir=tmp_path)
+    try:
+        release_claim.set()
+        sweep_thread.join(2)
+        assert not sweep_thread.is_alive()
+        assert promoted == [0]
+        assert db_path.exists()
+        live.append(kind=JournalRecordKind.EVENT, name="live", session_id="victim")
+    finally:
+        release_claim.set()
+        sweep_thread.join(2)
+        live.close()
 
 
 def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:
