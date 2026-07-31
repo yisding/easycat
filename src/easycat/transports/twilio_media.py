@@ -275,9 +275,7 @@ class TwilioTransportConfig:
             or not math.isfinite(timeout)
             or timeout <= 0
         ):
-            raise ValueError(
-                "stream_token_validation_timeout_s must be a positive finite number"
-            )
+            raise ValueError("stream_token_validation_timeout_s must be a positive finite number")
 
 
 def twilio_websocket_signature_process_request(
@@ -1828,7 +1826,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         """
         if timeout_s is None:
             return await self._wait_for_start()
-        if timeout_s <= 0:
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         try:
             async with asyncio.timeout(timeout_s):

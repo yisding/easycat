@@ -37,6 +37,22 @@ def _non_negative_float_setting(
     return value
 
 
+def _positive_float_setting(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    default: float,
+) -> float:
+    raw = _settings_value(env.get(name))
+    try:
+        value = float(raw) if raw else default
+    except (TypeError, ValueError, OverflowError):
+        value = 0.0
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"{name} must be a positive number")
+    return value
+
+
 def _positive_int_setting(
     env: Mapping[str, str],
     name: str,
@@ -190,9 +206,7 @@ def twilio_app_settings_from_env(
         )
 
     max_sessions = _positive_int_setting(env, "TWILIO_MAX_SESSIONS", default=64)
-    start_timeout_s = float(_settings_value(env.get("TWILIO_START_TIMEOUT_S")) or "10")
-    if start_timeout_s <= 0:
-        raise ValueError("TWILIO_START_TIMEOUT_S must be positive")
+    start_timeout_s = _positive_float_setting(env, "TWILIO_START_TIMEOUT_S", default=10.0)
 
     return TwilioAppSettings(
         stream_url=resolved_stream_url,

@@ -468,6 +468,17 @@ def test_stream_url_required_raises_value_error() -> None:
     assert "stream_url" in str(exc.value)
 
 
+@pytest.mark.parametrize("start_timeout_s", [float("nan"), float("inf")])
+def test_nonfinite_start_timeout_raises_value_error(start_timeout_s: float) -> None:
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        start_timeout_s=start_timeout_s,
+    )
+
+    with pytest.raises(ValueError, match="start_timeout_s"):
+        asyncio.run(serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config))
+
+
 def test_run_twilio_without_stream_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without stream_url (kwarg or env) the helper's ValueError surfaces."""
     monkeypatch.delenv("TWILIO_STREAM_URL", raising=False)

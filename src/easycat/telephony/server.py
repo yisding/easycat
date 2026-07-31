@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -310,7 +311,7 @@ async def serve_twilio_voice_app(
             "wss:// media URL Twilio connects back to. Set stream_url (or the "
             "TWILIO_STREAM_URL env var when running through VoiceApp)."
         )
-    if config.start_timeout_s <= 0:
+    if not math.isfinite(config.start_timeout_s) or config.start_timeout_s <= 0:
         raise ValueError("TwilioVoiceServerConfig.start_timeout_s must be positive")
 
     # aiohttp is the only thing that makes twilio mode need the telephony extra;
