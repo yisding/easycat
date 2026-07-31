@@ -96,6 +96,8 @@ class InMemoryRingBuffer:
                 input_ref,
                 output_ref,
             )
+            if sequence == -1:
+                return -1
             result = "pass"
             return sequence
         except Exception as exc:
@@ -161,7 +163,8 @@ class InMemoryRingBuffer:
 
     @property
     def degraded(self) -> bool:
-        return self._degraded
+        with self._lock:
+            return self._degraded
 
     @property
     def dropped_records(self) -> int:
@@ -188,6 +191,12 @@ class InMemoryRingBuffer:
             cpu_ns=time.process_time_ns(),
         )
         with self._lock:
+            # ``append`` performs a fast degraded-state check before calling
+            # this helper.  Recheck under the write lock so an append which
+            # crossed that check cannot publish a normal record after another
+            # thread transitions the journal to degraded mode.
+            if self._degraded:
+                return -1
             was_full = len(self._buf) == self._capacity
             evicted_sequence = self._buf[0].sequence if was_full else None
 
@@ -300,7 +309,13 @@ class InMemoryRingBuffer:
                 self._ref_counts[ref] = count
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
-        self._degraded = True
+        # Commit the one-way transition under the same lock used by appends.
+        # Several writers can observe a healthy journal concurrently and then
+        # fail, but only the winner may emit the single forensic marker.
+        with self._lock:
+            if self._degraded:
+                return
+            self._degraded = True
         observe_gauge("easycat.journal.degraded", 1)
         # Build the marker once with sequence=-1 so it does not consume a live
         # sequence number.  ``append`` returns -1 in degraded mode, and keeping
