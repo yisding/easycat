@@ -352,6 +352,7 @@ class OutboundCallManager:
                 create_error,
                 lifecycle_error,
                 stale_cleanup_error,
+                placement_epoch,
             ) = await self._place_call_transaction(to)
 
         if lifecycle_error is not None:
@@ -368,6 +369,7 @@ class OutboundCallManager:
             call_sid=call_sid if create_error is None else None,
             cancellation=cancellation,
             create_error=create_error,
+            placement_epoch=placement_epoch,
         )
 
     async def _place_call_transaction(
@@ -379,6 +381,7 @@ class OutboundCallManager:
         Exception | None,
         RuntimeError | None,
         Exception | None,
+        int,
     ]:
         """Run eligibility, provider creation, and epoch reconciliation under the lock."""
         self._ensure_can_place_call()
@@ -390,7 +393,7 @@ class OutboundCallManager:
             # Keep this lifecycle error in the create_error tuple slot:
             # place_call must route it through _finish_call_placement instead
             # of the stale-call path, which requires a provider call SID.
-            return None, None, self._lifecycle_changed_error(), None, None
+            return None, None, self._lifecycle_changed_error(), None, None, placement_epoch
 
         # ``asyncio.to_thread`` cannot stop its worker when the awaiting
         # coroutine is cancelled. Retain placement ownership until it settles.
@@ -398,19 +401,19 @@ class OutboundCallManager:
             self._build_create_kwargs(to)
         )
         if create_error is not None:
-            return None, cancellation, create_error, None, None
+            return None, cancellation, create_error, None, None, placement_epoch
         assert call is not None
         try:
             call_sid = call.sid
             if not isinstance(call_sid, str) or not call_sid:
                 raise ValueError("Twilio call creation returned an empty call SID")
         except Exception as exc:
-            return None, cancellation, exc, None, None
+            return None, cancellation, exc, None, None, placement_epoch
 
         if self._placement_epoch_is_current(placement_epoch) and cancellation is None:
             self._owned_call_sids.add(call_sid)
             self._set_active_call(call_sid)
-            return call_sid, cancellation, None, None, None
+            return call_sid, cancellation, None, None, None, placement_epoch
 
         self._reconciling_call_sids.add(call_sid)
         stale_cleanup_error, cleanup_cancellation = await self._complete_call_owned(call_sid)
@@ -431,7 +434,14 @@ class OutboundCallManager:
         ):
             # Keep retry ownership without reactivating the current lifecycle.
             self._pending_cleanup_call_sids.add(call_sid)
-        return call_sid, cancellation, None, lifecycle_error, stale_cleanup_error
+        return (
+            call_sid,
+            cancellation,
+            None,
+            lifecycle_error,
+            stale_cleanup_error,
+            placement_epoch,
+        )
 
     def _ensure_can_place_call(self) -> None:
         if not self._started:
@@ -595,6 +605,7 @@ class OutboundCallManager:
         call_sid: str | None,
         cancellation: asyncio.CancelledError | None,
         create_error: Exception | None,
+        placement_epoch: int,
     ) -> str:
         """Dispatch placement events after unlocking, then propagate the caller outcome."""
         # EventBus dispatch is inline and async handlers are awaited. Never hold
@@ -628,6 +639,12 @@ class OutboundCallManager:
             return await self._finish_dispatch_failed_call(
                 call_sid=call_sid,
                 error=exc,
+                cancellation=cancellation,
+            )
+        if not self._placement_epoch_is_current(placement_epoch):
+            return await self._finish_dispatch_failed_call(
+                call_sid=call_sid,
+                error=self._lifecycle_changed_error(call_sid=call_sid),
                 cancellation=cancellation,
             )
         self._terminal_reconciliation_call_sids.discard(call_sid)

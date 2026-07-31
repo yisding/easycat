@@ -790,6 +790,42 @@ class TestOutboundCallManagerPlaceCall:
         assert manager._owned_call_sids == set()
 
     @pytest.mark.asyncio
+    async def test_stop_during_initiated_dispatch_completes_stale_call(self) -> None:
+        bus = EventBus()
+        dispatch_started = asyncio.Event()
+        release_dispatch = asyncio.Event()
+        failed: list[CallFailed] = []
+
+        async def block_initiated(_event: CallInitiated) -> None:
+            dispatch_started.set()
+            await release_dispatch.wait()
+
+        bus.subscribe(CallInitiated, block_initiated)
+        bus.subscribe(CallFailed, failed.append)
+        manager = self._make_manager(bus)
+        manager._client.calls.create.return_value = SimpleNamespace(sid="CA-STOP-DISPATCH")
+        call_resource = MagicMock()
+        manager._client.calls.return_value = call_resource
+
+        placement = asyncio.create_task(manager.place_call("+15551111111"))
+        await dispatch_started.wait()
+
+        manager.stop()
+        release_dispatch.set()
+
+        with pytest.raises(RuntimeError, match="lifecycle change"):
+            await placement
+        manager._client.calls.assert_called_once_with("CA-STOP-DISPATCH")
+        call_resource.update.assert_called_once_with(status="completed")
+        assert [event.call_sid for event in failed] == ["CA-STOP-DISPATCH"]
+        assert manager._started is False
+        assert manager.state is OutboundCallManagerState.IDLE
+        assert manager.active_call_sid is None
+        assert manager._owned_call_sids == set()
+        assert manager._pending_cleanup_call_sids == set()
+        assert manager._reconciling_call_sids == set()
+
+    @pytest.mark.asyncio
     async def test_cancelled_stop_during_create_cleans_up_then_preserves_cancellation(
         self,
     ) -> None:
