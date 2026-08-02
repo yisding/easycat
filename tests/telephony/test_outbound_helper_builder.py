@@ -70,7 +70,7 @@ def test_builder_omits_disabled_optional_helpers() -> None:
 @pytest.mark.asyncio
 async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
     bus = EventBus(handler_error_policy="raise")
-    state_machine = Mock(state=OutboundCallState.IVR)
+    state_machine = Mock(state=OutboundCallState.IVR, call_sid="CA123")
     state_machine.transition = AsyncMock()
     navigator = Mock()
     delivery = Mock(call_sid="")
@@ -84,6 +84,8 @@ async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
     coordinator.start()
 
     await bus.emit(CallInitiated(call_sid="CA123", to="+15550000001", from_="+15550000002"))
+    await bus.emit(CallInitiated(call_sid="CA123", to="+15550000001", from_="+15550000002"))
+    await bus.emit(CallInitiated(call_sid="CA-stale", to="+15550000001", from_="+15550000002"))
     await bus.emit(CallStateChanged(old=OutboundCallState.CLASSIFYING, new=OutboundCallState.IVR))
     await bus.emit(IVRAction(type=IVRActionType.HUMAN_DETECTED))
     await bus.emit(IVRAction(type=IVRActionType.HANGUP))
@@ -101,6 +103,7 @@ async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
     delivery.send_speech.assert_awaited_once_with("one moment")
 
     coordinator.stop()
+    state_machine.call_sid = "CA456"
     await bus.emit(CallInitiated(call_sid="CA456", to="+15550000003", from_="+15550000002"))
     navigator.reset_for_call.assert_called_once_with()
 
@@ -127,6 +130,7 @@ async def test_ivr_call_boundary_resets_navigation_without_dtmf_delivery() -> No
     coordinator = next(
         helper for helper in built.helpers if isinstance(helper, _IVRCallbackCoordinator)
     )
+    built.state_machine.start()
     navigator.start()
     coordinator.start()
     try:
@@ -145,7 +149,7 @@ async def test_ivr_call_boundary_resets_navigation_without_dtmf_delivery() -> No
         assert len(navigator.history) == 1
         assert navigator.in_hold is True
 
-        navigator.deactivate()
+        await built.state_machine.transition(OutboundCallState.ENDED)
         await bus.emit(CallInitiated(call_sid="CA2", to="+15550000003", from_="+15550000002"))
 
         assert navigator.menu_depth == 0
@@ -159,3 +163,4 @@ async def test_ivr_call_boundary_resets_navigation_without_dtmf_delivery() -> No
     finally:
         coordinator.stop()
         navigator.stop()
+        built.state_machine.stop()

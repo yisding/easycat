@@ -58,6 +58,7 @@ class _IVRCallbackCoordinator:
         self._navigator = navigator
         self._delivery = delivery
         self._started = False
+        self._accepted_call_sid = ""
 
     def start(self) -> None:
         if self._started:
@@ -76,6 +77,17 @@ class _IVRCallbackCoordinator:
         self._started = False
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
+        # The placement path and Twilio's initiated webhook can publish the
+        # same call twice. The state machine subscribes before this helper and
+        # is the authority that rejects stale or overlapping SIDs; mirror only
+        # the call it accepted, and reset each accepted SID exactly once.
+        if (
+            not event.call_sid
+            or event.call_sid != self._state_machine.call_sid
+            or event.call_sid == self._accepted_call_sid
+        ):
+            return
+        self._accepted_call_sid = event.call_sid
         self._navigator.reset_for_call()
         if self._delivery is not None:
             self._delivery.call_sid = event.call_sid
