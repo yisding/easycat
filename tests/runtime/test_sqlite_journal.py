@@ -1802,6 +1802,19 @@ class _FakeLibsqlModule:
         return self._conn
 
 
+class _BlockingOwnerDeleteConn(_LockProbeConn):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_started = threading.Event()
+        self.release_delete = threading.Event()
+
+    def execute(self, sql, params=None):
+        if "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')" in sql:
+            self.delete_started.set()
+            assert self.release_delete.wait(timeout=1)
+        return super().execute(sql, params)
+
+
 class TestLibsqlJournal:
     def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
         from easycat.runtime import LibsqlJournal
@@ -1895,6 +1908,27 @@ class TestLibsqlJournal:
             # Releasing the first owner permits a later replica instance.
             reopened = LibsqlJournal("single-writer", data_dir=tmp_path)
             reopened.close()
+
+    def test_rejects_replacement_writer_until_close_releases_claim(self, tmp_path: Path) -> None:
+        """A closing writer owns the path until marker cleanup completes."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _BlockingOwnerDeleteConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            first = LibsqlJournal("closing-writer", data_dir=tmp_path)
+            close_thread = threading.Thread(target=first.close)
+            close_thread.start()
+            try:
+                assert probe.delete_started.wait(timeout=1)
+                with pytest.raises(RuntimeError, match="Journal is already active"):
+                    LibsqlJournal("closing-writer", data_dir=tmp_path)
+            finally:
+                probe.release_delete.set()
+                close_thread.join(timeout=1)
+
+        assert not close_thread.is_alive()
 
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""
