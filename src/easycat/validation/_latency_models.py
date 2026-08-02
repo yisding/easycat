@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
@@ -221,7 +222,13 @@ class ReliabilitySample:
 def _float_or_none(value: object) -> float | None:
     if value is None:
         return None
-    return float(cast(float, value))
+    try:
+        parsed = float(cast(float, value))
+    except OverflowError as exc:
+        raise ValueError("latency and reliability numeric values must be finite") from exc
+    if not math.isfinite(parsed):
+        raise ValueError("latency and reliability numeric values must be finite")
+    return parsed
 
 
 def _int_or_none(value: object) -> int | None:
