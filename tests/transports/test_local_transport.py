@@ -615,3 +615,77 @@ class TestLocalTransport:
         assert len(received) == 1
         assert received[0].turn_id == "t1"
         assert transport._emit_tasks == set()  # drained after completion
+
+    @pytest.mark.asyncio
+    async def test_late_prior_stream_callbacks_do_not_touch_reconnected_transport(
+        self,
+        monkeypatch,
+    ):
+        """A callback queued before close must not cross into the next session.
+
+        PortAudio callbacks run off-loop and can race stream teardown.  Keep the
+        old fake callbacks callable after ``stop``/``close`` to model that late
+        delivery deterministically without requiring an audio device.
+        """
+        np = pytest.importorskip("numpy")
+        input_callbacks: list[object] = []
+        output_callbacks: list[object] = []
+
+        class FakeStream:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeSoundDevice:
+            @staticmethod
+            def InputStream(*, callback: object, **_kwargs: object) -> FakeStream:
+                input_callbacks.append(callback)
+                return FakeStream()
+
+            @staticmethod
+            def OutputStream(*, callback: object, **_kwargs: object) -> FakeStream:
+                output_callbacks.append(callback)
+                return FakeStream()
+
+        def fake_require_module(module_name: str, **_kwargs: object) -> object:
+            if module_name == "sounddevice":
+                return FakeSoundDevice()
+            return np
+
+        monkeypatch.setattr(local_mod, "require_module", fake_require_module)
+        transport = LocalTransport(LocalTransportConfig(output_preroll_frames=0))
+        await transport.connect()
+        old_input = input_callbacks[0]
+        old_output = output_callbacks[0]
+        await transport.disconnect()
+        await transport.connect()
+
+        try:
+            frame_samples = transport._frame_samples
+            stale_indata = np.ones((frame_samples, 1), dtype=np.float32)
+            old_input(stale_indata, frame_samples, None, None)  # type: ignore[operator]
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert transport._in_queue.empty()
+
+            frame_data = b"\x01\x00" * frame_samples
+            assert await transport.send_audio(
+                AudioChunk(data=frame_data, format=transport.audio_format)
+            )
+            stale_outdata = np.ones((frame_samples, 1), dtype=np.float32)
+            old_output(stale_outdata, frame_samples, None, None)  # type: ignore[operator]
+
+            assert (stale_outdata == 0).all()
+            assert transport._out_queue.qsize() == 1
+
+            current_outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+            output_callbacks[1](current_outdata, frame_samples, None, None)  # type: ignore[operator]
+            assert np.any(current_outdata)
+            assert transport._out_queue.empty()
+        finally:
+            await transport.disconnect()

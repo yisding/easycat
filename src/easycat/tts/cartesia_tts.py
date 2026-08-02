@@ -306,8 +306,13 @@ class CartesiaTTS(_WSTTSBase):
                     yield event
             return
 
-        async for event in self._synthesize_oneshot(text):
-            yield event
+        # The one-shot stream has its own socket-closing ``finally``. Own the
+        # delegated generator just as we do the persistent path: closing this
+        # public generator after first audio otherwise abandons that finally
+        # and leaves the one-shot connection live until garbage collection.
+        async with contextlib.aclosing(self._synthesize_oneshot(text)) as stream:
+            async for event in stream:
+                yield event
 
     async def _synthesize_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
         ws = await self._replace_oneshot_ws(self._create_ws)
