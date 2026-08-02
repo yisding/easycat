@@ -58,6 +58,18 @@ class CartesiaSTTConfig:
     # Optional EventBus for provider-error observability
     event_bus: Any = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        normalized_encoding = (
+            self.encoding.strip().lower() if isinstance(self.encoding, str) else ""
+        )
+        if normalized_encoding != "pcm_s16le":
+            raise ValueError(
+                f"Unsupported Cartesia STT encoding: {self.encoding!r}. "
+                "EasyCat's streaming STT path sends pcm_s16le PCM; other "
+                "encodings require a matching encoder."
+            )
+        self.encoding = normalized_encoding
+
     @property
     def resolved_model(self) -> str:
         """The model actually used, resolving the language-aware default.

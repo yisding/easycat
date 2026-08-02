@@ -55,6 +55,7 @@ from easycat.session._session import Session
 from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
+from easycat.stt.base import STTBase
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
@@ -282,6 +283,98 @@ async def test_on_turn_started_does_not_leave_task_bound_to_turn() -> None:
         assert session._turn is not None
         assert session._turn.id == "t-context"
         assert _current_turn_log_context() == "-"
+    finally:
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_successor_turn_closes_stranded_stt_stream_before_starting() -> None:
+    """A barge-in cannot start a second stream while the prior close is live."""
+
+    class BlockingLifecycleSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_calls = 0
+            self.close_started = asyncio.Event()
+            self.release_close = asyncio.Event()
+
+        async def _on_start(self) -> None:
+            self.start_calls += 1
+
+        async def _on_end(self) -> None:
+            self.close_started.set()
+            await self.release_close.wait()
+
+    stt = BlockingLifecycleSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    runner = session._turn_runner
+
+    try:
+        await runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+
+        # Model the committed-transcript fast path: the old turn has released
+        # its active flag, but the provider close task and event consumer still
+        # own the prior stream. STTBase correctly refuses a second start until
+        # that lifecycle has completed.
+        session._stt_committer.mark_inactive()
+        close_task = session._runtime_scope.create_task(
+            session._stt_committer.FINAL_CLOSE_TASK_NAME,
+            session._stt_committer.end_stream(old_turn),
+        )
+        await asyncio.wait_for(stt.close_started.wait(), timeout=0.25)
+
+        await asyncio.wait_for(
+            runner.on_turn_started(TurnStarted(turn_id="successor-turn")),
+            timeout=0.25,
+        )
+
+        assert close_task.cancelled()
+        assert stt.start_calls == 2
+        assert session._turn is not None
+        assert session._turn.id == "successor-turn"
+        assert session._stt_committer.is_active
+    finally:
+        stt.release_close.set()
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_completed_stt_close_does_not_force_successor_teardown() -> None:
+    """Drained final-close bookkeeping is not a live successor handoff."""
+
+    class CountingLifecycleSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.end_calls = 0
+
+        async def _on_end(self) -> None:
+            self.end_calls += 1
+
+    stt = CountingLifecycleSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    runner = session._turn_runner
+
+    try:
+        await runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+
+        session._stt_committer.mark_inactive()
+        close_task = session._runtime_scope.create_task(
+            session._stt_committer.FINAL_CLOSE_TASK_NAME,
+            session._stt_committer.end_stream(old_turn),
+        )
+        await close_task
+        await asyncio.sleep(0)
+
+        assert not session._stt_committer.requires_successor_handoff
+        await runner.on_turn_started(TurnStarted(turn_id="successor-turn"))
+
+        assert stt.end_calls == 1
     finally:
         await session._stt_committer.cancel(session._turn)
 
@@ -1325,6 +1418,36 @@ async def test_send_text_runs_agent_without_audio() -> None:
     )
     response = await session.send_text("hello")
     assert response == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_send_text_rechecks_admission_after_waiting_for_prior_work() -> None:
+    """A stop that begins mid-admission cannot publish a new text task."""
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+        )
+    )
+    entered_cancel = asyncio.Event()
+    release_cancel = asyncio.Event()
+
+    async def pause_cancel_application_prompt() -> bool:
+        entered_cancel.set()
+        await release_cancel.wait()
+        return True
+
+    session._turn_runner.cancel_application_prompt = pause_cancel_application_prompt  # type: ignore[method-assign]
+    sending = asyncio.create_task(session.send_text("hello"))
+    await asyncio.wait_for(entered_cancel.wait(), timeout=0.25)
+
+    session._stopping = True
+    release_cancel.set()
+
+    with pytest.raises(RuntimeError, match="Session is stopping"):
+        await asyncio.wait_for(sending, timeout=0.25)
+    assert session._turn_runner.active_text_turn is None
+    assert session._turn_runner.text_turn_cancel_token is None
 
 
 @pytest.mark.asyncio

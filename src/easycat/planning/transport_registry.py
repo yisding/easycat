@@ -32,13 +32,13 @@ from dataclasses import dataclass, field
 #
 # The catalog (and the tables below) store the pyproject EXTRA NAME. To detect a
 # missing extra via ``importlib.util.find_spec`` we need an importable module
-# name. Empty-dependency marker extras (deepgram/elevenlabs/cartesia talk to
-# their APIs over the core ``websockets``/``httpx`` deps; krisp ships no PyPI
-# package) map to ``None`` — there is nothing to probe, so they are never
-# reported as a missing extra.
+# name. Providers that need only core dependencies (OpenAI/Deepgram/
+# ElevenLabs/Cartesia use ``websockets``/``httpx`` directly; Krisp ships no
+# PyPI package) map to ``None`` — there is no additional runtime import to
+# probe, so they are never reported as a missing extra.
 EXTRA_PROBE_MODULE: dict[str, str | None] = {
     # STT/TTS catalog extras.
-    "openai": "openai",
+    "openai": None,
     "deepgram": None,
     "elevenlabs": None,
     "cartesia": None,

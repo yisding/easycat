@@ -765,6 +765,43 @@ async def test_barge_in_starts_new_turn():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_vad_and_manual_barge_ins_claim_one_successor_turn():
+    """VAD and PTT cannot both publish a successor during an async cutoff."""
+    bus = EventBus()
+    cutoff_started = asyncio.Event()
+    release_cutoff = asyncio.Event()
+    cancel_calls = 0
+
+    async def delayed_cancel() -> None:
+        nonlocal cancel_calls
+        cancel_calls += 1
+        cutoff_started.set()
+        await release_cutoff.wait()
+        await bus.emit(Interruption())
+
+    tm = TurnManager(bus, cancel_turn_callback=delayed_cancel)
+    collector = EventCollector(bus)
+    previous_token = CancelToken()
+    tm._state = TurnManagerState.BOT_SPEAKING
+    tm._current_turn_id = "old-turn"
+    tm._cancel_token = previous_token
+
+    vad_barge_in = asyncio.create_task(tm.on_vad_event(VADStartSpeaking()))
+    await asyncio.wait_for(cutoff_started.wait(), timeout=0.25)
+    manual_barge_in = asyncio.create_task(tm.start_turn())
+    await asyncio.sleep(0)
+
+    release_cutoff.set()
+    await asyncio.wait_for(asyncio.gather(vad_barge_in, manual_barge_in), timeout=0.25)
+
+    assert cancel_calls == 1
+    assert previous_token.is_cancelled
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    assert collector.type_names.count("Interruption") == 1
+    assert collector.type_names.count("TurnStarted") == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["vad_idle", "barge_in", "manual"])
 async def test_begin_turn_shared_bookkeeping_across_paths(path):
     """All three turn-start paths share the consolidated ``_begin_turn`` logic.

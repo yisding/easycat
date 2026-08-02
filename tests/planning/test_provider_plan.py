@@ -152,6 +152,31 @@ def test_empty_dependency_extras_are_never_missing() -> None:
     assert "cartesia" not in plan.missing_extras
 
 
+def test_openai_audio_providers_do_not_require_optional_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Built-in OpenAI STT/TTS use core HTTP/WebSocket dependencies only."""
+    real_find_spec = importlib.util.find_spec
+    seen: list[str] = []
+
+    def fake_find_spec(name: str, package: object = None):  # noqa: ANN202
+        seen.append(name)
+        if name == "openai":
+            return None
+        return real_find_spec(name, package)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    plan = build_provider_plan(
+        _profile(transport="websocket", stt="openai-realtime", tts="openai"),
+        environ={"OPENAI_API_KEY": "x"},
+    )
+
+    assert plan.selected["stt"].extra == "openai"
+    assert plan.selected["tts"].extra == "openai"
+    assert "openai" not in plan.missing_extras
+    assert "openai" not in seen
+
+
 def test_unknown_vad_shortcut_raises_not_silent_auto_fallback() -> None:
     # Regression: an unknown vad shortcut must NOT silently fall back to the
     # ``auto`` metadata while keeping the bad name. ``create_vad`` /

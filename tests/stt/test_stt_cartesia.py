@@ -336,6 +336,19 @@ def test_cartesia_default_model_is_ink2():
     assert config.uses_volume_gate is False
 
 
+@pytest.mark.parametrize("encoding", ["pcm_s16le", "PCM_S16LE", " pcm_s16le "])
+def test_cartesia_config_normalizes_pcm16_encoding(encoding: str):
+    config = CartesiaSTTConfig(api_key="k", encoding=encoding)
+
+    assert config.encoding == "pcm_s16le"
+
+
+@pytest.mark.parametrize("encoding", ["pcm_f32le", "mulaw", "", None])
+def test_cartesia_config_rejects_unsupported_encoding(encoding: object):
+    with pytest.raises(ValueError, match="Unsupported Cartesia STT encoding"):
+        CartesiaSTTConfig(api_key="k", encoding=encoding)  # type: ignore[arg-type]
+
+
 def test_cartesia_default_falls_back_to_ink_whisper_for_non_english():
     # ink-2 is English-only; a non-English config with no explicit model must
     # resolve to the multilingual ink-whisper (and use its volume-gate params).

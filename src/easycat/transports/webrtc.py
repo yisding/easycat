@@ -70,6 +70,10 @@ _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
 # Browser-created data channel carrying session events to the playground.
 _EVENTS_CHANNEL_LABEL = "events"
+# A request handler normally observes cancellation immediately. Keep a small
+# bound anyway: third-party request/SDP code can swallow cancellation, and
+# transport teardown must report incomplete cleanup rather than wait forever.
+_OFFER_CANCEL_DRAIN_TIMEOUT_S = 0.5
 
 
 def _inspect_static_dir(static_dir: str | Path) -> tuple[Path, bool, bool]:
@@ -163,6 +167,15 @@ class WebRTCTransport(AudioQueueMixin):
         self._peer_generation = 0
         self._retiring_peer_generation: int | None = None
         self._offer_lock = asyncio.Lock()
+        # Exact request-handler task currently owning ``_offer_lock``. Teardown
+        # cancels and reaps it before waiting on the lock, so a client stalled
+        # in request-body parsing or SDP negotiation cannot block disconnect.
+        self._active_offer_task: asyncio.Task[Any] | None = None
+        # Includes both the lock owner and handlers queued behind it. Register
+        # before awaiting the lock so disconnect can account for a request that
+        # passed its initial admission gate just before terminal state was
+        # published.
+        self._offer_tasks: set[asyncio.Task[Any]] = set()
         self._lifecycle_lock = asyncio.Lock()
         self._lifecycle_owner: asyncio.Task[Any] | None = None
         self._lifecycle_action: str | None = None
@@ -397,6 +410,10 @@ class WebRTCTransport(AudioQueueMixin):
         """Disconnect while the caller owns ``_lifecycle_lock``."""
         if not self._has_disconnect_work():
             return
+        if self._active_offer_task is asyncio.current_task():
+            raise RuntimeError(
+                "WebRTCTransport.disconnect() cannot run from the active offer handler"
+            )
         was_connected = self._connected
         if was_connected:
             # Set this before the first cleanup await. A cancelled disconnect
@@ -404,16 +421,30 @@ class WebRTCTransport(AudioQueueMixin):
             # async close on retry.
             self._outbound_cleanup_pending = True
 
-        # Flip the public state while serialized against ``_handle_offer`` so an
-        # in-flight offer either finishes before teardown starts, or every offer
-        # queued behind teardown immediately observes the disconnected state. Do
-        # not hold this lock across aiohttp cleanup: cleanup waits for active
-        # request handlers, and queued ``/offer`` handlers need the lock in order
-        # to return their shutdown 503 response.
-        async with self._offer_lock:
-            self._connected = False
+        # Publish terminal state before touching the active handler. This makes
+        # every queued/new offer return 503 as soon as it acquires the lock.
+        self._connected = False
 
         cleanup_errors: list[Exception] = []
+        offers_reaped = await self._stop_active_offer_for_disconnect(cleanup_errors)
+
+        if not offers_reaped:
+            # A cancellation-resistant handler can still own the offer lock
+            # and candidate/peer locals. Do not race it by closing shared
+            # resources or asking aiohttp to wait for its request task. Leave
+            # exact ownership reachable for a later disconnect retry.
+            self._client_connected.clear()
+            self._enqueue_sentinel()
+            self._peer_closed.set()
+            self._disconnect_cleanup_error = cleanup_errors[0]
+            raise cleanup_errors[0]
+
+        # Use the lock only as a short barrier after cancelling the active owner.
+        # Previously disconnect waited here while an unbounded request.json() or
+        # SDP operation still owned the lock. Do not hold it across aiohttp
+        # cleanup: cleanup itself waits for request handlers to finish.
+        async with self._offer_lock:
+            pass
 
         await self._stop_consumer_for_disconnect(cleanup_errors)
         await self._close_peer_for_disconnect(cleanup_errors)
@@ -467,6 +498,71 @@ class WebRTCTransport(AudioQueueMixin):
         self._disconnect_cleanup_error = RuntimeError(
             "WebRTC disconnect was interrupted by cancellation"
         )
+
+    async def _stop_active_offer_for_disconnect(
+        self,
+        cleanup_errors: list[Exception],
+    ) -> bool:
+        """Cancel and reap the offer-lock owner without waiting forever.
+
+        Returns ``False`` when the active handler ignores cancellation past the
+        bounded drain window. In that case its lock and local candidate state
+        remain live, so the caller must retain the signaling stack for an
+        explicit retry rather than continuing concurrent teardown.
+        """
+        offer_task = self._active_offer_task
+        current = asyncio.current_task()
+        if offer_task is None:
+            return True
+        if offer_task is current:
+            raise RuntimeError(
+                "WebRTCTransport.disconnect() cannot run from the active offer handler"
+            )
+
+        if not offer_task.done():
+            offer_task.cancel()
+        done, pending = await asyncio.wait(
+            (offer_task,),
+            timeout=_OFFER_CANCEL_DRAIN_TIMEOUT_S,
+        )
+        if pending:
+            # Queued handlers have no provider work of their own; cancel them
+            # so they do not stay forever behind the uncooperative lock owner.
+            queued = tuple(
+                task
+                for task in self._offer_tasks
+                if task is not offer_task and task is not current and not task.done()
+            )
+            for task in queued:
+                task.cancel()
+            if queued:
+                await asyncio.gather(*queued, return_exceptions=True)
+            error = TimeoutError(
+                "WebRTC offer handler did not stop after cancellation; "
+                "call disconnect() again after it unwinds"
+            )
+            self._record_disconnect_cleanup_error(
+                "active WebRTC offer",
+                error,
+                cleanup_errors,
+            )
+            return False
+
+        assert offer_task in done
+        try:
+            offer_task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            self._record_disconnect_cleanup_error(
+                "active WebRTC offer",
+                exc,
+                cleanup_errors,
+            )
+        finally:
+            if self._active_offer_task is offer_task:
+                self._active_offer_task = None
+        return True
 
     async def _stop_consumer_for_disconnect(
         self,
@@ -607,6 +703,8 @@ class WebRTCTransport(AudioQueueMixin):
         return any(
             (
                 self._connected,
+                self._active_offer_task is not None,
+                bool(self._offer_tasks),
                 self._consume_task is not None,
                 self._pc is not None,
                 self._pending_peer_cleanup is not None,
@@ -790,8 +888,27 @@ class WebRTCTransport(AudioQueueMixin):
 
     async def _handle_offer(self, request: Any) -> Any:
         """Handle an SDP offer from the browser client."""
-        async with self._offer_lock:
-            return await self._handle_offer_locked(request)
+        # This check intentionally precedes lock acquisition: once disconnect
+        # publishes terminal state, fresh HTTP requests must receive 503 even
+        # if an old handler is still stuck holding the previous offer lock.
+        if not self._connected:
+            return self._unavailable_response(request)
+        current = asyncio.current_task()
+        if current is None:  # pragma: no cover - async request handlers have a task
+            raise RuntimeError("WebRTC offer handler requires an asyncio task")
+        self._offer_tasks.add(current)
+        try:
+            async with self._offer_lock:
+                if not self._connected:
+                    return self._unavailable_response(request)
+                self._active_offer_task = current
+                try:
+                    return await self._handle_offer_locked(request)
+                finally:
+                    if self._active_offer_task is current:
+                        self._active_offer_task = None
+        finally:
+            self._offer_tasks.discard(current)
 
     def _unavailable_response(self, request: Any) -> Any:
         """Build a 503 response for offers received while disconnected."""
@@ -803,13 +920,28 @@ class WebRTCTransport(AudioQueueMixin):
             headers=self._cors_headers(request),
         )
 
+    async def _discard_unpublished_offer_during_shutdown(
+        self,
+        request: Any,
+        pc: Any,
+    ) -> Any:
+        """Close a negotiated candidate that raced with terminal teardown."""
+        candidate_cleanup_error = await self._close_unpublished_peer(pc)
+        if candidate_cleanup_error is not None:
+            shutdown_error = RuntimeError(
+                "WebRTC offer completed negotiation after shutdown and candidate cleanup failed"
+            )
+            self._publish_failed_peer_replacement(shutdown_error)
+            raise shutdown_error from candidate_cleanup_error
+        return self._unavailable_response(request)
+
     async def _handle_offer_locked(self, request: Any) -> Any:
         """Handle an SDP offer with peer replacement serialized."""
         web = self._web
         handlers = self._signaling()
         # Bail before doing any work if teardown has already begun. ``disconnect``
-        # clears ``_connected`` under ``_offer_lock``, so once we hold the lock the
-        # value is stable for the duration of this handler.
+        # clears ``_connected`` before cancelling the active offer and waiting on
+        # ``_offer_lock``, so queued/new handlers observe terminal state here.
         if not self._connected:
             return self._unavailable_response(request)
         if not handlers.authorized(request):
@@ -829,6 +961,11 @@ class WebRTCTransport(AudioQueueMixin):
                 content_type="application/json",
                 headers=self._cors_headers(request),
             )
+
+        # A request-body implementation may swallow Task.cancel(). Avoid
+        # allocating a peer after disconnect has already closed admission.
+        if not self._connected:
+            return self._unavailable_response(request)
 
         sdp = params.get("sdp") if isinstance(params, dict) else None
         sdp_type = params.get("type") if isinstance(params, dict) else None
@@ -876,14 +1013,6 @@ class WebRTCTransport(AudioQueueMixin):
             def on_ice_gathering_state_change() -> None:
                 if pc.iceGatheringState == "complete":
                     ice_gathering_complete.set()
-
-            # Re-check teardown before committing the new peer. This handler still
-            # holds ``_offer_lock``, so ``disconnect`` cannot flip ``_connected``
-            # between the initial guard and this commit point; keep the guard so a
-            # half-built PC is discarded if the locking changes in the future.
-            if not self._connected:
-                await pc.close()
-                return self._unavailable_response(request)
 
             # Prepare an outbound track for the new connection, but keep the
             # existing peer's source active until negotiation succeeds.
@@ -970,11 +1099,38 @@ class WebRTCTransport(AudioQueueMixin):
                 headers=self._cors_headers(request),
             )
 
+        assert pc is not None
+        return await self._commit_negotiated_offer(
+            request,
+            pc=pc,
+            outbound=outbound,
+            outbound_track=outbound_track,
+            captured_track=captured_track,
+            peer_generation=peer_generation,
+        )
+
+    async def _commit_negotiated_offer(
+        self,
+        request: Any,
+        *,
+        pc: Any,
+        outbound: OutboundAudioSource,
+        outbound_track: Any,
+        captured_track: Any | None,
+        peer_generation: int,
+    ) -> Any:
+        """Atomically install a negotiated candidate or discard it on shutdown."""
+        web = self._web
+        # A third-party SDP await can consume Task.cancel() and return normally.
+        # Re-check the state disconnect published before retiring the current peer
+        # or committing this candidate.
+        if not self._connected:
+            return await self._discard_unpublished_offer_during_shutdown(request, pc)
+
         # Close any existing peer connection only after the replacement SDP is
         # proven valid. Keep the old generation current until its resources
         # retire successfully; the new task is created only at the atomic swap
         # below, so this block can never cancel it.
-        assert pc is not None
         # Suppress terminal callbacks from the old peer while it retires
         # without claiming the candidate generation before publication.
         self._retiring_peer_generation = self._peer_generation
@@ -991,6 +1147,13 @@ class WebRTCTransport(AudioQueueMixin):
             if candidate_cleanup_error is not None:
                 raise retirement_error from candidate_cleanup_error
             raise
+
+        # Retirement itself awaits third-party cleanup. A cancellation-resistant
+        # close can return normally after disconnect has published terminal
+        # state, so check once more before atomically installing this candidate.
+        if not self._connected:
+            self._retiring_peer_generation = None
+            return await self._discard_unpublished_offer_during_shutdown(request, pc)
 
         # Clear stale audio from the previous peer so it doesn't leak into
         # the new session's receive_audio() iterator. Do not replace the queue:

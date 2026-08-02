@@ -70,7 +70,6 @@ _CATALOG = ProviderCatalog(
             "OPENAI_API_KEY",
             "openai",
             ("openai.com",),
-            probe_module="openai",
         ),
         "openai-realtime": ProviderSpec(
             OpenAIRealtimeSTT,
@@ -78,7 +77,6 @@ _CATALOG = ProviderCatalog(
             "OPENAI_API_KEY",
             "openai",
             ("openai.com",),
-            probe_module="openai",
         ),
         "deepgram": ProviderSpec(
             DeepgramSTT,

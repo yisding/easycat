@@ -480,6 +480,31 @@ def test_elevenlabs_config_final_timeout_default():
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_empty_committed_transcript_acknowledges_without_final():
+    """A silence-only commit releases its waiter without emitting empty text."""
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    final_received = asyncio.Event()
+    stt._final_received = final_received
+    stt._audio_epoch = 1
+    stt._committed_through_epoch = 1
+    stt._audio_pending_commit = False
+    stt._manual_commit_inflight = 1
+
+    stt._handle_json_message(
+        {
+            "message_type": "committed_transcript",
+            "text": "",
+        }
+    )
+
+    assert final_received.is_set()
+    assert stt._manual_commit_inflight == 0
+    assert stt._committed_through_epoch == 1
+    assert stt._audio_pending_commit is False
+    assert stt._event_queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit():
     # In VAD mode (the realtime default) the server emits committed_transcript
     # on its own. Once it does, _audio_pending_commit must be cleared so a

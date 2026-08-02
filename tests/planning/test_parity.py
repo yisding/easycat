@@ -96,7 +96,7 @@ def _require_extras(*modules: str) -> None:
 
 
 def test_parity_success_all_seven_roles(monkeypatch: pytest.MonkeyPatch) -> None:
-    _require_extras("openai", "onnxruntime", "sounddevice")
+    _require_extras("onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     config = _base_config()
     plan = build_provider_plan(config, environ=_ENV)
@@ -243,7 +243,7 @@ def test_parity_passthrough_aec_extra_missing_is_warning_not_blocking(
     # The DEFAULT fallback_policy is "passthrough": with livekit absent
     # create_session degrades to PassthroughAEC instead of raising, so the
     # planner must NOT block /health/ready — it reports a non-blocking warning.
-    _require_extras("openai", "onnxruntime", "sounddevice")
+    _require_extras("onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.echo_cancellation import EchoCancellationConfig
 
@@ -273,7 +273,7 @@ def test_parity_browser_profile_aec_extra_missing_is_warning_not_blocking(
     # A manifest browser profile auto-enables AEC with the passthrough fallback
     # (the manifest cannot pick "error"), so a missing aec extra must stay a
     # warning — otherwise /health/ready would reject a deployable browser server.
-    _require_extras("openai", "onnxruntime", "aiortc")
+    _require_extras("onnxruntime", "aiortc")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.project.schema import VoiceProfile
 
@@ -319,7 +319,7 @@ def test_parity_auto_passthrough_noise_reducer_missing_is_warning_not_blocking(
     # instead of raising, so the planner must NOT block /health/ready (mirroring
     # the AEC passthrough case). Only an explicit backend="rnnoise" or
     # fallback_policy="error" blocks (covered above).
-    _require_extras("openai", "onnxruntime", "sounddevice")
+    _require_extras("onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     # Default NoiseReducerConfig is backend="auto" + fallback_policy="passthrough".
     config = _base_config(enable_noise_reduction=True)
@@ -407,7 +407,7 @@ def test_parity_transport_extra_blocks_readiness_even_though_construction_defers
 
 
 def test_parity_agent_is_a_deferred_carveout_not_a_static_blocker() -> None:
-    _require_extras("openai", "onnxruntime", "sounddevice")
+    _require_extras("onnxruntime", "sounddevice")
     # The planner is side-effect-free: it never imports the agent module, so an
     # UNRESOLVABLE ``python:`` reference is NOT a static blocking error. The
     # divergence (it raises EASYCAT_E605 at connection time via resolve_agent) is

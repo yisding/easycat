@@ -203,6 +203,11 @@ class TurnManager:
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
+        # Claim token for the asynchronous barge-in cutoff window. Manual PTT
+        # and VAD entry points can run in different tasks; without a synchronous
+        # claim both can observe BOT_SPEAKING/PROCESSING, await the same cutoff,
+        # then publish competing successor turns.
+        self._barge_in_claim: object | None = None
 
         # Optional endpoint detector (smart-turn model)
         self._endpoint_detector: SmartTurnProvider | None = self._config.endpoint_detector
@@ -674,15 +679,42 @@ class TurnManager:
         queued session action has ``no_interrupt=True``).  In that case we
         do **not** start a new turn — the current bot playback continues.
         """
-        # Cancel current bot output via the session callback.
-        # The callback is responsible for emitting the Interruption event.
-        if self._cancel_turn_callback:
-            result = await self._cancel_turn_callback()
-            if result is False:
+        if self._barge_in_claim is not None:
+            return
+
+        expected_state = self._state
+        expected_turn_id = self._current_turn_id
+        expected_token = self._cancel_token
+        claim = object()
+        self._barge_in_claim = claim
+        try:
+            # Cancel current bot output via the session callback.
+            # The callback is responsible for emitting the Interruption event.
+            if self._cancel_turn_callback:
+                result = await self._cancel_turn_callback()
+                if result is False:
+                    return
+
+            # Another live turn may have advanced the manager while the cutoff
+            # awaited transport/provider work. Never let this stale callback
+            # create a successor for that different turn. ``IDLE`` is the one
+            # expected state change: cancelling a silent application prompt
+            # releases its old turn before this callback returns, after which
+            # this already-claimed barge-in must install the voice successor.
+            if self._state is expected_state:
+                if (
+                    self._current_turn_id != expected_turn_id
+                    or self._cancel_token is not expected_token
+                ):
+                    return
+            elif self._state is not TurnManagerState.IDLE:
                 return
 
-        # Start new turn, cancelling the prior token (see ``_begin_turn``).
-        await self._begin_turn("barge_in", cancel_previous_token=True)
+            # Start new turn, cancelling the prior token (see ``_begin_turn``).
+            await self._begin_turn("barge_in", cancel_previous_token=True)
+        finally:
+            if self._barge_in_claim is claim:
+                self._barge_in_claim = None
 
     # ── Push-to-talk mode ───────────────────────────────────────
 
@@ -795,6 +827,7 @@ class TurnManager:
         if not preserve_token and self._cancel_token is not None:
             self._cancel_token.cancel()
         self._cancel_token = None
+        self._barge_in_claim = None
         self._silence_start_time = None
         self._current_turn_id = None
 

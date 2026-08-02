@@ -102,7 +102,9 @@ def test_extra_probe_module_covers_every_named_extra() -> None:
 
 def test_probe_module_for_extra_resolves() -> None:
     assert probe_module_for_extra(None) is None
-    # Empty-dependency marker extras map to None (nothing to probe).
+    # Providers backed entirely by core HTTP/WebSocket dependencies map to
+    # None (nothing additional to probe).
+    assert probe_module_for_extra("openai") is None
     assert probe_module_for_extra("deepgram") is None
     assert probe_module_for_extra("silero-vad") == "onnxruntime"
     assert probe_module_for_extra("webrtc") == "aiortc"

@@ -260,12 +260,22 @@ class TurnRunner:
         # Cancel the previous turn's token so any in-flight agent/TTS work
         # notices the cancellation before we overwrite the turn pointer.
         prev = self._turn.current
-        self._stt.cancel_scheduled()
-        self._stt.cancel_inflight()
-        self._stt.resolve_pending(prev, "")
-
         if prev and not prev.cancel_token.is_cancelled:
             prev.cancel_token.cancel()
+
+        if prev is not None and self._stt.requires_successor_handoff:
+            # Fast barge-in returns immediately after the audible cutoff and
+            # deliberately leaves provider cleanup detached.  If the previous
+            # turn was still waiting for an STT final, however, the same
+            # provider cannot admit a successor stream until that old lifecycle
+            # has closed.  Complete only this required handoff here, after the
+            # transport has already been cleared but before publishing the new
+            # turn into Session state.
+            await self._stt.cancel(prev)
+        else:
+            self._stt.cancel_scheduled()
+            self._stt.cancel_inflight()
+            self._stt.resolve_pending(prev, "")
 
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         turn = self._turn.begin(turn_id, cancel_token)
@@ -1293,13 +1303,21 @@ class TurnRunner:
         self._runtime_scope.discard(previous)
         return False
 
-    async def send_text(self, text: str) -> str:
+    async def send_text(self, text: str, *, admit: Callable[[], bool]) -> str:
         """Public text-turn entry point. Mirrors Session.send_text()."""
         # Serialize cancel-and-launch so concurrent send_text() calls
         # cannot both observe the same prev task and launch parallel turns.
         async with self._agent_turn_lock:
+            if not admit():
+                raise RuntimeError("Session is stopping")
             await self.cancel_application_prompt()
             await self._cancel_active_text_turn(source="text_session")
+            # The cancellation calls above suspend. Stop may close admission and
+            # snapshot active text work while this caller is waiting, so recheck
+            # at the actual task-publication boundary. There is no await between
+            # this check and assigning ``_active_text_turn``.
+            if not admit():
+                raise RuntimeError("Session is stopping")
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
             self._text_turn_cancel_token = token

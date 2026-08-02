@@ -10,7 +10,7 @@ import pytest
 import websockets
 
 from easycat.audio_format import AudioChunk, AudioFormat
-from easycat.events import Error, EventBus
+from easycat.events import Error, ErrorStage, EventBus
 from easycat.reconnecting_ws import ReconnectConfig
 from easycat.stt.websocket_base import WebSocketSTTBase, _noop_reconnect
 
@@ -609,6 +609,49 @@ async def test_receive_loop_no_error_on_clean_end():
     await asyncio.gather(*list(probe._emit_tasks))
 
     assert bus.events == []
+    assert probe._event_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_reports_bad_frame_and_continues_to_later_messages():
+    """A provider schema error is visible without truncating the stream."""
+
+    class _MessageWS:
+        died_abnormally = False
+        reconnect_attempts_exhausted = None
+        reconnect_exhaustion_reason = None
+
+        async def recv_iter(self):
+            yield '{"bad": true}'
+            yield '{"text": "still received"}'
+
+    class _FailOneFrameProbe(_Probe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.received: list[str] = []
+
+        def _handle_json_message(self, msg: dict[str, Any]) -> None:
+            if msg.get("bad"):
+                raise ValueError("invalid provider frame")
+            self.received.append(msg["text"])
+
+    probe = _FailOneFrameProbe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _MessageWS()  # type: ignore[assignment]
+
+    await probe._receive_loop()
+    await probe._drain_emit_tasks()
+
+    assert probe.received == ["still received"]
+    errors = [event for event in bus.events if isinstance(event, Error)]
+    assert len(errors) == 1
+    assert errors[0].stage is ErrorStage.STT
+    assert errors[0].provider == "probe"
+    assert str(errors[0].exception) == "invalid provider frame"
+    notes = getattr(errors[0].exception, "__notes__", [])
+    assert "phase=receive_frame" in notes
+    assert "frame_type=json" in notes
     assert probe._event_queue.get_nowait() is None
 
 
