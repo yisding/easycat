@@ -381,7 +381,11 @@ class SessionJournalSink:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str | None:
-        if self.artifact_store is None or not payload:
+        if (
+            self.artifact_store is None
+            or not payload
+            or (self.journal is not None and self.journal.degraded)
+        ):
             return None
         ref = self.artifact_store.put(payload, artifact_class=artifact_class)
         return ref or None
@@ -449,7 +453,7 @@ class SessionJournalSink:
             payload: bytes | None,
             artifact_class: ArtifactClass,
         ) -> str | None:
-            if payload is None or self.artifact_store is None:
+            if payload is None or self.artifact_store is None or journal.degraded:
                 return None
             store = self.artifact_store
             writes_block = getattr(store, "writes_block", None)
