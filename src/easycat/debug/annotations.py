@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 # Failure-type taxonomy shared with the SPA annotation control and the
 # troubleshooting/explain surface.  Keep this tuple and the hard-coded JS
@@ -187,11 +187,12 @@ def _lock_file(lock_file: Any) -> None:
     if os.name == "nt":
         import msvcrt
 
+        msvcrt_api = cast(Any, msvcrt)
         lock_file.seek(0)
         lock_file.write(b"\0")
         lock_file.flush()
         lock_file.seek(0)
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        msvcrt_api.locking(lock_file.fileno(), msvcrt_api.LK_LOCK, 1)
         return
 
     import fcntl
@@ -204,8 +205,9 @@ def _unlock_file(lock_file: Any) -> None:
     if os.name == "nt":
         import msvcrt
 
+        msvcrt_api = cast(Any, msvcrt)
         lock_file.seek(0)
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        msvcrt_api.locking(lock_file.fileno(), msvcrt_api.LK_UNLCK, 1)
         return
 
     import fcntl
