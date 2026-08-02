@@ -212,13 +212,16 @@ async def _start_twiml_http_listener(
                     "Twilio HTTP runner cleanup failed during startup rollback",
                     exc_info=True,
                 )
-            try:
-                await media_server.wait_closed()
-            except Exception:
-                logger.warning(
-                    "Twilio media listener wait failed during HTTP startup rollback",
-                    exc_info=True,
-                )
+            finally:
+                # Cancellation while runner cleanup is suspended must not skip
+                # ownership of the already-closed raw media listener.
+                try:
+                    await media_server.wait_closed()
+                except Exception:
+                    logger.warning(
+                        "Twilio media listener wait failed during HTTP startup rollback",
+                        exc_info=True,
+                    )
     return runner, site
 
 

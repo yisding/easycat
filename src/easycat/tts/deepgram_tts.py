@@ -216,7 +216,10 @@ class DeepgramTTS(_WSTTSBase):
         # its own right, so drop any sub-sample byte held from before the drop
         # to avoid shifting every replayed sample by one byte.
         self._reset_audio_alignment()
-        await self._send_speak_and_flush(ws, text)
+        # The reconnecting socket calls its primer while the send that found
+        # the drop may still own ``_send_lock``. Connection installation is
+        # already fenced, so replay must not reacquire that outer lock.
+        await self._send_speak_and_flush_unlocked(ws, text)
 
     def _handle_control(self, message: str) -> str | None:
         """Handle one Deepgram control frame and return its type."""
@@ -368,15 +371,22 @@ class DeepgramTTS(_WSTTSBase):
         Speak so the old cycle can never append Flush after that containment.
         """
         async with self._send_lock:
-            if self._cancelled or self._ws is not ws:
-                if self._ws is ws:
-                    await self._close_ws()
-                return
-            await ws.send(json.dumps({"type": "Speak", "text": text}))
-            if self._cancelled or self._ws is not ws:
-                return
-            await ws.send(json.dumps({"type": "Flush"}))
-            self._record_flush()
+            await self._send_speak_and_flush_unlocked(ws, text)
+
+    async def _send_speak_and_flush_unlocked(
+        self,
+        ws: ReconnectingWebSocket,
+        text: str,
+    ) -> None:
+        if self._cancelled or self._ws is not ws:
+            if self._ws is ws:
+                await self._close_ws()
+            return
+        await ws.send(json.dumps({"type": "Speak", "text": text}))
+        if self._cancelled or self._ws is not ws:
+            return
+        await ws.send(json.dumps({"type": "Flush"}))
+        self._record_flush()
 
     async def _finish_cycle(self, cycle_done: asyncio.Event, *, completed: bool) -> None:
         """Publish cycle completion after protocol or socket cleanup finishes."""

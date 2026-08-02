@@ -538,6 +538,49 @@ def test_http_startup_failure_cleans_runner_when_media_close_fails(
     assert web.runner_cleaned is True
 
 
+@pytest.mark.asyncio
+async def test_cancelled_http_cleanup_still_waits_for_media_listener() -> None:
+    web = _FakeAiohttpWeb()
+    cleanup_started = asyncio.Event()
+
+    async def fail_site_start(_self: Any) -> None:
+        raise OSError("address already in use")
+
+    async def block_runner_cleanup(_self: Any) -> None:
+        cleanup_started.set()
+        await asyncio.Event().wait()
+
+    class _RecordingMediaServer(_FakeMediaServer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.waited = False
+
+        async def wait_closed(self) -> None:
+            self.waited = True
+
+    web.TCPSite.start = fail_site_start
+    web.AppRunner.cleanup = block_runner_cleanup
+    media_server = _RecordingMediaServer()
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media")
+
+    starting = asyncio.create_task(
+        server_module._start_twiml_http_listener(
+            web,
+            config,
+            lambda _request: None,
+            media_server,
+        )
+    )
+    await cleanup_started.wait()
+    starting.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+
+    assert media_server.closed is True
+    assert media_server.waited is True
+
+
 def test_media_listener_bounds_messages_and_disables_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
