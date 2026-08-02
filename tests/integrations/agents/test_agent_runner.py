@@ -440,6 +440,27 @@ class _CancellationIgnoringBridge(_FakeBridge):
         yield AgentBridgeEvent(kind="done", text="stale")
 
 
+class _CancellationIgnoringToolBridge(_FakeBridge):
+    def __init__(self):
+        super().__init__()
+        self.tool_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        _ = turn_input, recorder, cancel_token
+        self.invoke_called = True
+        yield AgentBridgeEvent(kind="tool_started", tool_name="write", call_id="call-1")
+        self.tool_started.set()
+        await self.release.wait()
+        yield AgentBridgeEvent(kind="tool_started", tool_name="late", call_id="call-2")
+        yield AgentBridgeEvent(kind="tool_delta", call_id="call-2", text="stale")
+        yield AgentBridgeEvent(kind="tool_result", call_id="call-2", result="stale")
+        yield AgentBridgeEvent(kind="tool_delta", call_id="call-1", text="finishing")
+        yield AgentBridgeEvent(kind="tool_result", call_id="call-1", result="written")
+        yield AgentBridgeEvent(kind="text_delta", text="stale")
+        yield AgentBridgeEvent(kind="done", text="stale")
+
+
 @pytest.mark.asyncio
 async def test_agent_runner_wrapping_a_bridge_delegates_invoke():
     inner = _FakeBridge()
@@ -476,6 +497,26 @@ async def test_wrapped_bridge_drops_output_after_cancellation():
     inner.release.set()
 
     assert await asyncio.wait_for(task, timeout=1) == []
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_wrapped_bridge_drains_inflight_tool_result_after_cancellation():
+    inner = _CancellationIgnoringToolBridge()
+    runner = AgentRunner(inner)
+    token = CancelToken()
+    task = asyncio.create_task(_drain(runner, "old", token))
+
+    await asyncio.wait_for(inner.tool_started.wait(), timeout=1)
+    token.cancel()
+    inner.release.set()
+
+    events = await asyncio.wait_for(task, timeout=1)
+    assert [(event.kind, event.call_id) for event in events] == [
+        ("tool_started", "call-1"),
+        ("tool_delta", "call-1"),
+        ("tool_result", "call-1"),
+    ]
     assert runner.history == []
 
 
