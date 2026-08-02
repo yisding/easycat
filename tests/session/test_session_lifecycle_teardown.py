@@ -237,6 +237,31 @@ async def test_stop_join_ignores_preexisting_cancellation_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_join_propagates_cancellation_pending_before_entry() -> None:
+    session = Session(_full_config())
+    active_stop = asyncio.create_task(asyncio.Event().wait())
+    session._stop_task = active_stop
+    session._stop_force = False
+
+    async def join_with_pending_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await session.stop()
+
+    caller = asyncio.create_task(join_with_pending_cancellation())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert caller.done()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    active_stop.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await active_stop
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("owner_kind", ["voice", "text", "preemptive"])
 async def test_force_stop_from_runtime_owned_turn_task_closes_and_cancels_siblings(
     owner_kind: str,
