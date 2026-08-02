@@ -182,6 +182,50 @@ async def test_runtime_drains_after_listener_close_failure() -> None:
     await asyncio.wait_for(handler, timeout=1)
 
 
+async def test_cancelled_drain_preserves_connection_bookkeeping_for_retry() -> None:
+    events: list[str] = []
+    manager = _Manager(events)
+    server = _Server(events)
+    connection = _Connection(events)
+    session = _Session(events)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=lambda _connection: session,
+    )
+    key = id(connection)
+    runtime._sessions[key] = session
+    runtime._connections[key] = connection
+    manager.sessions[key] = session
+    drain_started = asyncio.Event()
+
+    async def block_gate_drain(*_args: object, **_kwargs: object) -> float:
+        drain_started.set()
+        await asyncio.Event().wait()
+        return 0.0
+
+    runtime.gate.drain = block_gate_drain  # type: ignore[method-assign]
+    draining = asyncio.create_task(runtime.drain(server, drain_timeout_s=1.0, force_timeout_s=1.0))
+    await drain_started.wait()
+    draining.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+
+    assert runtime._sessions == {key: session}
+    assert runtime._connections == {key: connection}
+
+    async def finish_gate_drain(*_args: object, **_kwargs: object) -> float:
+        return asyncio.get_running_loop().time() + 1.0
+
+    runtime.gate.drain = finish_gate_drain  # type: ignore[method-assign]
+    session.allow_graceful.set()
+    await runtime.drain(server, drain_timeout_s=1.0, force_timeout_s=1.0)
+
+    assert connection.close_calls == [(1001, "Server shutdown after drain")]
+    assert runtime._sessions == {}
+    assert runtime._connections == {}
+
+
 async def test_runtime_allows_async_preflight_to_reject_before_session_creation() -> None:
     events: list[str] = []
     manager = _Manager(events)
