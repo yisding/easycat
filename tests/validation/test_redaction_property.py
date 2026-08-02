@@ -23,6 +23,7 @@ from easycat._provider_catalog import ProviderCatalog
 from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
+    ArtifactRedactionError,
     contains_unredacted_sensitive_text,
     redact_command,
     redact_runtime_secrets,
@@ -261,6 +262,20 @@ def test_non_utf8_artifact_scrubs_raw_and_json_escaped_secret_bytes(
     assert raw_secret not in redacted
     assert escaped_secret not in redacted
     assert redacted.count(REDACTED_SECRET.encode("utf-8")) == 2
+
+
+def test_recursive_json_parse_failure_remains_fail_closed(tmp_path: Path) -> None:
+    secret = "runtime-secret"
+    escaped_secret = "".join(f"\\u{ord(char):04x}" for char in secret)
+    value = "[" * 2_000 + f'"{escaped_secret}"' + "]" * 2_000
+    path = tmp_path / "recursive.json"
+    path.write_text(value, encoding="utf-8")
+
+    with pytest.raises(ArtifactRedactionError) as exc_info:
+        redact_runtime_secrets_in_file(path, (secret,), artifact_format="json")
+
+    assert isinstance(exc_info.value.__cause__, RecursionError)
+    assert path.read_text(encoding="utf-8") == value
 
 
 def test_key_based_redaction_catches_short_secret_values() -> None:
