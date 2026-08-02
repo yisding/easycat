@@ -832,8 +832,18 @@ def _report_exit_code(
     if raw_exit_code is None:
         return 0
     try:
-        return int(cast("int | str", raw_exit_code))
-    except (TypeError, ValueError):
+        if isinstance(raw_exit_code, bool):
+            raise ValueError
+        if isinstance(raw_exit_code, int):
+            return raw_exit_code
+        if isinstance(raw_exit_code, float):
+            if not math.isfinite(raw_exit_code) or not raw_exit_code.is_integer():
+                raise ValueError
+            return int(raw_exit_code)
+        if isinstance(raw_exit_code, str):
+            return int(raw_exit_code)
+        raise ValueError
+    except (TypeError, ValueError, OverflowError):
         _report_load_error(
             path,
             "invalid validation report JSON: exit_code must be an integer",

@@ -50,6 +50,40 @@ def test_slice_runner_fails_on_corrupt_reliability_artifact(tmp_path: Path) -> N
     assert "reliability" in result.run.artifacts
 
 
+@pytest.mark.parametrize(
+    "raw_queue_depth",
+    [
+        pytest.param("1e400", id="nonfinite"),
+        pytest.param("1.5", id="fractional"),
+        pytest.param("true", id="boolean"),
+    ],
+)
+def test_slice_runner_fails_on_invalid_reliability_integer_signals(
+    tmp_path: Path,
+    raw_queue_depth: str,
+) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        reliability = (
+            '[{"sample_id":"sample-1","condition_id":"baseline","mode":"stress",'
+            '"informational":false,"eligible":true,"signals":{"queue_depth":'
+            f"{raw_queue_depth}"
+            "}}]"
+        )
+        Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"]).write_text(reliability)
+        return CommandResult(exit_code=0)
+
+    result = run_validation_slice(
+        "stress",
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 7, 11, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.exit_code == 1
+    assert result.run.tool_exit_codes == {"pytest": 0, "reliability_samples": 1}
+    assert result.run.failures[0].failure_class == "reliability_artifact_error"
+
+
 def test_slice_runner_parses_reliability_artifact_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

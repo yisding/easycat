@@ -300,6 +300,60 @@ def test_validate_report_cli_json_rejects_malformed_exit_code_with_envelope(
     assert "exit_code must be an integer" in payload["message"]
 
 
+@pytest.mark.parametrize(
+    "raw_exit_code",
+    [
+        pytest.param("1e400", id="nonfinite"),
+        pytest.param("1.5", id="fractional"),
+        pytest.param("true", id="boolean"),
+    ],
+)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["human", "json"])
+def test_validate_report_cli_rejects_invalid_numeric_exit_codes(
+    cli: CliRunner,
+    tmp_path: Path,
+    raw_exit_code: str,
+    json_mode: bool,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload.pop("exit_code")
+    encoded = json.dumps(payload)
+    report_path.write_text(encoded[:-1] + ', "exit_code": ' + raw_exit_code + "}")
+
+    args = ["validate", "report", str(report_path)]
+    if json_mode:
+        args.append("--json")
+    result = cli.invoke(app, args)
+
+    assert result.exit_code == 2
+    if json_mode:
+        error = json.loads(result.stdout)
+        assert error["schema_version"] == 1
+        assert error["command"] == "validate report"
+        assert error["status"] == "error"
+        assert error["report_path"] == str(report_path)
+        assert error["exit_code"] == 2
+        assert "exit_code must be an integer" in error["message"]
+    else:
+        assert "exit_code must be an integer" in result.stdout
+
+
+def test_validate_report_cli_accepts_string_exit_code(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload["exit_code"] = "0"
+    report_path.write_text(json.dumps(payload))
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["exit_code"] == 0
+
+
 def test_validate_report_cli_json_rejects_unknown_kind_with_envelope(
     cli: CliRunner,
     tmp_path: Path,

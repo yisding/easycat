@@ -191,6 +191,30 @@ def test_reliability_sample_from_dict_parses_string_booleans() -> None:
     assert evaluate_reliability_budgets([sample], DEFAULT_RELIABILITY_BUDGETS) == []
 
 
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        pytest.param(7, 7, id="integer"),
+        pytest.param(7.0, 7, id="integral-float"),
+        pytest.param("7", 7, id="integer-string"),
+        pytest.param(" +7 ", 7, id="whitespace-and-sign"),
+    ],
+)
+def test_reliability_sample_from_dict_preserves_integer_compatibility(
+    raw_value: object,
+    expected: int,
+) -> None:
+    sample = ReliabilitySample.from_dict(
+        {
+            "sample_id": "integer-signal",
+            "condition_id": "baseline",
+            "signals": {"queue_depth": raw_value},
+        }
+    )
+
+    assert sample.signals.queue_depth == expected
+
+
 # ---------------------------------------------------------------------------
 # 4. Latency artifact attaches reliability samples
 # ---------------------------------------------------------------------------

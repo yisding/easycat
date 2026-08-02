@@ -234,7 +234,20 @@ def _float_or_none(value: object) -> float | None:
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
-    return int(cast(int, value))
+    if isinstance(value, bool):
+        raise ValueError("reliability integer values must be finite integers")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("reliability integer values must be finite integers")
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ValueError("reliability integer values must be finite integers") from exc
+    raise ValueError("reliability integer values must be finite integers")
 
 
 def _bool_or_none(value: object) -> bool | None:
