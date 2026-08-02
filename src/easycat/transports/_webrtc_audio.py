@@ -370,26 +370,32 @@ class OutboundAudioSource:
         Bounded: a subscriber that never returns cannot hang teardown — after
         ``_ACLOSE_TIMEOUT_S`` the drain worker is cancelled instead of awaited.
         """
-        if not self._emit_tasks:
-            return
-        tasks = list(self._emit_tasks)
-        done, pending = await asyncio.wait(tasks, timeout=self._ACLOSE_TIMEOUT_S)
-        if pending:
-            logger.warning(
-                "Delivery-event drain exceeded %.1fs during teardown — cancelling",
-                self._ACLOSE_TIMEOUT_S,
-            )
-            for task in pending:
-                task.cancel()
-                _track_background_emit_task(task)
-            # Let cooperative workers observe cancellation without awaiting a
-            # subscriber that deliberately suppresses it.
-            await asyncio.sleep(0)
-        for task in done:
-            if not task.cancelled():
-                try:
-                    task.exception()
-                except Exception:  # pragma: no cover - defensive teardown
-                    pass
+        current = asyncio.current_task()
+        # EventBus subscribers run inside the delivery worker. A subscriber is
+        # allowed to initiate transport teardown, which re-enters here; never
+        # wait for or cancel that same task or it would deadlock until the
+        # timeout and then abort its own event dispatch.
+        tasks = [task for task in self._emit_tasks if task is not current]
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=self._ACLOSE_TIMEOUT_S)
+            if pending:
+                logger.warning(
+                    "Delivery-event drain exceeded %.1fs during teardown — cancelling",
+                    self._ACLOSE_TIMEOUT_S,
+                )
+                for task in pending:
+                    task.cancel()
+                    _track_background_emit_task(task)
+                # Let cooperative workers observe cancellation without awaiting a
+                # subscriber that deliberately suppresses it.
+                await asyncio.sleep(0)
+            for task in done:
+                if not task.cancelled():
+                    try:
+                        task.exception()
+                    except Exception:  # pragma: no cover - defensive teardown
+                        pass
+            # A self-owned worker remains tracked until it returns from this
+            # subscriber and its completion callback reaps it.
+            self._emit_tasks.difference_update(tasks)
         self._emit_queue.clear()
-        self._emit_tasks.clear()
