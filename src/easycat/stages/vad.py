@@ -69,21 +69,16 @@ class VADStage:
         # ``snapshot_state`` so ``replay_decision`` returns something real.
         self._last_decision: Any = None
         self._input_frame_aligner = AudioFrameAligner()
-        self._input_frame_turn_id: str | None = None
 
     def _normalize_audio_input(
         self,
         input: Any,
-        turn: TurnContext,
         *,
         capture_allowed: bool,
     ) -> Any:
         """Frame-align and downmix provider-facing PCM16 audio."""
         if not isinstance(input, AudioChunk):
             return input
-        if self._input_frame_turn_id != turn.id:
-            self._input_frame_aligner.reset()
-            self._input_frame_turn_id = turn.id
         input = self._input_frame_aligner.align(input)
         if input.format.channels > 1:
             input = to_mono_chunk(input)
@@ -128,7 +123,6 @@ class VADStage:
         # raw input.
         input = self._normalize_audio_input(
             input,
-            turn,
             capture_allowed=capture_allowed,
         )
         start_sequence: int | None = None

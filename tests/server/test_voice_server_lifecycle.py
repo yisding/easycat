@@ -452,7 +452,11 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
 
     assert stop_started.is_set()
     assert session.stopped.is_set()
-    assert server._runner is None
+    # AppRunner.cleanup() stops its registered sites. Do not invoke it while
+    # the retained site.stop() call is still pending, or aiohttp receives two
+    # concurrent stop operations for the same site.
+    runner.cleanup.assert_not_awaited()
+    assert server._runner is runner
     assert server._site is site
     assert server._gate.is_draining is True
     assert server._gate.try_acquire() is False
@@ -464,7 +468,9 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
     await asyncio.wait_for(server.stop(force=True), timeout=0.5)
 
     assert site.stop.await_count == 1
+    runner.cleanup.assert_awaited_once()
     assert server._site is None
+    assert server._runner is None
     assert server._gate.is_draining is False
     assert server._lifecycle_cleanup_error is None
 
