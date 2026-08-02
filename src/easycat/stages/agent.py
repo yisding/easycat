@@ -298,7 +298,8 @@ class AgentStage:
                                         turn_id=turn.id,
                                         data_extra={"type": "DONE", "text": text},
                                     )
-                                accumulated = [text]
+                                if not (cancel_token and cancel_token.is_cancelled):
+                                    accumulated = [text]
                         elif kind == "tool_started" and getattr(event, "tool_name", ""):
                             if journal_enabled:
                                 journal_append_event(
@@ -372,7 +373,13 @@ class AgentStage:
             # ``GeneratorExit`` at the yield above).
             if not errored:
                 elapsed_ms = (time.perf_counter() - started) * 1000
-                final_text = "".join(accumulated)
+                # Cancellation can arrive while a terminal bridge stream is
+                # being drained after its ``done`` event. Recheck at the
+                # commit boundary so unheard terminal text cannot enter the
+                # raw-bridge shadow history or stage completion record.
+                final_text = (
+                    "" if cancel_token and cancel_token.is_cancelled else "".join(accumulated)
+                )
                 if (
                     self._tracks_history
                     and input_role != "system"
