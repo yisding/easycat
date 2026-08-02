@@ -16,6 +16,7 @@ import asyncio
 import logging
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from easycat._audio_utils import resample, to_mono
 from easycat._extras import require_module
+from easycat._numeric import is_finite_number
 from easycat._smart_turn_features import (
     _create_triangular_filter_bank as _create_triangular_filter_bank,
 )
@@ -77,6 +79,13 @@ def _validate_probability_threshold(name: str, value: float) -> float:
     return threshold
 
 
+def _finite_positive_duration(name: str, value: object) -> float:
+    """Validate a public duration without accepting booleans or non-finite values."""
+    if not is_finite_number(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite positive number")
+    return float(value)
+
+
 @dataclass(frozen=True)
 class SmartTurnResult:
     """Result from smart-turn detection."""
@@ -118,15 +127,22 @@ class SmartTurnONNX:
         timeout_s: float = 2.0,
         max_audio_seconds: float = _MAX_AUDIO_SECONDS,
     ) -> None:
-        if timeout_s <= 0:
-            raise ValueError("timeout_s must be positive")
-        if max_audio_seconds <= 0:
-            raise ValueError("max_audio_seconds must be positive")
+        timeout_s = _finite_positive_duration("timeout_s", timeout_s)
+        max_audio_seconds = _finite_positive_duration("max_audio_seconds", max_audio_seconds)
+        max_audio_samples = self._SAMPLE_RATE * max_audio_seconds
+        if (
+            not math.isfinite(max_audio_samples)
+            or max_audio_samples < 1
+            or max_audio_samples > sys.maxsize
+        ):
+            raise ValueError(
+                "max_audio_seconds must produce a positive, representable audio window"
+            )
 
         self._model_path = model_path
         self._threshold = _validate_probability_threshold("threshold", threshold)
         self._timeout_s = timeout_s
-        self._max_audio_samples = int(self._SAMPLE_RATE * max_audio_seconds)
+        self._max_audio_samples = int(max_audio_samples)
         self._session: Any = None  # ort.InferenceSession (lazy)
         self._feature_extractor: Any = None  # NumPy Whisper frontend (lazy)
         self._np: Any = None  # numpy module (lazy)
@@ -372,10 +388,10 @@ class SmartTurnConfig:
 
     def __post_init__(self) -> None:
         _validate_probability_threshold("threshold", self.threshold)
-        if self.timeout_s <= 0:
-            raise ValueError("timeout_s must be positive")
-        if self.max_audio_seconds <= 0:
-            raise ValueError("max_audio_seconds must be positive")
+        self.timeout_s = _finite_positive_duration("timeout_s", self.timeout_s)
+        self.max_audio_seconds = _finite_positive_duration(
+            "max_audio_seconds", self.max_audio_seconds
+        )
 
 
 def create_smart_turn(
