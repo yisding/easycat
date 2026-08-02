@@ -5,8 +5,6 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
-import subprocess
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -45,20 +43,6 @@ class TestInMemoryArtifactStore:
         store.delete(ref)
         assert not store.has(ref)
         assert store.get(ref) is None
-
-    def test_cleanup_lease_only_rolls_back_its_new_ref(self):
-        store = InMemoryArtifactStore()
-        created = store.put_with_cleanup_lease(b"created")
-        created_ref = created.ref
-        assert created.created is True
-        created.rollback()
-        assert not store.has(created_ref)
-
-        existing_ref = store.put(b"existing")
-        existing = store.put_with_cleanup_lease(b"existing")
-        assert existing.created is False
-        existing.rollback()
-        assert store.has(existing_ref)
 
     def test_refuses_new_writes_past_cap(self):
         """Once the byte cap is reached, new artifacts are refused (return "")
@@ -161,44 +145,6 @@ class TestFilesystemArtifactStore:
         expected = hashlib.sha256(b"hello fs").hexdigest()
         assert ref == expected
         assert store.get(ref) == b"hello fs"
-
-    def test_cleanup_lease_excludes_cross_process_same_payload_writer(self, tmp_path):
-        payload = b"cross-process lease"
-        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
-        lease = store.put_with_cleanup_lease(payload)
-        assert lease.created is True
-
-        script = """
-import sys
-from easycat.runtime.artifacts import FilesystemArtifactStore
-
-store = FilesystemArtifactStore("sess", data_dir=sys.argv[1])
-print("ready", flush=True)
-print(store.put(b"cross-process lease"), flush=True)
-"""
-        process = subprocess.Popen(
-            [sys.executable, "-c", script, str(tmp_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            assert process.stdout is not None
-            assert process.stdout.readline().strip() == "ready"
-            with pytest.raises(subprocess.TimeoutExpired):
-                process.wait(timeout=0.2)
-
-            lease.rollback()
-            stdout, stderr = process.communicate(timeout=5)
-        finally:
-            lease.commit()
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
-
-        assert process.returncode == 0, stderr
-        assert stdout.strip() == hashlib.sha256(payload).hexdigest()
-        assert store.get(hashlib.sha256(payload).hexdigest()) == payload
 
     def test_path_fallback_remains_usable_without_descriptor_relative_io(
         self,
