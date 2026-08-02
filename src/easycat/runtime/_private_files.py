@@ -17,6 +17,12 @@ _DIRECTORY_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
+_DIR_FD_FUNCTIONS = getattr(os, "supports_dir_fd", set())
+_FD_FUNCTIONS = getattr(os, "supports_fd", set())
+_SUPPORTS_DESCRIPTOR_PRIVATE_COPY = all(
+    function in _DIR_FD_FUNCTIONS for function in (os.open, os.unlink)
+)
+_SUPPORTS_DIRECTORY_HANDLES = bool(getattr(os, "O_DIRECTORY", 0))
 
 
 def _symlink_error(path: Path) -> OSError:
@@ -51,11 +57,40 @@ def _open_checked_path(
     return fd
 
 
+def _chmod_fd(fd: int, mode: int) -> None:
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is not None:
+        fchmod(fd, mode)
+    elif os.chmod in _FD_FUNCTIONS:
+        os.chmod(fd, mode)
+
+
 def _chmod_open_path(fd: int, mode: int) -> None:
     try:
-        os.fchmod(fd, mode)
+        # Windows does not expose descriptor chmod and does not implement
+        # POSIX owner-only mode bits. Avoid a path-based chmod after validating
+        # the descriptor: the name could be swapped to a link in between.
+        _chmod_fd(fd, mode)
     finally:
         os.close(fd)
+
+
+def _path_is_link_or_reparse(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(reparse_flag and getattr(metadata, "st_file_attributes", 0) & reparse_flag)
+
+
+def _path_has_link_or_reparse(path: Path) -> bool:
+    absolute = path.absolute()
+    return any(_path_is_link_or_reparse(candidate) for candidate in (absolute, *absolute.parents))
 
 
 def _open_directory_chain(path: Path) -> int:
@@ -76,6 +111,13 @@ def _open_directory_chain(path: Path) -> int:
 
 def copy_private_file(source: Path, target: Path) -> None:
     """Copy one regular file exclusively without following any symlink component."""
+    if _SUPPORTS_DESCRIPTOR_PRIVATE_COPY:
+        _copy_private_file_with_descriptors(source, target)
+    else:
+        _copy_private_file_with_paths(source, target)
+
+
+def _copy_private_file_with_descriptors(source: Path, target: Path) -> None:
     source_dir = _open_directory_chain(source.parent)
     target_dir = _open_directory_chain(target.parent)
     source_fd: int | None = None
@@ -107,7 +149,7 @@ def copy_private_file(source: Path, target: Path) -> None:
                 if written <= 0:
                     raise OSError("Private file copy made no progress")
                 view = view[written:]
-        os.fchmod(target_fd, PRIVATE_FILE_MODE)
+        _chmod_fd(target_fd, PRIVATE_FILE_MODE)
     except BaseException:
         if target_created:
             try:
@@ -124,8 +166,62 @@ def copy_private_file(source: Path, target: Path) -> None:
         os.close(target_dir)
 
 
+def _copy_private_file_with_paths(source: Path, target: Path) -> None:
+    # Python's descriptor-less Windows APIs cannot close an external
+    # ancestor-swap race. Treat the configured runtime directory as a trusted
+    # boundary and reject every visible link, reparse point, or metadata error.
+    source_unsafe = _path_has_link_or_reparse(source)
+    target_unsafe = _path_has_link_or_reparse(target.parent)
+    if source_unsafe or target_unsafe:
+        raise _symlink_error(source if source_unsafe else target.parent)
+    source_fd = _open_checked_path(source, os.O_RDONLY, expected_type=stat.S_ISREG)
+    target_fd: int | None = None
+    target_created = False
+    try:
+        target_fd = os.open(
+            target,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            PRIVATE_FILE_MODE,
+        )
+        target_created = True
+        named = os.lstat(target)
+        opened = os.fstat(target_fd)
+        if (
+            not stat.S_ISREG(named.st_mode)
+            or not stat.S_ISREG(opened.st_mode)
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise _symlink_error(target)
+        while chunk := os.read(source_fd, 1024 * 1024):
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                if written <= 0:
+                    raise OSError("Private file copy made no progress")
+                view = view[written:]
+        _chmod_fd(target_fd, PRIVATE_FILE_MODE)
+    except BaseException:
+        if target_created:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(source_fd)
+        if target_fd is not None:
+            os.close(target_fd)
+
+
 def mkdir_private(path: Path) -> None:
     """Create a non-symlink directory and force owner-only permissions."""
+    if not _SUPPORTS_DIRECTORY_HANDLES:
+        if _path_has_link_or_reparse(path):
+            raise _symlink_error(path)
+        path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
+        if _path_has_link_or_reparse(path):
+            raise _symlink_error(path)
+        return
     path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
     fd = _open_checked_path(
         path,
