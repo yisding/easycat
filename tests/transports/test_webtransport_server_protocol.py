@@ -475,6 +475,25 @@ class TestWebTransportServerWiring:
         assert server._cleanup_error is None  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_handler_does_not_suppress_process_control_from_disconnect(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(WebTransportTransportConfig(), _noop)
+        stop = SystemExit("stop process")
+        transport = SimpleNamespace(
+            connect=AsyncMock(),
+            disconnect=AsyncMock(side_effect=stop),
+            _disconnect_cleanup_error=None,
+        )
+
+        with pytest.raises(SystemExit, match="stop process"):
+            await server._run_handler(transport)  # type: ignore[arg-type]  # noqa: SLF001
+
+        assert server._pending_transport_cleanup == set()  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_stop_retains_transport_cleanup_until_a_later_retry_succeeds(self) -> None:
         async def _noop(_transport: WebTransportConnectionTransport) -> None:
             return
