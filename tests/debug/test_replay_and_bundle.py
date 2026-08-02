@@ -741,6 +741,36 @@ class TestBundleExport:
             assert f"artifacts/{ref}.bin" not in zf.namelist()
         assert outside_path.read_bytes() == payload
 
+    def test_export_does_not_read_artifacts_through_data_dir_symlink(self, tmp_path):
+        payload = b"outside artifact"
+        ref = hashlib.sha256(payload).hexdigest()
+        outside_data = tmp_path / "outside-data"
+        outside_path = outside_data / "artifacts" / "sess" / ref[:2] / f"{ref}.bin"
+        outside_path.parent.mkdir(parents=True)
+        outside_path.write_bytes(payload)
+        linked_data = tmp_path / "linked-data"
+        try:
+            linked_data.symlink_to(outside_data, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        class _LinkedFilesystemStore:
+            _dir = linked_data / "artifacts" / "sess"
+
+        path = tmp_path / "linked-data-artifact.zip"
+        export_debug_bundle(
+            _FakeSession(
+                debug="full",
+                journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
+                artifact_store=_LinkedFilesystemStore(),
+            ),
+            path,
+        )
+
+        with zipfile.ZipFile(path) as zf:
+            assert f"artifacts/{ref}.bin" not in zf.namelist()
+        assert outside_path.read_bytes() == payload
+
     def test_inline_export_streams_sharded_files(self, tmp_path):
         payload = b"inline-streamed-artifact"
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)

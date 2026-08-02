@@ -56,7 +56,7 @@ from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
 from easycat.stt.base import STTBase
-from easycat.timeouts import AgentTimeoutError, TimeoutConfig
+from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 from tests._bridge_helpers import _TestBridgeBase
@@ -438,6 +438,89 @@ async def test_successor_turn_drains_scoped_segment_commit_before_starting() -> 
 
 
 @pytest.mark.asyncio
+async def test_successor_turn_bounds_cancellation_resistant_segment_commit() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class StreamOwningSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.start_calls = 0
+
+        async def start_stream(self) -> None:
+            self.start_calls += 1
+            if self.stream_open:
+                raise RuntimeError("previous STT stream is still open")
+            self.stream_open = True
+
+        async def commit_segment(self) -> bool:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_started.set()
+                await release_cleanup.wait()
+                return False
+
+    stt = StreamOwningSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    runner = session._turn_runner
+    resets: list[None] = []
+    errors: list[Error] = []
+    session._stt_committer._on_speech_detection_reset = lambda: resets.append(None)
+    session.event_bus.subscribe(Error, errors.append)
+
+    scoped_commit: asyncio.Task[None] | None = None
+    try:
+        await runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+        old_turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=old_turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        event_task = session._stt_committer.stt_task
+        assert event_task is not None
+        event_task.cancel()
+        await asyncio.gather(event_task, return_exceptions=True)
+        session._stt_committer._stt_task = None
+        session._stt_committer.mark_inactive()
+        session._stt_committer._segment_commit_task = None
+
+        await asyncio.wait_for(
+            runner.on_turn_started(TurnStarted(turn_id="successor-turn")),
+            timeout=1,
+        )
+
+        assert cleanup_started.is_set()
+        assert not scoped_commit.done()
+        assert session._runtime_scope.tasks("stt_segment_commit") == ()
+        timeout_error = next(
+            event for event in errors if isinstance(event.exception, STTTimeoutError)
+        )
+        assert timeout_error.stage is ErrorStage.STT
+        assert timeout_error.provider == "stt"
+        assert timeout_error.exception.timeout == pytest.approx(0.01)
+        assert resets
+        assert stt.end_stream_calls == 1
+        assert stt.start_calls == 2
+        assert session._turn is not None
+        assert session._turn.id == "successor-turn"
+    finally:
+        release_cleanup.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
 async def test_on_turn_started_start_failure_tears_down_turn() -> None:
     """If ``start_stream`` fails, the turn is fully torn down.
 
@@ -608,6 +691,98 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
         stt.release_send.set()
         if processing_stop is not None and not processing_stop.done():
             await processing_stop
+        await session._stt_committer.cancel(session._turn)
+        await session._turn_manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_vad_stop_updates_turn_state_when_stop_frame_stt_send_fails() -> None:
+    class FailSecondSendSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.send_calls = 0
+
+        async def send_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_calls += 1
+            if self.send_calls == 2:
+                raise RuntimeError("STT send_audio failed")
+
+    stt = FailSecondSendSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=10_000,
+                stt_segment_silence_ms=10_000,
+            ),
+        )
+    )
+    session._is_running = True
+    stops: list[VADStopSpeaking] = []
+    session.event_bus.subscribe(VADStopSpeaking, stops.append)
+    chunk = _chunk()
+
+    try:
+        await session._audio_router._process_chunk(chunk)
+        with pytest.raises(RuntimeError, match="STT send_audio failed"):
+            await session._audio_router._process_chunk(chunk)
+
+        assert len(stops) == 1
+        assert session._turn_manager.state is TurnManagerState.USER_PAUSED
+    finally:
+        await session._stt_committer.cancel(session._turn)
+        await session._turn_manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_vad_events_after_stop_preserve_order_behind_stt_send() -> None:
+    class StopThenStartVAD:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def process(self, _chunk: AudioChunk) -> AsyncIterator[Event]:
+            self.calls += 1
+            if self.calls == 1:
+                yield VADStartSpeaking()
+            elif self.calls == 2:
+                yield VADStopSpeaking()
+                yield VADStartSpeaking()
+
+        def configure(self, **_kwargs: object) -> None:
+            pass
+
+    order: list[str] = []
+
+    class OrderingSTT(FakeSTT):
+        async def send_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            order.append("send")
+
+    session = Session(
+        _config(
+            stt=OrderingSTT(transcript=""),
+            vad=StopThenStartVAD(),
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=10_000,
+                stt_segment_silence_ms=10_000,
+            ),
+        )
+    )
+    session._is_running = True
+    session.event_bus.subscribe(VADStopSpeaking, lambda _event: order.append("stop"))
+    session.event_bus.subscribe(VADStartSpeaking, lambda _event: order.append("start"))
+    chunk = _chunk()
+
+    try:
+        await session._audio_router._process_chunk(chunk)
+        order.clear()
+
+        await session._audio_router._process_chunk(chunk)
+
+        assert order == ["send", "stop", "start"]
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+    finally:
         await session._stt_committer.cancel(session._turn)
         await session._turn_manager.shutdown()
 
@@ -1115,6 +1290,39 @@ async def test_cancel_preemptive_generation_ignores_preexisting_cancellation_cou
     assert owned.cancelled()
     assert runner._preemptive_task is None
     assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+@pytest.mark.asyncio
+async def test_cancel_preemptive_generation_propagates_cancellation_pending_before_entry() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    started = asyncio.Event()
+
+    async def block() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    owned = session._runtime_scope.create_task(TurnRunner._PREEMPTIVE_TASK_NAME, block())
+    runner._preemptive_task = owned
+    await started.wait()
+
+    async def cancel_with_pending_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await runner.cancel_preemptive_generation()
+
+    caller = asyncio.create_task(cancel_with_pending_cancellation())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert caller.done()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert runner._preemptive_task is owned
+    owned.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await owned
 
 
 @pytest.mark.asyncio

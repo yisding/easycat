@@ -849,7 +849,7 @@ class STTAMDFusionClassifier:
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset classification state for a new outbound call."""
-        self._cancel_timeout()
+        self._cancel_timeout(detach_current=True)
         self._amd_result = None
         self._stt_result = None
         self._emitted = False
@@ -857,13 +857,22 @@ class STTAMDFusionClassifier:
         self._screening_active = False
         self._call_sid = event.call_sid
 
-    def _cancel_timeout(self) -> None:
+    def _cancel_timeout(self, *, detach_current: bool = False) -> None:
         task = self._timeout_task
         try:
             current = asyncio.current_task()
         except RuntimeError:
             current = None
         if task is current:
+            if detach_current:
+                # A fused-event subscriber can synchronously start the next
+                # call while this old timeout is still dispatching. Detach its
+                # name so the new call can arm an independent timeout; the old
+                # task continues its already-in-progress event delivery.
+                self._tasks.cancel(_STT_AMD_TIMEOUT_TASK)
+                if self._timeout_task is task:
+                    self._timeout_task = None
+                return
             # The timeout owns its own fusion emission. Keep it registered
             # until that emission settles so stop() can still cancel a blocked
             # subscriber instead of permitting a stale post-stop result.
