@@ -17,7 +17,7 @@ __all__ = [
 import asyncio
 import logging
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -34,9 +34,9 @@ from easycat.events import (
     STTPartial,
     VoicemailDetected,
 )
+from easycat.telephony.call_state import _CallBoundaryAcceptor
 
 logger = logging.getLogger(__name__)
-_CallBoundaryAcceptor = Callable[[str, str], bool]
 
 ScreeningPlatform = Literal["ios", "android", "carrier", "third_party"]
 

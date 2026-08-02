@@ -7,7 +7,7 @@ import enum
 import logging
 import math
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -24,10 +24,10 @@ from easycat.events import (
     VoicemailDetected,
 )
 from easycat.runtime.scope import BackgroundTaskScope
+from easycat.telephony.call_state import _CallBoundaryAcceptor
 
 logger = logging.getLogger(__name__)
 _STT_AMD_TIMEOUT_TASK = "stt_amd_timeout"
-_CallBoundaryAcceptor = Callable[[str, str], bool]
 
 
 # ── Shared audio analysis helpers ────────────────────────────────
