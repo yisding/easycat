@@ -383,6 +383,20 @@ class TestMultiContextWSManager:
         assert replayed == [armed.context_id]
         await mgr.aclose()
 
+    async def test_on_reconnect_primer_does_not_reacquire_send_lock(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        frames = [json.dumps({"context_id": ctx.context_id, "transcript": "hi"})]
+        await mgr.send(ctx, frames)
+        ws.sent.clear()
+
+        async with mgr._send_lock:
+            await asyncio.wait_for(mgr._on_reconnect(), timeout=1)
+
+        assert ws.sent == frames
+        await mgr.aclose()
+
     async def test_on_reconnect_propagates_live_context_replay_failure(self):
         ws = FakeMultiContextWS()
         mgr = MultiContextWSManager(_make_adapter(ws))
