@@ -1364,7 +1364,10 @@ class LibsqlJournal(_SqlJournalBase):
         key = (os.getpid(), self._db_path.absolute())
         with _LIVE_JOURNALS_LOCK:
             current = _LIVE_JOURNALS.get(key)
-            if current is not None and not current._closed:
+            # ``close()`` marks the instance closed before it removes the
+            # persisted owner marker. Keep the in-process claim exclusive
+            # until teardown reaches ``_release_live_journal()``.
+            if current is not None:
                 raise RuntimeError(f"Journal is already active: {self._db_path}")
 
             row = self._conn.execute(

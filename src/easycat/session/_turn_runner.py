@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -143,6 +144,13 @@ class _PreemptiveAgentResult:
 
     response: PreparedAgentResponse | None = None
     error: Exception | None = None
+
+
+@dataclass
+class _TextTurnStreamState:
+    accumulated: str = ""
+    structured_output: object | None = None
+    pending_tool_calls: Counter[str | None] = field(default_factory=Counter)
 
 
 class TurnRunner:
@@ -564,6 +572,12 @@ class TurnRunner:
 
     async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            # Checkpoint before mutating ownership. Otherwise a cancellation
+            # requested immediately before entry is included in the baseline
+            # below and mistaken for the speculative task's cancellation.
+            await asyncio.sleep(0)
         task = self._preemptive_task
         self._preemptive_task = None
         self._preemptive_transcript = ""
@@ -576,7 +590,6 @@ class TurnRunner:
             # teardown close the surrounding session.
             self._runtime_scope.discard(cast(asyncio.Task[Any], task))
             return
-        current_task = asyncio.current_task()
         cancellation_requests = current_task.cancelling() if current_task is not None else 0
         if not task.done():
             task.cancel()
@@ -1480,8 +1493,7 @@ class TurnRunner:
         Progress is mirrored onto ``_text_turn_accumulated`` so a barge-in
         ``send_text`` can report what had already been delivered.
         """
-        structured_output: object | None = None
-        accumulated = ""
+        state = _TextTurnStreamState()
         # Build a turn context for this text turn so AgentStage can
         # stamp records with the right turn_id.
         text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
@@ -1501,52 +1513,96 @@ class TurnRunner:
         try:
             async for event in stream:
                 # A bridge can ignore the cooperative cancel token and yield
-                # after the application prompt has been cancelled.  Text
-                # turns do not have the voice consumer's cancellation gate,
-                # so stop here before such output can reach text clients.
+                # after the application prompt has been cancelled. Suppress
+                # stale assistant output while still draining lifecycle events
+                # for tools that were already in flight.
                 if cancel_token and cancel_token.is_cancelled:
-                    break
-                kind = getattr(event, "kind", None)
-                if kind is None:
+                    if not await self._drain_cancelled_text_event(event, state, turn_id):
+                        break
                     continue
-                if kind == "done":
-                    if event.text:
-                        accumulated = event.text
-                    if getattr(event, "structured_output", None) is not None:
-                        structured_output = event.structured_output
+                if await self._consume_text_event(event, state, turn_id):
                     break
-                if kind == "text_delta" and event.text:
-                    accumulated += event.text
-                    self._text_turn_accumulated = accumulated
-                    await self._emit(
-                        AgentDelta(
-                            text=event.text,
-                            session_id=self._session_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                else:
-                    # tool_started / tool_delta / tool_result share the same
-                    # event-translation as the voice path via emit_tool_event,
-                    # so the two cannot drift.  The per-tool observability span
-                    # is text-path specific and threaded in via tool_span.
-                    await emit_tool_event(
-                        event,
-                        kind,
-                        emit=self._emit,
-                        session_id=self._session_id,
-                        turn_id=turn_id,
-                        tool_span=lambda: observability.span(
-                            "easycat.agent.tool",
-                            {
-                                "easycat.stage": "agent",
-                                "easycat.surface": "agent_bridge",
-                            },
-                        ),
-                    )
         finally:
             await stream.aclose()
-        return accumulated, structured_output
+        return state.accumulated, state.structured_output
+
+    async def _drain_cancelled_text_event(
+        self,
+        event: object,
+        state: _TextTurnStreamState,
+        turn_id: str,
+    ) -> bool:
+        """Drain lifecycle events only for tools observed before cancellation."""
+        kind = getattr(event, "kind", None)
+        call_id = getattr(event, "call_id", None)
+        if not state.pending_tool_calls or kind == "done":
+            return False
+        if kind == "tool_result" and state.pending_tool_calls[call_id] > 0:
+            self._finish_text_tool_call(state, call_id)
+            await self._emit_text_tool_event(event, kind, turn_id)
+        elif kind == "tool_delta" and state.pending_tool_calls[call_id] > 0:
+            await self._emit_text_tool_event(event, kind, turn_id)
+        return bool(state.pending_tool_calls)
+
+    async def _consume_text_event(
+        self,
+        event: object,
+        state: _TextTurnStreamState,
+        turn_id: str,
+    ) -> bool:
+        """Consume one live text-turn event; return whether it is terminal."""
+        kind = getattr(event, "kind", None)
+        if kind is None:
+            return False
+        if kind == "done":
+            if getattr(event, "text", ""):
+                state.accumulated = event.text
+            if getattr(event, "structured_output", None) is not None:
+                state.structured_output = event.structured_output
+            return True
+        if kind == "text_delta" and getattr(event, "text", ""):
+            state.accumulated += event.text
+            self._text_turn_accumulated = state.accumulated
+            await self._emit(
+                AgentDelta(
+                    text=event.text,
+                    session_id=self._session_id,
+                    turn_id=turn_id,
+                )
+            )
+            return False
+        if kind == "tool_started":
+            state.pending_tool_calls[getattr(event, "call_id", None)] += 1
+        elif kind == "tool_result":
+            self._finish_text_tool_call(state, getattr(event, "call_id", None))
+        await self._emit_text_tool_event(event, kind, turn_id)
+        return False
+
+    @staticmethod
+    def _finish_text_tool_call(state: _TextTurnStreamState, call_id: str | None) -> None:
+        remaining = state.pending_tool_calls[call_id] - 1
+        if remaining > 0:
+            state.pending_tool_calls[call_id] = remaining
+        else:
+            state.pending_tool_calls.pop(call_id, None)
+
+    async def _emit_text_tool_event(self, event: object, kind: str, turn_id: str) -> None:
+        # tool_started / tool_delta / tool_result share the same event
+        # translation as the voice path so the two surfaces cannot drift.
+        await emit_tool_event(
+            event,
+            kind,
+            emit=self._emit,
+            session_id=self._session_id,
+            turn_id=turn_id,
+            tool_span=lambda: observability.span(
+                "easycat.agent.tool",
+                {
+                    "easycat.stage": "agent",
+                    "easycat.surface": "agent_bridge",
+                },
+            ),
+        )
 
     async def _execute_text_turn(
         self,

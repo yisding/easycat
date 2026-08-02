@@ -403,7 +403,7 @@ class STTBase:
         if (
             isinstance(value, bool)
             or not isinstance(value, int | float)
-            or not math.isfinite(value)
+            or (isinstance(value, float) and not math.isfinite(value))
             or value <= 0
         ):
             raise ValueError(f"{name} must be a positive finite number when set (got {value!r})")
