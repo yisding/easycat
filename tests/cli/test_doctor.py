@@ -496,6 +496,59 @@ TWILIO_AUTH_TOKEN=0123456789abcdef0123456789abcdef
     assert checks["env_twilio_auth_token"]["status"] == "ok"
 
 
+def test_doctor_rejects_invalid_numeric_twilio_scaffold_values(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "twilio-phone"
+required_env = ["OPENAI_API_KEY"]
+optional_env = [
+    "TWILIO_WS_PORT",
+    "TWILIO_MAX_SESSIONS",
+    "TWILIO_START_TIMEOUT_S",
+    "TWILIO_DRAIN_TIMEOUT_S",
+    "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TWILIO_WS_PORT=abc
+TWILIO_MAX_SESSIONS=0
+TWILIO_START_TIMEOUT_S=nan
+TWILIO_DRAIN_TIMEOUT_S=-1
+TWILIO_FORCE_SHUTDOWN_TIMEOUT_S=inf
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 1
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    for name in (
+        "twilio_ws_port",
+        "twilio_max_sessions",
+        "twilio_start_timeout_s",
+        "twilio_drain_timeout_s",
+        "twilio_force_shutdown_timeout_s",
+    ):
+        check = checks[f"env_{name}"]
+        assert check["status"] == "fail"
+        assert check["requirement"] == "optional"
+        assert check["code"] == "EASYCAT_E210"
+
+
 def test_doctor_scaffold_optional_env_is_allowed_and_non_blocking(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,
@@ -938,3 +991,40 @@ def test_doctor_fix_json_reports_each_mutation_and_is_idempotent(
 
     assert second.exit_code == 0, second.stderr
     assert json.loads(second.stdout)["fixes"] == []
+
+
+def test_doctor_failed_fix_sets_error_status_and_nonzero_exit(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    checks = [
+        doctor_module.CheckResult(
+            name="journal_writable",
+            status="skip",
+            detail="journal directory does not exist",
+            code="EASYCAT_E207",
+        )
+    ]
+    failed_fix = doctor_module.FixResult(
+        action="create_directory",
+        target=str(tmp_path / "journals"),
+        status="failed",
+        detail="permission denied",
+    )
+    monkeypatch.setattr(doctor_module, "_run_all_checks", lambda **_kwargs: checks)
+    monkeypatch.setattr(doctor_module, "_apply_safe_fixes", lambda _results: [failed_fix])
+
+    terminal_result = cli.invoke(app, ["doctor", "--fix"])
+
+    assert terminal_result.exit_code == 1
+    assert "--fix failed" in terminal_result.stderr
+    assert "1 fix failed" in terminal_result.stderr
+
+    json_result = cli.invoke(app, ["doctor", "--fix", "--json"])
+
+    assert json_result.exit_code == 1
+    payload = json.loads(json_result.stdout)
+    assert payload["status"] == "error"
+    assert payload["fixes"] == [failed_fix.as_dict()]

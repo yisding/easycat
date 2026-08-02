@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import math
 import os
 import re
 import shlex
@@ -331,6 +332,38 @@ def _missing_provider_result(
     )
 
 
+def _scaffold_env_value_error(var: str, value: str) -> str | None:
+    """Return the generated runtime's numeric validation error, if any."""
+    if var in {"TWILIO_WS_PORT", "TWILIO_MAX_SESSIONS"}:
+        try:
+            parsed_int = int(value)
+        except ValueError:
+            parsed_int = 0
+        if var == "TWILIO_WS_PORT" and not 1 <= parsed_int <= 65_535:
+            return "TWILIO_WS_PORT must be an integer from 1 to 65535"
+        if var == "TWILIO_MAX_SESSIONS" and parsed_int <= 0:
+            return "TWILIO_MAX_SESSIONS must be a positive integer"
+
+    if var in {
+        "TWILIO_START_TIMEOUT_S",
+        "TWILIO_DRAIN_TIMEOUT_S",
+        "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+    }:
+        try:
+            parsed_float = float(value)
+        except ValueError:
+            parsed_float = float("nan")
+        if var == "TWILIO_START_TIMEOUT_S":
+            valid = math.isfinite(parsed_float) and parsed_float > 0
+        else:
+            valid = math.isfinite(parsed_float) and parsed_float >= 0
+        if not valid:
+            if var == "TWILIO_START_TIMEOUT_S":
+                return f"{var} must be a finite number greater than zero"
+            return f"{var} must be a finite non-negative number"
+    return None
+
+
 def _check_scaffold_env_var(
     var: str,
     *,
@@ -352,6 +385,8 @@ def _check_scaffold_env_var(
         detail = f"{var} looks like a placeholder"
     elif var == "TWILIO_STREAM_URL" and not str(value).casefold().startswith("wss://"):
         detail = "TWILIO_STREAM_URL must use wss://"
+    else:
+        detail = _scaffold_env_value_error(var, str(value))
 
     name = f"env_{var.casefold()}"
     if detail is None:
@@ -927,7 +962,12 @@ def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
 _STATUS_GLYPH = {"ok": "[green]✓[/]", "fail": "[red]✗[/]", "skip": "[dim]~[/]"}
 
 
-def _render_report(results: list[CheckResult], profile: str) -> None:
+def _render_report(
+    results: list[CheckResult],
+    profile: str,
+    *,
+    failed_fixes: int = 0,
+) -> None:
     stderr_console.print(f"[bold]EasyCat doctor[/] — {profile} profile")
     stderr_console.print()
     table = Table(show_header=False, box=None, padding=(0, 1))
@@ -958,7 +998,13 @@ def _render_report(results: list[CheckResult], profile: str) -> None:
     failed = sum(1 for r in results if r.status == "fail")
     skipped = sum(1 for r in results if r.status == "skip")
     total = passed + failed + skipped
-    if failed:
+    if failed_fixes:
+        fix_label = "fix" if failed_fixes == 1 else "fixes"
+        stderr_console.print(
+            f"[red]{failed} checks failed[/], [red]{failed_fixes} {fix_label} failed[/], "
+            f"{passed} passed, {skipped} skipped (of {total})."
+        )
+    elif failed:
         stderr_console.print(
             f"[red]{failed} failed[/], {passed} passed, {skipped} skipped (of {total})."
         )
@@ -1050,8 +1096,9 @@ def doctor(
                 scaffold=scaffold,
             )
 
+        failed_fixes = sum(result.status == "failed" for result in fix_results)
+        failed = any(r.status == "fail" for r in results) or failed_fixes > 0
         if json_output:
-            failed = any(r.status == "fail" for r in results)
             fields: dict[str, Any] = {
                 "environment": environment,
                 "checks": [r.as_dict() for r in results],
@@ -1060,9 +1107,8 @@ def doctor(
                 fields["fixes"] = [result.as_dict() for result in fix_results]
             emit_json(json_envelope("doctor", status="error" if failed else "ok", **fields))
         else:
-            _render_report(results, profile=environment)
+            _render_report(results, profile=environment, failed_fixes=failed_fixes)
 
-    failed = any(r.status == "fail" for r in results)
     raise typer.Exit(1 if failed else 0)
 
 
