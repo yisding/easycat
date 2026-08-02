@@ -37,6 +37,7 @@ def _make_bare_manager(**overrides: object) -> OutboundCallManager:
         "_reconciling_call_sids": set(),
         "_terminal_reconciliation_call_sids": set(),
         "_synthetic_failure_event_ids": set(),
+        "_session_id": None,
         "_started": False,
         "_lifecycle_epoch": 0,
         "_place_call_lock": asyncio.Lock(),
@@ -48,6 +49,25 @@ def _make_bare_manager(**overrides: object) -> OutboundCallManager:
 
 
 class TestParseCallStatusCallback:
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"CallStatus": "initiated", "CallSid": "CA123"},
+            {"CallStatus": "ringing", "CallSid": "CA123"},
+            {"CallStatus": "in-progress", "CallSid": "CA123"},
+            {"CallStatus": "completed", "CallSid": "CA123"},
+            {"CallStatus": "failed", "CallSid": "CA123"},
+        ],
+    )
+    def test_stamps_session_correlation_on_every_lifecycle_status(
+        self,
+        params: dict[str, str],
+    ) -> None:
+        result = parse_call_status_callback(params, session_id="session-1")
+
+        assert result is not None
+        assert result.session_id == "session-1"
+
     def test_initiated_status(self) -> None:
         result = parse_call_status_callback(
             {"CallStatus": "initiated", "CallSid": "CA123", "To": "+1555", "From": "+1999"}
@@ -223,11 +243,14 @@ class TestEmitCallStatus:
         result = await emit_call_status(
             {"CallStatus": "in-progress", "CallSid": "CA1", "AnsweredBy": "machine_start"},
             bus,
+            session_id="session-1",
         )
         assert isinstance(result, CallAnswered)
+        assert result.session_id == "session-1"
         assert len(received) == 1
         assert received[0].result == "machine"
         assert received[0].call_sid == "CA1"
+        assert received[0].session_id == "session-1"
 
     @pytest.mark.asyncio
     async def test_initiated_callback_for_sid_evicted_call_does_not_repin_capacity(self) -> None:
@@ -429,6 +452,7 @@ class TestOutboundCallManagerPlaceCall:
         received: list[CallInitiated] = []
         bus.subscribe(CallInitiated, received.append)
         manager = self._make_manager(bus)
+        manager.set_session_id("session-1")
         mock_call = MagicMock()
         mock_call.sid = "CA999"
         manager._client.calls.create.return_value = mock_call
@@ -437,6 +461,7 @@ class TestOutboundCallManagerPlaceCall:
         assert received[0].call_sid == "CA999"
         assert received[0].to == "+15551234567"
         assert received[0].from_ == "+15559876543"
+        assert received[0].session_id == "session-1"
         assert manager.state == OutboundCallManagerState.ACTIVE
         assert manager.active_call_sid == "CA999"
 
@@ -589,11 +614,13 @@ class TestOutboundCallManagerPlaceCall:
         received: list[CallFailed] = []
         bus.subscribe(CallFailed, received.append)
         manager = self._make_manager(bus)
+        manager.set_session_id("session-1")
         manager._client.calls.create.side_effect = RuntimeError("network error")
         with pytest.raises(RuntimeError, match="network error"):
             await manager.place_call("+15551234567")
         assert len(received) == 1
         assert "network error" in received[0].reason
+        assert received[0].session_id == "session-1"
 
     @pytest.mark.asyncio
     async def test_place_call_blocks_dnc_numbers(self) -> None:
