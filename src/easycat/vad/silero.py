@@ -12,7 +12,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from easycat._audio_utils import PCM16StreamResampler, to_mono_chunk
+from easycat._audio_utils import AudioFrameAligner, PCM16StreamResampler, to_mono_chunk
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import Event
@@ -204,6 +204,7 @@ class SileroVAD(_VADBase):
         self._buffer: bytes = b""
         self._buffer_rate: int | None = None
         self._audio_resampler = PCM16StreamResampler(_SILERO_DEFAULT_RATE)
+        self._source_frame_aligner = AudioFrameAligner()
 
         self._load_model()
 
@@ -254,6 +255,7 @@ class SileroVAD(_VADBase):
         first so frame boundaries and resampling stay correct.
         """
         np = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
+        chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
         # Silero v6.2.1 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
@@ -335,6 +337,7 @@ class SileroVAD(_VADBase):
         """Reset VAD internal state."""
         super().reset()
         self._audio_resampler.reset()
+        self._source_frame_aligner.reset()
         self._buffer = b""
         self._buffer_rate = None
         if self._model is not None:
@@ -346,6 +349,7 @@ class SileroVAD(_VADBase):
     def close(self) -> None:
         """Release the loaded model (onnxruntime session)."""
         super().close()
+        self._source_frame_aligner.reset()
         self._buffer = b""
         self._buffer_rate = None
 

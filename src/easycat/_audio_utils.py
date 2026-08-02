@@ -663,6 +663,46 @@ def to_mono(data: bytes, channels: int) -> bytes:
     return struct.pack(f"<{len(mono_samples)}h", *mono_samples)
 
 
+class AudioFrameAligner:
+    """Carry incomplete source frames across streaming audio chunks.
+
+    A transport can split interleaved PCM frames at arbitrary byte offsets.
+    Downmixing either half independently loses or cross-pairs channel samples,
+    so consumers that normalize multi-channel streaming audio must align the
+    source geometry first. A format change deliberately drops an incomplete
+    old frame rather than combining it with different audio geometry.
+    """
+
+    def __init__(self) -> None:
+        self._carry = b""
+        self._carry_format: AudioFormat | None = None
+
+    def align(self, chunk: AudioChunk) -> AudioChunk:
+        """Return ``chunk`` with only complete source frames.
+
+        Any trailing partial frame is retained for the next same-format
+        chunk. Call :meth:`reset` at a stream boundary when it must be
+        discarded instead.
+        """
+        if self._carry_format != chunk.format:
+            self.reset()
+
+        data = self._carry + chunk.data
+        remainder = len(data) % chunk.format.frame_size
+        if remainder:
+            self._carry = data[-remainder:]
+            self._carry_format = chunk.format
+            data = data[:-remainder]
+        else:
+            self.reset()
+        return replace(chunk, data=data)
+
+    def reset(self) -> None:
+        """Discard an incomplete frame at an explicit stream boundary."""
+        self._carry = b""
+        self._carry_format = None
+
+
 def to_mono_chunk(chunk: AudioChunk) -> AudioChunk:
     """Downmix an AudioChunk to mono."""
     if chunk.format.channels == 1:

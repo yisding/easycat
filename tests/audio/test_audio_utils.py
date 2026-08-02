@@ -6,6 +6,7 @@ import struct
 import pytest
 
 from easycat._audio_utils import (
+    AudioFrameAligner,
     PCM16StreamResampler,
     chunk_frames,
     resample,
@@ -636,6 +637,27 @@ def test_to_mono_chunk_already_mono():
     chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
     result = to_mono_chunk(chunk)
     assert result is chunk
+
+
+def test_audio_frame_aligner_preserves_split_stereo_frames():
+    fmt = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    data = struct.pack("<6h", 100, 300, 1_000, 2_000, 3_000, 4_000)
+    aligner = AudioFrameAligner()
+
+    first = aligner.align(AudioChunk(data=data[:6], format=fmt))
+    second = aligner.align(AudioChunk(data=data[6:], format=fmt))
+
+    assert to_mono_chunk(first).data == struct.pack("<h", 200)
+    assert to_mono_chunk(second).data == struct.pack("<2h", 1_500, 3_500)
+
+
+def test_audio_frame_aligner_discards_partial_frame_on_format_change():
+    stereo = AudioFormat(sample_rate=16_000, channels=2, sample_width=2)
+    mono = PCM16_MONO_16K
+    aligner = AudioFrameAligner()
+
+    assert aligner.align(AudioChunk(data=b"\x00\x00", format=stereo)).data == b""
+    assert aligner.align(AudioChunk(data=b"\x01\x00", format=mono)).data == b"\x01\x00"
 
 
 # ── Chunk sizing tests ────────────────────────────────────────────
