@@ -41,6 +41,8 @@ _ACCOUNTING_VERSION = 1
 _MAX_ACCOUNTING_FILE_BYTES = 4096
 _ARTIFACT_EPOCH_FILENAME = ".easycat-artifact-epoch-v1.json"
 _ARTIFACT_EPOCH_VERSION = 1
+_ARTIFACT_RETIREMENT_FILENAME = ".easycat-artifact-retirement-v1.json"
+_ARTIFACT_RETIREMENT_VERSION = 1
 _MANAGED_ARTIFACT_SUFFIX = ".owner"
 _MAX_ARTIFACT_EPOCH_FILE_BYTES = 256
 
@@ -326,6 +328,52 @@ def _artifact_epoch_from_bytes(payload: bytes) -> str | None:
     if epoch is not None and (not isinstance(epoch, str) or not _is_cleanup_token(epoch)):
         raise ValueError("invalid artifact epoch")
     return epoch
+
+
+def _artifact_retirement_payload(
+    retiring_epoch: str | None,
+    replacement_epoch: str,
+) -> bytes:
+    return (
+        json.dumps(
+            {
+                "replacement_epoch": replacement_epoch,
+                "retiring_epoch": retiring_epoch,
+                "version": _ARTIFACT_RETIREMENT_VERSION,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("ascii")
+
+
+def _artifact_retirement_from_bytes(payload: bytes) -> tuple[str | None, str]:
+    if len(payload) > _MAX_ARTIFACT_EPOCH_FILE_BYTES:
+        raise ValueError("artifact retirement intent is too large")
+    try:
+        value = json.loads(payload.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid artifact retirement JSON") from exc
+    if not isinstance(value, dict) or set(value) != {
+        "replacement_epoch",
+        "retiring_epoch",
+        "version",
+    }:
+        raise ValueError("invalid artifact retirement shape")
+    if value["version"] != _ARTIFACT_RETIREMENT_VERSION:
+        raise ValueError("unsupported artifact retirement version")
+    retiring_epoch = value["retiring_epoch"]
+    if retiring_epoch is not None and (
+        not isinstance(retiring_epoch, str) or not _is_cleanup_token(retiring_epoch)
+    ):
+        raise ValueError("invalid retiring artifact epoch")
+    replacement_epoch = value["replacement_epoch"]
+    if not isinstance(replacement_epoch, str) or not _is_cleanup_token(replacement_epoch):
+        raise ValueError("invalid replacement artifact epoch")
+    if retiring_epoch == replacement_epoch:
+        raise ValueError("artifact retirement epochs must differ")
+    return retiring_epoch, replacement_epoch
 
 
 @dataclass(frozen=True, slots=True)
@@ -661,6 +709,38 @@ class FilesystemArtifactStore:
                     exc_info=True,
                 )
 
+    @staticmethod
+    def _pending_journal_retirements(data_dir: str | Path) -> tuple[str, ...]:
+        """Return validated session ids with durable retirement intents."""
+        artifacts_dir = Path(data_dir) / "artifacts"
+        if _path_is_link_or_reparse(artifacts_dir):
+            return ()
+        try:
+            entries = tuple(artifacts_dir.iterdir())
+        except OSError:
+            return ()
+
+        pending: list[str] = []
+        for entry in entries:
+            try:
+                validate_persistent_session_id(entry.name)
+                metadata = entry.lstat()
+                marker = entry / _ARTIFACT_RETIREMENT_FILENAME
+                marker_metadata = marker.lstat()
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or _metadata_is_link_or_reparse(metadata)
+                    or not stat.S_ISREG(marker_metadata.st_mode)
+                    or _metadata_is_link_or_reparse(marker_metadata)
+                    or marker_metadata.st_nlink != 1
+                    or marker_metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
+                ):
+                    continue
+            except (FileNotFoundError, OSError, UnicodeError, ValueError):
+                continue
+            pending.append(entry.name)
+        return tuple(sorted(pending))
+
     def put(
         self,
         payload: bytes,
@@ -684,7 +764,7 @@ class FilesystemArtifactStore:
                     accounting = self._load_accounting_locked(persist_missing=False)
                     created = not self.has(ref)
                     if not created:
-                        epoch = self._read_artifact_epoch_locked()
+                        epoch = self._effective_artifact_epoch_locked()
                         if not self._write_managed_artifact_epoch_locked(ref, epoch):
                             return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                         if not self._revoke_cleanup_token_locked(ref):
@@ -696,7 +776,7 @@ class FilesystemArtifactStore:
                     )
                     if reserved is None:
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                    epoch = self._read_artifact_epoch_locked()
+                    epoch = self._effective_artifact_epoch_locked()
                     if not self._write_managed_artifact_epoch_locked(ref, epoch):
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                     if not self._put_new_locked(ref, payload):
@@ -750,16 +830,20 @@ class FilesystemArtifactStore:
         capability; committed refs revoke them when they are adopted here.
         """
         referenced = {ref for ref in referenced_refs if _is_sha256_ref(ref)}
-        new_epoch = uuid.uuid4().hex
         removed = 0
         try:
             with self._write_claim():
                 with self._reuse_session_fd_locked(create=True):
                     accounting = self._load_accounting_locked(persist_missing=False)
                     managed = self._managed_artifact_epochs_locked()
+                    retirement = self._read_artifact_retirement_intent_locked()
+                    new_epoch = retirement[1] if retirement is not None else uuid.uuid4().hex
                     self._write_artifact_epoch_locked(new_epoch)
                     for ref, prior_epoch in managed.items():
-                        if prior_epoch is None or ref in referenced:
+                        preserve_for_retirement = (
+                            retirement is not None and prior_epoch != retirement[0]
+                        )
+                        if preserve_for_retirement or prior_epoch is None or ref in referenced:
                             if not self.has(ref):
                                 self._delete_managed_artifact_epoch_locked(ref)
                                 continue
@@ -777,9 +861,9 @@ class FilesystemArtifactStore:
                             ref,
                             before_bytes,
                         )
-                        self._delete_ref_locked(ref)
-                        accounting = self._complete_pending_delete_locked(pending)
+                        accounting = self._apply_pending_delete_locked(pending)
                         removed += 1
+                    self._delete_artifact_retirement_intent_locked()
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
                 "Artifact journal-epoch rotation failed for %s",
@@ -787,6 +871,68 @@ class FilesystemArtifactStore:
                 exc_info=True,
             )
         return removed
+
+    def _prepare_journal_retirement(self) -> bool:
+        """Durably record that crash promotion will retire managed live blobs."""
+        try:
+            with self._write_claim():
+                with self._reuse_session_fd_locked(create=True):
+                    retirement = self._read_artifact_retirement_intent_locked()
+                    if retirement is None:
+                        retiring_epoch = self._read_artifact_epoch_locked()
+                        replacement_epoch = uuid.uuid4().hex
+                        # Persist the replacement before publishing it as the
+                        # current epoch. A retry can finish the rotation after
+                        # a crash between these two atomic metadata writes.
+                        self._write_artifact_retirement_intent_locked(
+                            retiring_epoch,
+                            replacement_epoch,
+                        )
+                    else:
+                        _, replacement_epoch = retirement
+                    self._write_artifact_epoch_locked(replacement_epoch)
+            return True
+        except (NotImplementedError, OSError, ValueError):
+            logger.warning(
+                "Artifact journal-retirement preparation failed for %s",
+                self._dir,
+                exc_info=True,
+            )
+            return False
+
+    def _complete_journal_retirement(self) -> bool:
+        """Delete every managed live blob after its crash snapshot is durable."""
+        try:
+            with self._write_claim():
+                with self._reuse_session_fd_locked(create=True):
+                    retirement = self._read_artifact_retirement_intent_locked()
+                    if retirement is None:
+                        return True
+                    retiring_epoch, replacement_epoch = retirement
+                    self._write_artifact_epoch_locked(replacement_epoch)
+                    accounting = self._load_accounting_locked(persist_missing=False)
+                    managed = self._managed_artifact_epochs_locked()
+                    for ref, owner_epoch in managed.items():
+                        if retiring_epoch is None or owner_epoch != retiring_epoch:
+                            continue
+                        before_bytes = self._ref_stored_bytes_locked(ref)
+                        if before_bytes > accounting.total_bytes:
+                            raise ValueError("artifact accounting baseline is inconsistent")
+                        pending = self._begin_pending_delete_locked(
+                            accounting,
+                            ref,
+                            before_bytes,
+                        )
+                        accounting = self._apply_pending_delete_locked(pending)
+                    self._delete_artifact_retirement_intent_locked()
+            return True
+        except (NotImplementedError, OSError, ValueError):
+            logger.warning(
+                "Artifact journal retirement failed for %s",
+                self._dir,
+                exc_info=True,
+            )
+            return False
 
     def _put_new_with_descriptors(self, ref: str, payload: bytes) -> None:
         session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
@@ -887,9 +1033,8 @@ class FilesystemArtifactStore:
                     if before_bytes > accounting.total_bytes:
                         raise ValueError("artifact accounting baseline is inconsistent")
                     pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
-                    self._delete_ref_locked(ref)
+                    self._apply_pending_delete_locked(pending)
                     self._cap_rejected_accounting = None
-                    self._complete_pending_delete_locked(pending)
         except (NotImplementedError, OSError, ValueError):
             logger.warning("Artifact delete claim failed for ref=%s", ref, exc_info=True)
 
@@ -907,9 +1052,8 @@ class FilesystemArtifactStore:
                     if before_bytes > accounting.total_bytes:
                         raise ValueError("artifact accounting baseline is inconsistent")
                     pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
-                    self._delete_ref_locked(ref)
+                    self._apply_pending_delete_locked(pending)
                     self._cap_rejected_accounting = None
-                    self._complete_pending_delete_locked(pending)
                     return not self.has(ref)
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
@@ -1105,11 +1249,16 @@ class FilesystemArtifactStore:
             raise
         except (OSError, ValueError):
             previous = _ArtifactAccounting(total_bytes=0)
+        retirement = self._read_artifact_retirement_intent_locked()
+        pending_ref = previous.pending_delete_ref if retirement is not None else None
+        pending_before_bytes = (
+            self._ref_stored_bytes_locked(pending_ref) if pending_ref is not None else 0
+        )
         accounting = replace(
             previous,
             total_bytes=self._stored_bytes(),
-            pending_delete_ref=None,
-            pending_delete_before_bytes=0,
+            pending_delete_ref=pending_ref,
+            pending_delete_before_bytes=pending_before_bytes,
         )
         accounting = self._write_accounting_locked(accounting)
         self._current_bytes = accounting.total_bytes
@@ -1166,14 +1315,22 @@ class FilesystemArtifactStore:
         self,
         pending: _ArtifactAccounting,
     ) -> _ArtifactAccounting:
+        return self._apply_pending_delete_locked(pending)
+
+    def _apply_pending_delete_locked(
+        self,
+        pending: _ArtifactAccounting,
+    ) -> _ArtifactAccounting:
         ref = pending.pending_delete_ref
         if ref is None:
-            return pending
+            raise ValueError("artifact delete intent is missing")
         # Replay the unlink even when the blob appears absent so live peers
         # complete an interrupted same-boot delete intent before decreasing
         # the shared ledger. A post-host-crash constructor instead recounts
         # physical blobs before trusting the ledger.
         self._delete_ref_locked(ref)
+        if self.has(ref):
+            raise OSError(f"Artifact delete made no progress for ref={ref}")
         return self._complete_pending_delete_locked(pending)
 
     def _complete_pending_delete_locked(
@@ -1400,10 +1557,16 @@ class FilesystemArtifactStore:
             if self._path_has_link_or_reparse(path):
                 raise OSError(f"Refusing unsafe artifact epoch path: {path}")
             try:
-                payload = path.read_bytes()
+                metadata = path.lstat()
             except FileNotFoundError:
                 return None
-            return _artifact_epoch_from_bytes(payload)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
+            ):
+                raise ValueError("invalid artifact epoch metadata")
+            return _artifact_epoch_from_bytes(path.read_bytes())
         session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
         try:
             try:
@@ -1414,6 +1577,12 @@ class FilesystemArtifactStore:
             if owns_session_fd:
                 os.close(session_fd)
 
+    def _effective_artifact_epoch_locked(self) -> str | None:
+        retirement = self._read_artifact_retirement_intent_locked()
+        if retirement is not None:
+            return retirement[1]
+        return self._read_artifact_epoch_locked()
+
     def _write_artifact_epoch_locked(self, epoch: str) -> None:
         payload = _artifact_epoch_payload(epoch)
         if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
@@ -1422,6 +1591,77 @@ class FilesystemArtifactStore:
         session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
         try:
             self._replace_file_at(session_fd, _ARTIFACT_EPOCH_FILENAME, payload)
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _write_artifact_retirement_intent_locked(
+        self,
+        retiring_epoch: str | None,
+        replacement_epoch: str,
+    ) -> None:
+        payload = _artifact_retirement_payload(retiring_epoch, replacement_epoch)
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            self._replace_file_with_paths(
+                self._dir / _ARTIFACT_RETIREMENT_FILENAME,
+                payload,
+            )
+            return
+        session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+        try:
+            self._replace_file_at(
+                session_fd,
+                _ARTIFACT_RETIREMENT_FILENAME,
+                payload,
+            )
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _read_artifact_retirement_intent_locked(self) -> tuple[str | None, str] | None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            path = self._dir / _ARTIFACT_RETIREMENT_FILENAME
+            if self._path_has_link_or_reparse(path):
+                raise OSError(f"Refusing unsafe artifact retirement path: {path}")
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                return None
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
+            ):
+                raise ValueError("invalid artifact retirement metadata")
+            return _artifact_retirement_from_bytes(path.read_bytes())
+        session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+        try:
+            try:
+                fd = _open_regular_at(session_fd, _ARTIFACT_RETIREMENT_FILENAME)
+            except FileNotFoundError:
+                return None
+            try:
+                metadata = os.fstat(fd)
+                if metadata.st_nlink != 1 or metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES:
+                    raise ValueError("invalid artifact retirement metadata")
+                return _artifact_retirement_from_bytes(_read_all_fd(fd))
+            finally:
+                os.close(fd)
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _delete_artifact_retirement_intent_locked(self) -> None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            path = self._dir / _ARTIFACT_RETIREMENT_FILENAME
+            if self._path_has_link_or_reparse(path):
+                raise OSError(f"Refusing unsafe artifact retirement path: {path}")
+            path.unlink(missing_ok=True)
+            return
+        session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+        try:
+            if not self._unlink_name(session_fd, _ARTIFACT_RETIREMENT_FILENAME):
+                raise OSError("Could not clear artifact retirement intent")
         finally:
             if owns_session_fd:
                 os.close(session_fd)

@@ -28,6 +28,7 @@ from easycat.runtime._private_files import (
     mkdir_private,
     sqlite_readonly_uri,
 )
+from easycat.runtime.artifacts import FilesystemArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +481,7 @@ def sweep_crashed_journals(data_dir: str | Path, *, skip: Path | None = None) ->
     individual failures are logged and skipped, never raised.
     """
     root = Path(data_dir)
+    _retry_artifact_retirements(root, skip=skip)
     journals_dir = root / "journals"
     if not journals_dir.is_dir():
         return 0
@@ -530,8 +532,19 @@ def _promote_one(root: Path, db_path: Path) -> bool:
                 return False
             crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
             _copy_journal_to_crash_dump(db_path, crash_path)
+            store = FilesystemArtifactStore(db_path.stem, data_dir=root)
+            try:
+                if not store._prepare_journal_retirement():
+                    raise OSError("Could not prepare artifact journal retirement")
+            finally:
+                store.close()
             snapshot_crash_dump_artifacts(root, db_path, artifact_root)
             if _remove_journal(db_path):
+                store = FilesystemArtifactStore(db_path.stem, data_dir=root)
+                try:
+                    store._complete_journal_retirement()
+                finally:
+                    store.close()
                 logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
                 return True
             # If the source database itself remains, this promotion is only a
@@ -546,6 +559,37 @@ def _promote_one(root: Path, db_path: Path) -> bool:
         logger.warning("Failed to promote crashed journal %s", db_path, exc_info=True)
         return False
     return False
+
+
+def _retry_artifact_retirements(root: Path, *, skip: Path | None) -> None:
+    """Finish durable live-store retirements whose source journal is gone."""
+    journals_dir = root / "journals"
+    skip_resolved: Path | None = None
+    if skip is not None:
+        try:
+            skip_resolved = skip.resolve()
+        except OSError:
+            skip_resolved = skip
+
+    for session_id in FilesystemArtifactStore._pending_journal_retirements(root):
+        db_path = journals_dir / f"{session_id}.sqlite"
+        if _is_skipped(db_path, skip_resolved):
+            continue
+        try:
+            with journal_file_claim(db_path, blocking=False) as claimed:
+                if not claimed or db_path.exists():
+                    continue
+                store = FilesystemArtifactStore(session_id, data_dir=root)
+                try:
+                    store._complete_journal_retirement()
+                finally:
+                    store.close()
+        except OSError:
+            logger.debug(
+                "Deferred artifact journal retirement failed for %s",
+                session_id,
+                exc_info=True,
+            )
 
 
 def _remove_journal(db_path: Path) -> bool:
