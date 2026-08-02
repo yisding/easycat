@@ -225,6 +225,12 @@ class TestTwilioStreamTokenStore:
         assert not store.consume(f"{token}x")
         assert not store.consume("nonce.123.é")
 
+    def test_consumes_fractional_ttl_without_rounding_down(self) -> None:
+        current = 100.25
+        store = TwilioStreamTokenStore("secret", ttl_s=0.1, now=lambda: current)
+
+        assert store.consume(store.issue())
+
     def test_rejects_expired_tokens(self) -> None:
         current = 1000.0
 

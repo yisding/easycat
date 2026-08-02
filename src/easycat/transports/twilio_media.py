@@ -55,6 +55,7 @@ _TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
 _DEGRADED_TWILIO_SEQUENCE_GAP = "twilio_sequence_gap"
 _DEGRADED_TWILIO_TIMESTAMP_GAP = "twilio_timestamp_gap"
 _TWILIO_MULAW_BYTES_PER_MS = 8
+_TWILIO_STREAM_TOKEN_TIME_SCALE = 1_000_000_000
 TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
 
 
@@ -84,7 +85,7 @@ def _decode_twilio_raw(raw: str | bytes) -> str | None:
 @dataclass(frozen=True)
 class _TwilioStreamGrant:
     token: str
-    expires_at: int
+    expires_at_ns: int
     claims: tuple[tuple[str, str], ...]
 
 
@@ -137,13 +138,13 @@ class TwilioStreamTokenStore:
                 return existing.token
 
         nonce = secrets.token_urlsafe(24)
-        expires_at = int(self._now() + self._ttl_s)
-        payload = f"{nonce}.{expires_at}"
+        expires_at_ns = math.ceil((self._now() + self._ttl_s) * _TWILIO_STREAM_TOKEN_TIME_SCALE)
+        payload = f"{nonce}.{expires_at_ns}"
         signature = self._signature(payload)
         token = f"{payload}.{signature}"
         grant = _TwilioStreamGrant(
             token=token,
-            expires_at=expires_at,
+            expires_at_ns=expires_at_ns,
             claims=normalized_claims,
         )
         self._pending[nonce] = grant
@@ -176,22 +177,23 @@ class TwilioStreamTokenStore:
             return False
         nonce, expires_text, signature = parts
         try:
-            expires_at = int(expires_text)
+            expires_at_ns = int(expires_text)
         except ValueError:
             return False
 
-        payload = f"{nonce}.{expires_at}"
+        payload = f"{nonce}.{expires_at_ns}"
         try:
             matches_signature = hmac.compare_digest(signature, self._signature(payload))
         except TypeError:
             return False
         if not matches_signature:
             return False
-        if expires_at < self._now():
+        now_ns = math.floor(self._now() * _TWILIO_STREAM_TOKEN_TIME_SCALE)
+        if expires_at_ns < now_ns:
             self._pending.pop(nonce, None)
             return False
         grant = self._pending.pop(nonce, None)
-        if grant is None or grant.expires_at != expires_at:
+        if grant is None or grant.expires_at_ns != expires_at_ns:
             return False
         return _twilio_grant_claims_match(grant.claims, start)
 
@@ -200,11 +202,13 @@ class TwilioStreamTokenStore:
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     def _prune_expired(self) -> None:
-        now = self._now()
-        expired = [nonce for nonce, grant in self._pending.items() if grant.expires_at < now]
+        now_ns = math.floor(self._now() * _TWILIO_STREAM_TOKEN_TIME_SCALE)
+        expired = [nonce for nonce, grant in self._pending.items() if grant.expires_at_ns < now_ns]
         for nonce in expired:
             self._pending.pop(nonce, None)
-        expired_keys = [key for key, grant in self._idempotent.items() if grant.expires_at < now]
+        expired_keys = [
+            key for key, grant in self._idempotent.items() if grant.expires_at_ns < now_ns
+        ]
         for key in expired_keys:
             self._idempotent.pop(key, None)
 
