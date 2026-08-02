@@ -66,16 +66,70 @@ def _crash_one(
         session_id=session_id,
         input_ref=input_ref,
     )
-    # append() already committed each record; rewrite the liveness marker to
-    # a dead PID, then drop the connection to simulate a crash (no close()).
-    j._conn.execute("COMMIT")
-    j._conn.execute(
-        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
-        (str(_dead_pid()),),
+    # Invalidate any scheduled batch while holding the journal lock, then
+    # stamp a dead owner and drop the connection without a clean-close marker.
+    with j._lock:
+        j._commit_transaction_locked(reopen=False)
+        j._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(_dead_pid()),),
+        )
+        j._conn.commit()
+        j._conn.close()
+        j._closed = True
+    j._release_live_journal()
+
+
+def _crash_with_managed_artifacts(session_id: str, data_dir) -> tuple[str, str]:
+    journal = SqliteJournal(session_id, data_dir=data_dir)
+    store = FilesystemArtifactStore(session_id, data_dir=data_dir)
+    committed_ref = store.put(b"committed crash artifact")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="ev",
+        session_id=session_id,
+        input_ref=committed_ref,
     )
-    j._conn.commit()
-    j._conn.close()
-    j._closed = True
+    orphan_ref = store.put(b"uncommitted crash artifact")
+    with journal._lock:
+        journal._commit_transaction_locked(reopen=False)
+        journal._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(_dead_pid()),),
+        )
+        journal._conn.commit()
+        journal._conn.close()
+        journal._closed = True
+    journal._release_live_journal()
+    store.close()
+    return committed_ref, orphan_ref
+
+
+def _crash_with_incomplete_artifact_snapshot(session_id: str, data_dir) -> tuple[str, str]:
+    journal = SqliteJournal(session_id, data_dir=data_dir)
+    store = FilesystemArtifactStore(session_id, data_dir=data_dir)
+    missing_ref = store.put(b"missing before sweep")
+    available_ref = store.put(b"must remain available")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="ev",
+        session_id=session_id,
+        input_ref=missing_ref,
+        output_ref=available_ref,
+    )
+    with journal._lock:
+        journal._commit_transaction_locked(reopen=False)
+        journal._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(_dead_pid()),),
+        )
+        journal._conn.commit()
+        journal._conn.close()
+        journal._closed = True
+    journal._release_live_journal()
+    store._ref_path(missing_ref).unlink()
+    store.close()
+    return missing_ref, available_ref
 
 
 def test_sqlite_construction_skips_repeat_sweep_within_interval(
@@ -128,6 +182,137 @@ def test_crash_dump_snapshots_artifacts_away_from_reused_session(tmp_path) -> No
     assert copied.read_bytes() == payload
 
 
+def test_different_session_sweep_retires_crashed_live_artifacts(tmp_path) -> None:
+    committed_ref, orphan_ref = _crash_with_managed_artifacts("unique-old", tmp_path)
+    journal_sql_module._clear_crash_sweep_states()
+
+    fresh = SqliteJournal("unique-new", data_dir=tmp_path)
+    fresh.close()
+
+    crash_path = tmp_path / "crash-dumps" / "unique-old.sqlite"
+    copied = crash_dump_artifact_root(crash_path) / committed_ref[:2] / f"{committed_ref}.bin"
+    assert copied.read_bytes() == b"committed crash artifact"
+    old_store = FilesystemArtifactStore("unique-old", data_dir=tmp_path)
+    try:
+        assert old_store.has(committed_ref) is False
+        assert old_store.has(orphan_ref) is False
+        assert old_store._current_bytes == 0
+    finally:
+        old_store.close()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+
+
+def test_sweep_retries_retirement_after_source_journal_is_gone(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committed_ref, orphan_ref = _crash_with_managed_artifacts("retry-old", tmp_path)
+    original_complete = FilesystemArtifactStore._complete_journal_retirement
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_complete_journal_retirement",
+        lambda self: False,
+    )
+
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not (tmp_path / "journals" / "retry-old.sqlite").exists()
+    leaked = FilesystemArtifactStore("retry-old", data_dir=tmp_path)
+    try:
+        assert leaked.has(committed_ref)
+        assert leaked.has(orphan_ref)
+    finally:
+        leaked.close()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ("retry-old",)
+
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_complete_journal_retirement",
+        original_complete,
+    )
+    assert sweep_crashed_journals(tmp_path) == 0
+    retired = FilesystemArtifactStore("retry-old", data_dir=tmp_path)
+    try:
+        assert retired.has(committed_ref) is False
+        assert retired.has(orphan_ref) is False
+        assert retired._current_bytes == 0
+    finally:
+        retired.close()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+
+
+def test_retirement_prepare_failure_keeps_source_for_retry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committed_ref, orphan_ref = _crash_with_managed_artifacts("prepare-retry", tmp_path)
+    original_write_epoch = FilesystemArtifactStore._write_artifact_epoch_locked
+
+    def fail_epoch_write(self, epoch: str) -> None:
+        raise OSError("injected epoch rotation failure")
+
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_write_artifact_epoch_locked",
+        fail_epoch_write,
+    )
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert (tmp_path / "journals" / "prepare-retry.sqlite").exists()
+    assert not (tmp_path / "crash-dumps" / "prepare-retry.sqlite").exists()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ("prepare-retry",)
+
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_write_artifact_epoch_locked",
+        original_write_epoch,
+    )
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not (tmp_path / "journals" / "prepare-retry.sqlite").exists()
+    store = FilesystemArtifactStore("prepare-retry", data_dir=tmp_path)
+    try:
+        assert store.has(committed_ref) is False
+        assert store.has(orphan_ref) is False
+        assert store._current_bytes == 0
+    finally:
+        store.close()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+
+
+def test_same_id_reopen_completes_deferred_artifact_retirement(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committed_ref, orphan_ref = _crash_with_managed_artifacts("retry-same", tmp_path)
+    original_complete = FilesystemArtifactStore._complete_journal_retirement
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_complete_journal_retirement",
+        lambda self: False,
+    )
+    assert sweep_crashed_journals(tmp_path) == 1
+    monkeypatch.setattr(
+        FilesystemArtifactStore,
+        "_complete_journal_retirement",
+        original_complete,
+    )
+    prestaged = FilesystemArtifactStore("retry-same", data_dir=tmp_path)
+    replacement_ref = prestaged.put(b"replacement session artifact")
+    prestaged.close()
+
+    reopened = SqliteJournal("retry-same", data_dir=tmp_path)
+    try:
+        store = FilesystemArtifactStore("retry-same", data_dir=tmp_path)
+        try:
+            assert store.has(committed_ref) is False
+            assert store.has(orphan_ref) is False
+            assert store.get(replacement_ref) == b"replacement session artifact"
+            assert store._current_bytes == len(b"replacement session artifact")
+        finally:
+            store.close()
+        assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+    finally:
+        reopened.close()
+
+
 def test_crash_dump_does_not_snapshot_artifacts_through_parent_symlink(tmp_path) -> None:
     session_id = "orphan"
     payload = b"outside artifact"
@@ -141,11 +326,12 @@ def test_crash_dump_does_not_snapshot_artifacts_through_parent_symlink(tmp_path)
     except OSError:
         pytest.skip("symlinks are unavailable in this test environment")
 
-    assert sweep_crashed_journals(tmp_path) == 1
+    assert sweep_crashed_journals(tmp_path) == 0
 
     crash_path = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
     copied = crash_dump_artifact_root(crash_path) / ref[:2] / f"{ref}.bin"
     assert not copied.exists()
+    assert (tmp_path / "journals" / f"{session_id}.sqlite").exists()
     assert outside_store.get(ref) == payload
 
 
@@ -155,7 +341,11 @@ def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     ref = hashlib.sha256(payload).hexdigest()
     _crash_one(session_id, tmp_path, input_ref=ref)
     artifacts = tmp_path / "artifacts"
-    artifacts.mkdir()
+    artifacts.mkdir(exist_ok=True)
+    # Journal startup may create live artifact-epoch metadata even when no
+    # payload has been published. Replace that managed directory with the
+    # unsafe ancestor this regression is intended to exercise.
+    shutil.rmtree(artifacts / session_id)
     outside = tmp_path / "outside"
     shard = outside / ref[:2]
     shard.mkdir(parents=True)
@@ -167,13 +357,45 @@ def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     target = tmp_path / "snapshot"
     target.mkdir()
 
-    snapshot_crash_dump_artifacts(
-        tmp_path,
-        tmp_path / "journals" / f"{session_id}.sqlite",
-        target,
+    assert (
+        snapshot_crash_dump_artifacts(
+            tmp_path,
+            tmp_path / "journals" / f"{session_id}.sqlite",
+            target,
+        )
+        is False
     )
 
     assert list(target.rglob("*.bin")) == []
+
+
+def test_incomplete_artifact_snapshot_keeps_source_and_remaining_live_blobs(tmp_path) -> None:
+    session_id = "partial-snapshot"
+    _, available_ref = _crash_with_incomplete_artifact_snapshot(session_id, tmp_path)
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert (tmp_path / "journals" / f"{session_id}.sqlite").exists()
+    assert not (tmp_path / "crash-dumps" / f"{session_id}.sqlite").exists()
+    store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    assert store.get(available_ref) == b"must remain available"
+
+
+def test_same_id_reopen_refuses_incomplete_artifact_snapshot(tmp_path) -> None:
+    session_id = "partial-same-id"
+    _, available_ref = _crash_with_incomplete_artifact_snapshot(session_id, tmp_path)
+
+    with pytest.raises(RuntimeError, match="snapshot was incomplete"):
+        SqliteJournal(session_id, data_dir=tmp_path)
+
+    db_path = tmp_path / "journals" / f"{session_id}.sqlite"
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM journal").fetchone() == (1,)
+    finally:
+        conn.close()
+    store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    assert store.get(available_ref) == b"must remain available"
+    assert not (tmp_path / "crash-dumps" / f"{session_id}.sqlite").exists()
 
 
 def test_crash_copy_rejects_symlinked_wal_sidecar(
@@ -505,6 +727,7 @@ def test_failed_source_removal_does_not_accumulate_duplicate_dumps(
 ) -> None:
     _crash_one("stuck", tmp_path)
     source = tmp_path / "journals" / "stuck.sqlite"
+    original_remove = crash_sweep_module._remove_journal
     monkeypatch.setattr(crash_sweep_module, "_remove_journal", lambda _path: False)
 
     assert sweep_crashed_journals(tmp_path) == 0
@@ -512,6 +735,13 @@ def test_failed_source_removal_does_not_accumulate_duplicate_dumps(
 
     assert source.exists()
     assert list((tmp_path / "crash-dumps").iterdir()) == []
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ("stuck",)
+
+    monkeypatch.setattr(crash_sweep_module, "_remove_journal", original_remove)
+    assert sweep_crashed_journals(tmp_path) == 1
+    assert not source.exists()
+    assert (tmp_path / "crash-dumps" / "stuck.sqlite").exists()
+    assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
 
 
 def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:

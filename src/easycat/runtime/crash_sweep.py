@@ -28,6 +28,7 @@ from easycat.runtime._private_files import (
     mkdir_private,
     sqlite_readonly_uri,
 )
+from easycat.runtime.artifacts import FilesystemArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -168,13 +169,12 @@ def snapshot_crash_dump_artifacts(
     root: Path,
     db_path: Path,
     artifact_root: Path,
-) -> None:
+) -> bool:
     """Copy the artifacts referenced by *db_path* into a reserved snapshot.
 
     The snapshot is deliberately all-or-nothing.  If a referenced blob is
-    already missing, leave the reserved directory empty so callers can still
-    inspect journal metadata without accidentally resolving blobs from a later
-    session that reused the same id.
+    missing or the journal cannot be read, leave the reserved directory empty
+    and return ``False`` so callers retain the source journal and live store.
     """
     try:
         unsafe_target = artifact_root.is_symlink() or not artifact_root.is_dir()
@@ -184,8 +184,10 @@ def snapshot_crash_dump_artifacts(
         raise OSError(f"Crash artifact reservation is unsafe: {artifact_root}")
 
     refs = _referenced_artifact_refs(db_path)
+    if refs is None:
+        return False
     if not refs:
-        return
+        return True
 
     artifacts_dir = root / "artifacts"
     source_root = artifacts_dir / db_path.stem
@@ -196,7 +198,7 @@ def snapshot_crash_dump_artifacts(
     except OSError:
         unsafe_source = True
     if unsafe_source:
-        return
+        return False
 
     sources: list[tuple[str, Path]] = []
     for ref in refs:
@@ -207,7 +209,7 @@ def snapshot_crash_dump_artifacts(
                 "keeping it without an artifact snapshot",
                 db_path,
             )
-            return
+            return False
         sources.append((ref, source))
 
     for ref, source in sources:
@@ -215,6 +217,7 @@ def snapshot_crash_dump_artifacts(
         mkdir_private(target_dir)
         target = target_dir / f"{ref}.bin"
         copy_private_file(source, target)
+    return True
 
 
 def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
@@ -248,12 +251,12 @@ def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
         )
 
 
-def _referenced_artifact_refs(db_path: Path) -> set[str]:
+def _referenced_artifact_refs(db_path: Path) -> set[str] | None:
     """Read validated artifact refs from a journal without mutating it."""
     try:
         conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
     except sqlite3.DatabaseError:
-        return set()
+        return None
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(journal)")}
         if not {"input_ref", "output_ref"} & columns:
@@ -267,7 +270,7 @@ def _referenced_artifact_refs(db_path: Path) -> set[str]:
                     refs.add(ref)
         return refs
     except sqlite3.DatabaseError:
-        return set()
+        return None
     finally:
         conn.close()
 
@@ -480,6 +483,7 @@ def sweep_crashed_journals(data_dir: str | Path, *, skip: Path | None = None) ->
     individual failures are logged and skipped, never raised.
     """
     root = Path(data_dir)
+    _retry_artifact_retirements(root, skip=skip)
     journals_dir = root / "journals"
     if not journals_dir.is_dir():
         return 0
@@ -530,8 +534,20 @@ def _promote_one(root: Path, db_path: Path) -> bool:
                 return False
             crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
             _copy_journal_to_crash_dump(db_path, crash_path)
-            snapshot_crash_dump_artifacts(root, db_path, artifact_root)
+            store = FilesystemArtifactStore(db_path.stem, data_dir=root)
+            try:
+                if not store._prepare_journal_retirement():
+                    raise OSError("Could not prepare artifact journal retirement")
+            finally:
+                store.close()
+            if not snapshot_crash_dump_artifacts(root, db_path, artifact_root):
+                raise OSError("Crash artifact snapshot was incomplete")
             if _remove_journal(db_path):
+                store = FilesystemArtifactStore(db_path.stem, data_dir=root)
+                try:
+                    store._complete_journal_retirement()
+                finally:
+                    store.close()
                 logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
                 return True
             # If the source database itself remains, this promotion is only a
@@ -546,6 +562,37 @@ def _promote_one(root: Path, db_path: Path) -> bool:
         logger.warning("Failed to promote crashed journal %s", db_path, exc_info=True)
         return False
     return False
+
+
+def _retry_artifact_retirements(root: Path, *, skip: Path | None) -> None:
+    """Finish durable live-store retirements whose source journal is gone."""
+    journals_dir = root / "journals"
+    skip_resolved: Path | None = None
+    if skip is not None:
+        try:
+            skip_resolved = skip.resolve()
+        except OSError:
+            skip_resolved = skip
+
+    for session_id in FilesystemArtifactStore._pending_journal_retirements(root):
+        db_path = journals_dir / f"{session_id}.sqlite"
+        if _is_skipped(db_path, skip_resolved):
+            continue
+        try:
+            with journal_file_claim(db_path, blocking=False) as claimed:
+                if not claimed or db_path.exists():
+                    continue
+                store = FilesystemArtifactStore(session_id, data_dir=root)
+                try:
+                    store._complete_journal_retirement()
+                finally:
+                    store.close()
+        except OSError:
+            logger.debug(
+                "Deferred artifact journal retirement failed for %s",
+                session_id,
+                exc_info=True,
+            )
 
 
 def _remove_journal(db_path: Path) -> bool:

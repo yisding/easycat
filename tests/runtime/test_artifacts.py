@@ -276,6 +276,215 @@ print(store.put(b"cross-process token"), flush=True)
         assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
         assert not store.has(receipt.ref)
 
+    def test_first_journal_epoch_adopts_artifact_staged_before_journal(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"staged before journal")
+
+        assert store.begin_journal_epoch(set()) == 0
+        assert store.has(receipt.ref)
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
+
+    def test_bound_artifact_survives_duplicate_put_but_reclaims_next_epoch(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=32)
+        second = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=32)
+        first.begin_journal_epoch(set())
+        receipt = first.put_with_cleanup_token(b"managed duplicate")
+
+        assert second.put(b"managed duplicate") == receipt.ref
+        assert first.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert first.begin_journal_epoch(set()) == 1
+        assert first.has(receipt.ref) is False
+        assert first._current_bytes == 0
+
+    def test_committed_ref_is_adopted_and_revokes_cleanup_ownership(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        receipt = store.put_with_cleanup_token(b"committed artifact")
+
+        assert store.begin_journal_epoch({receipt.ref}) == 0
+        assert store.has(receipt.ref)
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+
+        assert store.begin_journal_epoch(set()) == 1
+        assert store.has(receipt.ref) is False
+
+    def test_journal_retirement_seals_only_the_prior_epoch(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        retiring_ref = store.put(b"retiring")
+        retired_only_ref = store.put(b"retired only")
+
+        assert store._prepare_journal_retirement() is True
+        replacement_ref = store.put(b"replacement")
+        duplicate_ref = store.put(b"retiring")
+        assert duplicate_ref == retiring_ref
+
+        assert store._complete_journal_retirement() is True
+        assert store.get(retiring_ref) == b"retiring"
+        assert store.has(retired_only_ref) is False
+        assert store.get(replacement_ref) == b"replacement"
+
+    def test_journal_retirement_preserves_unbound_artifacts(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        unbound_ref = store.put(b"before journal")
+
+        assert store._prepare_journal_retirement() is True
+        assert store._complete_journal_retirement() is True
+        assert store.get(unbound_ref) == b"before journal"
+
+    def test_journal_retirement_replays_interrupted_accounting(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        refs = {store.put(b"first old blob"), store.put(b"second old blob")}
+        assert store._prepare_journal_retirement() is True
+        original_complete = FilesystemArtifactStore._complete_pending_delete_locked
+        failed = False
+
+        def fail_once(self, pending):
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise OSError("injected interrupted delete accounting")
+            return original_complete(self, pending)
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_complete_pending_delete_locked",
+            fail_once,
+        )
+        assert store._complete_journal_retirement() is False
+        assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ("sess",)
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_complete_pending_delete_locked",
+            original_complete,
+        )
+        assert store._complete_journal_retirement() is True
+        assert all(store.has(ref) is False for ref in refs)
+        assert store._current_bytes == 0
+        assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+
+    def test_invalid_journal_retirement_intent_preserves_artifacts(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        ref = store.put(b"preserve on invalid intent")
+        marker = store._dir / ".easycat-artifact-retirement-v1.json"
+        marker.write_text('{"replacement_epoch":"bad"}\n', encoding="ascii")
+
+        assert store._complete_journal_retirement() is False
+        assert store.get(ref) == b"preserve on invalid intent"
+
+    def test_put_uses_replacement_epoch_after_interrupted_prepare(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        retiring_ref = store.put(b"old session")
+        original_write_epoch = FilesystemArtifactStore._write_artifact_epoch_locked
+
+        def fail_epoch_write(self, epoch: str) -> None:
+            raise OSError("interrupted rotation")
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_write_artifact_epoch_locked",
+            fail_epoch_write,
+        )
+        assert store._prepare_journal_retirement() is False
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_write_artifact_epoch_locked",
+            original_write_epoch,
+        )
+        replacement_ref = store.put(b"new session")
+        assert store._complete_journal_retirement() is True
+        assert store.has(retiring_ref) is False
+        assert store.get(replacement_ref) == b"new session"
+
+    def test_journal_retirement_retries_blob_unlink_failure(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("requires descriptor artifact deletion")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        retiring_ref = store.put(b"cannot unlink yet")
+        assert store._prepare_journal_retirement() is True
+        original_delete_name = FilesystemArtifactStore._delete_name
+
+        def fail_blob_unlink(self, directory_fd: int, name: str) -> None:
+            if name.endswith(".bin"):
+                return
+            original_delete_name(self, directory_fd, name)
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_delete_name",
+            fail_blob_unlink,
+        )
+        assert store._complete_journal_retirement() is False
+        assert store.has(retiring_ref)
+        assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ("sess",)
+        store.close()
+
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_delete_name",
+            original_delete_name,
+        )
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        assert store._complete_journal_retirement() is True
+        assert store.has(retiring_ref) is False
+        assert store._current_bytes == 0
+        assert FilesystemArtifactStore._pending_journal_retirements(tmp_path) == ()
+
+    def test_fallback_rejects_hardlinked_retirement_intent(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        ref = store.put(b"retiring but protected")
+        assert store._prepare_journal_retirement() is True
+        marker = store._dir / ".easycat-artifact-retirement-v1.json"
+        try:
+            os.link(marker, tmp_path / "retirement-link")
+        except OSError:
+            pytest.skip("hard links are unavailable in this test environment")
+        monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+
+        assert store._complete_journal_retirement() is False
+        assert store.get(ref) == b"retiring but protected"
+
+    def test_fallback_rejects_hardlinked_retiring_epoch(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        ref = store.put(b"epoch selector protected")
+        epoch = store._dir / ".easycat-artifact-epoch-v1.json"
+        try:
+            os.link(epoch, tmp_path / "epoch-link")
+        except OSError:
+            pytest.skip("hard links are unavailable in this test environment")
+        monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+
+        assert store._prepare_journal_retirement() is False
+        assert store.get(ref) == b"epoch selector protected"
+
     def test_duplicate_put_revokes_cleanup_ownership(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         first = store.put_with_cleanup_token(b"shared")

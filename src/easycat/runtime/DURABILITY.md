@@ -167,8 +167,11 @@ crash-recovery semantics are required.
     <session_id>.sqlite            # live journal (one per session)
   artifacts/
     <session_id>/
+      .easycat-artifact-epoch-v1.json # current live-journal ownership epoch
+      .easycat-artifact-retirement-v1.json # resumable crash-sweep retirement
       <sha256[:2]>/
         <sha256>.bin               # content-addressable artifacts (0600)
+        <sha256>.owner             # durable live-journal epoch ownership
   crash-dumps/
     <session_id>.sqlite            # promoted from journals/ on unclean shutdown
     <session_id>.artifacts/        # immutable snapshot for that crash dump
@@ -177,8 +180,19 @@ crash-recovery semantics are required.
 ```
 
 - Root directory: configurable via `EASYCAT_DATA_DIR` env var
-- Directories: created lazily on first write
+- Directories: created lazily on first journal or artifact use
 - Permissions: files `0600`, directories `0700` (secret-adjacent data)
+
+The filesystem artifact store records ownership separately from cancellation
+tokens. On journal startup, after crash recovery or clean-reuse truncation has
+finished, it rotates the live ownership epoch. Artifacts still referenced by
+the surviving journal are adopted into the new epoch; managed artifacts from a
+prior epoch with no surviving journal reference are deleted with the same
+crash-recoverable accounting protocol used by explicit deletes. Artifacts
+written before the first journal exists are initially unbound and adopted by
+that first journal. Unknown or invalid ownership metadata is preserved rather
+than guessed at, and artifacts created before ownership metadata was introduced
+remain unmanaged for backward compatibility.
 
 ### Crashed-journal sweep
 
@@ -188,10 +202,17 @@ path only fires when the **same** `session_id` is reopened, an orphaned id
 would otherwise linger.  Every `SqliteJournal` open first runs
 `runtime/crash_sweep.py::sweep_crashed_journals`, which scans `journals/` and
 **promotes each crashed-but-unswept journal to `crash-dumps/`** (checkpointing
-WAL pages first, then removing the source).  The sweep skips the journal the
-opening session owns, skips locked/live databases, skips cleanly-closed or
-empty files, and never raises into journal startup.  Both the in-session
-promoter and the sweep share `crash_sweep.py::_copy_journal_to_crash_dump`.
+WAL pages first, snapshotting referenced artifacts, then removing the source).
+Before source removal it seals the old live-artifact epoch behind a durable
+retirement intent. After the dump owns its artifact snapshot, the sweep
+reclaims only blobs from that sealed epoch; a replacement epoch and unbound or
+unknown ownership remain conservative. Interrupted retirement resumes on a
+later sweep, including after the source journal is already gone. The sweep
+retains the source journal and old live epoch if any referenced artifact cannot
+be copied into the all-or-nothing snapshot. It skips the journal the opening
+session owns, skips locked/live databases, skips cleanly-closed or empty files,
+and never raises into journal startup. Both the in-session promoter and the sweep share
+`crash_sweep.py::_copy_journal_to_crash_dump`.
 
 Promoted crash dumps surface in `uv run easycat bundles list` with a `status`
 column: a crashed journal still in `journals/` shows `crashed (uncommitted)`,

@@ -718,6 +718,60 @@ class TestSqliteJournalBatching:
         finally:
             journal.close()
 
+    def test_failed_batch_artifact_is_reclaimed_when_journal_reopens(self, tmp_path):
+        journal = SqliteJournal("artifact-batch-failure", data_dir=tmp_path)
+        journal._batch_commit_interval_s = 60.0
+        store = FilesystemArtifactStore(
+            "artifact-batch-failure",
+            data_dir=tmp_path,
+            max_bytes=32,
+        )
+        payload = b"unreferenced-byte-leak"
+        ref = store.put(payload)
+        try:
+            assert (
+                journal.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="stage_start",
+                    session_id="artifact-batch-failure",
+                    input_ref=ref,
+                )
+                == 1
+            )
+            with mock.patch.object(
+                journal,
+                "_execute_commit_locked",
+                side_effect=sqlite3.OperationalError("injected COMMIT failure"),
+            ):
+                assert (
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="turn_ended",
+                        session_id="artifact-batch-failure",
+                    )
+                    == -1
+                )
+
+            assert journal.degraded is True
+            assert store.has(ref)
+        finally:
+            journal.close()
+            store.close()
+
+        reopened_journal = SqliteJournal("artifact-batch-failure", data_dir=tmp_path)
+        reopened_store = FilesystemArtifactStore(
+            "artifact-batch-failure",
+            data_dir=tmp_path,
+            max_bytes=32,
+        )
+        try:
+            assert reopened_store.has(ref) is False
+            assert reopened_store._current_bytes == 0
+            assert reopened_store.put(b"0123456789ABC")
+        finally:
+            reopened_journal.close()
+            reopened_store.close()
+
     def test_elapsed_time_commits_batch(self, tmp_path):
         journal = SqliteJournal("batch-time", data_dir=tmp_path)
         journal._batch_commit_interval_s = 0.02
@@ -952,6 +1006,42 @@ class TestCrashRecovery:
             assert (second_snapshot / second_ref[:2] / f"{second_ref}.bin").exists()
         finally:
             third.close()
+
+    def test_clean_session_reuse_releases_prior_epoch_artifacts(self, tmp_path):
+        session_id = "reused-clean-artifacts"
+        first = SqliteJournal(session_id, data_dir=tmp_path)
+        artifacts = FilesystemArtifactStore(session_id, data_dir=tmp_path, max_bytes=32)
+        old_ref = artifacts.put(b"prior-session-artifact")
+        try:
+            assert (
+                first.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="turn_ended",
+                    session_id=session_id,
+                    input_ref=old_ref,
+                )
+                == 1
+            )
+        finally:
+            first.close()
+            artifacts.close()
+
+        prior_store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+        try:
+            assert prior_store.has(old_ref)
+        finally:
+            prior_store.close()
+
+        second = SqliteJournal(session_id, data_dir=tmp_path)
+        reopened = FilesystemArtifactStore(session_id, data_dir=tmp_path, max_bytes=32)
+        try:
+            assert second.read() == []
+            assert reopened.has(old_ref) is False
+            assert reopened._current_bytes == 0
+            assert reopened.put(b"new-session-artifact")
+        finally:
+            second.close()
+            reopened.close()
 
     def test_open_sweeps_orphaned_foreign_crash(self, tmp_path):
         # A *different* session id whose owning process is gone is promoted
@@ -1388,6 +1478,67 @@ class TestCrashRecovery:
         ).fetchone()[0]
         crash_conn.close()
         assert dumped == n_records
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="SIGKILL not available on Windows",
+    )
+    def test_sigkill_before_batch_commit_reclaims_unreferenced_artifact(self, tmp_path):
+        script = textwrap.dedent(f"""\
+            import signal, sys
+            sys.path.insert(0, "src")
+            from easycat.runtime import SqliteJournal
+            from easycat.runtime.artifacts import FilesystemArtifactStore
+            from easycat.runtime.records import JournalRecordKind
+
+            journal = SqliteJournal("artifact-crash", data_dir={str(tmp_path)!r})
+            journal._batch_commit_interval_s = 60.0
+            store = FilesystemArtifactStore("artifact-crash", data_dir={str(tmp_path)!r})
+            ref = store.put(b"unreferenced-byte-leak")
+            sequence = journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="stage_start",
+                session_id="artifact-crash",
+                input_ref=ref,
+            )
+            print(ref, sequence, flush=True)
+            signal.pause()
+        """)
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        try:
+            ready = proc.stdout.readline().strip().split()
+            assert len(ready) == 2, ready
+            ref, sequence = ready
+            assert sequence == "1"
+
+            proc.send_signal(signal.SIGKILL)
+            proc.wait(timeout=5)
+
+            reopened_journal = SqliteJournal("artifact-crash", data_dir=tmp_path)
+            reopened_store = FilesystemArtifactStore(
+                "artifact-crash",
+                data_dir=tmp_path,
+                max_bytes=32,
+            )
+            try:
+                assert reopened_journal.read(start=-1) == []
+                assert reopened_store.has(ref) is False
+                assert reopened_store._current_bytes == 0
+                assert reopened_store.put(b"0123456789ABC")
+            finally:
+                reopened_journal.close()
+                reopened_store.close()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=5)
 
 
 class TestRetention:

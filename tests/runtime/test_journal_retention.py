@@ -44,16 +44,6 @@ def _backdate(db_path, *, age_days: float) -> None:
             os.utime(sidecar, (mtime, mtime))
 
 
-def _journal_file_bytes(db_path) -> int:
-    """Return journal DB + sidecar bytes for tests without artifacts."""
-    total = 0
-    for suffix in ("", "-wal", "-shm"):
-        sidecar = type(db_path)(str(db_path) + suffix)
-        if sidecar.exists():
-            total += sidecar.stat().st_size
-    return total
-
-
 def _mark_live_pid(db_path, pid: int) -> None:
     """Stamp a closed journal with a ``live_pid`` marker for *pid*.
 
@@ -223,7 +213,10 @@ def test_age_window_missing_file_drops_cached_bytes_before_cap_pass(tmp_path, mo
     fresh = _seed_journal(tmp_path, "fresh-sess")
     _backdate(stale, age_days=30)
     _backdate(fresh, age_days=1)
-    fresh_bytes = _journal_file_bytes(fresh)
+    # Durable artifact-epoch metadata is part of the retained session size,
+    # even though this fixture has no payload blobs.
+    fresh_bytes = journal_retention_module._session_bytes(tmp_path, fresh)
+    assert fresh_bytes is not None
 
     original_stat = type(stale).stat
     vanished = False
