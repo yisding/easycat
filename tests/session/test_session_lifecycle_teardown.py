@@ -237,6 +237,31 @@ async def test_stop_join_ignores_preexisting_cancellation_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_join_propagates_cancellation_pending_before_entry() -> None:
+    session = Session(_full_config())
+    active_stop = asyncio.create_task(asyncio.Event().wait())
+    session._stop_task = active_stop
+    session._stop_force = False
+
+    async def join_with_pending_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await session.stop()
+
+    caller = asyncio.create_task(join_with_pending_cancellation())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert caller.done()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    active_stop.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await active_stop
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("owner_kind", ["voice", "text", "preemptive"])
 async def test_force_stop_from_runtime_owned_turn_task_closes_and_cancels_siblings(
     owner_kind: str,
@@ -716,6 +741,43 @@ async def test_cancel_turn_barge_in_emits_interruption():
     await session.cancel_turn(barge_in=True)
     assert len(received) == 1
     assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_reclaims_late_context_for_captured_manager_turn():
+    class BlockingClearTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clear_entered = asyncio.Event()
+            self.release_clear = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.clear_entered.set()
+            await self.release_clear.wait()
+
+    transport = BlockingClearTransport()
+    session = Session(_full_config(transport=transport))
+    await session._turn_manager.start_turn()
+    manager_token = session._turn_manager.cancel_token
+    assert manager_token is not None
+    assert session._turn is None
+
+    cancel_task = asyncio.create_task(session.cancel_turn())
+    try:
+        await asyncio.wait_for(transport.clear_entered.wait(), timeout=1)
+        late_turn = TurnContext("late-turn", manager_token)
+        session._turn = late_turn
+        session._turn_generation = late_turn.generation
+
+        transport.release_clear.set()
+        await cancel_task
+
+        assert session._turn is None
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        transport.release_clear.set()
+        if not cancel_task.done():
+            await cancel_task
 
 
 @pytest.mark.asyncio
