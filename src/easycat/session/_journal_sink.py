@@ -31,6 +31,7 @@ from easycat.events import (
     Event,
     EventBus,
     EventHandler,
+    EventSubscription,
     Interruption,
     PlaybackMarkAck,
     ReconnectAttempt,
@@ -375,6 +376,7 @@ class SessionJournalSink:
     session_id: str
     current_turn_id: TurnIdResolver
     redaction: RedactionPolicy = "secrets"
+    subscribe_event: Callable[[type[Event], EventHandler], EventSubscription] | None = None
     _subscribed: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
@@ -525,7 +527,8 @@ class SessionJournalSink:
         await _await_owned_write(operation)
 
     def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
-        self.event_bus.subscribe(event_type, handler)
+        subscribe = self.subscribe_event or self.event_bus.subscribe
+        subscribe(event_type, handler)
 
     def _make_event_handler(
         self,

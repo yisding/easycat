@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from re import sub
 from typing import Any, Literal, TypeVar, cast
@@ -352,6 +353,8 @@ class Session:
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._session_log_token = None
+        self._event_subscription_owner = object()
+        self._event_subscriptions: list[EventSubscription] = []
         # Per-turn state — created fresh at each turn start.
         # _turn_generation is a monotonic counter incremented at turn start
         # so stale callbacks from previous turns are detectable.
@@ -369,7 +372,14 @@ class Session:
         # TurnRunner, GreetingController), wires their event-bus
         # subscriptions and TurnManager bindings, and returns the
         # assembled bundle for us to unpack onto private fields.
-        self._unpack(build_session(self, cfg))
+        try:
+            self._unpack(build_session(self, cfg))
+        except BaseException:
+            # The caller-supplied EventBus can outlive a failed Session
+            # constructor. Do not let partially assembled collaborators remain
+            # pinned to that bus when later construction raises.
+            self._unsubscribe_session_event_handlers()
+            raise
         self._debug_backends = SessionDebugBackends(
             journal=self._journal,
             journal_view=self._journal_view,
@@ -722,6 +732,56 @@ class Session:
     def subscribe_event(self, event_type: type, handler: EventHandler) -> EventSubscription:
         """Subscribe to a session event via the underlying EventBus."""
         return self.event_bus.subscribe(event_type, handler)
+
+    def _subscribe_owned(
+        self,
+        event_type: type,
+        handler: EventHandler,
+    ) -> EventSubscription:
+        """Subscribe one Session-owned handler with correlation isolation."""
+
+        @wraps(handler)
+        def _scoped_handler(event: Any) -> Any:
+            if not self._accept_owned_event(event_type, event):
+                return None
+            return handler(event)
+
+        # The marker lets sibling Session wrappers distinguish a genuinely
+        # shared bus from app-level observers without retaining another strong
+        # reference beyond the wrapper's existing closure over this Session.
+        cast(Any, _scoped_handler)._easycat_event_owner = self._event_subscription_owner
+        subscription = self.event_bus.subscribe(event_type, _scoped_handler)
+        self._event_subscriptions.append(subscription)
+        return subscription
+
+    def _accept_owned_event(self, event_type: type, event: Any) -> bool:
+        """Return whether an event can safely drive this Session's internals."""
+        event_session_id = getattr(event, "session_id", None)
+        if event_session_id is not None:
+            return event_session_id == self.session_id
+
+        # Buffered delivery callbacks can carry the actual TurnContext even
+        # when an older custom transport omits session correlation. Identity
+        # with this Session's live turn is sufficient ownership proof.
+        turn_ref = getattr(event, "turn_ref", None)
+        if turn_ref is not None:
+            return turn_ref is self._turn
+
+        # Preserve the historical convenience of emitting bare events on a
+        # private Session bus. Once multiple Sessions own handlers for this
+        # event type, however, an unscoped event has no safe recipient.
+        owners = {
+            owner
+            for candidate in self.event_bus.subscribers(event_type)
+            if (owner := getattr(candidate, "_easycat_event_owner", None)) is not None
+        }
+        return owners == {self._event_subscription_owner}
+
+    def _unsubscribe_session_event_handlers(self) -> None:
+        """Release only handlers installed by Session collaborator wiring."""
+        subscriptions, self._event_subscriptions = self._event_subscriptions, []
+        for subscription in subscriptions:
+            subscription.unsubscribe()
 
     def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
         """Unsubscribe a handler previously attached with ``subscribe_event``."""
@@ -1604,6 +1664,7 @@ class Session:
             self._turn = None
             self._finalize_debug_backends()
             self._mark_closed()
+            self._unsubscribe_session_event_handlers()
             # Drop this session's armed emergency-export exporter from the
             # process-wide registry now that it has stopped cleanly. Otherwise
             # the exporter closure (which strongly references this Session)

@@ -660,12 +660,13 @@ class AudioRouter:
         check; a second router means the bus is shared across sessions and bare
         delivery callbacks must be dropped instead of relabeled.
         """
-        routers = [
-            handler
-            for handler in self._event_bus.subscribers(TransportAudioDelivered)
-            if getattr(handler, "__func__", None) is AudioRouter.on_audio_delivered
-            and isinstance(getattr(handler, "__self__", None), AudioRouter)
-        ]
+        routers = []
+        for handler in self._event_bus.subscribers(TransportAudioDelivered):
+            target = getattr(handler, "__wrapped__", handler)
+            if getattr(target, "__func__", None) is AudioRouter.on_audio_delivered and isinstance(
+                getattr(target, "__self__", None), AudioRouter
+            ):
+                routers.append(target)
         return len(routers) == 1 and routers[0] == self.on_audio_delivered
 
     # ── Internal: ingress loop ─────────────────────────────────

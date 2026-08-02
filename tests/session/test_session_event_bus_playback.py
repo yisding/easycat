@@ -13,6 +13,7 @@ from easycat.events import (
     AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    CallAnswered,
     Error,
     ErrorStage,
     EventBus,
@@ -24,7 +25,10 @@ from easycat.events import (
     TransportAudioDelivered,
     TurnEnded,
     TurnStarted,
+    VADStartSpeaking,
+    VADStopSpeaking,
 )
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from tests.session._session_core_helpers import (
     FakePlaybackAckTransport,
@@ -155,6 +159,84 @@ async def test_session_events_include_correlation_ids():
     assert seen
     for event in seen:
         assert event.session_id == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_shared_event_bus_scopes_session_owned_turn_handlers() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    victim_journal = InMemoryRingBuffer()
+    other_journal = InMemoryRingBuffer()
+    victim = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="victim-session",
+            journal=victim_journal,
+        )
+    )
+    other = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="other-session",
+            journal=other_journal,
+        )
+    )
+    victim._is_running = True
+    other._is_running = True
+
+    try:
+        await bus.emit(TurnStarted(turn_id="ambiguous-turn"))
+
+        assert victim.current_turn is None
+        assert other.current_turn is None
+
+        await bus.emit(TurnStarted(session_id=victim.session_id, turn_id="victim-turn"))
+
+        assert victim.current_turn is not None
+        assert victim.current_turn.id == "victim-turn"
+        assert other.current_turn is None
+        assert any(record.name == "turn_started" for record in victim_journal.read())
+        assert other_journal.read() == []
+    finally:
+        await victim.stop(force=True)
+        await other.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_releases_only_session_owned_event_handlers() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[TurnStarted] = []
+
+    def observe(event: TurnStarted) -> None:
+        observed.append(event)
+
+    external = bus.subscribe(TurnStarted, observe)
+    session = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="stopped-session",
+            greeting="hello",
+            journal=InMemoryRingBuffer(),
+        )
+    )
+
+    await session.stop(force=True)
+
+    assert external.active is True
+    assert bus.subscribers(TurnStarted) == [observe]
+    for event_type in (
+        PlaybackMarkAck,
+        TransportAudioDelivered,
+        CallAnswered,
+        VADStartSpeaking,
+        VADStopSpeaking,
+        STTFinal,
+        TurnEnded,
+    ):
+        assert bus.subscribers(event_type) == []
+
+    event = TurnStarted(session_id="another-session", turn_id="another-turn")
+    await bus.emit(event)
+    assert observed == [event]
 
 
 def test_begin_turn_exposes_coherent_test_and_replay_seam() -> None:

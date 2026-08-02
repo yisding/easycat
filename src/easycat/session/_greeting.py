@@ -18,7 +18,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from easycat.events import CallAnswered, EventBus
+from easycat.events import CallAnswered, EventBus, EventHandler, EventSubscription
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 
@@ -36,18 +36,20 @@ class GreetingController:
         event_bus: EventBus,
         runtime_scope: RuntimeScope,
         journal_sink: SessionJournalSink,
+        subscribe_event: Callable[[type, EventHandler], EventSubscription] | None = None,
     ) -> None:
         self._greeting = greeting
         self._synthesize = synthesize
         self._event_bus = event_bus
         self._runtime_scope = runtime_scope
         self._journal_sink = journal_sink
+        self._subscribe_event = subscribe_event or event_bus.subscribe
 
         self._spoken: bool = False
         self._task: asyncio.Task[Any] | None = None
 
         if self._greeting:
-            self._event_bus.subscribe(CallAnswered, self._on_call_answered)
+            self._subscribe_event(CallAnswered, self._on_call_answered)
 
     # ── Introspection (used by Session teardown / tests) ─────────
 

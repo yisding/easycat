@@ -123,6 +123,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
         redaction=cfg.journal_redaction,
+        subscribe_event=session._subscribe_owned,
     )
     journal_sink.subscribe()
     warmup = WarmupRunner(
@@ -208,8 +209,8 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         outbound_queue=outbound_queue,
         capture_aec_reference=cfg.capture_aec_reference,
     )
-    event_bus.subscribe(PlaybackMarkAck, audio_router.on_playback_ack)
-    event_bus.subscribe(TransportAudioDelivered, audio_router.on_audio_delivered)
+    session._subscribe_owned(PlaybackMarkAck, audio_router.on_playback_ack)
+    session._subscribe_owned(TransportAudioDelivered, audio_router.on_audio_delivered)
 
     # ── STTCommitter ─────────────────────────────────────────────
     stt_committer = STTCommitter(
@@ -223,8 +224,8 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         turn_manager=session._turn_manager,
         on_speech_detection_reset=audio_router.reset_speech_detection,
     )
-    event_bus.subscribe(VADStopSpeaking, stt_committer.schedule)
-    event_bus.subscribe(VADStartSpeaking, stt_committer.cancel_scheduled)
+    session._subscribe_owned(VADStopSpeaking, stt_committer.schedule)
+    session._subscribe_owned(VADStartSpeaking, stt_committer.cancel_scheduled)
 
     # ── TTSScheduler ─────────────────────────────────────────────
     tts_scheduler = TTSScheduler(
@@ -286,9 +287,9 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         journal_enabled=journal is not None,
     )
-    event_bus.subscribe(TurnStarted, turn_runner.on_turn_started)
-    event_bus.subscribe(STTFinal, turn_runner.on_stt_final)
-    event_bus.subscribe(TurnEnded, turn_runner.schedule_turn_ended)
+    session._subscribe_owned(TurnStarted, turn_runner.on_turn_started)
+    session._subscribe_owned(STTFinal, turn_runner.on_stt_final)
+    session._subscribe_owned(TurnEnded, turn_runner.schedule_turn_ended)
 
     # Plug the TurnStage into the TurnManager's endpoint-detector call so
     # smart-turn decisions go through stage.execute() and produce journal
@@ -312,6 +313,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         event_bus=event_bus,
         runtime_scope=session._runtime_scope,
         journal_sink=journal_sink,
+        subscribe_event=session._subscribe_owned,
     )
 
     return SessionComponents(
