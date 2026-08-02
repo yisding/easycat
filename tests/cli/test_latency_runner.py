@@ -333,6 +333,35 @@ def test_latency_runner_rejects_non_finite_sample_measurements(
     )
 
 
+def test_latency_runner_reports_overflowing_sample_measurement(tmp_path: Path) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        overflowing_integer = "9" * 400
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(
+            "["
+            '{"sample_id":"sample-1","condition_id":"baseline","warmup":false,'
+            '"timestamp_source":"event_monotonic","stages":{"total_ms":'
+            f"{overflowing_integer}"
+            "}}]"
+        )
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["status"] == "fail"
+    assert report["latency"]["samples"] == []
+    assert report["tool_exit_codes"]["latency_samples"] == 1
+    assert any(
+        failure["failure_class"] == "latency_artifact_error" for failure in report["failures"]
+    )
+
+
 def test_latency_runner_can_require_samples_for_release_gates(tmp_path: Path) -> None:
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=0, stdout="skipped", stderr="")
