@@ -236,7 +236,7 @@ def _archive_session(root: Path, oldest: Path) -> Path | None:
     archive_path: Path | None = None
     try:
         if oldest.is_symlink():
-            return False
+            return None
         mkdir_private(archive_dir)
         archive_path = _reserve_archive_path(archive_dir, oldest.stem)
         # Checkpoint WAL so all data is in the main database file
