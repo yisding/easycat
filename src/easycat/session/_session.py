@@ -1361,6 +1361,11 @@ class Session:
             raise RuntimeError("Session.stop() requires a running asyncio task")
         if self._start_task is current_task:
             raise RuntimeError("Session.stop() cannot run reentrantly during start()")
+        if current_task.cancelling():
+            # Deliver a newly-pending cancellation before sampling baselines
+            # used to distinguish caller cancellation from a joined stop.
+            # A previously caught cancellation is not re-delivered here.
+            await asyncio.sleep(0)
 
         # Serialize the startup transaction against teardown, but release the
         # lock before the potentially long stop body so a force caller can
@@ -1728,7 +1733,14 @@ class Session:
         still recognizing a manager-only turn whose Session pointer has not
         been installed yet.
         """
-        if self._turn is not turn:
+        active_turn = self._turn
+        manager_only_turn_was_installed = (
+            turn is None
+            and active_turn is not None
+            and manager_token is not None
+            and active_turn.cancel_token is manager_token
+        )
+        if active_turn is not turn and not manager_only_turn_was_installed:
             return False
         active_manager_token = self._turn_manager.cancel_token
         if active_manager_token is not None and active_manager_token is not manager_token:

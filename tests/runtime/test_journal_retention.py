@@ -270,6 +270,20 @@ def test_retention_ignores_symlinked_journal_file(tmp_path):
     assert not (tmp_path / "archive").exists()
 
 
+def test_archive_session_symlink_returns_failure_sentinel(tmp_path):
+    outside_root = tmp_path / "outside"
+    target = _seed_journal(outside_root, "target")
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    linked = journals / "linked.sqlite"
+    linked.symlink_to(target)
+
+    assert retention_module._archive_session(tmp_path, linked) is None
+    assert linked.is_symlink()
+    assert target.exists()
+    assert not (tmp_path / "archive").exists()
+
+
 def test_retention_refuses_symlinked_archive_directory(tmp_path):
     stale = _seed_journal(tmp_path, "stale-sess")
     target = tmp_path / "outside-archive"
