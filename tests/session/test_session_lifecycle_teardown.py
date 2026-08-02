@@ -770,6 +770,14 @@ async def test_stale_cancel_turn_cleanup_preserves_barge_in_successor():
 
 @pytest.mark.asyncio
 async def test_stale_cancel_tts_playback_preserves_barge_in_successor():
+    class OrderingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = asyncio.Event()
+
+        async def cancel(self) -> None:
+            self.cancelled.set()
+
     class BlockingFirstClearTransport(FakeTransport):
         def __init__(self) -> None:
             super().__init__()
@@ -783,7 +791,8 @@ async def test_stale_cancel_tts_playback_preserves_barge_in_successor():
                 await self.release_first_clear.wait()
 
     transport = BlockingFirstClearTransport()
-    session = Session(_full_config(transport=transport))
+    tts = OrderingTTS()
+    session = Session(_full_config(transport=transport, tts=tts))
     session._is_running = True
     old_turn = TurnContext("old-turn", CancelToken())
     session._turn = old_turn
@@ -794,6 +803,7 @@ async def test_stale_cancel_tts_playback_preserves_barge_in_successor():
 
     try:
         await asyncio.wait_for(transport.first_clear_entered.wait(), timeout=1)
+        assert tts.cancelled.is_set()
         await session._turn_manager._handle_speech_start()  # noqa: SLF001
 
         successor = session._turn
