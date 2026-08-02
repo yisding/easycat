@@ -569,7 +569,7 @@ class WebRTCRoutes:
         return await self._signaling().handle_cors_preflight(request)
 
 
-async def _shutdown_standalone_webrtc(
+async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stages
     *,
     site: Any,
     runner: Any,
@@ -582,18 +582,28 @@ async def _shutdown_standalone_webrtc(
 ) -> None:
     """Drain sessions even when the standalone HTTP listener fails to stop."""
     gate.start_draining()
-    listener_error: BaseException | None = None
-    try:
-        await site.stop()
-    except BaseException as exc:
-        listener_error = exc
-    try:
-        await runner.cleanup()
-    except BaseException as exc:
+    listener_error: Exception | None = None
+    body_error: BaseException | None = None
+
+    def record_error(exc: BaseException) -> None:
+        nonlocal listener_error, body_error
+        if not isinstance(exc, Exception):
+            if body_error is None:
+                body_error = exc
+            return
         if listener_error is None:
             listener_error = exc
         else:
-            logger.warning("Standalone WebRTC runner cleanup also failed", exc_info=True)
+            logger.warning("Standalone WebRTC listener cleanup also failed", exc_info=True)
+
+    try:
+        await site.stop()
+    except BaseException as exc:
+        record_error(exc)
+    try:
+        await runner.cleanup()
+    except BaseException as exc:
+        record_error(exc)
     try:
         await gate.drain(
             lambda: tuple(active_sessions.items()),
@@ -602,23 +612,32 @@ async def _shutdown_standalone_webrtc(
             force_timeout_s=max(force_shutdown_timeout_s, 0.0),
             stop_for_key=routes._stop_managed_session,
         )
-    finally:
-        try:
-            await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
-        finally:
-            try:
-                swept = await _await_with_hard_timeout(
-                    manager.stop_all(force=True),
-                    timeout_s=max(force_shutdown_timeout_s, 0.0),
-                )
-                if not swept:
-                    logger.warning(
-                        "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
-                        force_shutdown_timeout_s,
-                    )
-            finally:
-                if listener_error is not None:
-                    raise listener_error
+    except BaseException as exc:
+        if body_error is None:
+            body_error = exc
+    try:
+        await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
+    except BaseException as exc:
+        if body_error is None:
+            body_error = exc
+    try:
+        swept = await _await_with_hard_timeout(
+            manager.stop_all(force=True),
+            timeout_s=max(force_shutdown_timeout_s, 0.0),
+        )
+        if not swept:
+            logger.warning(
+                "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
+                force_shutdown_timeout_s,
+            )
+    except BaseException as exc:
+        if body_error is None:
+            body_error = exc
+
+    if body_error is not None:
+        raise body_error
+    if listener_error is not None:
+        raise listener_error
 
 
 async def serve_webrtc_config_sessions(
