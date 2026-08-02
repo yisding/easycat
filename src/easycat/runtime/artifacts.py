@@ -39,12 +39,20 @@ _DIRECTORY_OPEN_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
-_FILE_OPEN_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_CLOEXEC", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
-    | getattr(os, "O_NONBLOCK", 0)
-)
+
+
+def _artifact_file_open_flags() -> int:
+    """Build platform-specific flags for binary artifact-file reads."""
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+
+
+_FILE_OPEN_FLAGS = _artifact_file_open_flags()
 _FILE_CREATE_FLAGS = (
     os.O_WRONLY
     | os.O_CREAT
