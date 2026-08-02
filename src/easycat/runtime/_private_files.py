@@ -41,6 +41,11 @@ def harden_sqlite_files(db_path: Path) -> None:
         chmod_private_file(Path(str(db_path) + suffix))
 
 
+def sqlite_readonly_uri(path: str | Path) -> str:
+    """Build an escaped absolute SQLite URI for an existing read-only file."""
+    return f"{Path(path).absolute().as_uri()}?mode=ro"
+
+
 def private_tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo:
     """Store sensitive archive members with owner-only file/dir metadata."""
     info.mode = PRIVATE_DIR_MODE if info.isdir() else PRIVATE_FILE_MODE

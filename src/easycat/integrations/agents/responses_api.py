@@ -501,7 +501,7 @@ class RemoteResponsesAPIBridge:
     ) -> None:
         # Step 1: plan the mutation.
         plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
+        applied = run_interruption_journal_protocol(
             plan,
             mode,
             recorder,
@@ -509,6 +509,8 @@ class RemoteResponsesAPIBridge:
             serialize_state=self._serialize_framework_state,
             apply_mutation=self._apply_planned_mutation,
         )
+        if not applied:
+            return
 
         # Store per-turn metadata for the next request so a server that
         # supports the EasyCat extension can use richer interruption semantics.

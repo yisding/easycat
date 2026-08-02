@@ -1317,6 +1317,7 @@ class TestInterruptionApplyFailed:
         bridge.apply_interruption("heard", CancellationMode.IMMEDIATE_STOP, recorder=rec)
 
         assert len(apply_called) == 0
+        assert bridge._pending_turn_metadata is None
 
 
 class TestCancellationModeMatrix:

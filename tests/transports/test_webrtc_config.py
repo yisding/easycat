@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K
+from easycat.audio_format import PCM16_MONO_16K, AudioFormat
 from easycat.transports.webrtc import (
     ICEServer,
     WebRTCTransport,
@@ -26,6 +26,21 @@ class TestWebRTCTransportConfig:
         assert "stun:" in config.ice_servers[0].urls[0]
         assert config.cors_allowed_origins == ()
         assert config.stats_path is None
+
+    @pytest.mark.parametrize(
+        "audio_format",
+        [
+            AudioFormat(sample_rate=16_000, channels=2, sample_width=2),
+            AudioFormat(sample_rate=16_000, channels=1, sample_width=1),
+            AudioFormat(sample_rate=16_000, channels=1, sample_width=2, encoding="mulaw"),
+        ],
+    )
+    def test_rejects_audio_geometry_the_mono_pcm16_boundary_cannot_represent(
+        self,
+        audio_format: AudioFormat,
+    ) -> None:
+        with pytest.raises(ValueError, match="audio_format"):
+            WebRTCTransportConfig(audio_format=audio_format)
 
     @pytest.mark.asyncio
     async def test_non_loopback_bind_requires_auth_token(self):

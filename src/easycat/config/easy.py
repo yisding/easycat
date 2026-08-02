@@ -16,13 +16,13 @@ import inspect
 import logging
 import math
 import os
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from easycat._provider_helpers import has_usable_credential
+from easycat._session_id import validate_session_id
 from easycat.echo_cancellation import (
     EchoCancellationConfig,
     is_echo_canceller_config,
@@ -124,7 +124,6 @@ _VALID_HANDLER_ERROR_POLICY = {"continue", "raise"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
-_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def _require_positive(name: str, value: float) -> None:
@@ -229,13 +228,10 @@ def _validate_common(
                     f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
                 )
     if session_id is not None:
-        if not session_id.strip():
-            raise EasyConfigError("session_id must not be empty")
-        if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
-            raise EasyConfigError(
-                "session_id must be 1-128 ASCII letters, digits, '.', '_', or '-', "
-                f"starting with a letter or digit: {session_id!r}"
-            )
+        try:
+            validate_session_id(session_id)
+        except ValueError as exc:
+            raise EasyConfigError(str(exc)) from exc
     if isinstance(agent, str):
         from urllib.parse import urlparse
 

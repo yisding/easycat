@@ -22,6 +22,7 @@ from typing import Any, Literal
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._observability import observe_gauge, record_histogram
+from easycat._session_id import validate_persistent_session_id
 from easycat.runtime._journal_codec import (
     _JOURNAL_INSERT_SQL,
     _SQLITE_SCHEMA,
@@ -415,6 +416,7 @@ class SqliteJournal(_SqlJournalBase):
         retention_mode: Literal["archive", "delete"] = "archive",
         redaction: RedactionPolicy = "secrets",
     ) -> None:
+        validate_persistent_session_id(session_id)
         self._redaction = validate_redaction_policy(redaction)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._root = root
@@ -1208,6 +1210,7 @@ class LibsqlJournal(_SqlJournalBase):
         sync_interval_s: float | None = None,
         redaction: RedactionPolicy = "secrets",
     ) -> None:
+        validate_persistent_session_id(session_id)
         self._redaction = validate_redaction_policy(redaction)
         import libsql_experimental as libsql  # noqa: F811 — intentional conditional import
 

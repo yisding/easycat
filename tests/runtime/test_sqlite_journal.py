@@ -68,6 +68,20 @@ def journal(tmp_path):
 
 
 class TestSqliteJournalBasics:
+    @pytest.mark.parametrize(
+        "session_id",
+        [".", "..", "../escape", r"..\escape", "/absolute", "nested/session"],
+    )
+    def test_rejects_session_ids_that_can_escape_journal_root(
+        self,
+        tmp_path,
+        session_id: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="session_id must"):
+            SqliteJournal(session_id, data_dir=tmp_path)
+
+        assert not (tmp_path.parent / "escape.sqlite").exists()
+
     def test_append_and_read(self, journal):
         seq = journal.append(
             kind=JournalRecordKind.EVENT,
@@ -358,6 +372,26 @@ class TestSqliteJournalBasics:
 
 
 class TestSqliteJournalLifecycle:
+    @pytest.mark.parametrize("directory_name", ["runs?blue", "runs#blue", "runs%3Fblue"])
+    def test_readonly_view_handles_reserved_uri_characters(
+        self,
+        tmp_path,
+        directory_name: str,
+    ) -> None:
+        data_dir = tmp_path / directory_name
+        journal = SqliteJournal("reserved-path", data_dir=data_dir)
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="saved",
+            session_id="reserved-path",
+        )
+        db_path = journal.db_path
+        journal.close()
+
+        records = ReadonlySqliteJournal(db_path).read()
+
+        assert [record.name for record in records] == ["saved"]
+
     def test_close_sets_clean_marker(self, tmp_path):
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
@@ -1603,6 +1637,13 @@ class _FakeLibsqlModule:
 
 
 class TestLibsqlJournal:
+    def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
+        from easycat.runtime import LibsqlJournal
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": None}):
+            with pytest.raises(ValueError, match="session_id must"):
+                LibsqlJournal("../escape", data_dir=tmp_path)
+
     def test_tag_index_failure_rolls_back_and_restores_sequence(
         self,
         tmp_path: Path,

@@ -167,7 +167,7 @@ def run_interruption_journal_protocol(
     *,
     serialize_state: Callable[[], bytes],
     apply_mutation: Callable[[InterruptionPlan], None],
-) -> None:
+) -> bool:
     """Run the four-step atomic interruption-journal protocol once.
 
     Bridges build an :class:`InterruptionPlan` and provide ``serialize_state``
@@ -194,7 +194,7 @@ def run_interruption_journal_protocol(
             )
         except Exception:
             # Journal in degraded mode — skip mutation, runtime falls back.
-            return
+            return False
 
     # Step 3: apply the planned mutation.
     try:
@@ -231,6 +231,7 @@ def run_interruption_journal_protocol(
                 "mutation already applied",
                 exc_info=True,
             )
+    return True
 
 
 def apply_standard_interruption(

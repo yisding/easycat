@@ -606,8 +606,26 @@ class TestReadonlySqliteFollow:
 
 
 class TestCreateJournal:
+    @pytest.mark.parametrize(
+        "session_id",
+        [".", "..", "../escape", r"..\escape", "/absolute", "nested/session"],
+    )
+    def test_rejects_session_ids_that_can_escape_persistent_root(
+        self,
+        tmp_path,
+        session_id: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="session_id must"):
+            create_journal(session_id, debug="full", data_dir=tmp_path)
+
+        assert not (tmp_path.parent / "escape.sqlite").exists()
+
     def test_returns_ring_buffer(self):
         j = create_journal("test-session")
+        assert isinstance(j, InMemoryRingBuffer)
+
+    def test_in_memory_journal_does_not_apply_filesystem_id_rules(self):
+        j = create_journal("../not-persisted")
         assert isinstance(j, InMemoryRingBuffer)
 
     def test_light_returns_ring_buffer(self):

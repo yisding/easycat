@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.runtime._journal_codec import _build_slice_where, _row_to_record
+from easycat.runtime._private_files import sqlite_readonly_uri
 from easycat.runtime.journal import _read_records, _slice_records, _validate_read_limit
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 
@@ -97,7 +98,7 @@ class ReadonlySqliteJournal:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+        return sqlite3.connect(sqlite_readonly_uri(self._db_path), uri=True)
 
     def _query(self, sql: str, params: list[Any]) -> list[JournalRecord]:
         with self._connect() as conn:

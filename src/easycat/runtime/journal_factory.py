@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from easycat._session_id import validate_persistent_session_id
 from easycat.runtime.journal_memory import InMemoryRingBuffer
 from easycat.runtime.journal_sql import (
     LibsqlJournal,
@@ -46,6 +47,7 @@ def create_journal(
     file-level retention instead).
     """
     if debug == "full":
+        validate_persistent_session_id(session_id)
         if backend == "sqlite+litestream":
             journal: SqliteJournal | LitestreamSqliteJournal | LibsqlJournal
             journal = LitestreamSqliteJournal(
