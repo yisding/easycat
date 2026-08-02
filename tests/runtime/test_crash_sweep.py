@@ -14,6 +14,7 @@ import time
 import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
+from easycat.runtime import crash_sweep as crash_sweep_module
 from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
@@ -373,6 +374,21 @@ def test_sweep_promotes_crashed_orphan(tmp_path) -> None:
     assert crash.exists()
     # The source is removed so it stops accumulating in journals/.
     assert not journal.exists()
+
+
+def test_failed_source_removal_does_not_accumulate_duplicate_dumps(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _crash_one("stuck", tmp_path)
+    source = tmp_path / "journals" / "stuck.sqlite"
+    monkeypatch.setattr(crash_sweep_module, "_remove_journal", lambda _path: False)
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert sweep_crashed_journals(tmp_path) == 0
+
+    assert source.exists()
+    assert list((tmp_path / "crash-dumps").iterdir()) == []
 
 
 def test_sweep_promotes_orphan_when_pid_was_reused(tmp_path) -> None:
