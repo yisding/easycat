@@ -1068,7 +1068,7 @@ class TestCrashRecovery:
         _simulate_crash_after_flush(j1)
 
         with mock.patch(
-            "easycat.runtime.journal_sql.shutil.copy2",
+            "easycat.runtime.crash_sweep.copy_private_file",
             side_effect=OSError("disk full"),
         ):
             j2 = SqliteJournal("sess", data_dir=tmp_path)
