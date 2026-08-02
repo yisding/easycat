@@ -618,6 +618,7 @@ async def test_webrtc_offer_crossing_drain_during_session_start_is_rolled_back(
     class _StartingSession:
         def __init__(self) -> None:
             self.stopped = False
+            self.force_stopped = False
 
         async def start(self) -> None:
             session_started.set()
@@ -625,6 +626,9 @@ async def test_webrtc_offer_crossing_drain_during_session_start_is_rolled_back(
 
         async def stop(self, *, force: bool = False) -> None:
             self.stopped = True
+            self.force_stopped = force
+            if not force:
+                await asyncio.Event().wait()
 
     class _OfferResponse:
         status = 200
@@ -673,10 +677,11 @@ async def test_webrtc_offer_crossing_drain_during_session_start_is_rolled_back(
     gate.start_draining()
     allow_start.set()
 
-    response = await offer
+    response = await asyncio.wait_for(offer, timeout=1)
     transport = _StartedOfferTransport.instance
     assert response.status == 503
     assert session.stopped is True
+    assert session.force_stopped is True
     assert transport is not None and transport.disconnected is True
     assert manager.active_keys() == ()
     assert gate.active_keys() == ()
