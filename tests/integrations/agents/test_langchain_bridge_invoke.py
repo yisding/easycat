@@ -453,6 +453,55 @@ class TestLangChainBridgeInvoke:
         assert names.count("unit_entered") == names.count("unit_exited") == 2
 
     @pytest.mark.asyncio
+    async def test_consumer_aclose_closes_underlying_event_stream(self):
+        """Barge-in must close the runnable-owned async iterator too."""
+
+        class _CloseAwareEvents:
+            def __init__(self) -> None:
+                self.closed = False
+                self._events = iter(
+                    [
+                        {
+                            "event": "on_chat_model_stream",
+                            "name": "ChatOpenAI",
+                            "run_id": "m",
+                            "parent_ids": [],
+                            "data": {"chunk": _MockAIMessageChunk(content="Hello")},
+                        }
+                    ]
+                )
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> dict[str, Any]:
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        class _CloseAwareRunnable:
+            def __init__(self, events: _CloseAwareEvents) -> None:
+                self.events = events
+
+            def astream_events(self, input: Any, **kwargs: Any) -> _CloseAwareEvents:
+                return self.events
+
+        events = _CloseAwareEvents()
+        bridge = LangChainBridge(_CloseAwareRunnable(events))
+        stream = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "Hello"
+        await stream.aclose()
+
+        assert events.closed
+
+    @pytest.mark.asyncio
     async def test_chain_wrapping_text_llm_streams_text(self):
         """Chains like ``PromptTemplate | FakeStreamingListLLM`` use a
         non-chat ``BaseLLM`` whose raw tokens surface via

@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from easycat.events import CallAnswered, EventBus, STTFinal, VoicemailDetected
+from easycat.events import CallAnswered, CallInitiated, EventBus, STTFinal, VoicemailDetected
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
     STTAMDFusionClassifier,
@@ -431,5 +431,70 @@ class TestEnhancedVoicemailIntegration:
             assert classifier.amd_result == "machine"
             assert classifier._emitted is True
             assert classifier._tasks.empty
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_timeout_while_fused_event_subscriber_is_blocked(self) -> None:
+        """A timeout-owned fusion result cannot leak after classifier teardown."""
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.01)
+        fusion_started = asyncio.Event()
+        allow_fusion_finish = asyncio.Event()
+        fused_results: list[VoicemailDetected] = []
+
+        async def block_fused(event: VoicemailDetected) -> None:
+            if event.source != "fusion":
+                return
+            fusion_started.set()
+            await allow_fusion_finish.wait()
+            fused_results.append(event)
+
+        classifier.start()
+        bus.subscribe(VoicemailDetected, block_fused)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await asyncio.wait_for(fusion_started.wait(), timeout=0.5)
+
+            classifier.stop()
+            allow_fusion_finish.set()
+            await asyncio.sleep(0)
+
+            assert fused_results == []
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_reentrant_call_reset_rearms_fusion_timeout(self) -> None:
+        bus = EventBus()
+        classifier = STTAMDFusionClassifier(bus, stt_timeout_s=0.01)
+        fused_call_sids: list[str] = []
+        second_fused = asyncio.Event()
+
+        async def start_next_call(event: VoicemailDetected) -> None:
+            if event.source != "fusion" or event.call_sid != "CA1":
+                return
+            await bus.emit(CallInitiated(call_sid="CA2", to="+2", from_="+1"))
+            await bus.emit(CallAnswered(call_sid="CA2"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA2"))
+
+        def record_fused(event: VoicemailDetected) -> None:
+            if event.source != "fusion":
+                return
+            fused_call_sids.append(event.call_sid)
+            if event.call_sid == "CA2":
+                second_fused.set()
+
+        classifier.start()
+        bus.subscribe(VoicemailDetected, start_next_call)
+        bus.subscribe(VoicemailDetected, record_fused)
+        try:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+2", from_="+1"))
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA1"))
+            await asyncio.wait_for(second_fused.wait(), timeout=0.5)
+
+            assert fused_call_sids == ["CA1", "CA2"]
         finally:
             classifier.stop()

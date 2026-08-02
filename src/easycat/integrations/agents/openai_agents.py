@@ -17,6 +17,7 @@ from uuid import uuid4
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
 from easycat.integrations.agents._helpers import (
+    aclose_quietly,
     bridge_version_info,
     record_usage_from_result,
     split_replacement_by_original_parts,
@@ -264,9 +265,11 @@ class OpenAIAgentsBridge:
         run_cancelled = False
         stream_failed = False
         usage_model_ambiguous = False
+        event_stream: AsyncIterator[Any] | None = None
 
         try:
-            async for event in result.stream_events():
+            event_stream = result.stream_events()
+            async for event in event_stream:
                 if cancel_token and cancel_token.is_cancelled:
                     if not run_cancelled:
                         run_cancelled = True
@@ -347,6 +350,11 @@ class OpenAIAgentsBridge:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             raise
         finally:
+            # ``result.stream_events()`` may own an SDK event generator. An
+            # outer consumer close only injects ``GeneratorExit`` into this
+            # bridge, not into that delegated iterator, so release it before
+            # snapshotting the now-settled SDK state.
+            await aclose_quietly(event_stream)
             # This ``finally`` also runs on ``GeneratorExit`` /
             # ``CancelledError`` injected by ``AgentRunner``'s timeout/
             # barge-in ``aclose()`` (neither is an ``Exception`` so the

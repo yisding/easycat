@@ -21,6 +21,10 @@ from easycat.events import TTSEventType
 logger = logging.getLogger(__name__)
 
 
+class _TTSFirstByteDeadlineExceeded(TimeoutError):
+    """Private marker for expiry of this wrapper's first-byte deadline."""
+
+
 def _finite_positive_timeout(value: Any, *, name: str) -> float:
     """Validate one public timeout boundary without accepting booleans."""
     if not is_finite_number(value) or value <= 0:
@@ -139,10 +143,16 @@ async def with_agent_timeout(
     error event and raises AgentTimeoutError.
     """
     timeout = _finite_positive_timeout(timeout, name="timeout")
+    timeout_context = asyncio.timeout(timeout)
     try:
-        async with asyncio.timeout(timeout):
+        async with timeout_context:
             return await coro
     except TimeoutError:
+        # A provider can raise its own ``TimeoutError`` before this wrapper's
+        # deadline. Preserve that failure rather than reporting a false
+        # EasyCat agent-deadline breach (and emitting a misleading Error).
+        if not timeout_context.expired():
+            raise
         err = AgentTimeoutError(timeout)
         logger.warning(str(err))
         if event_bus is not None:
@@ -154,11 +164,19 @@ async def with_agent_timeout(
 
 async def _next_before_deadline(events_iter: AsyncIterator[Any], deadline: float) -> Any:
     """Read one event without extending an absolute event-loop deadline."""
-    remaining = deadline - asyncio.get_running_loop().time()
-    if remaining <= 0:
-        raise TimeoutError
-    async with asyncio.timeout(remaining):
-        return await events_iter.__anext__()
+    if deadline <= asyncio.get_running_loop().time():
+        raise _TTSFirstByteDeadlineExceeded
+    timeout_context = asyncio.timeout_at(deadline)
+    try:
+        async with timeout_context:
+            return await events_iter.__anext__()
+    except TimeoutError:
+        # Do not translate a provider-owned TimeoutError into a first-byte
+        # timeout. ``asyncio.Timeout.expired`` tells us whether this scope
+        # actually delivered the cancellation that became TimeoutError.
+        if timeout_context.expired():
+            raise _TTSFirstByteDeadlineExceeded from None
+        raise
 
 
 async def with_tts_timeout(
@@ -192,7 +210,7 @@ async def with_tts_timeout(
                 yield event
             except StopAsyncIteration:
                 return
-            except TimeoutError:
+            except _TTSFirstByteDeadlineExceeded:
                 timed_out = True
                 break
     finally:

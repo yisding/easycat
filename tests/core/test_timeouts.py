@@ -143,6 +143,22 @@ class TestAgentTimeout:
         assert len(errors) == 1
         assert errors[0].stage == ErrorStage.AGENT
 
+    async def test_provider_timeout_error_is_not_relabelled_as_agent_deadline(self):
+        """Only this wrapper's elapsed deadline becomes ``AgentTimeoutError``."""
+        provider_error = TimeoutError("provider request deadline")
+        event_bus = EventBus()
+        errors: list[Error] = []
+        event_bus.subscribe(Error, errors.append)
+
+        async def provider() -> None:
+            raise provider_error
+
+        with pytest.raises(TimeoutError) as exc_info:
+            await with_agent_timeout(provider(), timeout=1.0, event_bus=event_bus)
+
+        assert exc_info.value is provider_error
+        assert errors == []
+
 
 # ── TTS first-byte timeout (Task 8.5) ─────────────────────────────
 
@@ -286,6 +302,29 @@ class TestTTSTimeout:
             )
 
         assert errors[0].provider == "elevenlabs"
+
+    async def test_provider_timeout_error_is_not_relabelled_as_tts_deadline(self):
+        """A source failure must not emit a false first-byte timeout event."""
+        provider_error = TimeoutError("provider request deadline")
+        event_bus = EventBus()
+        errors: list[Error] = []
+        event_bus.subscribe(Error, errors.append)
+
+        async def provider_events():
+            raise provider_error
+            yield b"unreachable"
+
+        with pytest.raises(TimeoutError) as exc_info:
+            await _collect(
+                with_tts_timeout(
+                    provider_events(),
+                    timeout=1.0,
+                    event_bus=event_bus,
+                )
+            )
+
+        assert exc_info.value is provider_error
+        assert errors == []
 
 
 # ── resolve_provider_name ─────────────────────────────────────────

@@ -78,18 +78,19 @@ class ProviderErrorEmitter:
 
         _add_exception_notes(exc, **context)
         try:
-            task = asyncio.create_task(
-                bus.emit(
-                    Error(
-                        exception=exc,
-                        stage=self._error_stage,
-                        provider=self._provider_error_name,
-                    )
-                )
-            )
+            loop = asyncio.get_running_loop()
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error - no running loop", exc_info=True)
             return
+        task = loop.create_task(
+            bus.emit(
+                Error(
+                    exception=exc,
+                    stage=self._error_stage,
+                    provider=self._provider_error_name,
+                )
+            )
+        )
         # Keep a strong reference until the emit completes; the event loop
         # only holds a weak one, so an untracked task can be GC'd mid-flight.
         self._emit_tasks.add(task)

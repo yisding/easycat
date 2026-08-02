@@ -326,6 +326,7 @@ class LangChainBridge:
         if self._include_types is not None:
             stream_kwargs["include_types"] = self._include_types
 
+        stream: AsyncIterator[dict[str, Any]] | None = None
         try:
             stream = self._runnable.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
@@ -398,6 +399,13 @@ class LangChainBridge:
             except Exception:
                 logger.debug("Failed to preserve partial LangChain turn on cancel", exc_info=True)
             raise
+        finally:
+            # ``async for`` does not close an arbitrary async iterator when
+            # this driver is cancelled or its consumer calls ``aclose()``.
+            # LangChain streams can own callback tasks and transport resources,
+            # so release them before the bridge returns control to a follow-up
+            # turn or interruption rewrite.
+            await aclose_quietly(stream)
 
     async def _finalize_done(
         self,

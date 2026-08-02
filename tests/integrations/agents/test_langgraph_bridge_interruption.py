@@ -20,7 +20,6 @@ from ._langgraph_bridge_support import (
     _MockMessage,
     _MockState,
     _model_stream,
-    _node_end,
     _node_start,
     asyncio,
     pytest,
@@ -40,15 +39,35 @@ class TestLangGraphBridgeAclosePropagation:
 
     @pytest.mark.asyncio
     async def test_consumer_aclose_propagates_to_drive_stream_cleanup(self):
-        class _HangingGraph(_MockCompiledGraph):
-            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-                async def _gen() -> AsyncIterator[dict[str, Any]]:
-                    yield _node_start("answer", "n1")
-                    yield _model_stream("Hello world", run_id="m1", parent="n1", node="answer")
-                    await asyncio.Event().wait()
-                    yield _node_end("answer", "n1")  # pragma: no cover
+        class _CloseAwareEvents:
+            def __init__(self) -> None:
+                self.closed = False
+                self._events = iter(
+                    [
+                        _node_start("answer", "n1"),
+                        _model_stream("Hello world", run_id="m1", parent="n1", node="answer"),
+                    ]
+                )
 
-                return _gen()
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> dict[str, Any]:
+                try:
+                    return next(self._events)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        class _HangingGraph(_MockCompiledGraph):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self.event_stream = _CloseAwareEvents()
+
+            def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+                return self.event_stream
 
         prior_ai = _MockMessage("assistant", "previous turn", message_id="prev")
         graph = _HangingGraph(state=_MockState(values={"messages": [prior_ai]}))
@@ -75,6 +94,10 @@ class TestLangGraphBridgeAclosePropagation:
         # drive ``_drive_stream``'s cleanup synchronously; ``wait_for`` guards
         # against a non-propagated close hanging on ``Event().wait()``.
         await asyncio.wait_for(stream.aclose(), timeout=2.0)
+
+        # The graph-owned iterator is closed as well: ``async for`` does not
+        # forward a consumer's close into an arbitrary async iterator.
+        assert graph.event_stream.closed
 
         # The partial turn was committed during aclose (BaseException arm),
         # appended after — not overwriting — the prior turn's message.
