@@ -447,6 +447,19 @@ def test_elevenlabs_stt_config_rejects_negative_max_retries():
         ElevenLabsSTTConfig(api_key="k", max_retries=-1)
 
 
+@pytest.mark.parametrize(
+    "limit_name",
+    ["max_audio_chunk_bytes", "max_audio_buffer_bytes", "max_audio_duration_ms"],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True])
+def test_elevenlabs_stt_config_rejects_nonfinite_audio_limits(
+    limit_name: str,
+    value: float | bool,
+) -> None:
+    with pytest.raises(ValueError, match="positive finite number"):
+        ElevenLabsSTTConfig(api_key="k", **{limit_name: value})
+
+
 @pytest.mark.parametrize("mode", ["", "realtim", "streaming", 1, None])
 def test_elevenlabs_stt_config_rejects_unknown_mode(mode):
     with pytest.raises(ValueError, match=r"mode must be 'realtime' or 'batch'"):

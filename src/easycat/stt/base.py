@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import TypeVar
@@ -397,8 +398,15 @@ class STTBase:
 
     @staticmethod
     def _validate_positive_limit(name: str, value: int | float | None) -> None:
-        if value is not None and value <= 0:
-            raise ValueError(f"{name} must be > 0 when set (got {value!r})")
+        if value is None:
+            return
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or (isinstance(value, float) and not math.isfinite(value))
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive finite number when set (got {value!r})")
 
     @staticmethod
     def _extend_limited_audio_buffer(

@@ -515,6 +515,25 @@ def test_openai_stt_config_rejects_negative_max_retries():
         OpenAISTTConfig(api_key="test-key", max_retries=-1)
 
 
+@pytest.mark.parametrize(
+    "limit_name",
+    ["max_audio_chunk_bytes", "max_audio_buffer_bytes", "max_audio_duration_ms"],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True])
+def test_openai_stt_config_rejects_nonfinite_audio_limits(
+    limit_name: str,
+    value: float | bool,
+) -> None:
+    with pytest.raises(ValueError, match="positive finite number"):
+        OpenAISTTConfig(api_key="test-key", **{limit_name: value})
+
+
+def test_openai_stt_config_accepts_arbitrarily_large_integer_audio_limit() -> None:
+    config = OpenAISTTConfig(api_key="test-key", max_audio_chunk_bytes=10**309)
+
+    assert config.max_audio_chunk_bytes == 10**309
+
+
 @pytest.mark.asyncio
 async def test_openai_stt_stream_event_limit_aborts_without_emitting_buffered_partials():
     mock_client = _make_mock_client(
