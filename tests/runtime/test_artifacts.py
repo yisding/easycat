@@ -239,6 +239,40 @@ class TestFilesystemArtifactStore:
         assert store.put(payload) == ""
         assert not (outside_dir / ref[:2] / f"{ref}.bin").exists()
 
+    def test_artifacts_ancestor_symlink_is_not_followed_for_writes(self, tmp_path):
+        payload = b"trusted payload"
+        artifacts_dir = tmp_path / "artifacts"
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        try:
+            artifacts_dir.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ""
+        assert not (outside_dir / "sess").exists()
+
+    def test_precreated_temp_symlink_cannot_overwrite_external_file(self, tmp_path):
+        payload = b"trusted payload"
+        ref = hashlib.sha256(payload).hexdigest()
+        shard = tmp_path / "artifacts" / "sess" / ref[:2]
+        shard.mkdir(parents=True)
+        victim = tmp_path / "victim.bin"
+        victim.write_bytes(b"keep me")
+        legacy_tmp = shard / f"{ref}.tmp"
+        try:
+            legacy_tmp.symlink_to(victim)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ref
+        assert victim.read_bytes() == b"keep me"
+        assert (shard / f"{ref}.bin").read_bytes() == payload
+
     def test_get_head_tail_reads_bounded_window(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         payload = b"a" * 10 + b"middle" * 20 + b"z" * 10
