@@ -176,6 +176,13 @@ def snapshot_crash_dump_artifacts(
     inspect journal metadata without accidentally resolving blobs from a later
     session that reused the same id.
     """
+    try:
+        unsafe_target = artifact_root.is_symlink() or not artifact_root.is_dir()
+    except OSError as exc:
+        raise OSError(f"Crash artifact reservation is unavailable: {artifact_root}") from exc
+    if unsafe_target:
+        raise OSError(f"Crash artifact reservation is unsafe: {artifact_root}")
+
     refs = _referenced_artifact_refs(db_path)
     if not refs:
         return
@@ -184,10 +191,7 @@ def snapshot_crash_dump_artifacts(
     source_root = artifacts_dir / db_path.stem
     try:
         unsafe_source = (
-            artifact_root.is_symlink()
-            or artifacts_dir.is_symlink()
-            or source_root.is_symlink()
-            or not source_root.is_dir()
+            artifacts_dir.is_symlink() or source_root.is_symlink() or not source_root.is_dir()
         )
     except OSError:
         unsafe_source = True
@@ -222,7 +226,26 @@ def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
             pass
         except OSError:
             logger.debug("Failed to remove incomplete crash dump %s", crash_path, exc_info=True)
-    shutil.rmtree(str(artifact_root), ignore_errors=True)
+    try:
+        if artifact_root.is_symlink() or not artifact_root.is_dir():
+            artifact_root.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(str(artifact_root))
+    except OSError:
+        # The reservation can be swapped for a symlink after the first check.
+        # A second lstat-style check lets cleanup remove only that link, never
+        # the directory it targets.
+        try:
+            if artifact_root.is_symlink():
+                artifact_root.unlink()
+                return
+        except OSError:
+            pass
+        logger.debug(
+            "Failed to remove incomplete crash artifact reservation %s",
+            artifact_root,
+            exc_info=True,
+        )
 
 
 def _referenced_artifact_refs(db_path: Path) -> set[str]:

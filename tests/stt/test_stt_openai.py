@@ -528,6 +528,12 @@ def test_openai_stt_config_rejects_nonfinite_audio_limits(
         OpenAISTTConfig(api_key="test-key", **{limit_name: value})
 
 
+def test_openai_stt_config_accepts_arbitrarily_large_integer_audio_limit() -> None:
+    config = OpenAISTTConfig(api_key="test-key", max_audio_chunk_bytes=10**309)
+
+    assert config.max_audio_chunk_bytes == 10**309
+
+
 @pytest.mark.asyncio
 async def test_openai_stt_stream_event_limit_aborts_without_emitting_buffered_partials():
     mock_client = _make_mock_client(
