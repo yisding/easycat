@@ -95,6 +95,7 @@ class _RetentionSweep:
         self._total_bytes = 0
         self._files: list[Path] = []
         self._protected_count = 0
+        self._claim_contended = False
         for file in files:
             size = _session_bytes(root, file)
             if size is None:
@@ -129,7 +130,7 @@ class _RetentionSweep:
 
     def prune_older_than(self, cutoff: float) -> None:
         """Prune any prunable journal older than *cutoff*, regardless of caps."""
-        while self._files:
+        while self._files and not self._claim_contended:
             oldest = self._files[0]
             try:
                 mtime = oldest.stat().st_mtime
@@ -143,9 +144,13 @@ class _RetentionSweep:
 
     def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
-        while self._files and (
-            len(self._files) + self._protected_count > max_sessions
-            or self._total_bytes > max_bytes
+        while (
+            self._files
+            and not self._claim_contended
+            and (
+                len(self._files) + self._protected_count > max_sessions
+                or self._total_bytes > max_bytes
+            )
         ):
             self._prune_oldest()
 
@@ -165,7 +170,11 @@ class _RetentionSweep:
             return False
         with journal_file_claim(oldest, blocking=False) as claimed:
             if not claimed:
-                self._protected_count += 1
+                # Another retention/crash sweep may be acting on this same
+                # snapshot. Stop this pass instead of treating the transient
+                # contention as one permanently protected session and
+                # deleting a different candidate to satisfy the stale caps.
+                self._claim_contended = True
                 return False
             if self._is_protected(oldest):
                 self._protected_count += 1
