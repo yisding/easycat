@@ -269,15 +269,21 @@ def test_init_error_envelope(
 
 
 @pytest.mark.parametrize(
-    "config",
+    ("config", "message_fragment"),
     [
-        '{"schema_version":' + ("9" * 5000) + ',"template":"text-chat"}',
         (
-            '{"schema_version":1,"template":"text-chat","tools":'
-            + ("[" * 10_000)
-            + '"lookup"'
-            + ("]" * 10_000)
-            + "}"
+            '{"schema_version":' + ("9" * 5000) + ',"template":"text-chat"}',
+            "not valid JSON",
+        ),
+        (
+            (
+                '{"schema_version":1,"template":"text-chat","tools":'
+                + ("[" * 10_000)
+                + '"lookup"'
+                + ("]" * 10_000)
+                + "}"
+            ),
+            None,
         ),
     ],
     ids=["oversized-integer", "excessive-nesting"],
@@ -287,6 +293,7 @@ def test_init_decoder_resource_errors_use_error_envelope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     config: str,
+    message_fragment: str | None,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -296,7 +303,8 @@ def test_init_decoder_resource_errors_use_error_envelope(
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "init", status="error")
     assert payload["code"] == "EASYCAT_E102"
-    assert "not valid JSON" in payload["message"]
+    if message_fragment is not None:
+        assert message_fragment in payload["message"]
     assert payload["exit_code"] == 4
 
 

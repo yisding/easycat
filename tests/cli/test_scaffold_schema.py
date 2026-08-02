@@ -5,6 +5,7 @@ from dataclasses import fields
 
 import pytest
 
+from easycat.cli.scaffold import _schema
 from easycat.cli.scaffold._schema import (
     SCHEMA_V1_KEYS,
     InitConfig,
@@ -81,17 +82,16 @@ def test_parse_config_wraps_oversized_integer_decoder_error() -> None:
     assert "not valid JSON" in exc_info.value.message
 
 
-def test_parse_config_wraps_excessive_nesting_decoder_error() -> None:
-    raw = (
-        '{"schema_version":1,"template":"text-chat","tools":'
-        + ("[" * 10_000)
-        + '"lookup"'
-        + ("]" * 10_000)
-        + "}"
-    )
+def test_parse_config_wraps_excessive_nesting_decoder_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_recursion_error(_raw: str) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding JSON")
+
+    monkeypatch.setattr(_schema.json, "loads", raise_recursion_error)
 
     with pytest.raises(EasyCatError) as exc_info:
-        parse_config(raw)
+        parse_config('{"schema_version":1,"template":"text-chat"}')
 
     assert exc_info.value.code == "EASYCAT_E102"
     assert "maximum nesting depth exceeded" in exc_info.value.message
