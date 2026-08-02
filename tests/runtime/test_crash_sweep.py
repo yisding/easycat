@@ -127,6 +127,27 @@ def test_crash_dump_snapshots_artifacts_away_from_reused_session(tmp_path) -> No
     assert copied.read_bytes() == payload
 
 
+def test_crash_dump_does_not_snapshot_artifacts_through_parent_symlink(tmp_path) -> None:
+    session_id = "orphan"
+    payload = b"outside artifact"
+    outside_root = tmp_path / "outside"
+    outside_store = FilesystemArtifactStore(session_id, data_dir=outside_root)
+    ref = outside_store.put(payload)
+    _crash_one(session_id, tmp_path, input_ref=ref)
+    artifacts = tmp_path / "artifacts"
+    try:
+        artifacts.symlink_to(outside_root / "artifacts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+
+    assert sweep_crashed_journals(tmp_path) == 1
+
+    crash_path = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
+    copied = crash_dump_artifact_root(crash_path) / ref[:2] / f"{ref}.bin"
+    assert not copied.exists()
+    assert outside_store.get(ref) == payload
+
+
 def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     session_id = "linked-artifacts"
     payload = b"outside payload"
@@ -145,12 +166,11 @@ def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     target = tmp_path / "snapshot"
     target.mkdir()
 
-    with pytest.raises(OSError):
-        snapshot_crash_dump_artifacts(
-            tmp_path,
-            tmp_path / "journals" / f"{session_id}.sqlite",
-            target,
-        )
+    snapshot_crash_dump_artifacts(
+        tmp_path,
+        tmp_path / "journals" / f"{session_id}.sqlite",
+        target,
+    )
 
     assert list(target.rglob("*.bin")) == []
 
@@ -624,6 +644,40 @@ def test_sweep_refuses_symlinked_crash_dump_directory(tmp_path) -> None:
     assert crash_dumps.is_symlink()
     assert target.stat().st_mode & 0o777 == 0o755
     assert list(target.iterdir()) == []
+
+
+def test_sweep_fails_if_reserved_artifact_root_is_replaced_by_symlink(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _crash_one("orphan", tmp_path)
+    source = tmp_path / "journals" / "orphan.sqlite"
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    marker = outside / "keep.bin"
+    marker.write_bytes(b"external")
+    original_reserve = crash_sweep_module.reserve_crash_dump_paths
+
+    def replace_reservation(root, session_id):
+        crash_path, artifact_root = original_reserve(root, session_id)
+        artifact_root.rmdir()
+        try:
+            artifact_root.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+        return crash_path, artifact_root
+
+    monkeypatch.setattr(
+        crash_sweep_module,
+        "reserve_crash_dump_paths",
+        replace_reservation,
+    )
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert source.exists()
+    assert not (tmp_path / "crash-dumps" / "orphan.sqlite").exists()
+    assert not (tmp_path / "crash-dumps" / "orphan.artifacts").is_symlink()
+    assert marker.read_bytes() == b"external"
 
 
 def test_sqlite_journal_open_ignores_malformed_sibling_journal(tmp_path) -> None:

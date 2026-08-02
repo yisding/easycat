@@ -312,7 +312,8 @@ class FilesystemArtifactStore:
     ) -> None:
         validate_persistent_session_id(session_id)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
-        self._dir = root / "artifacts" / session_id
+        self._artifacts_dir = root / "artifacts"
+        self._dir = self._artifacts_dir / session_id
         self._lock = threading.Lock()
         self._max_bytes = max_bytes
         self._current_bytes = self._stored_bytes()
