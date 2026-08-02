@@ -217,6 +217,25 @@ class TestSharedEmitSeam:
         assert "suppressed 2 similar events" in emitted
         assert "truncated" in emitted
 
+    @pytest.mark.asyncio
+    async def test_emit_subscriber_can_drain_its_own_diagnostic_task(self) -> None:
+        """A diagnostic callback may synchronously initiate local teardown."""
+        h = _MixinHarness(max_pending=1)
+        bus = EventBus()
+        h._event_bus = bus
+        drained = asyncio.Event()
+
+        async def _handler(_event: TransportDegraded) -> None:
+            await h._drain_emit_tasks()
+            drained.set()
+
+        bus.subscribe(TransportDegraded, _handler)
+        h._emit_degraded("test", "self-drain")
+
+        await asyncio.wait_for(drained.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert h._emit_tasks == set()
+
 
 class _RaceServerWS:
     def __init__(self) -> None:
@@ -265,6 +284,17 @@ class _FakeServerWS:
         self.closed = (code, reason)
 
 
+class _ClosedServer:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    async def wait_closed(self) -> None:
+        return None
+
+
 class TestWebSocketDegradedEvents:
     @pytest.mark.asyncio
     async def test_extra_client_rejected_emits(self) -> None:
@@ -299,6 +329,60 @@ class TestWebSocketDegradedEvents:
         await _drain_scheduled_emits()
         assert [e.reason for e in received] == [_DEGRADED_INVALID_SAMPLE_RATE]
         assert "-1" in received[0].detail
+
+    @pytest.mark.asyncio
+    async def test_emit_subscriber_can_disconnect_server_transport(self) -> None:
+        """The diagnostic cleanup child must not await its initiating emitter."""
+        transport = WebSocketTransport(WebSocketTransportConfig(port=0))
+        bus = EventBus()
+        transport._event_bus = bus
+        transport._connected = True
+        transport._server = _ClosedServer()  # type: ignore[assignment]
+        disconnected = asyncio.Event()
+
+        async def _handler(_event: TransportDegraded) -> None:
+            await transport.disconnect()
+            disconnected.set()
+
+        bus.subscribe(TransportDegraded, _handler)
+        transport._emit_degraded("test", "disconnect from event observer")
+
+        await asyncio.wait_for(disconnected.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert transport._emit_tasks == set()
+        assert transport._disconnect_cleanup_pending is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_emitters_can_both_disconnect_server_transport(self) -> None:
+        transport = WebSocketTransport(WebSocketTransportConfig(port=0))
+        bus = EventBus()
+        transport._event_bus = bus
+        transport._connected = True
+        transport._server = _ClosedServer()  # type: ignore[assignment]
+        both_entered = asyncio.Event()
+        finished = asyncio.Event()
+        entered = 0
+        completed = 0
+
+        async def _handler(_event: TransportDegraded) -> None:
+            nonlocal entered, completed
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await both_entered.wait()
+            await transport.disconnect()
+            completed += 1
+            if completed == 2:
+                finished.set()
+
+        bus.subscribe(TransportDegraded, _handler)
+        transport._emit_degraded("first", "first concurrent observer")
+        transport._emit_degraded("second", "second concurrent observer")
+
+        await asyncio.wait_for(finished.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert transport._emit_tasks == set()
+        assert transport._disconnect_cleanup_pending is False
 
     @pytest.mark.asyncio
     async def test_stale_connection_cleanup_does_not_clear_new_client(self) -> None:
