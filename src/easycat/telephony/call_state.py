@@ -413,6 +413,21 @@ class OutboundCallStateMachine:
         """The provider identifier for the currently accepted call."""
         return self._call_sid
 
+    def accepts_call_initiation(self, call_sid: str, observer_call_sid: str) -> bool:
+        """Return whether a helper may adopt ``call_sid`` as a new call.
+
+        Outbound helpers subscribe to :class:`CallInitiated` on both sides of
+        this state machine in the event-bus ordering.  ``observer_call_sid``
+        lets the same predicate work before the state machine adopts a new
+        sequential SID and after it has done so, while rejecting duplicate and
+        overlapping initiations in either position.
+        """
+        if not call_sid or call_sid == observer_call_sid:
+            return False
+        if not self._call_sid or self._state == OutboundCallState.ENDED:
+            return True
+        return call_sid == self._call_sid and self._state == OutboundCallState.INITIATING
+
     @property
     def gate(self) -> ClassificationGate:
         return self._gate
@@ -483,16 +498,13 @@ class OutboundCallStateMachine:
         This allows a single session to handle sequential outbound calls
         without getting stuck in the ENDED state from a previous call.
         """
-        if not event.call_sid:
-            return
-        if event.call_sid == self._call_sid:
-            return
-        if self._call_sid and self._state != OutboundCallState.ENDED:
-            logger.debug(
-                "Ignoring CallInitiated for %s while %s is active",
-                event.call_sid,
-                self._call_sid,
-            )
+        if not self.accepts_call_initiation(event.call_sid, self._call_sid):
+            if event.call_sid and event.call_sid != self._call_sid:
+                logger.debug(
+                    "Ignoring CallInitiated for %s while %s is active",
+                    event.call_sid,
+                    self._call_sid,
+                )
             return
         self._cancel_timers()
         self._gate.stop()

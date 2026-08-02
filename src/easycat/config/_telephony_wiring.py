@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from easycat.telephony.call_state import OutboundCallStateMachine
     from easycat.telephony.compliance import DNCStore
     from easycat.telephony.screening import CallScreeningDetector
+    from easycat.telephony.voicemail import VoicemailDetector
 
     from .easy import OutboundCallConfig, TelephonyConfig
 
@@ -38,15 +39,15 @@ logger = logging.getLogger("easycat.config")
 class TelephonyHelpers:
     """Typed result of :func:`create_telephony_helpers`.
 
-    ``helpers`` is the full list the session starts/stops; ``state_machine``
-    and ``screening_detector`` are the two members ``create_session`` and
-    :func:`wire_outbound_pipeline` need by name, populated inline as the
-    helpers are built (no ``isinstance`` re-scan).
+    ``helpers`` is the full list the session starts/stops. Typed collaborator
+    fields let the wiring connect call-boundary and pipeline behavior without
+    re-scanning ``list[Any]`` with ``isinstance``.
     """
 
     helpers: list[Any] = field(default_factory=list)
     state_machine: OutboundCallStateMachine | None = None
     screening_detector: CallScreeningDetector | None = None
+    voicemail_detector: VoicemailDetector | None = None
 
 
 def create_telephony_helpers(
@@ -67,7 +68,8 @@ def create_telephony_helpers(
     if config.enable_voicemail_detector:
         from easycat.telephony.voicemail import VoicemailDetector
 
-        result.helpers.append(VoicemailDetector(event_bus, config.voicemail_detector))
+        result.voicemail_detector = VoicemailDetector(event_bus, config.voicemail_detector)
+        result.helpers.append(result.voicemail_detector)
 
     if config.enable_outbound_call_manager and config.outbound:
         _build_outbound_helpers(event_bus, config.outbound, result, dnc_list=dnc_list)
@@ -107,6 +109,10 @@ def _build_outbound_helpers(
     result.helpers.extend(built.helpers)
     result.state_machine = built.state_machine
     result.screening_detector = built.screening_detector
+    if result.voicemail_detector is not None:
+        result.voicemail_detector.set_call_boundary_acceptor(
+            built.state_machine.accepts_call_initiation
+        )
 
 
 class _OutboundPipelineWiring:

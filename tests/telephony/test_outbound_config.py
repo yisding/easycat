@@ -12,7 +12,17 @@ from easycat.config import (
     VoicemailDetectionConfig,
     _create_telephony_helpers,
 )
-from easycat.events import CallAnswered, CallFailed, EventBus, ScreeningResponse
+from easycat.events import (
+    CallAnswered,
+    CallEnded,
+    CallFailed,
+    CallInitiated,
+    EventBus,
+    ScreeningResponse,
+    VADStartSpeaking,
+    VADStopSpeaking,
+    VoicemailDetected,
+)
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.compliance import DNCList
 from easycat.telephony.number_health import CallDispositionTracker
@@ -260,6 +270,48 @@ class TestTelephonyConfigExtension:
         screening = result.screening_detector
         assert isinstance(screening, CallScreeningDetector)
         assert screening._track_filter == "inbound"
+
+    @pytest.mark.asyncio
+    async def test_vad_voicemail_detector_uses_outbound_call_boundary(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        result = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_voicemail_detector=True,
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(from_number="+15559876543"),
+            ),
+        )
+        detector = result.voicemail_detector
+        assert detector is not None
+        detected: list[VoicemailDetected] = []
+
+        def capture(event: VoicemailDetected) -> None:
+            if event.source == "detector":
+                detected.append(event)
+
+        bus.subscribe(VoicemailDetected, capture)
+        for helper in result.helpers:
+            helper.start()
+        try:
+            await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+            await bus.emit(CallAnswered(call_sid="CA-A"))
+            await bus.emit(VADStartSpeaking(timestamp=10.0))
+
+            await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+            await bus.emit(CallInitiated(call_sid="CA-B", to="+15550000003", from_="+15550000002"))
+            await bus.emit(VADStopSpeaking(timestamp=20.0))
+
+            assert [(event.call_sid, event.result) for event in detected] == [("CA-A", "machine")]
+
+            await bus.emit(CallEnded(call_sid="CA-A"))
+            await bus.emit(CallInitiated(call_sid="CA-B", to="+15550000003", from_="+15550000002"))
+
+            assert detector._call_sid == "CA-B"
+            assert detector.has_emitted is False
+        finally:
+            for helper in reversed(result.helpers):
+                helper.stop()
 
     @pytest.mark.asyncio
     async def test_outbound_helpers_record_specific_failed_disposition(self) -> None:

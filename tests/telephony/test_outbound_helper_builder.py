@@ -12,16 +12,39 @@ from easycat.config._outbound_helpers import (
     build_outbound_helpers,
 )
 from easycat.events import (
+    CallAnswered,
+    CallEnded,
     CallInitiated,
     CallStateChanged,
     EventBus,
     IVRAction,
     IVRActionType,
     STTFinal,
+    STTPartial,
+    VoicemailDetected,
 )
 from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.ivr import IVRNavigator
 from easycat.telephony.outbound import OutboundCallManager
+from easycat.telephony.screening import CallScreeningDetector, ScreeningState
+from easycat.telephony.voicemail import (
+    PostScreeningVoicemailDetector,
+    STTAMDFusionClassifier,
+)
+
+
+def _start_helpers(helpers: tuple[object, ...]) -> None:
+    for helper in helpers:
+        start = getattr(helper, "start", None)
+        if start is not None:
+            start()
+
+
+def _stop_helpers(helpers: tuple[object, ...]) -> None:
+    for helper in reversed(helpers):
+        stop = getattr(helper, "stop", None)
+        if stop is not None:
+            stop()
 
 
 def test_builder_preserves_default_helper_order_and_shared_patterns() -> None:
@@ -65,6 +88,104 @@ def test_builder_omits_disabled_optional_helpers() -> None:
         "VoicemailPolicyHandler",
     )
     assert built.screening_detector is None
+
+
+@pytest.mark.asyncio
+async def test_active_call_fusion_ignores_duplicate_and_overlapping_initiations() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    built = build_outbound_helpers(
+        bus,
+        OutboundCallConfig(from_number="+15550000002"),
+        manager_cls=OutboundCallManager,
+    )
+    fusion = next(helper for helper in built.helpers if isinstance(helper, STTAMDFusionClassifier))
+    fused: list[VoicemailDetected] = []
+
+    def capture(event: VoicemailDetected) -> None:
+        if event.source == "fusion":
+            fused.append(event)
+
+    bus.subscribe(VoicemailDetected, capture)
+    _start_helpers(built.helpers)
+    try:
+        await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+        await bus.emit(CallAnswered(call_sid="CA-A"))
+        await bus.emit(VoicemailDetected(result="machine", call_sid="CA-A"))
+
+        await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+        await bus.emit(CallInitiated(call_sid="CA-B", to="+15550000003", from_="+15550000002"))
+
+        assert built.state_machine.call_sid == "CA-A"
+        assert built.state_machine.state == OutboundCallState.CLASSIFYING
+        assert fusion.amd_result == "machine"
+
+        await bus.emit(
+            STTFinal(text="You've reached Alex, please leave a message", track="inbound")
+        )
+
+        assert built.state_machine.state == OutboundCallState.VOICEMAIL
+        assert [(event.call_sid, event.result) for event in fused] == [("CA-A", "machine")]
+
+        await bus.emit(CallEnded(call_sid="CA-A"))
+        await bus.emit(CallInitiated(call_sid="CA-B", to="+15550000003", from_="+15550000002"))
+
+        assert built.state_machine.call_sid == "CA-B"
+        assert built.state_machine.state == OutboundCallState.INITIATING
+        assert fusion._call_sid == "CA-B"
+        assert fusion.amd_result is None
+    finally:
+        _stop_helpers(built.helpers)
+
+
+@pytest.mark.asyncio
+async def test_active_screening_survives_stale_initiation_and_keeps_call_sid() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    built = build_outbound_helpers(
+        bus,
+        OutboundCallConfig(from_number="+15550000002", screening_response=""),
+        manager_cls=OutboundCallManager,
+    )
+    screening = next(
+        helper for helper in built.helpers if isinstance(helper, CallScreeningDetector)
+    )
+    post_screening = next(
+        helper for helper in built.helpers if isinstance(helper, PostScreeningVoicemailDetector)
+    )
+    fused: list[VoicemailDetected] = []
+
+    def capture(event: VoicemailDetected) -> None:
+        if event.source == "fusion":
+            fused.append(event)
+
+    bus.subscribe(VoicemailDetected, capture)
+    _start_helpers(built.helpers)
+    try:
+        await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+        await bus.emit(CallAnswered(call_sid="CA-A"))
+        await bus.emit(
+            STTPartial(
+                text="Please record your name and reason for calling",
+                track="inbound",
+            )
+        )
+
+        assert built.state_machine.state == OutboundCallState.SCREENING
+        assert screening.state == ScreeningState.SCREENING_DETECTED
+        assert post_screening.active is True
+
+        await bus.emit(CallInitiated(call_sid="CA-A", to="+15550000001", from_="+15550000002"))
+        await bus.emit(CallInitiated(call_sid="CA-B", to="+15550000003", from_="+15550000002"))
+
+        assert built.state_machine.call_sid == "CA-A"
+        assert screening.state == ScreeningState.SCREENING_DETECTED
+        assert post_screening.active is True
+
+        await bus.emit(STTFinal(text="Please leave a message after the tone", track="inbound"))
+
+        assert built.state_machine.state == OutboundCallState.VOICEMAIL
+        assert [(event.call_sid, event.result) for event in fused] == [("CA-A", "machine")]
+    finally:
+        _stop_helpers(built.helpers)
 
 
 @pytest.mark.asyncio
