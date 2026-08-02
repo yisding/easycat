@@ -92,13 +92,20 @@ def _parse_int(value: Any) -> int | None:
     return parsed
 
 
-def _voicemail_detected_event(result: VoicemailResult, call_sid: str) -> VoicemailDetected:
+def _voicemail_detected_event(
+    result: VoicemailResult,
+    call_sid: str,
+    *,
+    session_id: str | None = None,
+) -> VoicemailDetected:
     """Build the AMD classification event correlated to a Twilio call SID."""
-    return VoicemailDetected(result=result, call_sid=call_sid)
+    return VoicemailDetected(result=result, call_sid=call_sid, session_id=session_id)
 
 
 def parse_call_status_callback(
     params: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> CallInitiated | CallRinging | CallAnswered | CallEnded | CallFailed | None:
     """Parse a Twilio status callback into a call lifecycle event.
 
@@ -120,13 +127,18 @@ def parse_call_status_callback(
             call_sid=call_sid,
             to=params.get("To", ""),
             from_=params.get("From", ""),
+            session_id=session_id,
         )
 
     if status == "ringing":
-        return CallRinging(call_sid=call_sid)
+        return CallRinging(call_sid=call_sid, session_id=session_id)
 
     if status == "in-progress":
-        return CallAnswered(call_sid=call_sid, answered_by=params.get("AnsweredBy"))
+        return CallAnswered(
+            call_sid=call_sid,
+            answered_by=params.get("AnsweredBy"),
+            session_id=session_id,
+        )
 
     if status == "completed":
         duration_s = _parse_float(params.get("CallDuration"))
@@ -137,6 +149,7 @@ def parse_call_status_callback(
             duration_s=duration_s,
             disposition="completed",
             number=params.get("From", ""),
+            session_id=session_id,
         )
 
     if status in {"busy", "no-answer", "failed", "canceled"}:
@@ -147,13 +160,17 @@ def parse_call_status_callback(
             reason=reason,
             sip_code=sip_code,
             number=params.get("From", ""),
+            session_id=session_id,
         )
 
     return None
 
 
 async def emit_call_status(
-    params: dict[str, Any], event_bus: EventBus
+    params: dict[str, Any],
+    event_bus: EventBus,
+    *,
+    session_id: str | None = None,
 ) -> CallInitiated | CallRinging | CallAnswered | CallEnded | CallFailed | None:
     """Parse a Twilio status callback and emit the resulting event.
 
@@ -162,14 +179,20 @@ async def emit_call_status(
     is also emitted so the call state machine can classify the call without
     requiring a separate ``emit_twilio_amd()`` call.
     """
-    event = parse_call_status_callback(params)
+    event = parse_call_status_callback(params, session_id=session_id)
     if event is not None:
         await event_bus.emit(event)
         # Emit AMD classification when AnsweredBy is present on the answered callback.
         if isinstance(event, CallAnswered) and event.answered_by:
             amd_result = TWILIO_AMD_MAP.get(event.answered_by.lower())
             if amd_result is not None:
-                await event_bus.emit(_voicemail_detected_event(amd_result, event.call_sid))
+                await event_bus.emit(
+                    _voicemail_detected_event(
+                        amd_result,
+                        event.call_sid,
+                        session_id=session_id,
+                    )
+                )
     return event
 
 
@@ -212,6 +235,7 @@ class OutboundCallManager:
         twilio_auth_token: str = "",
         status_callback_url: str = "",
         twiml_url: str = "",
+        session_id: str | None = None,
     ) -> None:
         # Lazy-import twilio at instantiation time.
         try:
@@ -228,6 +252,7 @@ class OutboundCallManager:
             )
 
         self._event_bus = event_bus
+        self._session_id = session_id
         self._from_number = from_number
         self._amd_mode = amd_mode
         self._async_amd = async_amd
@@ -284,6 +309,10 @@ class OutboundCallManager:
     @property
     def active_call_sid(self) -> str | None:
         return self._active_call_sid
+
+    def set_session_id(self, session_id: str) -> None:
+        """Attach the owning Session correlation ID to lifecycle events."""
+        self._session_id = session_id
 
     def start(self) -> None:
         if self._started:
@@ -576,7 +605,11 @@ class OutboundCallManager:
     ) -> str:
         """Report a stale placement, then preserve the original caller outcome."""
         dispatch_error: Exception | None = None
-        failure_event = CallFailed(call_sid=call_sid, reason=str(error))
+        failure_event = CallFailed(
+            call_sid=call_sid,
+            reason=str(error),
+            session_id=self._session_id,
+        )
         failure_event_id = id(failure_event)
         self._synthetic_failure_event_ids.add(failure_event_id)
         try:
@@ -613,7 +646,13 @@ class OutboundCallManager:
         # another placement must reach the active-call check and fail promptly,
         # not deadlock waiting on its own dispatch stack.
         if create_error is not None:
-            await self._event_bus.emit(CallFailed(call_sid="", reason=str(create_error)))
+            await self._event_bus.emit(
+                CallFailed(
+                    call_sid="",
+                    reason=str(create_error),
+                    session_id=self._session_id,
+                )
+            )
             if cancellation is not None:
                 raise cancellation
             raise create_error
@@ -627,7 +666,12 @@ class OutboundCallManager:
         self._reconciling_call_sids.add(call_sid)
         try:
             await self._event_bus.emit(
-                CallInitiated(call_sid=call_sid, to=to, from_=self._from_number)
+                CallInitiated(
+                    call_sid=call_sid,
+                    to=to,
+                    from_=self._from_number,
+                    session_id=self._session_id,
+                )
             )
         except asyncio.CancelledError as exc:
             return await self._finish_dispatch_failed_call(
@@ -675,7 +719,11 @@ class OutboundCallManager:
             failure_reason = (
                 f"{error}; immediate hangup of Twilio call {call_sid} failed: {cleanup_error}"
             )
-        failure_event = CallFailed(call_sid=call_sid, reason=failure_reason)
+        failure_event = CallFailed(
+            call_sid=call_sid,
+            reason=failure_reason,
+            session_id=self._session_id,
+        )
         failure_event_id = id(failure_event)
         self._synthetic_failure_event_ids.add(failure_event_id)
         secondary_dispatch_error: Exception | None = None

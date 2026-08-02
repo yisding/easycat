@@ -663,6 +663,7 @@ async def _emit_twilio_call_ended(
     call_sid: str | None,
     answered_at: float | None,
     call_identity: Any | None,
+    session_id: str | None,
 ) -> None:
     if event_bus is None or call_sid is None:
         return
@@ -674,6 +675,7 @@ async def _emit_twilio_call_ended(
             call_sid=call_sid,
             duration_s=duration,
             number=call_identity.caller_number if call_identity is not None else None,
+            session_id=session_id,
         )
     )
 
@@ -737,13 +739,15 @@ def _is_active_twilio_stream_event(
 async def _emit_parsed_twilio_dtmf(
     msg: dict[str, Any],
     event_bus: EventBus | None,
+    *,
+    session_id: str | None,
 ) -> None:
     event = parse_twilio_dtmf_message(msg)
     if event is None:
         logger.debug("Ignoring Twilio DTMF with invalid payload")
         return
     if event_bus is not None:
-        await event_bus.emit(event)
+        await event_bus.emit(replace(event, session_id=session_id))
 
 
 class _TwilioProtocolMixin:
@@ -778,6 +782,7 @@ class _TwilioProtocolMixin:
     _client_connected: Any
     _diagnostics: _TwilioStreamDiagnostics
     _event_bus: EventBus | None
+    _easycat_session_id: str | None
     _config: TwilioTransportConfig
     _audio_format: AudioFormat
     _stream_sid: str | None
@@ -1022,7 +1027,13 @@ class _TwilioProtocolMixin:
                 logger.debug("Identity sink raised on start", exc_info=True)
 
         if self._event_bus is not None and self._call_sid:
-            await self._event_bus.emit(CallAnswered(call_sid=self._call_sid, answered_by="human"))
+            await self._event_bus.emit(
+                CallAnswered(
+                    call_sid=self._call_sid,
+                    answered_by="human",
+                    session_id=self._easycat_session_id,
+                )
+            )
 
         logger.info(
             "Twilio stream started: streamSid=%s callSid=%s from=%s to=%s",
@@ -1103,7 +1114,9 @@ class _TwilioProtocolMixin:
             return
         logger.debug("Twilio mark acknowledged: %s", mark_name)
         if self._event_bus is not None:
-            await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
+            await self._event_bus.emit(
+                PlaybackMarkAck(mark_name=mark_name, session_id=self._easycat_session_id)
+            )
 
     async def _emit_call_ended_once(self) -> None:
         if self._call_ended_emitted or self._call_sid is None:
@@ -1114,6 +1127,7 @@ class _TwilioProtocolMixin:
             call_sid=self._call_sid,
             answered_at=self._answered_at,
             call_identity=self._call_identity,
+            session_id=self._easycat_session_id,
         )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
@@ -1124,7 +1138,11 @@ class _TwilioProtocolMixin:
             event_name="dtmf",
         ):
             self._diagnostics.observe_sequence(msg)
-            await _emit_parsed_twilio_dtmf(msg, self._event_bus)
+            await _emit_parsed_twilio_dtmf(
+                msg,
+                self._event_bus,
+                session_id=self._easycat_session_id,
+            )
 
     _MessageHandler = Callable[["_TwilioProtocolMixin", dict[str, Any]], Awaitable[None]]
     _MESSAGE_HANDLERS: ClassVar[dict[str, _MessageHandler]] = {

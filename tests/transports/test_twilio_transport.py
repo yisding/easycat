@@ -20,6 +20,7 @@ from easycat.events import (
     DTMF,
     CallAnswered,
     CallEnded,
+    Event,
     EventBus,
     PlaybackMarkAck,
     TransportDegraded,
@@ -1300,6 +1301,59 @@ class TestTwilioDtmfParsingInTransports:
         )
 
         assert digits == ["B"]
+
+
+class TestTwilioSharedBusSessionCorrelation:
+    @pytest.mark.asyncio
+    async def test_builtin_events_stay_with_their_owning_session(self) -> None:
+        event_bus = EventBus()
+        left_events: list[Event] = []
+        right_events: list[Event] = []
+
+        def collect_left(event: Event) -> None:
+            if event.session_id == "session-left":
+                left_events.append(event)
+
+        def collect_right(event: Event) -> None:
+            if event.session_id == "session-right":
+                right_events.append(event)
+
+        event_bus.subscribe_all(collect_left)
+        event_bus.subscribe_all(collect_right)
+        left = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+        right = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+        left.set_session_id("session-left")
+        right.set_session_id("session-right")
+
+        async def emit_lifecycle(
+            transport: TwilioConnectionTransport,
+            *,
+            stream_sid: str,
+            call_sid: str,
+        ) -> None:
+            await transport._handle_message(_twilio_start_msg(stream_sid, call_sid))
+            await transport._handle_message(_twilio_mark_msg("mark-1", stream_sid))
+            await transport._handle_message(_twilio_dtmf_msg("5", stream_sid))
+            transport._emit_degraded("test-session-correlation")
+            await _drain_transport_diagnostics(transport)
+            await transport._handle_message(_twilio_stop_msg(stream_sid))
+
+        await emit_lifecycle(left, stream_sid="STREAM-LEFT", call_sid="CALL-LEFT")
+        await emit_lifecycle(right, stream_sid="STREAM-RIGHT", call_sid="CALL-RIGHT")
+
+        expected_types = {
+            CallAnswered,
+            PlaybackMarkAck,
+            DTMF,
+            TransportDegraded,
+            CallEnded,
+        }
+        assert {type(event) for event in left_events} == expected_types
+        assert {type(event) for event in right_events} == expected_types
+        assert len(left_events) == len(expected_types)
+        assert len(right_events) == len(expected_types)
+        assert all(event.session_id == "session-left" for event in left_events)
+        assert all(event.session_id == "session-right" for event in right_events)
 
 
 class TestTwilioStreamGapDiagnostics:

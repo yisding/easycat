@@ -13,9 +13,12 @@ from easycat.events import (
     AudioOut,
     BotStartedSpeaking,
     BotStoppedSpeaking,
+    CallAnswered,
     Error,
     ErrorStage,
     EventBus,
+    EventHandler,
+    EventSubscription,
     Interruption,
     PlaybackMarkAck,
     STTFinal,
@@ -24,7 +27,10 @@ from easycat.events import (
     TransportAudioDelivered,
     TurnEnded,
     TurnStarted,
+    VADStartSpeaking,
+    VADStopSpeaking,
 )
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from tests.session._session_core_helpers import (
     FakePlaybackAckTransport,
@@ -155,6 +161,175 @@ async def test_session_events_include_correlation_ids():
     assert seen
     for event in seen:
         assert event.session_id == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_shared_event_bus_scopes_session_owned_turn_handlers() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    victim_journal = InMemoryRingBuffer()
+    other_journal = InMemoryRingBuffer()
+    victim = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="victim-session",
+            journal=victim_journal,
+        )
+    )
+    other = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="other-session",
+            journal=other_journal,
+        )
+    )
+    victim._is_running = True
+    other._is_running = True
+
+    try:
+        await bus.emit(TurnStarted(turn_id="ambiguous-turn"))
+
+        assert victim.current_turn is None
+        assert other.current_turn is None
+
+        await bus.emit(TurnStarted(session_id=victim.session_id, turn_id="victim-turn"))
+
+        assert victim.current_turn is not None
+        assert victim.current_turn.id == "victim-turn"
+        assert other.current_turn is None
+        assert any(record.name == "turn_started" for record in victim_journal.read())
+        assert other_journal.read() == []
+    finally:
+        await victim.stop(force=True)
+        await other.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_shared_event_bus_stays_ambiguous_after_peer_stops() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    survivor = Session(_full_config(event_bus=bus, session_id="survivor-session"))
+    peer = Session(_full_config(event_bus=bus, session_id="peer-session"))
+    survivor._is_running = True
+
+    await peer.stop(force=True)
+    try:
+        await bus.emit(TurnStarted(turn_id="late-peer-turn"))
+
+        assert survivor.current_turn is None
+    finally:
+        await survivor.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_failed_second_session_does_not_poison_private_bus_compatibility() -> None:
+    class FailNextSubscriptionBus(EventBus):
+        fail_next_subscription = False
+
+        def subscribe(self, event_type: type, handler: EventHandler) -> EventSubscription:
+            if self.fail_next_subscription:
+                self.fail_next_subscription = False
+                raise RuntimeError("subscribe failed")
+            return super().subscribe(event_type, handler)
+
+    bus = FailNextSubscriptionBus(handler_error_policy="raise")
+    survivor = Session(_full_config(event_bus=bus, session_id="survivor-session"))
+    survivor._is_running = True
+    bus.fail_next_subscription = True
+
+    with pytest.raises(RuntimeError, match="subscribe failed"):
+        Session(_full_config(event_bus=bus, session_id="failed-session"))
+
+    try:
+        await bus.emit(TurnStarted(turn_id="private-bus-turn"))
+
+        assert survivor.current_turn is not None
+        assert survivor.current_turn.id == "private-bus-turn"
+        assert not getattr(bus, "_easycat_was_shared_by_sessions", False)
+    finally:
+        await survivor.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_releases_only_session_owned_event_handlers() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[TurnStarted] = []
+
+    def observe(event: TurnStarted) -> None:
+        observed.append(event)
+
+    external = bus.subscribe(TurnStarted, observe)
+    session = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="stopped-session",
+            greeting="hello",
+            journal=InMemoryRingBuffer(),
+        )
+    )
+
+    await session.stop(force=True)
+
+    assert external.active is True
+    assert bus.subscribers(TurnStarted) == [observe]
+    for event_type in (
+        PlaybackMarkAck,
+        TransportAudioDelivered,
+        CallAnswered,
+        VADStartSpeaking,
+        VADStopSpeaking,
+        STTFinal,
+        TurnEnded,
+    ):
+        assert bus.subscribers(event_type) == []
+
+    event = TurnStarted(session_id="another-session", turn_id="another-turn")
+    await bus.emit(event)
+    assert observed == [event]
+
+
+@pytest.mark.asyncio
+async def test_failed_session_stop_releases_owned_event_handlers() -> None:
+    class FailingDisconnectTransport(ReportingTransport):
+        async def disconnect(self) -> None:
+            raise RuntimeError("disconnect failed")
+
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[TurnStarted] = []
+
+    def observe(event: TurnStarted) -> None:
+        observed.append(event)
+
+    external = bus.subscribe(TurnStarted, observe)
+    session = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="failed-stop-session",
+            transport=FailingDisconnectTransport(),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await session.stop(force=True)
+
+    assert external.active is True
+    assert bus.subscribers(TurnStarted) == [observe]
+    assert session._event_subscriptions == []
+
+    replacement = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="replacement-session",
+        )
+    )
+    replacement._is_running = True
+    try:
+        late_event = TurnStarted(turn_id="late-failed-session-turn")
+        await bus.emit(late_event)
+
+        assert replacement.current_turn is None
+        assert observed == [late_event]
+        assert getattr(bus, "_easycat_was_shared_by_sessions", False)
+    finally:
+        await replacement.stop(force=True)
 
 
 def test_begin_turn_exposes_coherent_test_and_replay_seam() -> None:

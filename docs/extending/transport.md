@@ -107,6 +107,13 @@ an explicitly configured bus, so subclasses such as `MemoryTransport` need no
 additional wiring. Private `_event_bus` attachment remains a legacy fallback,
 not an extension contract.
 
+If the transport emits EasyCat events directly, also expose synchronous
+`set_session_id(session_id)`. Session calls it during construction, after bus
+attachment and before any transport `connect()` or `warmup()` hook can run, so
+those events remain attributable when multiple sessions share one `EventBus`.
+`AudioQueueMixin` implements this hook and stamps its built-in diagnostics;
+custom events should copy the bound ID into their `session_id` field too.
+
 ## Verifying conformance
 
 ```python

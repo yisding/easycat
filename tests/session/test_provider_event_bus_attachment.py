@@ -23,6 +23,15 @@ class _PublicHookProvider:
         self.received_bus = event_bus
 
 
+class _SessionIdProducer(_PublicHookProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_session_id: str | None = None
+
+    def set_session_id(self, session_id: str) -> None:
+        self.received_session_id = session_id
+
+
 def test_session_attaches_public_event_bus_hook_to_every_audio_stage() -> None:
     bus = EventBus()
     providers = [_PublicHookProvider() for _ in range(6)]
@@ -45,6 +54,23 @@ def test_session_attaches_public_event_bus_hook_to_every_audio_stage() -> None:
     # The public hook wins; private-name fallbacks are not touched.
     assert all(provider._event_bus is None for provider in providers)
     assert all(provider._config.event_bus is None for provider in providers)
+
+
+def test_session_binds_correlation_id_to_transport_and_telephony_producers() -> None:
+    transport = _SessionIdProducer()
+    helper = _SessionIdProducer()
+
+    Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            session_id="session-owned-events",
+            transport=transport,
+            telephony_helpers=(helper,),
+        )
+    )
+
+    assert transport.received_session_id == "session-owned-events"
+    assert helper.received_session_id == "session-owned-events"
 
 
 def test_failed_public_hook_uses_legacy_event_bus_fallback(

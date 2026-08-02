@@ -192,6 +192,7 @@ class AudioQueueMixin:
     _in_queue: _InboundAudioQueue
     _client_connected: asyncio.Event
     _event_bus: EventBus | None
+    _easycat_session_id: str | None
     _emit_tasks: set[asyncio.Task[None]]
     _degraded_last_emit: dict[tuple[str, bool], float]
     _degraded_suppressed: dict[tuple[str, bool], int]
@@ -216,6 +217,10 @@ class AudioQueueMixin:
         # injection (e.g. Twilio transports pass ``event_bus`` before calling
         # this) — only default it when unset.
         self._event_bus = getattr(self, "_event_bus", None)
+        # Session correlation is attached post-construction, just like the
+        # EventBus. Preserve an early binding if a concrete transport already
+        # received one before queue initialization.
+        self._easycat_session_id = getattr(self, "_easycat_session_id", None)
         # Fire-and-forget ``bus.emit`` tasks, tracked so they are not GC'd
         # mid-flight.  Observability must never block a transport hot path,
         # so emission is scheduled, not awaited.
@@ -231,6 +236,10 @@ class AudioQueueMixin:
         """Attach the session bus unless construction supplied an explicit bus."""
         if self._event_bus is None:
             self._event_bus = event_bus
+
+    def set_session_id(self, session_id: str) -> None:
+        """Attach the owning Session correlation ID to producer-side events."""
+        self._easycat_session_id = session_id
 
     def _record_transport_disconnect(self, reason: str) -> None:
         """Count one abnormal transport disconnect (a drop, not a clean close).
@@ -302,6 +311,7 @@ class AudioQueueMixin:
             reason=reason,
             detail=detail,
             fatal=fatal,
+            session_id=self._easycat_session_id,
         )
         task = loop.create_task(bus.emit(event))
         self._emit_tasks.add(task)

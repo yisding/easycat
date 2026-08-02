@@ -7,7 +7,11 @@ from dataclasses import replace
 import pytest
 
 from easycat import (
+    CallInitiated,
     EasyConfig,
+    EventBus,
+    Session,
+    SessionConfig,
     create_session,
 )
 from easycat.config import _factory as config_factory
@@ -79,6 +83,61 @@ class _BlockingArtifactStore:
 
     def delete(self, ref: str) -> None:
         self.refs.discard(ref)
+
+
+@pytest.mark.asyncio
+async def test_outbound_identity_subscription_is_session_scoped_on_shared_bus() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    victim = Session(
+        SessionConfig(runtime_mode="text_session", event_bus=bus, session_id="victim-session")
+    )
+    other = Session(
+        SessionConfig(runtime_mode="text_session", event_bus=bus, session_id="other-session")
+    )
+    config_factory._subscribe_outbound_identity(victim)
+    config_factory._subscribe_outbound_identity(other)
+
+    try:
+        await bus.emit(
+            CallInitiated(
+                session_id=victim.session_id,
+                call_sid="CA-victim",
+                to="+15551112222",
+                from_="+15559876543",
+            )
+        )
+
+        assert victim.call_identity is not None
+        assert victim.call_identity.call_sid == "CA-victim"
+        assert other.call_identity is None
+    finally:
+        await victim.stop(force=True)
+        await other.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_releases_outbound_identity_subscription_only() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[CallInitiated] = []
+    external = bus.subscribe(CallInitiated, observed.append)
+    session = Session(
+        SessionConfig(runtime_mode="text_session", event_bus=bus, session_id="stopped-session")
+    )
+    config_factory._subscribe_outbound_identity(session)
+
+    await session.stop(force=True)
+
+    assert external.active is True
+    assert bus.subscribers(CallInitiated) == [observed.append]
+    event = CallInitiated(
+        session_id="another-session",
+        call_sid="CA-other",
+        to="+15552223333",
+        from_="+15559876543",
+    )
+    await bus.emit(event)
+    assert observed == [event]
+    assert session.call_identity is None
 
 
 @pytest.mark.asyncio

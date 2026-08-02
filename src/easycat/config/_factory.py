@@ -703,7 +703,7 @@ def _build_audio_session(
     )
 
 
-def _subscribe_outbound_identity(session: Session, event_bus: EventBus) -> None:
+def _subscribe_outbound_identity(session: Session) -> None:
     from easycat.events import CallInitiated
     from easycat.session._types import CallIdentity
 
@@ -718,7 +718,7 @@ def _subscribe_outbound_identity(session: Session, event_bus: EventBus) -> None:
             call_sid=event.call_sid,
         )
 
-    event_bus.subscribe(CallInitiated, on_call_initiated)
+    session._subscribe_owned(CallInitiated, on_call_initiated)
 
 
 def _wire_outbound_pipeline(built: _BuiltAudioSession) -> None:
@@ -765,7 +765,7 @@ def _finalize_audio_session(config: EasyConfig, built: _BuiltAudioSession) -> No
     session._agent_model = config.agent_model
     session._remote_agent_api_key = config.remote_agent_api_key
     _wire_outbound_pipeline(built)
-    _subscribe_outbound_identity(session, built.event_bus)
+    _subscribe_outbound_identity(session)
     _maybe_launch_debugger(config, session)
     _maybe_arm_dev_session(session)
     if config.debug != "off" and _emergency_export_enabled(config):
