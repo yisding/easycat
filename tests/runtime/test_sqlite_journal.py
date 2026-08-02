@@ -1755,12 +1755,18 @@ class _LockProbeConn:
         self.journal = None
         self.violations: list[str] = []
         self.sync_threads: set[str] = set()
+        self.live_owner_present = False
+        self.synced_live_owner_states: list[bool] = []
         self.rollbacks = 0
 
     def executescript(self, sql):
         return None
 
     def execute(self, sql, params=None):
+        if "VALUES ('live_pid', ?)" in sql:
+            self.live_owner_present = True
+        elif "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')" in sql:
+            self.live_owner_present = False
         return _LockProbeCursor()
 
     def commit(self):
@@ -1775,6 +1781,7 @@ class _LockProbeConn:
     def sync(self):
         import threading
 
+        self.synced_live_owner_states.append(self.live_owner_present)
         journal = self.journal
         if journal is None:
             # __init__/thread-start race before the test wires us up.
@@ -1853,6 +1860,22 @@ class TestLibsqlJournal:
             journal.close()
 
         assert probe.violations == []
+
+    def test_close_syncs_live_owner_marker_removal(self, tmp_path: Path) -> None:
+        """The remote replica must not retain an owner after local close."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            journal = LibsqlJournal("close-owner", data_dir=tmp_path)
+            probe.journal = journal
+            assert probe.live_owner_present is True
+
+            journal.close()
+
+        assert probe.synced_live_owner_states[-1] is False
 
     def test_rejects_second_live_writer_for_same_local_replica(self, tmp_path: Path) -> None:
         """A second local libSQL writer would reuse the same sequence counter."""
