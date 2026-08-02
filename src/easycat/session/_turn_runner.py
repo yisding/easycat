@@ -50,6 +50,7 @@ from easycat.events import (
     TurnStarted,
 )
 from easycat.integrations.agents._agent_runner import PreparedAgentResponse
+from easycat.integrations.agents.base import AgentBridgeEvent
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
@@ -1528,7 +1529,7 @@ class TurnRunner:
 
     async def _drain_cancelled_text_event(
         self,
-        event: object,
+        event: AgentBridgeEvent,
         state: _TextTurnStreamState,
         turn_id: str,
     ) -> bool:
@@ -1546,7 +1547,7 @@ class TurnRunner:
 
     async def _consume_text_event(
         self,
-        event: object,
+        event: AgentBridgeEvent,
         state: _TextTurnStreamState,
         turn_id: str,
     ) -> bool:
@@ -1586,7 +1587,12 @@ class TurnRunner:
         else:
             state.pending_tool_calls.pop(call_id, None)
 
-    async def _emit_text_tool_event(self, event: object, kind: str, turn_id: str) -> None:
+    async def _emit_text_tool_event(
+        self,
+        event: AgentBridgeEvent,
+        kind: str,
+        turn_id: str,
+    ) -> None:
         # tool_started / tool_delta / tool_result share the same event
         # translation as the voice path so the two surfaces cannot drift.
         await emit_tool_event(

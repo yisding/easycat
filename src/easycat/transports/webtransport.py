@@ -134,14 +134,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_BACKGROUND_CLEANUP_TASKS: set[asyncio.Future[object]] = set()
+_BACKGROUND_CLEANUP_TASKS: set[asyncio.Future[Any]] = set()
 
 
-def _track_background_cleanup(future: asyncio.Future[object]) -> None:
+def _track_background_cleanup(future: asyncio.Future[Any]) -> None:
     """Keep a timed-out teardown reachable and consume its eventual result."""
     _BACKGROUND_CLEANUP_TASKS.add(future)
 
-    def finish(done: asyncio.Future[object]) -> None:
+    def finish(done: asyncio.Future[Any]) -> None:
         _BACKGROUND_CLEANUP_TASKS.discard(done)
         if not done.cancelled():
             try:

@@ -17,8 +17,8 @@ _DIRECTORY_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
-_DIR_FD_FUNCTIONS = getattr(os, "supports_dir_fd", set())
-_FD_FUNCTIONS = getattr(os, "supports_fd", set())
+_DIR_FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_dir_fd", set())
+_FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_fd", set())
 _SUPPORTS_DESCRIPTOR_PRIVATE_COPY = all(
     function in _DIR_FD_FUNCTIONS for function in (os.open, os.unlink)
 )

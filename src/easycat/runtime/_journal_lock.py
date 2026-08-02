@@ -8,6 +8,7 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, cast
 
 _LOCK_BUCKET_COUNT = 256
 
@@ -29,11 +30,12 @@ def _acquire_lock(fd: int, *, blocking: bool) -> None:
     if os.name == "nt":
         import msvcrt
 
+        msvcrt_api = cast(Any, msvcrt)
         if os.fstat(fd).st_size == 0:
             os.write(fd, b"\0")
         os.lseek(fd, 0, os.SEEK_SET)
-        mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
-        msvcrt.locking(fd, mode, 1)
+        mode = msvcrt_api.LK_LOCK if blocking else msvcrt_api.LK_NBLCK
+        msvcrt_api.locking(fd, mode, 1)
         return
 
     import fcntl
@@ -49,8 +51,9 @@ def _release_lock(fd: int) -> None:
     if os.name == "nt":
         import msvcrt
 
+        msvcrt_api = cast(Any, msvcrt)
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        msvcrt_api.locking(fd, msvcrt_api.LK_UNLCK, 1)
         return
 
     import fcntl
