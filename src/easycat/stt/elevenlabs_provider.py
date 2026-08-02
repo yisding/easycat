@@ -389,6 +389,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
         empty server-side audio buffer, so reset the pending-commit flag
         to match.
         """
+        had_uncommitted_audio = (
+            self._audio_pending_commit
+            or self._audio_epoch > self._committed_through_epoch
+            or bool(self._pending_manual_commits)
+            or self._manual_commit_inflight > 0
+        )
         self._audio_resampler.reset()
         self._audio_pending_commit = False
         # Fresh socket: nothing is buffered server-side and any manual commit
@@ -405,6 +411,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._pending_manual_commits.clear()
         self._final_received = None
         self._dropping_pending_final = False
+        if had_uncommitted_audio:
+            logger.warning(
+                "ElevenLabs reconnected with uncommitted audio; containing the "
+                "prior socket epoch before continuing"
+            )
+            self._promote_partial_to_final()
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         payload_audio = self._audio_resampler.process(
@@ -515,15 +527,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
                         "promoting %d-char partial to FINAL",
                         len(self._partial_text),
                     )
-                if self._partial_text:
-                    self._emit_event(
-                        STTEvent(
-                            type=STTEventType.FINAL,
-                            text=self._partial_text,
-                            language=self._config.language,
-                        )
-                    )
-                    self._partial_text = ""
+                if self._promote_partial_to_final():
                     # Only suppress the late committed transcript when we
                     # actually promoted a partial to a FINAL.  If no partial
                     # ever arrived, a real ``committed_transcript`` showing up
@@ -563,6 +567,20 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 language=msg.get("language_code") or self._config.language,
             )
         )
+
+    def _promote_partial_to_final(self) -> bool:
+        """Emit and clear the latest partial when its socket epoch cannot finish."""
+        if not self._partial_text:
+            return False
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=self._partial_text,
+                language=self._config.language,
+            )
+        )
+        self._partial_text = ""
+        return True
 
     def _reconcile_pending_commit_on_committed(self) -> _PendingManualCommit | None:
         """Clear the pending-commit flag only when the committed transcript
