@@ -21,9 +21,11 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Any
 from uuid import uuid4
 
@@ -42,6 +44,21 @@ from easycat.runtime.scope import RuntimeScope
 from easycat.smart_turn import SmartTurnProvider, _validate_probability_threshold
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_non_negative_finite_number(name: str, value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
+        raise ValueError(f"{name} must be a finite non-negative number")
+
+
+def _validate_positive_integer(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
 
 
 class TurnManagerState(enum.Enum):
@@ -126,23 +143,20 @@ class TurnManagerConfig:
     endpoint_threshold: float | None = None
 
     def __post_init__(self) -> None:
-        if self.end_of_turn_silence_ms < 0:
-            raise ValueError("end_of_turn_silence_ms must be non-negative")
-        if (
-            self.punctuated_end_of_turn_silence_ms is not None
-            and self.punctuated_end_of_turn_silence_ms < 0
+        for name, value in (
+            ("end_of_turn_silence_ms", self.end_of_turn_silence_ms),
+            ("stt_segment_silence_ms", self.stt_segment_silence_ms),
+            ("pre_roll_ms", self.pre_roll_ms),
+            ("max_turn_audio_ms", self.max_turn_audio_ms),
         ):
-            raise ValueError("punctuated_end_of_turn_silence_ms must be non-negative or None")
-        if self.stt_segment_silence_ms < 0:
-            raise ValueError("stt_segment_silence_ms must be non-negative")
-        if self.pre_roll_ms < 0:
-            raise ValueError("pre_roll_ms must be non-negative")
-        if self.max_turn_audio_ms < 0:
-            raise ValueError("max_turn_audio_ms must be non-negative")
-        if self.max_pre_roll_chunks < 1:
-            raise ValueError("max_pre_roll_chunks must be positive")
-        if self.max_turn_audio_chunks < 1:
-            raise ValueError("max_turn_audio_chunks must be positive")
+            _validate_non_negative_finite_number(name, value)
+        if self.punctuated_end_of_turn_silence_ms is not None:
+            _validate_non_negative_finite_number(
+                "punctuated_end_of_turn_silence_ms",
+                self.punctuated_end_of_turn_silence_ms,
+            )
+        _validate_positive_integer("max_pre_roll_chunks", self.max_pre_roll_chunks)
+        _validate_positive_integer("max_turn_audio_chunks", self.max_turn_audio_chunks)
         if self.endpoint_threshold is not None:
             _validate_probability_threshold("endpoint_threshold", self.endpoint_threshold)
 

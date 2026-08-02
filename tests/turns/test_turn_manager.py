@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import math
 from unittest.mock import AsyncMock
 
 import pytest
@@ -53,6 +54,47 @@ class EventCollector:
     @property
     def type_names(self) -> list[str]:
         return [type(e).__name__ for e in self.events]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "end_of_turn_silence_ms",
+        "punctuated_end_of_turn_silence_ms",
+        "stt_segment_silence_ms",
+        "pre_roll_ms",
+        "max_turn_audio_ms",
+    ],
+)
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_turn_manager_config_rejects_nonfinite_time_limits(field: str, value: float) -> None:
+    with pytest.raises(ValueError, match=field):
+        TurnManagerConfig(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "end_of_turn_silence_ms",
+        "punctuated_end_of_turn_silence_ms",
+        "stt_segment_silence_ms",
+        "pre_roll_ms",
+        "max_turn_audio_ms",
+    ],
+)
+def test_turn_manager_config_rejects_boolean_time_limits(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        TurnManagerConfig(**{field: True})
+
+
+@pytest.mark.parametrize("field", ["max_pre_roll_chunks", "max_turn_audio_chunks"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_turn_manager_config_requires_positive_integral_chunk_limits(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        TurnManagerConfig(**{field: value})
 
 
 @pytest.mark.asyncio
