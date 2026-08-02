@@ -520,6 +520,49 @@ def test_latency_runner_reports_malformed_reliability_samples_without_crashing(
     assert report["latency"]["samples"][0]["sample_id"] == "sample-1"
 
 
+@pytest.mark.parametrize(
+    "raw_queue_depth",
+    [
+        pytest.param("1e400", id="nonfinite"),
+        pytest.param("1.5", id="fractional"),
+        pytest.param("true", id="boolean"),
+    ],
+)
+def test_latency_runner_reports_invalid_reliability_integer_signals(
+    tmp_path: Path,
+    raw_queue_depth: str,
+) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        sample = LatencySample(
+            sample_id="sample-1",
+            condition_id="baseline",
+            warmup=False,
+            timestamp_source="event_monotonic",
+            stages=LatencyStageDurations(total_ms=750.0),
+        )
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        reliability = (
+            '[{"sample_id":"sample-1","condition_id":"baseline","mode":"smoke",'
+            '"informational":true,"eligible":false,"signals":{"queue_depth":'
+            f"{raw_queue_depth}"
+            "}}]"
+        )
+        Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"]).write_text(reliability)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.exit_code == 1
+    report = json.loads(result.report_path.read_text())
+    assert report["tool_exit_codes"] == {"pytest": 0, "reliability_samples": 1}
+    assert report["failures"][0]["failure_class"] == "reliability_artifact_error"
+
+
 def test_latency_runner_reports_deeply_nested_reliability_samples_without_crashing(
     tmp_path: Path,
 ) -> None:
