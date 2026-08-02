@@ -438,7 +438,15 @@ class CartesiaTTS(_WSTTSBase):
                 if terminal:
                     terminal_received = True
                     break
-            tail = self._finish_audio_event(state=audio_state)
+            # Cancellation is context-scoped on the persistent socket. A
+            # successor context can reset the provider-global cancellation
+            # flag before this generator unwinds, so use the manager-owned
+            # context state when deciding whether delayed resampler output is
+            # still deliverable.
+            tail = self._finish_audio_event(
+                emit=not ctx.cancelled,
+                state=audio_state,
+            )
             if tail is not None:
                 yield tail
 
