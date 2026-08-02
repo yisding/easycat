@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import os
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
@@ -78,6 +79,13 @@ class ProviderCatalog:
     capability_resolvers: dict[str, ProviderCapabilityResolver | None] = field(init=False)
     config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
+    _discovery_owner: int | None = field(init=False, default=None, repr=False, compare=False)
+    _discovery_lock: threading.RLock = field(
+        init=False,
+        default_factory=threading.RLock,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         config_to_provider: dict[type, Callable[..., Any]] = {}
@@ -160,88 +168,115 @@ class ProviderCatalog:
             raise ValueError(
                 f"{self.kind} provider {normalized!r} env_var must be non-empty or None."
             )
-        existing = self.providers.get(normalized)
-        if existing is not None:
-            same_metadata = (
-                self.env_vars[normalized] == env_var
-                and self.extras.get(normalized, "") == (extra or "")
-                and self.api_domains.get(normalized, ()) == tuple(api_domains)
-                and self.probe_modules.get(normalized) == probe_module
-                and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
-                and self.capability_resolvers.get(normalized) is capability_resolver
-            )
-            if existing == (provider_cls, config_cls) and same_metadata:
-                return
-            raise ValueError(
-                f"{self.kind} provider {normalized!r} is already registered "
-                f"with a different provider/config/env_var."
-            )
-        existing_provider = self.config_to_provider.get(config_cls)
-        if existing_provider is not None:
-            existing_name = next(
-                name
-                for name, (candidate_provider, candidate_config) in self.providers.items()
-                if candidate_config is config_cls and candidate_provider is existing_provider
-            )
-            if existing_provider is not provider_cls:
-                raise ValueError(
-                    f"{self.kind} config class {config_cls.__name__!r} is already registered "
-                    f"for provider {existing_name!r}; it cannot also map to provider "
-                    f"{normalized!r} with a different implementation."
+        with self._discovery_lock:
+            existing = self.providers.get(normalized)
+            if existing is not None:
+                same_metadata = (
+                    self.env_vars[normalized] == env_var
+                    and self.extras.get(normalized, "") == (extra or "")
+                    and self.api_domains.get(normalized, ()) == tuple(api_domains)
+                    and self.probe_modules.get(normalized) == probe_module
+                    and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
+                    and self.capability_resolvers.get(normalized) is capability_resolver
                 )
-            alias_spec = ProviderSpec(
-                provider_cls=provider_cls,
-                config_cls=config_cls,
-                env_var=env_var,
-                extra=extra or "",
-                api_domains=tuple(api_domains),
-                probe_module=probe_module,
-                capabilities=frozenset(capabilities),
-                capability_resolver=capability_resolver,
-            )
-            existing_spec = ProviderSpec(
-                provider_cls=provider_cls,
-                config_cls=config_cls,
-                env_var=self.env_vars[existing_name],
-                extra=self.extras[existing_name],
-                api_domains=self.api_domains[existing_name],
-                probe_module=self.probe_modules[existing_name],
-                capabilities=self.capabilities[existing_name],
-                capability_resolver=self.capability_resolvers[existing_name],
-            )
-            if not _same_alias_metadata(existing_spec, alias_spec):
+                if existing == (provider_cls, config_cls) and same_metadata:
+                    return
                 raise ValueError(
-                    f"{self.kind} provider alias {normalized!r} shares config class "
-                    f"{config_cls.__name__!r} with {existing_name!r}, so both aliases "
-                    "must use identical metadata."
+                    f"{self.kind} provider {normalized!r} is already registered "
+                    f"with a different provider/config/env_var."
                 )
-        self.providers[normalized] = (provider_cls, config_cls)
-        self.env_vars[normalized] = env_var
-        self.extras[normalized] = extra or ""
-        self.api_domains[normalized] = tuple(api_domains)
-        self.probe_modules[normalized] = probe_module
-        self.capabilities[normalized] = frozenset(capabilities)
-        self.capability_resolvers[normalized] = capability_resolver
-        self.config_to_provider[config_cls] = provider_cls
-        register_sensitive_api_domains(api_domains)
+            existing_provider = self.config_to_provider.get(config_cls)
+            if existing_provider is not None:
+                existing_name = next(
+                    name
+                    for name, (candidate_provider, candidate_config) in self.providers.items()
+                    if candidate_config is config_cls and candidate_provider is existing_provider
+                )
+                if existing_provider is not provider_cls:
+                    raise ValueError(
+                        f"{self.kind} config class {config_cls.__name__!r} is already registered "
+                        f"for provider {existing_name!r}; it cannot also map to provider "
+                        f"{normalized!r} with a different implementation."
+                    )
+                alias_spec = ProviderSpec(
+                    provider_cls=provider_cls,
+                    config_cls=config_cls,
+                    env_var=env_var,
+                    extra=extra or "",
+                    api_domains=tuple(api_domains),
+                    probe_module=probe_module,
+                    capabilities=frozenset(capabilities),
+                    capability_resolver=capability_resolver,
+                )
+                existing_spec = ProviderSpec(
+                    provider_cls=provider_cls,
+                    config_cls=config_cls,
+                    env_var=self.env_vars[existing_name],
+                    extra=self.extras[existing_name],
+                    api_domains=self.api_domains[existing_name],
+                    probe_module=self.probe_modules[existing_name],
+                    capabilities=self.capabilities[existing_name],
+                    capability_resolver=self.capability_resolvers[existing_name],
+                )
+                if not _same_alias_metadata(existing_spec, alias_spec):
+                    raise ValueError(
+                        f"{self.kind} provider alias {normalized!r} shares config class "
+                        f"{config_cls.__name__!r} with {existing_name!r}, so both aliases "
+                        "must use identical metadata."
+                    )
+            self.providers[normalized] = (provider_cls, config_cls)
+            self.env_vars[normalized] = env_var
+            self.extras[normalized] = extra or ""
+            self.api_domains[normalized] = tuple(api_domains)
+            self.probe_modules[normalized] = probe_module
+            self.capabilities[normalized] = frozenset(capabilities)
+            self.capability_resolvers[normalized] = capability_resolver
+            self.config_to_provider[config_cls] = provider_cls
+            register_sensitive_api_domains(api_domains)
 
     def discover(self) -> None:
         """Load entry-point registration callbacks once, logging failures."""
         if self._discovered or not self.entry_point_group:
             return
-        object.__setattr__(self, "_discovered", True)
-        for entry_point in importlib.metadata.entry_points(group=self.entry_point_group):
+        with self._discovery_lock:
+            if self._discovered:
+                return
+            owner = threading.get_ident()
+            if self._discovery_owner == owner:
+                return
+            object.__setattr__(self, "_discovery_owner", owner)
             try:
-                register = entry_point.load()
-                register()
+                entry_points = importlib.metadata.entry_points(group=self.entry_point_group)
+                for entry_point in entry_points:
+                    try:
+                        register = entry_point.load()
+                        register()
+                    except Exception:
+                        logger.warning(
+                            "Failed to load %s provider entry point %r from group %r",
+                            self.kind,
+                            entry_point.name,
+                            self.entry_point_group,
+                            exc_info=True,
+                        )
             except Exception:
+                # Metadata enumeration can fail independently of any one
+                # callback. Do not publish a partial catalog as discovered;
+                # a later call must be able to retry the whole enumeration.
                 logger.warning(
-                    "Failed to load %s provider entry point %r from group %r",
+                    "Failed to enumerate %s provider entry points from group %r",
                     self.kind,
-                    entry_point.name,
                     self.entry_point_group,
                     exc_info=True,
                 )
+                return
+            else:
+                # Completion is published only after every registration
+                # callback finishes, so the lock-free fast path cannot observe
+                # partially populated catalog dictionaries.
+                object.__setattr__(self, "_discovered", True)
+            finally:
+                object.__setattr__(self, "_discovery_owner", None)
 
     def available_names(self) -> list[str]:
         """Return every registered provider name, sorted."""
