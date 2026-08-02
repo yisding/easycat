@@ -464,7 +464,7 @@ class CartesiaTTS(_WSTTSBase):
             # manager's live contexts — not a shared self._current_ctx field the
             # synthesize task's finally can null underneath us — avoids a
             # cross-task race where the cancel frame is never sent.
-            if was_active and self._mgr is not None:
+            if self._mgr is not None:
                 await self._mgr.cancel_all()
             return
         ws = self._ws
