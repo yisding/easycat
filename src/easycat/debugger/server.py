@@ -1445,6 +1445,7 @@ def serve_run_bundle(
     bundle: RunBundle,
     *,
     label: str = "bundle",
+    annotate_path: str | Path | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
@@ -1457,7 +1458,11 @@ def serve_run_bundle(
     for :func:`serve_bundle` to reopen.
     """
     _check_host(host, allow_remote)
-    source = _run_bundle_source(bundle, label=label)
+    source = _run_bundle_source(
+        bundle,
+        label=label,
+        annotate_path=Path(annotate_path) if annotate_path is not None else None,
+    )
     _serve(source, host=host, port=port, open_browser=open_browser, allow_remote=allow_remote)
 
 

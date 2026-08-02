@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 
 import pytest
 
+import easycat.debug.annotations as annotations_mod
 from easycat.debug.annotations import (
     FAILURE_TYPES,
     MAX_ANNOTATIONS,
@@ -190,6 +193,88 @@ def test_load_annotations_tolerates_deep_json_recursion(tmp_path: Path) -> None:
         '{"annotations":' + ("[" * 2000) + ("]" * 2000) + "}", encoding="utf-8"
     )
     assert load_annotations(bundle) == {}
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are unavailable on this platform")
+@pytest.mark.parametrize("via_symlink", [False, True])
+def test_load_annotations_rejects_fifo_sidecar_before_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    via_symlink: bool,
+) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar = sidecar_path(bundle)
+    fifo = tmp_path / "annotations.fifo"
+    os.mkfifo(fifo)
+    if via_symlink:
+        sidecar.symlink_to(fifo)
+    else:
+        os.mkfifo(sidecar)
+
+    def _read_text_must_not_run(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("a non-regular sidecar must not be opened for reading")
+
+    monkeypatch.setattr(Path, "read_text", _read_text_must_not_run)
+
+    assert load_annotations(bundle) == {}
+
+
+def test_save_annotation_serializes_concurrent_upserts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "call.zip"
+    barrier = threading.Barrier(2)
+    real_load = annotations_mod.load_annotations
+    errors: list[BaseException] = []
+
+    def _synchronized_load(bundle_path: str | Path) -> dict[str, dict[str, object]]:
+        try:
+            barrier.wait(timeout=0.2)
+        except threading.BrokenBarrierError:
+            pass
+        return real_load(bundle_path)
+
+    monkeypatch.setattr(annotations_mod, "load_annotations", _synchronized_load)
+
+    def _save(turn_id: str) -> None:
+        try:
+            save_annotation(bundle, Annotation(turn_id=turn_id, passed=True))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = threading.Thread(target=_save, args=("t1",))
+    second = threading.Thread(target=_save, args=("t2",))
+    first.start()
+    second.start()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert set(real_load(bundle)) == {"t1", "t2"}
+
+
+def test_serve_run_bundle_propagates_annotation_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.debugger.server as server
+    from easycat.debug.bundle import RunBundle
+
+    captured = []
+    monkeypatch.setattr(server, "_serve", lambda source, **_kwargs: captured.append(source))
+
+    bundle_path = tmp_path / "call.zip"
+    server.serve_run_bundle(
+        RunBundle(),
+        label="call.zip",
+        annotate_path=bundle_path,
+        open_browser=False,
+    )
+
+    assert captured[0]._annotate_path == bundle_path
 
 
 def test_save_annotation_rejects_unknown_allowed_turn(tmp_path: Path) -> None:

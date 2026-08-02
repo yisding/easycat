@@ -613,6 +613,7 @@ def test_debugger_serve_loads_bundle_and_invokes_ui(
     assert calls[0]["label"] == "session.zip"
     assert calls[0]["open_browser"] is False
     assert calls[0]["port"] == 0
+    assert calls[0]["annotate_path"] == bundle
     assert calls[0]["records"] == [{"sequence": 1, "session_id": "s1", "name": "event"}]
 
 
