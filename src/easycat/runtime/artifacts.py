@@ -13,14 +13,17 @@ import stat
 import threading
 import uuid
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from easycat._session_id import validate_persistent_session_id
+from easycat.runtime._journal_lock import path_file_claim
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ArtifactWriteLease",
     "ArtifactStore",
     "FilesystemArtifactStore",
     "InMemoryArtifactStore",
@@ -166,6 +169,51 @@ def _is_sha256_ref(ref: str) -> bool:
     return len(ref) == 64 and all(char in "0123456789abcdef" for char in ref)
 
 
+class ArtifactWriteLease:
+    """Exclusive ownership of one put until its caller commits or rolls back.
+
+    A newly-created content-addressed ref is safe to delete only while every
+    other producer is still excluded from claiming it. Store implementations
+    return this optional receipt to cancellation-aware callers and keep their
+    normal write lock held until one of the idempotent settlement methods is
+    called.
+    """
+
+    def __init__(
+        self,
+        ref: str,
+        *,
+        created: bool,
+        release: Callable[[], None],
+        rollback: Callable[[], None] | None = None,
+    ) -> None:
+        self.ref = ref
+        self.created = created
+        self._release = release
+        self._rollback = rollback
+        self._settled = False
+        self._settle_lock = threading.Lock()
+
+    def commit(self) -> None:
+        """Keep the ref and release exclusive ownership."""
+        self._settle(rollback=False)
+
+    def rollback(self) -> None:
+        """Delete a ref created by this lease, then release ownership."""
+        self._settle(rollback=True)
+
+    def _settle(self, *, rollback: bool) -> None:
+        with self._settle_lock:
+            if self._settled:
+                return
+            self._settled = True
+            try:
+                if rollback and self.created and self.ref and self._rollback is not None:
+                    self._rollback()
+            finally:
+                self._release()
+
+
 # ── In-memory backend ────────────────────────────────────────────
 
 
@@ -192,17 +240,32 @@ class InMemoryArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
+        lease = self.put_with_cleanup_lease(payload, artifact_class=artifact_class)
+        try:
+            return lease.ref
+        finally:
+            lease.commit()
+
+    def put_with_cleanup_lease(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: ArtifactClass = "debug_verbose",
+    ) -> ArtifactWriteLease:
+        """Put while excluding producers until the caller settles the lease."""
+        del artifact_class
         ref = _sha256(payload)
-        with self._lock:
+        self._lock.acquire()
+        try:
             if ref in self._store:
-                return ref
+                return ArtifactWriteLease(ref, created=False, release=self._lock.release)
             if len(payload) > self._max_bytes:
                 logger.warning(
                     "Artifact size %d exceeds max_bytes %d; skipping",
                     len(payload),
                     self._max_bytes,
                 )
-                return ""
+                return ArtifactWriteLease("", created=False, release=self._lock.release)
             if self._current_bytes + len(payload) > self._max_bytes:
                 if not self._cap_warned:
                     self._cap_warned = True
@@ -211,10 +274,18 @@ class InMemoryArtifactStore:
                         "artifacts (raise max_bytes or lower capture volume)",
                         self._max_bytes,
                     )
-                return ""
+                return ArtifactWriteLease("", created=False, release=self._lock.release)
             self._store[ref] = payload
             self._current_bytes += len(payload)
-        return ref
+            return ArtifactWriteLease(
+                ref,
+                created=True,
+                release=self._lock.release,
+                rollback=lambda: self._delete_locked(ref),
+            )
+        except BaseException:
+            self._lock.release()
+            raise
 
     def get(self, ref: str) -> bytes | None:
         with self._lock:
@@ -237,9 +308,12 @@ class InMemoryArtifactStore:
         if not _is_sha256_ref(ref):
             return
         with self._lock:
-            data = self._store.pop(ref, None)
-            if data is not None:
-                self._current_bytes -= len(data)
+            self._delete_locked(ref)
+
+    def _delete_locked(self, ref: str) -> None:
+        data = self._store.pop(ref, None)
+        if data is not None:
+            self._current_bytes -= len(data)
 
     def close(self) -> None:
         with self._lock:
@@ -326,12 +400,29 @@ class FilesystemArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
+        lease = self.put_with_cleanup_lease(payload, artifact_class=artifact_class)
+        try:
+            return lease.ref
+        finally:
+            lease.commit()
+
+    def put_with_cleanup_lease(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: ArtifactClass = "debug_verbose",
+    ) -> ArtifactWriteLease:
+        """Put while holding the session's cross-process artifact claim."""
+        del artifact_class
         ref = _sha256(payload)
-        if self.has(ref):
-            return ref
-        with self._lock:
+        try:
+            release = self._acquire_write_claim()
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact write claim failed for ref=%s", ref, exc_info=True)
+            return ArtifactWriteLease("", created=False, release=lambda: None)
+        try:
             if self.has(ref):
-                return ref
+                return ArtifactWriteLease(ref, created=False, release=release)
             if self._current_bytes + len(payload) > self._max_bytes:
                 # Refuse the new write rather than delete durable bytes that
                 # may already be referenced by a journal row.  Warn once so the
@@ -343,54 +434,70 @@ class FilesystemArtifactStore:
                         "artifacts (set a larger max_bytes or lower capture volume)",
                         self._max_bytes,
                     )
-                return ""
+                return ArtifactWriteLease("", created=False, release=release)
+            if not self._put_new_locked(ref, payload):
+                return ArtifactWriteLease("", created=False, release=release)
+            return ArtifactWriteLease(
+                ref,
+                created=True,
+                release=release,
+                rollback=lambda: self._delete_locked(ref),
+            )
+        except BaseException:
+            release()
+            raise
+
+    def _put_new_locked(self, ref: str, payload: bytes) -> bool:
+        try:
+            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                self._put_with_paths(ref, payload)
+            else:
+                self._put_new_with_descriptors(ref, payload)
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
+            return False
+        self._current_bytes += len(payload)
+        return True
+
+    def _put_new_with_descriptors(self, ref: str, payload: bytes) -> None:
+        session_fd = _open_directory_chain(self._dir, create=True)
+        try:
+            os.fchmod(session_fd, 0o700)
+            shard_fd = self._open_shard(session_fd, ref, create=True)
             try:
-                if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
-                    self._put_with_paths(ref, payload)
-                else:
-                    session_fd = _open_directory_chain(self._dir, create=True)
+                tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
+                tmp_fd = os.open(
+                    tmp_name,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                    dir_fd=shard_fd,
+                )
+                try:
                     try:
-                        os.fchmod(session_fd, 0o700)
-                        shard_fd = self._open_shard(session_fd, ref, create=True)
-                        try:
-                            tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
-                            tmp_fd = os.open(
-                                tmp_name,
-                                os.O_WRONLY
-                                | os.O_CREAT
-                                | os.O_EXCL
-                                | getattr(os, "O_CLOEXEC", 0)
-                                | getattr(os, "O_NOFOLLOW", 0),
-                                0o600,
-                                dir_fd=shard_fd,
-                            )
-                            try:
-                                try:
-                                    _write_all_fd(tmp_fd, payload)
-                                    os.fchmod(tmp_fd, 0o600)
-                                finally:
-                                    os.close(tmp_fd)
-                                os.replace(
-                                    tmp_name,
-                                    f"{ref}.bin",
-                                    src_dir_fd=shard_fd,
-                                    dst_dir_fd=shard_fd,
-                                )
-                            except BaseException:
-                                try:
-                                    os.unlink(tmp_name, dir_fd=shard_fd)
-                                except OSError:
-                                    pass
-                                raise
-                        finally:
-                            os.close(shard_fd)
+                        _write_all_fd(tmp_fd, payload)
+                        os.fchmod(tmp_fd, 0o600)
                     finally:
-                        os.close(session_fd)
-            except (NotImplementedError, OSError):
-                logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
-                return ""
-            self._current_bytes += len(payload)
-        return ref
+                        os.close(tmp_fd)
+                    os.replace(
+                        tmp_name,
+                        f"{ref}.bin",
+                        src_dir_fd=shard_fd,
+                        dst_dir_fd=shard_fd,
+                    )
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name, dir_fd=shard_fd)
+                    except OSError:
+                        pass
+                    raise
+            finally:
+                os.close(shard_fd)
+        finally:
+            os.close(session_fd)
 
     def get(self, ref: str) -> bytes | None:
         try:
@@ -434,27 +541,77 @@ class FilesystemArtifactStore:
     def delete(self, ref: str) -> None:
         if not _is_sha256_ref(ref):
             return
-        with self._lock:
-            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
-                self._delete_with_paths(ref)
-                return
+        try:
+            release = self._acquire_write_claim()
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact delete claim failed for ref=%s", ref, exc_info=True)
+            return
+        try:
+            self._delete_locked(ref)
+        finally:
+            release()
+
+    def _acquire_write_claim(self) -> Callable[[], None]:
+        """Acquire the in-process and stable cross-process store locks."""
+        self._lock.acquire()
+        claim: AbstractContextManager[bool] | None = None
+        try:
+            self._ensure_artifacts_dir()
+            claim = path_file_claim(
+                self._dir,
+                blocking=True,
+                namespace="artifact",
+            )
+            if not claim.__enter__():
+                raise OSError(f"Could not claim artifact store {self._dir}")
+        except BaseException:
+            if claim is not None:
+                claim.__exit__(None, None, None)
+            self._lock.release()
+            raise
+
+        def _release() -> None:
             try:
-                session_fd = _open_directory_chain(self._dir, create=False)
-            except (NotImplementedError, OSError):
-                return
-            try:
-                try:
-                    shard_fd = self._open_shard(session_fd, ref, create=False)
-                except OSError:
-                    shard_fd = None
-                if shard_fd is not None:
-                    try:
-                        self._delete_name(shard_fd, f"{ref}.bin")
-                    finally:
-                        os.close(shard_fd)
-                self._delete_name(session_fd, f"{ref}.bin")
+                claim.__exit__(None, None, None)
             finally:
-                os.close(session_fd)
+                self._lock.release()
+
+        return _release
+
+    def _ensure_artifacts_dir(self) -> None:
+        if _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            artifacts_fd = _open_directory_chain(self._artifacts_dir, create=True)
+            try:
+                os.fchmod(artifacts_fd, 0o700)
+            finally:
+                os.close(artifacts_fd)
+            return
+        if self._path_has_link_or_reparse(self._artifacts_dir):
+            raise OSError(f"Refusing symlinked artifact root: {self._artifacts_dir}")
+        self._artifacts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self._artifacts_dir, 0o700)
+
+    def _delete_locked(self, ref: str) -> None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            self._delete_with_paths(ref)
+            return
+        try:
+            session_fd = _open_directory_chain(self._dir, create=False)
+        except (NotImplementedError, OSError):
+            return
+        try:
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+            except OSError:
+                shard_fd = None
+            if shard_fd is not None:
+                try:
+                    self._delete_name(shard_fd, f"{ref}.bin")
+                finally:
+                    os.close(shard_fd)
+            self._delete_name(session_fd, f"{ref}.bin")
+        finally:
+            os.close(session_fd)
 
     def close(self) -> None:
         pass

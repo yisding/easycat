@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, Protocol, TypeVar, runtime_checkable
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.runtime.artifacts import FilesystemArtifactStore
+from easycat.runtime.artifacts import ArtifactWriteLease, FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
@@ -235,13 +234,39 @@ def put_artifact(
     ):
         return None
     capture_epoch = _capture_epoch(ctx)
-    artifact_preexisted = _artifact_preexists(ctx.artifact_store, payload)
-    ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
-    if ref and not _capture_write_is_current(ctx, capture_epoch):
-        if not artifact_preexisted:
-            ctx.artifact_store.delete(ref)
-        return None
-    return ref or None
+    store = ctx.artifact_store
+    return _put_nonblocking_artifact(
+        ctx,
+        store,
+        payload,
+        artifact_class,
+        capture_epoch,
+    )
+
+
+def _put_nonblocking_artifact(
+    ctx: RunContext,
+    store: Any,
+    payload: bytes,
+    artifact_class: Literal["replay_critical", "debug_verbose"],
+    capture_epoch: int | None,
+) -> str | None:
+    lease = _put_with_cleanup_lease(store, payload, artifact_class)
+    if lease is None:
+        # An unknown custom store cannot prove exclusive ownership of a new
+        # content-addressed ref. Retaining a possible orphan on revocation is
+        # safer than deleting a ref another producer may already reference.
+        ref = store.put(payload, artifact_class=artifact_class)
+        if not _capture_write_is_current(ctx, capture_epoch):
+            return None
+        return ref or None
+    try:
+        if lease.ref and not _capture_write_is_current(ctx, capture_epoch):
+            lease.rollback()
+            return None
+        return lease.ref or None
+    finally:
+        lease.commit()
 
 
 async def put_artifact_async(
@@ -266,8 +291,9 @@ async def put_artifact_async(
     ping-pong, an extra loop wakeup) at ~50 fps across every capture site.
 
     Either way the write settles before this coroutine returns. If the
-    caller cancels a blocking write, this helper waits for the worker and
-    removes any newly-created artifact before propagating cancellation.
+    caller cancels a blocking write, this helper waits for the worker and,
+    when the store supports exclusive cleanup leases, removes a ref created
+    by this write before propagating cancellation.
     """
     if (
         ctx.artifact_store is None
@@ -281,7 +307,6 @@ async def put_artifact_async(
         return None
     capture_epoch = _capture_epoch(ctx)
     store = ctx.artifact_store
-    artifact_preexisted = _artifact_preexists(store, payload)
     if _writes_block(store):
         return await _put_blocking_artifact(
             ctx,
@@ -289,14 +314,14 @@ async def put_artifact_async(
             payload,
             artifact_class,
             capture_epoch,
-            artifact_preexisted,
         )
-    ref = store.put(payload, artifact_class=artifact_class)
-    if ref and not _capture_write_is_current(ctx, capture_epoch):
-        if not artifact_preexisted:
-            store.delete(ref)
-        return None
-    return ref or None
+    return _put_nonblocking_artifact(
+        ctx,
+        store,
+        payload,
+        artifact_class,
+        capture_epoch,
+    )
 
 
 async def _put_blocking_artifact(
@@ -305,32 +330,65 @@ async def _put_blocking_artifact(
     payload: bytes,
     artifact_class: Literal["replay_critical", "debug_verbose"],
     capture_epoch: int | None,
-    artifact_preexisted: bool,
 ) -> str | None:
+    lease_put = getattr(store, "put_with_cleanup_lease", None)
+    if callable(lease_put):
+        put = lease_put
+        owns_cleanup = True
+    else:
+        put = store.put
+        owns_cleanup = False
     put_operation = asyncio.create_task(
-        asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
+        asyncio.to_thread(
+            put,
+            payload,
+            artifact_class=artifact_class,
+        )
     )
-    ref, cancellation = await _await_owned_artifact_io(put_operation)
+    result, cancellation = await _await_owned_artifact_io(put_operation)
+    lease = result if isinstance(result, ArtifactWriteLease) else None
+    ref = lease.ref if lease is not None else result
     if cancellation is not None:
-        if ref and not artifact_preexisted:
-            try:
-                await _delete_blocking_artifact(store, ref)
-            except BaseException:
-                # Cancellation remains the caller-visible outcome, but retain
-                # diagnostics if a custom store could not clean up.
-                logger.warning(
-                    "Artifact cleanup failed after cancellation for ref=%s",
-                    ref,
-                    exc_info=True,
-                )
-        raise cancellation
-    if ref and not _capture_write_is_current(ctx, capture_epoch):
-        if not artifact_preexisted:
-            delete_cancellation = await _delete_blocking_artifact(store, ref)
-            if delete_cancellation is not None:
-                raise delete_cancellation
+        await _rollback_cancelled_artifact(lease, ref, cancellation)
+    if owns_cleanup and lease is None:
+        raise TypeError("put_with_cleanup_lease() must return ArtifactWriteLease")
+    try:
+        capture_is_current = _capture_write_is_current(ctx, capture_epoch)
+    except BaseException:
+        if lease is not None:
+            lease.commit()
+        raise
+    if ref and not capture_is_current:
+        if lease is not None:
+            rollback_cancellation = await _rollback_blocking_artifact(lease)
+            if rollback_cancellation is not None:
+                raise rollback_cancellation
         return None
+    if lease is not None:
+        # Releasing an advisory/thread lock is non-blocking and creates no
+        # cancellation window between a successful put and the caller's next
+        # journal append.
+        lease.commit()
     return ref or None
+
+
+async def _rollback_cancelled_artifact(
+    lease: ArtifactWriteLease | None,
+    ref: Any,
+    cancellation: asyncio.CancelledError,
+) -> NoReturn:
+    if lease is not None:
+        try:
+            await _rollback_blocking_artifact(lease)
+        except BaseException:
+            # Cancellation remains the caller-visible outcome, but retain
+            # diagnostics if a store could not clean up and release its lease.
+            logger.warning(
+                "Artifact cleanup failed after cancellation for ref=%s",
+                ref,
+                exc_info=True,
+            )
+    raise cancellation
 
 
 async def _await_owned_artifact_io(
@@ -345,14 +403,16 @@ async def _await_owned_artifact_io(
             raise
         cancellation = exc
 
-    settled = asyncio.Event()
-    operation.add_done_callback(lambda _operation: settled.set())
     while not operation.done():
         try:
-            await settled.wait()
+            await asyncio.shield(operation)
         except asyncio.CancelledError:
             # Repeated cancellation must not detach the worker or its cleanup.
             continue
+        except BaseException:
+            # Retrieve the settled result below so cancellation keeps its
+            # documented precedence over a concurrent worker failure.
+            break
 
     try:
         return operation.result(), cancellation
@@ -364,14 +424,27 @@ async def _await_owned_artifact_io(
         raise
 
 
-async def _delete_blocking_artifact(
-    store: Any,
-    ref: str,
+async def _rollback_blocking_artifact(
+    lease: ArtifactWriteLease,
 ) -> asyncio.CancelledError | None:
-    """Delete a ref while retaining ownership through repeated cancellation."""
-    delete_operation = asyncio.create_task(asyncio.to_thread(store.delete, ref))
-    _, cancellation = await _await_owned_artifact_io(delete_operation)
+    """Roll back a lease while retaining ownership through cancellation."""
+    rollback_operation = asyncio.create_task(asyncio.to_thread(lease.rollback))
+    _, cancellation = await _await_owned_artifact_io(rollback_operation)
     return cancellation
+
+
+def _put_with_cleanup_lease(
+    store: Any,
+    payload: bytes,
+    artifact_class: Literal["replay_critical", "debug_verbose"],
+) -> ArtifactWriteLease | None:
+    put_with_lease = getattr(store, "put_with_cleanup_lease", None)
+    if not callable(put_with_lease):
+        return None
+    lease = put_with_lease(payload, artifact_class=artifact_class)
+    if not isinstance(lease, ArtifactWriteLease):
+        raise TypeError("put_with_cleanup_lease() must return ArtifactWriteLease")
+    return lease
 
 
 def _journal_is_degraded(ctx: RunContext) -> bool:
@@ -397,13 +470,6 @@ def _capture_write_is_current(ctx: RunContext, started_epoch: int | None) -> boo
         or ctx.audio_capture_epoch is None
         or ctx.audio_capture_epoch() == started_epoch
     )
-
-
-def _artifact_preexists(store: Any, payload: bytes) -> bool:
-    has = getattr(store, "has", None)
-    if not callable(has):
-        return False
-    return bool(has(hashlib.sha256(payload).hexdigest()))
 
 
 def _writes_block(store: Any) -> bool:
