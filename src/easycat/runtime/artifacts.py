@@ -12,6 +12,7 @@ import os
 import stat
 import threading
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -40,9 +41,9 @@ _FILE_OPEN_FLAGS = (
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_NONBLOCK", 0)
 )
-_DIR_FD_FUNCTIONS = getattr(os, "supports_dir_fd", set())
-_FD_FUNCTIONS = getattr(os, "supports_fd", set())
-_NOFOLLOW_FUNCTIONS = getattr(os, "supports_follow_symlinks", set())
+_DIR_FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_dir_fd", set())
+_FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_fd", set())
+_NOFOLLOW_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_follow_symlinks", set())
 _SUPPORTS_DESCRIPTOR_ARTIFACT_IO = (
     hasattr(os, "fchmod")
     and all(

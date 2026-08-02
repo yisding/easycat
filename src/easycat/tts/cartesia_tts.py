@@ -8,7 +8,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from uuid import uuid4
@@ -335,7 +335,7 @@ class CartesiaTTS(_WSTTSBase):
             async for event in stream:
                 yield event
 
-    async def _synthesize_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_oneshot(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         ws = await self._replace_oneshot_ws(self._create_ws)
         self._start_synthesis()
 
@@ -399,7 +399,7 @@ class CartesiaTTS(_WSTTSBase):
             return None
         return msg
 
-    async def _synthesize_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_persistent(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Synthesize over the shared persistent multi-context socket.
 
         Decoding is shared with the one-shot path via ``_decode_message``; only

@@ -9,7 +9,7 @@ import enum
 import json
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -270,7 +270,7 @@ class ElevenLabsTTS(_WSTTSBase):
             async for event in owned_stream:
                 yield event
 
-    async def _synthesize_http(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_http(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Synthesize via HTTP chunked transfer encoding."""
         self._start_synthesis()
         client = self._get_http_client()
@@ -330,7 +330,7 @@ class ElevenLabsTTS(_WSTTSBase):
             self._response = None
             self._end_synthesis()
 
-    async def _synthesize_ws(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_ws(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Synthesize via WebSocket streaming (one-shot or persistent)."""
         if self._persistent_enabled():
             async for event in self._synthesize_ws_persistent(text):
@@ -339,7 +339,7 @@ class ElevenLabsTTS(_WSTTSBase):
             async for event in self._synthesize_ws_oneshot(text):
                 yield event
 
-    async def _synthesize_ws_oneshot(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_ws_oneshot(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Explicit one-shot WebSocket path: fresh socket per synthesize call."""
         # Reject before publishing active synthesis state when a prior
         # fail-once close still owns the exact one-shot wrapper.
@@ -573,7 +573,7 @@ class ElevenLabsTTS(_WSTTSBase):
         # persistent turn completes instead of hanging until the socket closes.
         return events, bool(data.get("isFinal") or data.get("is_final"))
 
-    async def _synthesize_ws_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_ws_persistent(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Synthesize over the shared persistent multi-stream-input socket.
 
         The decode loop body matches the default one-shot WS path; only the
@@ -636,7 +636,7 @@ class ElevenLabsTTS(_WSTTSBase):
         self,
         ctx: _Context,
         audio_state: _AudioConversionState,
-    ) -> AsyncIterator[TTSEvent]:
+    ) -> AsyncGenerator[TTSEvent, None]:
         """Decode one context's already-parsed frames into TTSEvents.
 
         Decoding (incl. context-scoped error surfacing) is shared with the
