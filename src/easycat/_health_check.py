@@ -95,6 +95,14 @@ class PeriodicHealthChecker:
         task = self._task
         if task and not task.done():
             current = asyncio.current_task()
+            if task is current:
+                # Error subscribers and unhealthy callbacks run inside the
+                # checker task. They may initiate Session.stop(), which calls
+                # back here. Cancelling the current task would be mistaken for
+                # external caller cancellation below and abort the surrounding
+                # session teardown. The loop observes ``_running = False`` as
+                # soon as the callback returns and exits naturally.
+                return
             cancellation_requests = current.cancelling() if current is not None else 0
             task.cancel()
             try:
