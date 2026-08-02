@@ -495,6 +495,28 @@ async def test_api_replay_rejects_invalid_timing(tmp_path):
         assert "timing" in body["message"]
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("fidelity", []), ("tool_policy", {})],
+)
+async def test_api_replay_rejects_unhashable_enum_controls(tmp_path, name, value):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={name: value},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error_code"] == "BAD_REQUEST"
+        assert name in body["message"]
+
+
 async def test_api_replay_returns_structured_version_mismatch(tmp_path):
     """When the runner raises :class:`ProviderVersionMismatchError`, the
     handler must return a 409 with ``error_code`` and a ``mismatches``
