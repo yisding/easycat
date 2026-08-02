@@ -7,6 +7,10 @@ route command hint. Both are generated from the `easycat docs --json` route
 table; regenerate with `uv run python scripts/regen_llms_txt.py` after editing
 the docs route map.
 
+New to the codebase? Read the
+[developer textbook](docs/development/) for the guided architecture, runtime,
+testing, decision, and change-recipe tour before making a cross-cutting change.
+
 ## Project Structure & Module Organization
 - `src/easycat/`: core library code.
 - Key subpackages: `session/`, `stages/`, `stt/`, `tts/`, `vad/`, `transports/`, `telephony/`, `integrations/agents/`, `runtime/`, `validation/`, `debug/`, `debugger/`, `cli/`.

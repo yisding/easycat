@@ -91,6 +91,9 @@ The full architecture explanation — the `session/` collaborator map
 stage and provider layers, agent bridges, and the dual-backend fallback
 chains — lives in [docs/architecture.md](docs/architecture.md). Update that
 page when moving modules; this file keeps only the orientation map below.
+New maintainers should use the
+[developer textbook](docs/development/) for the chapter-by-chapter source,
+test, decision, and pitfall tour.
 
 **Package map:**
 - `session/` — core orchestrator package: `Session` lifecycle plus per-concern collaborators (`session/_builder.py` constructs them, `session/_wiring.py` wires them, `session/_turn_runner.py` drives a turn).

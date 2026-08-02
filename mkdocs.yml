@@ -176,6 +176,18 @@ nav:
               - Exercises: teaching/15-operate-in-production/EXERCISES.md
       - From EasyConfig to Session: from-easyconfig-to-session.md
       - Testing and evals: testing-and-evals.md
+  - Develop:
+      - Maintainer textbook: development/README.md
+      - Chapter 1 — System map: development/01-system-map.md
+      - Chapter 2 — Session construction and lifecycle: development/02-session-lifecycle.md
+      - Chapter 3 — Audio and turn-taking: development/03-audio-and-turns.md
+      - Chapter 4 — Agents, streaming, and interruption: development/04-agents-and-interruption.md
+      - Chapter 5 — Providers, stages, and extensions: development/05-providers-and-extensions.md
+      - Chapter 6 — Runtime, journals, and debugging: development/06-runtime-and-debugging.md
+      - Chapter 7 — Transports and production servers: development/07-transports-and-production.md
+      - Chapter 8 — Development and testing: development/08-development-and-testing.md
+      - Chapter 9 — Decisions and pitfalls: development/09-decisions-and-pitfalls.md
+      - Chapter 10 — Guided change recipes: development/10-guided-change-recipes.md
   - Reference:
       - Architecture: architecture.md
       - Events: reference/events.md
@@ -193,6 +205,7 @@ nav:
       - Latency: latency.md
       - Validation workflow: validation.md
       - Observability: observability.md
+      - Journal record schema: reference/journal-records.md
       - Browser playground: browser-playground.md
       - Deployment:
           - Docker: deployment/docker.md

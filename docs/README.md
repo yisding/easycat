@@ -101,6 +101,12 @@ them. Multi-word audience filters accept hyphens or underscores, so
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
+- New to developing EasyCat itself: follow the
+  [developer textbook](development/) for a guided source tour of the system
+  map, session ownership, audio and turn-taking, agent streaming and
+  interruption, providers and stages, journals and replay, production
+  servers, testing, accepted decisions, and common change recipes. It links
+  every chapter to the implementation and contract tests.
 - Looking up the production API: start with the
   [architecture explanation](architecture.md) for how the pipeline and
   session collaborators fit together, then use the
@@ -121,7 +127,8 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
   registries, session lifecycle, test layout, and maintainer command block,
   including docs/onboarding guard recipes; the full architecture explanation
-  lives in [docs/architecture.md](architecture.md). Coding agents should also read the
+  lives in [docs/architecture.md](architecture.md), and the guided newcomer
+  path lives in the [developer textbook](development/). Coding agents should also read the
   [repository agent guide](../AGENTS.md) for repo structure, development
   commands, docs/onboarding guard recipes, validation commands, and PR
   expectations.

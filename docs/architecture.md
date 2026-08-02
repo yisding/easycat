@@ -409,6 +409,8 @@ telephony authentication tests, and public configuration compatibility tests.
 
 ## Related Pages
 
+- [Developer textbook](development/) — the chapter-by-chapter newcomer path
+  through architecture, source ownership, tests, pitfalls, and change recipes.
 - [Events reference](reference/events.md) — every public event type and when
   it fires.
 - [EasyConfig field reference](reference/easyconfig.md) — every construction field.
