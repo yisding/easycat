@@ -409,6 +409,11 @@ class OutboundCallStateMachine:
         return self._state
 
     @property
+    def call_sid(self) -> str:
+        """The provider identifier for the currently accepted call."""
+        return self._call_sid
+
+    @property
     def gate(self) -> ClassificationGate:
         return self._gate
 

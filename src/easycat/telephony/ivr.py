@@ -295,6 +295,19 @@ class IVRNavigator:
         self._active = False
         self._cancel_prompt_timeout()
 
+    def reset_for_call(self) -> None:
+        """Clear navigation state owned by the previous outbound call.
+
+        Activation can occur more than once while traversing one call's state
+        machine, so it deliberately does not reset depth or history. The
+        outbound callback coordinator invokes this method only at the
+        ``CallInitiated`` boundary for a new call.
+        """
+        self._cancel_prompt_timeout()
+        self._menu_depth = 0
+        self._history.clear()
+        self._in_hold = False
+
     def _is_current_activation(self, activation_epoch: int) -> bool:
         return self._active and self._activation_epoch == activation_epoch
 

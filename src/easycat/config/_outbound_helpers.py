@@ -57,17 +57,40 @@ class _IVRCallbackCoordinator:
         self._state_machine = state_machine
         self._navigator = navigator
         self._delivery = delivery
+        self._started = False
+        self._accepted_call_sid = ""
 
-    def connect(self) -> None:
-        if self._delivery is not None:
-            self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallStateChanged, self._on_state_changed)
         self._event_bus.subscribe(IVRAction, self._on_action)
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
+        self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
+        self._event_bus.unsubscribe(IVRAction, self._on_action)
+        self._started = False
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
-        delivery = self._delivery
-        assert delivery is not None
-        delivery.call_sid = event.call_sid
+        # The placement path and Twilio's initiated webhook can publish the
+        # same call twice. The state machine subscribes before this helper and
+        # is the authority that rejects stale or overlapping SIDs; mirror only
+        # the call it accepted, and reset each accepted SID exactly once.
+        if (
+            not event.call_sid
+            or event.call_sid != self._state_machine.call_sid
+            or event.call_sid == self._accepted_call_sid
+        ):
+            return
+        self._accepted_call_sid = event.call_sid
+        self._navigator.reset_for_call()
+        if self._delivery is not None:
+            self._delivery.call_sid = event.call_sid
 
     def _on_state_changed(self, event: CallStateChanged) -> None:
         if event.new == OutboundCallState.IVR:
@@ -182,12 +205,14 @@ class _OutboundHelperBuilder:
             dtmf_delivery=self._config.ivr_dtmf_delivery,
         )
         self._helpers.append(navigator)
-        _IVRCallbackCoordinator(
-            self._event_bus,
-            state_machine,
-            navigator,
-            self._config.ivr_dtmf_delivery,
-        ).connect()
+        self._helpers.append(
+            _IVRCallbackCoordinator(
+                self._event_bus,
+                state_machine,
+                navigator,
+                self._config.ivr_dtmf_delivery,
+            )
+        )
 
     def _add_policy_helpers(self) -> None:
         self._helpers.append(VoicemailPolicyHandler(self._event_bus, expect_fused=True))
