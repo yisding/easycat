@@ -1960,6 +1960,49 @@ class TestLibsqlJournal:
             reopened = LibsqlJournal("single-writer", data_dir=tmp_path)
             reopened.close()
 
+    @pytest.mark.parametrize(
+        "sync_interval_s",
+        [0, -0.01, True, "0.1", float("nan"), float("inf"), float("-inf")],
+    )
+    def test_rejects_invalid_sync_interval(
+        self,
+        tmp_path: Path,
+        sync_interval_s: object,
+    ) -> None:
+        from easycat.runtime import LibsqlJournal
+
+        fake_libsql = _FakeLibsqlModule(_LockProbeConn())
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            with pytest.raises(
+                ValueError, match="sync_interval_s must be a finite positive number"
+            ):
+                LibsqlJournal(
+                    "invalid-sync-interval",
+                    data_dir=tmp_path,
+                    sync_interval_s=sync_interval_s,  # type: ignore[arg-type]
+                )
+
+        assert not (tmp_path / "journals" / "invalid-sync-interval.sqlite").exists()
+
+    @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "not-a-number"])
+    def test_rejects_invalid_sync_interval_environment(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        value: str,
+    ) -> None:
+        from easycat.runtime import LibsqlJournal
+
+        monkeypatch.setenv("EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S", value)
+        fake_libsql = _FakeLibsqlModule(_LockProbeConn())
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            with pytest.raises(
+                ValueError, match="sync_interval_s must be a finite positive number"
+            ):
+                LibsqlJournal("invalid-sync-environment", data_dir=tmp_path)
+
+        assert not (tmp_path / "journals" / "invalid-sync-environment.sqlite").exists()
+
     def test_rejects_replacement_writer_until_close_releases_claim(self, tmp_path: Path) -> None:
         """A closing writer owns the path until marker cleanup completes."""
         from easycat.runtime import LibsqlJournal
