@@ -353,7 +353,11 @@ class MultiContextWSManager:
             ):
                 continue
             try:
-                await self._send_frames(pending_frames, ctx=ctx)
+                # ReconnectingWebSocket invokes this primer while the send
+                # that observed the drop can still own ``_send_lock``. Its
+                # connection fence already excludes ordinary writers, so the
+                # primer must bypass the outer lock to avoid self-deadlock.
+                await self._send_frames_unlocked(pending_frames, ctx=ctx)
             except Exception:
                 # A context can be cancelled while its replay waits for the
                 # shared send lock. That race no longer needs recovery, but a
