@@ -633,6 +633,10 @@ class STTEvent:
     language: str | None = None
     word_timestamps: list[WordTimestamp] | None = None
     track: str | None = None
+    # Provider transport boundaries may finalize a transcript segment without
+    # representing a semantic end of the user's turn. Native-endpoint sessions
+    # only auto-end the turn for endpoint-bearing finals.
+    ends_turn: bool = True
     timestamp: float = field(default_factory=time.monotonic)
 
 

@@ -450,7 +450,7 @@ class STTCommitter:
                             future = turn.pending_stt_segment_futures.pop(0)
                             if not future.done():
                                 future.set_result(stt_event.text)
-                        if self._auto_turn_from_stt_final():
+                        if self._auto_turn_from_stt_final() and stt_event.ends_turn:
                             await self._turn_manager.end_turn()
             except Exception as exc:
                 logger.exception("STT event loop error")

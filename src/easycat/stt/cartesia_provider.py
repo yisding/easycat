@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
@@ -125,9 +126,15 @@ class CartesiaSTT(WebSocketSTTBase):
         )
         self._config = config
         self._audio_resampler = PCM16StreamResampler(config.sample_rate)
+        self._audio_epoch = 0
+        self._finalized_epoch = 0
+        self._latest_partial: STTEvent | None = None
 
     async def _on_start(self) -> None:
         self._audio_resampler.reset()
+        self._audio_epoch = 0
+        self._finalized_epoch = 0
+        self._latest_partial = None
         url = self._build_url()
         headers = {
             "X-API-Key": self._config.api_key,
@@ -138,19 +145,52 @@ class CartesiaSTT(WebSocketSTTBase):
             headers=headers,
             event_bus=self._config.event_bus,
             connect_fn=self._config.ws_connect,
+            on_reconnect=self._on_reconnect,
         )
 
+    async def _on_reconnect(self) -> None:
+        """Close the dropped socket's transcript boundary before resuming."""
+        partial = self._latest_partial
+        if partial is not None:
+            self._emit_event(
+                STTEvent(
+                    type=STTEventType.FINAL,
+                    text=partial.text,
+                    confidence=partial.confidence,
+                    language=partial.language,
+                    word_timestamps=partial.word_timestamps,
+                    ends_turn=False,
+                )
+            )
+        self._audio_resampler.reset()
+        self._latest_partial = None
+        self._finalized_epoch = self._audio_epoch
+
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        await self._append_audio(
-            self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
+        await self._prepare_and_send_audio(
+            lambda: self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
         )
+
+    async def _prepare_and_send_audio(self, prepare: Callable[[], bytes]) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+
+        sent = await ws.send_prepared(lambda: prepare() or None)
+        if sent:
+            self._audio_epoch += 1
 
     async def _append_audio(self, data: bytes) -> None:
         if data:
             await self._send_ws(data)
+            # A send fenced behind reconnect belongs to the replacement
+            # socket, not the socket whose reconnect callback is currently
+            # closing its transcript boundary. Count it only after the send
+            # succeeds so that callback cannot finalize a future epoch.
+            self._audio_epoch += 1
 
     async def _flush_audio_resampler(self) -> None:
-        await self._append_audio(self._audio_resampler.finish())
+        await self._prepare_and_send_audio(self._audio_resampler.finish)
 
     async def _on_commit_segment(self) -> bool:
         await self._flush_audio_resampler()
@@ -179,17 +219,20 @@ class CartesiaSTT(WebSocketSTTBase):
             return
 
         is_final = bool(msg.get("is_final"))
-        event_type = STTEventType.FINAL if is_final else STTEventType.PARTIAL
         word_timestamps = word_timestamps_from_words(msg.get("words"))
-        self._emit_event(
-            STTEvent(
-                type=event_type,
-                text=text,
-                confidence=msg.get("confidence"),
-                language=msg.get("language") or self._config.language,
-                word_timestamps=word_timestamps,
-            )
+        event = STTEvent(
+            type=STTEventType.FINAL if is_final else STTEventType.PARTIAL,
+            text=text,
+            confidence=msg.get("confidence"),
+            language=msg.get("language") or self._config.language,
+            word_timestamps=word_timestamps,
         )
+        if is_final:
+            self._latest_partial = None
+            self._finalized_epoch = self._audio_epoch
+        else:
+            self._latest_partial = event
+        self._emit_event(event)
 
     def _build_url(self) -> str:
         params = {

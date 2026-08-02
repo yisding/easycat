@@ -672,6 +672,38 @@ async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_endpoint_final_does_not_end_native_endpoint_turn() -> None:
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, tm = _make_committer(stt=stt, auto_turn=True)
+    committer.mark_active()
+    turn = _new_turn()
+    ended = asyncio.Event()
+    end_calls = 0
+
+    async def record_end_turn() -> None:
+        nonlocal end_calls
+        end_calls += 1
+        ended.set()
+
+    tm.end_turn = record_end_turn  # type: ignore[method-assign]
+    committer.start_event_loop(turn)
+
+    try:
+        await stt._queue.put(
+            STTEvent(type=STTEventType.FINAL, text="reconnect segment", ends_turn=False)
+        )
+        await emitted.wait_for(STTFinal)
+        await asyncio.sleep(0)
+        assert end_calls == 0
+
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="native endpoint"))
+        await asyncio.wait_for(ended.wait(), timeout=1)
+        assert end_calls == 1
+    finally:
+        await committer.cancel(turn)
+
+
+@pytest.mark.asyncio
 async def test_final_transcript_notifies_turn_manager_endpoint_hint() -> None:
     class _PunctuatedSTT(_RecordingSTT):
         async def commit_segment(self) -> bool:

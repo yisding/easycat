@@ -563,6 +563,44 @@ class ReconnectingWebSocket:
         ws = await self._await_connected()
         await ws.send(message)
 
+    async def send_prepared(
+        self,
+        prepare: Callable[[], str | bytes | None],
+    ) -> bool:
+        """Prepare and send one frame behind the reconnect installation fence.
+
+        Stateful encoders and resamplers must not produce a replacement-socket
+        frame before the reconnect callback resets their state. The callback
+        itself retains the same task-local primer bypass as :meth:`send`.
+        Returns whether ``prepare`` produced and sent a frame.
+        """
+        callback_ws = self._reconnect_callback_connection()
+        if callback_ws is not None:
+            message = prepare()
+            if message is None:
+                return False
+            await callback_ws.send(message)
+            return True
+
+        while True:
+            await self._wait_until_connected()
+            async with self._connect_lock:
+                # A receive-side drop can clear readiness just before this
+                # sender acquires the lock. Release it so reconnect installation
+                # can run, then prepare against the newly reset generation.
+                if not self._connected.is_set():
+                    continue
+                if self._closed:
+                    raise RuntimeError("WebSocket has been closed")
+                ws = self._ws
+                if ws is None:
+                    raise RuntimeError("WebSocket is not connected")
+                message = prepare()
+                if message is None:
+                    return False
+                await ws.send(message)
+                return True
+
     async def recv(self) -> str | bytes:
         """Receive a message from the WebSocket."""
         ws = await self._await_connected()

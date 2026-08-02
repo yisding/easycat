@@ -583,8 +583,47 @@ class TestReconnectingWebSocket:
             release_primer.set()
             await install
         await ordinary_send
-
         assert candidate._sent == ["session.update", "audio.append"]
+
+    async def test_send_prepared_runs_factory_after_reconnect_callback(self):
+        """Stateful frame preparation waits for reconnect state reset."""
+        candidate = FakeWSConnection()
+        callback_started = asyncio.Event()
+        release_callback = asyncio.Event()
+        state = "dropped"
+
+        async def reset_state() -> None:
+            nonlocal state
+            state = "replacement"
+            callback_started.set()
+            await release_callback.wait()
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            on_reconnect=reset_state,
+        )
+        ws._ever_connected = True
+        install = asyncio.create_task(
+            ws._install_connection(candidate, attempt=0, notify_reconnect=True)
+        )
+        await callback_started.wait()
+
+        prepared_states: list[str] = []
+
+        def prepare() -> bytes:
+            prepared_states.append(state)
+            return state.encode()
+
+        send = asyncio.create_task(ws.send_prepared(prepare))
+        await asyncio.sleep(0)
+        assert prepared_states == []
+
+        release_callback.set()
+        await install
+        assert await send is True
+        assert prepared_states == ["replacement"]
+        assert candidate._sent == [b"replacement"]
 
     async def test_spawned_callback_task_loses_bypass_after_installation(self):
         candidate = FakeWSConnection()
