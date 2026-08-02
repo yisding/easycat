@@ -177,6 +177,13 @@ async def test_shared_event_bus_scopes_session_convenience_handlers() -> None:
 
         victim.unsubscribe_handlers(on_registrations)
         victim.unsubscribe_handlers(agent_registrations)
+        registration_handlers = {
+            handler for _event_type, handler in (*on_registrations, *agent_registrations)
+        }
+        assert all(
+            subscription.handler not in registration_handlers
+            for subscription in victim._event_subscriptions
+        )
         await bus.emit(STTFinal(text="after unsubscribe", session_id=victim.session_id))
         await bus.emit(AgentFinal(text="after unsubscribe", session_id=victim.session_id))
 
@@ -185,6 +192,42 @@ async def test_shared_event_bus_scopes_session_convenience_handlers() -> None:
     finally:
         await victim.stop(force=True)
         await other.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_releases_convenience_handlers_from_shared_bus() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    session = Session(_full_config(event_bus=bus, session_id="owned-session"))
+    transcripts: list[str] = []
+    agent_finals: list[str] = []
+    external_events: list[STTFinal] = []
+
+    def observe_external(event: STTFinal) -> None:
+        external_events.append(event)
+
+    external = bus.subscribe(STTFinal, observe_external)
+    on_registrations = session.on(user_transcript=transcripts.append)
+    agent_registrations = session.subscribe_agent_events(
+        on_final=lambda event: agent_finals.append(event.text)
+    )
+
+    try:
+        await session.stop(force=True)
+        late_transcript = STTFinal(text="late transcript", session_id=session.session_id)
+        await bus.emit(late_transcript)
+        await bus.emit(AgentFinal(text="late response", session_id=session.session_id))
+
+        assert transcripts == []
+        assert agent_finals == []
+        assert external_events == [late_transcript]
+        assert all(
+            handler not in bus.subscribers(event_type)
+            for event_type, handler in (*on_registrations, *agent_registrations)
+        )
+        assert session._event_subscriptions == []
+        assert external.active is True
+    finally:
+        external.unsubscribe()
 
 
 @pytest.mark.asyncio

@@ -769,9 +769,7 @@ class Session:
         handler: EventHandler,
     ) -> EventHandler:
         """Subscribe a public convenience handler and return its bus wrapper."""
-        scoped_handler = self._scope_event_handler(handler)
-        self.event_bus.subscribe(event_type, scoped_handler)
-        return scoped_handler
+        return self._subscribe_owned(event_type, handler).handler
 
     def _commit_event_bus_ownership(self) -> None:
         """Mark a bus shared only after this Session constructed successfully."""
@@ -813,7 +811,7 @@ class Session:
         return not getattr(self.event_bus, "_easycat_was_shared_by_sessions", False)
 
     def _unsubscribe_session_event_handlers(self) -> None:
-        """Release only handlers installed by Session collaborator wiring."""
+        """Release every handler installed and owned by this Session."""
         subscriptions, self._event_subscriptions = self._event_subscriptions, []
         for subscription in subscriptions:
             subscription.unsubscribe()
@@ -923,7 +921,13 @@ class Session:
     def unsubscribe_handlers(self, registrations: list[tuple[type, EventHandler]]) -> None:
         """Unsubscribe a batch of event handlers from prior registrations."""
         for event_type, handler in registrations:
-            self.event_bus.unsubscribe(event_type, handler)
+            for index, subscription in enumerate(self._event_subscriptions):
+                if subscription.event_type is event_type and subscription.handler is handler:
+                    subscription.unsubscribe()
+                    del self._event_subscriptions[index]
+                    break
+            else:
+                self.event_bus.unsubscribe(event_type, handler)
 
     def get_helper(self, helper_type: type[_HelperT]) -> _HelperT | None:
         """Return the first attached telephony helper matching *helper_type*.
