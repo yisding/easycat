@@ -189,9 +189,19 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     names are rejected here rather than silently ignored — a typo in a
     UI checkbox should surface, not produce surprising frame slices.
     """
-    from easycat.runtime.replay import _STAGE_NAMES
+    from easycat.runtime.replay import _STAGE_NAMES, ReplayFidelity, ToolReplayPolicy
 
     out: dict[str, Any] = _validated_replay_timing(kwargs)
+    out.update(
+        _validated_replay_choice(
+            kwargs, "fidelity", frozenset(member.value for member in ReplayFidelity)
+        )
+    )
+    out.update(
+        _validated_replay_choice(
+            kwargs, "tool_policy", frozenset(member.value for member in ToolReplayPolicy)
+        )
+    )
     if "force" in kwargs:
         value = kwargs["force"]
         if not isinstance(value, bool):
@@ -227,6 +237,18 @@ def _validated_replay_timing(kwargs: dict[str, Any]) -> dict[str, str]:
     return {"timing": value}
 
 
+def _validated_replay_choice(
+    kwargs: dict[str, Any], name: str, allowed: frozenset[str]
+) -> dict[str, str]:
+    if name not in kwargs:
+        return {}
+    value = kwargs[name]
+    if not isinstance(value, str) or value not in allowed:
+        choices = ", ".join(repr(choice) for choice in sorted(allowed))
+        raise ValueError(f"{name} must be one of {choices}")
+    return {name: value}
+
+
 def _run_bundle_source(
     bundle: RunBundle, *, label: str, annotate_path: Path | None = None
 ) -> DebuggerSource:
@@ -246,9 +268,9 @@ def _run_bundle_source(
         )
 
         validated = _validated_replay_kwargs(kwargs)
-        fidelity = ReplayFidelity(kwargs.get("fidelity", "artifact"))
+        fidelity = ReplayFidelity(validated.get("fidelity", "artifact"))
         timing = validated.get("timing", "fast")
-        tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
+        tool_policy = ToolReplayPolicy(validated.get("tool_policy", "deny"))
         force = validated.get("force", False)
         spec = ReplaySpec(
             fidelity=fidelity,

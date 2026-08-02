@@ -24,7 +24,7 @@ from pathlib import Path
 
 from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import (
-    chmod_private_file,
+    copy_private_file,
     mkdir_private,
     sqlite_readonly_uri,
 )
@@ -119,16 +119,16 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     except sqlite3.OperationalError:
         pass  # Best-effort; copy WAL sidecars below as a fallback.
 
-    shutil.copy2(str(db_path), str(crash_path))
-    chmod_private_file(crash_path)
+    copy_private_file(db_path, crash_path)
     # Also copy WAL/SHM sidecars if the checkpoint was incomplete (e.g. a
     # concurrent reader held the file) so no committed page is lost.
     for suffix in ("-wal", "-shm"):
         sidecar = Path(str(db_path) + suffix)
-        if sidecar.exists():
-            crash_sidecar = Path(str(crash_path) + suffix)
-            shutil.copy2(str(sidecar), str(crash_sidecar))
-            chmod_private_file(crash_sidecar)
+        crash_sidecar = Path(str(crash_path) + suffix)
+        try:
+            copy_private_file(sidecar, crash_sidecar)
+        except FileNotFoundError:
+            pass
 
 
 def crash_dump_artifact_root(crash_path: Path) -> Path:
@@ -210,8 +210,7 @@ def snapshot_crash_dump_artifacts(
         target_dir = artifact_root / ref[:2]
         mkdir_private(target_dir)
         target = target_dir / f"{ref}.bin"
-        shutil.copy2(str(source), str(target))
-        chmod_private_file(target)
+        copy_private_file(source, target)
 
 
 def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
@@ -512,6 +511,12 @@ def _promote_one(root: Path, db_path: Path) -> bool:
             if _remove_journal(db_path):
                 logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
                 return True
+            # If the source database itself remains, this promotion is only a
+            # duplicate snapshot. Discard it so repeated sweeps cannot reserve
+            # unbounded numeric suffixes for one unremovable journal. If only a
+            # sidecar remains, retain the dump because it is the sole DB copy.
+            if db_path.exists():
+                discard_crash_dump(crash_path, artifact_root)
     except (OSError, sqlite3.DatabaseError):
         if crash_path is not None and artifact_root is not None:
             discard_crash_dump(crash_path, artifact_root)
