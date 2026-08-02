@@ -240,22 +240,22 @@ def test_negative_interruption_knobs_are_clamped(field_name: str, init_kwarg: st
     stages = {n: _RecordingStage(n) for n in names}
     sink, _ = _make_journal_sink()
 
-    base_kwargs: dict[str, Any] = dict(
-        wiring=make_wiring(),
-        transport_stage=stages["transport"],
-        tts_stage=stages["tts"],
-        agent_stage=stages["agent"],
-        turn_stage=stages["turn"],
-        stt_stage=stages["stt"],
-        vad_stage=stages["vad"],
-        audio_stage=stages["audio"],
-        run_ctx=_make_run_ctx(),
-        journal_sink=sink,
-        interruption_mode="precise",
-        interruption_latency_compensation_ms=0,
-        interruption_ack_stale_ms=0,
-        interruption_ack_tail_cap_ms=0,
-    )
+    base_kwargs: dict[str, Any] = {
+        "wiring": make_wiring(),
+        "transport_stage": stages["transport"],
+        "tts_stage": stages["tts"],
+        "agent_stage": stages["agent"],
+        "turn_stage": stages["turn"],
+        "stt_stage": stages["stt"],
+        "vad_stage": stages["vad"],
+        "audio_stage": stages["audio"],
+        "run_ctx": _make_run_ctx(),
+        "journal_sink": sink,
+        "interruption_mode": "precise",
+        "interruption_latency_compensation_ms": 0,
+        "interruption_ack_stale_ms": 0,
+        "interruption_ack_tail_cap_ms": 0,
+    }
     base_kwargs[init_kwarg] = -500
     orch = CancelOrchestrator(**base_kwargs)
     assert getattr(orch, field_name) == 0

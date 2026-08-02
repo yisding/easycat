@@ -8,7 +8,7 @@ rather than by wiring real providers.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -61,11 +61,11 @@ class _LifecycleSession:
         self._closed = True
         self.effective_stops += 1
 
-    async def __aenter__(self) -> _LifecycleSession:
+    async def __aenter__(self) -> Self:
         await self.start()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.stop(force=True)
 
 

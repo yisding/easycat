@@ -59,7 +59,7 @@ def _validate_poll_interval(name: str, value: object) -> None:
 
 def _validate_max_sessions(value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("max_sessions must be an integer >= 1")
+        raise ValueError("max_sessions must be an integer >= 1")  # noqa: TRY004 domain-specific validation error
     if value < 1:
         raise ValueError("max_sessions must be >= 1")
 
@@ -91,7 +91,7 @@ async def close_websocket_connections(
             continue
         try:
             result = close(code=code, reason=reason)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
             continue
         if isinstance(result, Awaitable):
             close_tasks.append(asyncio.ensure_future(result))
@@ -219,7 +219,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         listener_error: Exception | None = None
         try:
             self.start_draining(server)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # A raw WebSocket listener close is synchronous, but it can still
             # fail (for example from an event-loop/server implementation
             # error). Its established connections and sessions remain our
@@ -631,7 +631,7 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     except asyncio.CancelledError:
         if current_task is not None and current_task.cancelling() > cancellation_requests:
             raise
-    except Exception:  # pragma: no cover - defensive teardown
+    except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
         pass
 
 
@@ -679,7 +679,7 @@ def _track_background_timeout(future: asyncio.Future[object]) -> None:
         if not done.cancelled():
             try:
                 done.exception()
-            except Exception:  # pragma: no cover - defensive teardown
+            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
                 pass
 
     future.add_done_callback(finish)

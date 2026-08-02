@@ -37,7 +37,7 @@ def test_validate_quick_cli_writes_report_and_prints_human_summary(
     report_path = tmp_path / "validation.json"
     called: dict[str, object] = {}
 
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         called["slice_name"] = slice_name
         called.update(kwargs)
         run = _validation_run()
@@ -72,7 +72,7 @@ def test_validate_quick_cli_json_uses_standard_stdout_envelope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         run = _validation_run()
         result_report = tmp_path / "run" / "report.json"
         result_report.parent.mkdir()
@@ -129,7 +129,7 @@ def test_validate_contracts_cli_json_uses_standard_stdout_envelope(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         called["slice_name"] = slice_name
         called.update(kwargs)
         run = _validation_run(
@@ -171,7 +171,7 @@ def test_validate_quick_cli_show_output_streams_captured_logs(
     stdout_path.write_text("pytest stdout\n", encoding="utf-8")
     stderr_path.write_text("pytest stderr\n", encoding="utf-8")
 
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         run = _validation_run(
             artifacts={
                 "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
@@ -209,7 +209,7 @@ def test_validate_quick_cli_json_show_output_keeps_stdout_parseable(
     stdout_path.write_text("pytest stdout\n", encoding="utf-8")
     stderr_path.write_text("pytest stderr\n", encoding="utf-8")
 
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         run = _validation_run(
             artifacts={
                 "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
@@ -243,7 +243,7 @@ def test_validate_socket_cli_returns_validation_exit_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
         run = _validation_run(status="fail", exit_code=1, tool_exit_codes={"pytest": 5})
         result_report = tmp_path / "run" / "report.json"
         result_report.parent.mkdir()
@@ -270,7 +270,7 @@ def test_validate_live_cli_json_uses_standard_stdout_envelope(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_live_validation(**kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_live_validation(**kwargs) -> ValidationRunResult:
         called.update(kwargs)
         run = _validation_run()
         result_report = tmp_path / "run" / "report.json"
@@ -316,7 +316,7 @@ def test_validate_release_cli_json_uses_standard_stdout_envelope(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:
         called.update(kwargs)
         run = _validation_run(
             run_id="20260523T120000Z-release-12345",
@@ -447,7 +447,7 @@ def test_validate_release_cli_show_output_streams_child_report_logs(
     )
     parent_report.write_text(parent_run.to_json(), encoding="utf-8")
 
-    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:
         return ValidationRunResult(
             run=parent_run,
             run_dir=parent_dir,
@@ -533,7 +533,7 @@ def test_validate_release_cli_show_output_ignores_untrusted_child_report_log_pat
     )
     parent_report.write_text(parent_run.to_json(), encoding="utf-8")
 
-    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:
         return ValidationRunResult(
             run=parent_run,
             run_dir=parent_dir,

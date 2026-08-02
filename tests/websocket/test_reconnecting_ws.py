@@ -207,13 +207,15 @@ class TestReconnectingWebSocket:
     async def test_connect_all_retries_fail(self):
         ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
 
-        with patch(
-            "easycat.reconnecting_ws.websockets.connect",
-            new_callable=AsyncMock,
-            side_effect=ConnectionError("fail"),
+        with (
+            patch(
+                "easycat.reconnecting_ws.websockets.connect",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("fail"),
+            ),
+            pytest.raises(ConnectionError, match="Failed to connect"),
         ):
-            with pytest.raises(ConnectionError, match="Failed to connect"):
-                await ws.connect()
+            await ws.connect()
 
     @staticmethod
     def _attach_live(ws: ReconnectingWebSocket, conn) -> None:
@@ -1156,13 +1158,15 @@ class TestReconnectingWebSocket:
             provider_name="failing_provider",
         )
 
-        with patch(
-            "easycat.reconnecting_ws.websockets.connect",
-            new_callable=AsyncMock,
-            side_effect=ConnectionError("down"),
+        with (
+            patch(
+                "easycat.reconnecting_ws.websockets.connect",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("down"),
+            ),
+            pytest.raises(ConnectionError),
         ):
-            with pytest.raises(ConnectionError):
-                await ws.connect()
+            await ws.connect()
 
         failure_events = [e for e in events_received if isinstance(e, ReconnectFailure)]
         assert len(failure_events) == 1
@@ -1237,13 +1241,15 @@ class TestReconnectingWebSocket:
             on_give_up=callback,
         )
 
-        with patch(
-            "easycat.reconnecting_ws.websockets.connect",
-            new_callable=AsyncMock,
-            side_effect=ConnectionError("down"),
+        with (
+            patch(
+                "easycat.reconnecting_ws.websockets.connect",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("down"),
+            ),
+            pytest.raises(ConnectionError),
         ):
-            with pytest.raises(ConnectionError):
-                await ws.connect()
+            await ws.connect()
 
         callback.assert_called_once()
 

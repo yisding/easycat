@@ -92,7 +92,7 @@ def _resolve_python_agent(reference: str) -> Any:
     if callable(target):
         try:
             return target()
-        except Exception as exc:  # noqa: BLE001 — surface any factory error as E605
+        except Exception as exc:
             raise EASYCAT_E605(
                 reference=reference,
                 detail=f"calling the factory raised {type(exc).__name__}: {exc}",

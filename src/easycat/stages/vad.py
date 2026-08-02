@@ -79,11 +79,11 @@ class VADStage:
         """Frame-align and downmix provider-facing PCM16 audio."""
         if not isinstance(input, AudioChunk):
             return input
-        input = self._input_frame_aligner.align(input)
-        if input.format.channels > 1:
-            input = to_mono_chunk(input)
-            set_audio_capture_allowed(input, capture_allowed)
-        return input
+        normalized_input = self._input_frame_aligner.align(input)
+        if normalized_input.format.channels > 1:
+            normalized_input = to_mono_chunk(normalized_input)
+            set_audio_capture_allowed(normalized_input, capture_allowed)
+        return normalized_input
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = journal_ctx(ctx, self._journal)
@@ -121,7 +121,7 @@ class VADStage:
         # frame cannot lose or cross-pair channel samples. We do this after
         # capturing the input_ref artifact so replay still reflects the true
         # raw input.
-        input = self._normalize_audio_input(
+        provider_input = self._normalize_audio_input(
             input,
             capture_allowed=capture_allowed,
         )
@@ -148,7 +148,7 @@ class VADStage:
                 {"easycat.stage": self.name, "easycat.surface": "stt"},
             ):
                 events: list[Any] = []
-                stream = self._provider.process(input)
+                stream = self._provider.process(provider_input)
                 try:
                     async for event in stream:
                         events.append(event)

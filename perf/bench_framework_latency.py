@@ -118,7 +118,7 @@ class Worker:
         self.timeout_s = timeout_s
         self._stderr: list[str] = []
         self._messages: queue.Queue[str | object] = queue.Queue()
-        self._process = subprocess.Popen(  # noqa: S603 - argv is internally constructed
+        self._process = subprocess.Popen(
             spec.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -263,14 +263,14 @@ def rank_by_latency(
 
 def _revision() -> dict[str, Any]:
     try:
-        sha = subprocess.run(  # noqa: S603, S607 - fixed local git query
+        sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             check=True,
             capture_output=True,
             text=True,
         ).stdout.strip()
         dirty = bool(
-            subprocess.run(  # noqa: S603, S607 - fixed local git query
+            subprocess.run(
                 ["git", "status", "--porcelain"],
                 check=True,
                 capture_output=True,

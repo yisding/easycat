@@ -258,11 +258,11 @@ def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     # bounded and ``save_annotation`` is not locked out by the count cap.
     if len(annotations) > MAX_ANNOTATIONS:
         return {}
-    out: dict[str, dict[str, Any]] = {}
-    for turn_id, record in annotations.items():
-        if isinstance(turn_id, str) and isinstance(record, dict):
-            out[turn_id] = record
-    return out
+    return {
+        turn_id: record
+        for turn_id, record in annotations.items()
+        if isinstance(turn_id, str) and isinstance(record, dict)
+    }
 
 
 def save_annotation(
@@ -298,14 +298,11 @@ def save_annotation(
 
         tmp_name: str | None = None
         try:
-            tmp = tempfile.NamedTemporaryFile(
+            with tempfile.NamedTemporaryFile(
                 dir=path.parent, suffix=".tmp", delete=False, mode="w", encoding="utf-8"
-            )
-            tmp_name = tmp.name
-            try:
+            ) as tmp:
+                tmp_name = tmp.name
                 tmp.write(serialized)
-            finally:
-                tmp.close()
             Path(tmp_name).replace(path)
         except Exception:
             if tmp_name and Path(tmp_name).exists():

@@ -330,7 +330,7 @@ def test_doctor_ok_envelope(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
 
-    def fake_head(url, **kw):  # noqa: ANN001
+    def fake_head(url, **kw):
         class _R:
             status_code = 200
 
@@ -350,7 +350,7 @@ def test_doctor_ok_envelope(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> 
 def test_doctor_error_envelope(
     cli: CliRunner, empty_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_head(url, **kw):  # noqa: ANN001
+    def fake_head(url, **kw):
         class _R:
             status_code = 200
 

@@ -59,8 +59,10 @@ def render_llms_txt() -> str:
         "",
         "## Optional",
         "",
-        f"- [llms-full.txt]({_DOCS_SOURCE_URL}/blob/main/llms-full.txt) — every docs "
-        "route above expanded with its copyable command hints.",
+        (
+            f"- [llms-full.txt]({_DOCS_SOURCE_URL}/blob/main/llms-full.txt) — every docs "
+            "route above expanded with its copyable command hints."
+        ),
         "",
     ]
     return "\n".join(lines)

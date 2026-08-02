@@ -32,10 +32,10 @@ _RESOLVED_TOKEN = "sk-live-secret-token-abcdef1234567890"
 
 
 class _FakeSession:
-    async def start(self) -> None:  # noqa: D401 - test stub
+    async def start(self) -> None:
         pass
 
-    async def stop(self, *, force: bool = False) -> None:  # noqa: D401 - test stub
+    async def stop(self, *, force: bool = False) -> None:
         pass
 
 

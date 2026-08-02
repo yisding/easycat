@@ -192,7 +192,7 @@ def run_interruption_journal_protocol(
                 pre_state_ref=actual_pre_ref,
                 post_state_ref=plan.post_state_ref,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # Journal in degraded mode — skip mutation, runtime falls back.
             return False
 

@@ -125,7 +125,7 @@ def _build_session() -> tuple[Session, InMemoryRingBuffer, InMemoryArtifactStore
 @pytest.mark.asyncio
 async def test_ws4_cross_workstream_round_trip(tmp_path):
     """AC4.23 — capture, export, load, replay, diff."""
-    session, journal, artifact_store = _build_session()
+    session, journal, _artifact_store = _build_session()
 
     # Drive one complete streaming turn end-to-end.  That produces stage
     # records for STT, agent, and TTS, plus tts_frame records with

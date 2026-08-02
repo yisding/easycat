@@ -182,10 +182,7 @@ class NumberHealthMonitor:
         one_minute_ago = now - 60.0
         recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
         in_flight = self._concurrent.get(number, 0)
-        if len(recent) + in_flight >= self._max_calls_per_minute:
-            return False
-
-        return True
+        return not len(recent) + in_flight >= self._max_calls_per_minute
 
     def _active_records(self, number: str) -> list[_CallRecord]:
         """Return records within TTL for a number, pruning expired entries."""

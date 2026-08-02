@@ -60,9 +60,11 @@ prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a helpful voice assistant. "
-            "Use get_weather for weather questions and get_time for time. "
-            "Speak conversationally — you are talking, not writing.",
+            (
+                "You are a helpful voice assistant. "
+                "Use get_weather for weather questions and get_time for time. "
+                "Speak conversationally — you are talking, not writing."
+            ),
         ),
         ("placeholder", "{history}"),
         ("user", "{input}"),

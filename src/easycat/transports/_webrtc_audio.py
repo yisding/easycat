@@ -109,7 +109,7 @@ def _track_background_emit_task(task: asyncio.Task[None]) -> None:
         if not done.cancelled():
             try:
                 done.exception()
-            except Exception:  # pragma: no cover - defensive teardown
+            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
                 pass
 
     task.add_done_callback(_finished)
@@ -152,7 +152,7 @@ class OutboundAudioSource:
         class _Track(aiortc.MediaStreamTrack):
             kind = "audio"
 
-            async def recv(self_track) -> Any:  # noqa: N805
+            async def recv(self_track) -> Any:
                 return await transport_src._recv()
 
         return _Track()
@@ -393,7 +393,7 @@ class OutboundAudioSource:
                 if not task.cancelled():
                     try:
                         task.exception()
-                    except Exception:  # pragma: no cover - defensive teardown
+                    except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
                         pass
             # A self-owned worker remains tracked until it returns from this
             # subscriber and its completion callback reaps it.

@@ -135,7 +135,7 @@ class GenericWorkflowBridge(BridgeTemplate):
                 ws = self._workflow.snapshot_state()
                 if isinstance(ws, dict):
                     fields["workflow_state"] = ws
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
         return FrameworkStateSnapshot(
             fields=fields,
@@ -172,7 +172,7 @@ class GenericWorkflowBridge(BridgeTemplate):
                     ws = self._workflow.snapshot_state()
                     if isinstance(ws, dict):
                         state = ws
-                except Exception:
+                except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                     state = None
             if state is None:
                 raw = getattr(self._workflow, "__dict__", {})

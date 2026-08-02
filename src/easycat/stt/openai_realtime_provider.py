@@ -164,7 +164,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             try:
                 async with self._lifecycle_lock:
                     await self._ensure_persistent_connection()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 logger.debug("OpenAI Realtime warmup skipped: %s", exc)
                 try:
                     await self._discard_connection()
@@ -175,12 +175,12 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             return
         try:
             await self.start_stream()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("OpenAI Realtime warmup skipped: %s", exc)
             return
         try:
             await self.end_stream()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("OpenAI Realtime warmup close skipped: %s", exc)
 
     def _websocket_url(self) -> str:
@@ -203,7 +203,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             # the task has fully completed.
             try:
                 await self._close_task
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             self._close_task = None
             if self._persistent_enabled():
@@ -373,7 +373,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         await self._flush_audio_resampler()
         if self._ws is not None and self._audio_pending_commit:
             committed = await self._send_commit(wait_for_final=True)
-            if not committed and self._audio_pending_commit:
+            if not committed and self._audio_pending_commit:  # noqa: SIM102 nested branches preserve decision context
                 if not await self._clear_input_buffer():
                     self._final_wait_timed_out = True
         elif self._commit_pending and self._final_received is not None:
@@ -588,7 +588,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             "transcription_session.updated",
         ):
             logger.debug("OpenAI Realtime: %s", msg_type)
-            if msg_type in ("session.updated", "transcription_session.updated"):
+            if msg_type in ("session.updated", "transcription_session.updated"):  # noqa: SIM102 nested branches preserve decision context
                 if self._session_ready is not None and not self._session_ready.done():
                     self._session_ready.set_result(None)
 

@@ -19,11 +19,14 @@ from easycat.noise_reduction import (
 
 def test_rnnoise_fails_without_library():
     """RNNoiseReducer should raise RuntimeError if pyrnnoise is missing."""
-    with patch(
-        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    with (
+        patch(
+            "easycat.noise_reduction.require_module",
+            side_effect=ImportError("RNNoise unavailable"),
+        ),
+        pytest.raises(RuntimeError, match="RNNoise"),
     ):
-        with pytest.raises(RuntimeError, match="RNNoise"):
-            RNNoiseReducer()
+        RNNoiseReducer()
 
 
 @pytest.mark.asyncio
@@ -352,20 +355,26 @@ def test_factory_explicit_krisp_fails():
 
 def test_factory_explicit_rnnoise_fails():
     """Explicitly requesting rnnoise without pyrnnoise should raise."""
-    with patch(
-        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    with (
+        patch(
+            "easycat.noise_reduction.require_module",
+            side_effect=ImportError("RNNoise unavailable"),
+        ),
+        pytest.raises(RuntimeError, match="RNNoise"),
     ):
-        with pytest.raises(RuntimeError, match="RNNoise"):
-            create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
+        create_noise_reducer(NoiseReducerConfig(backend="rnnoise"))
 
 
 def test_factory_auto_fallback_policy_error_raises():
     """auto + fallback_policy='error' should fail loudly with an install hint."""
-    with patch(
-        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    with (
+        patch(
+            "easycat.noise_reduction.require_module",
+            side_effect=ImportError("RNNoise unavailable"),
+        ),
+        pytest.raises(RuntimeError) as exc_info,
     ):
-        with pytest.raises(RuntimeError) as exc_info:
-            create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
+        create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
     message = str(exc_info.value)
     assert "uv add 'easycat[rnnoise]'" in message
     assert "uv sync --extra rnnoise --group dev" in message
@@ -375,11 +384,14 @@ def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptur
     """auto + default passthrough policy should warn but return passthrough."""
     import logging
 
-    with patch(
-        "easycat.noise_reduction.require_module", side_effect=ImportError("RNNoise unavailable")
+    with (
+        patch(
+            "easycat.noise_reduction.require_module",
+            side_effect=ImportError("RNNoise unavailable"),
+        ),
+        caplog.at_level(logging.WARNING, logger="easycat.noise_reduction"),
     ):
-        with caplog.at_level(logging.WARNING, logger="easycat.noise_reduction"):
-            reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
+        reducer = create_noise_reducer(NoiseReducerConfig(backend="auto"))
     assert isinstance(reducer, PassthroughNoiseReducer)
     assert any("passthrough" in record.message.lower() for record in caplog.records)
     assert any("uv add 'easycat[rnnoise]'" in record.message for record in caplog.records)
@@ -438,7 +450,7 @@ def test_clip_round_to_pcm16_bytes_matches_scalar_reference():
     from easycat.noise_reduction import _clip_round_to_pcm16_bytes
 
     def scalar_reference(samples: list[float]) -> bytes:
-        clipped = (max(-32768, min(32767, int(round(v)))) for v in samples)
+        clipped = (max(-32768, min(32767, round(v))) for v in samples)
         return struct.pack(f"<{len(samples)}h", *clipped)
 
     rng = random.Random(1234)

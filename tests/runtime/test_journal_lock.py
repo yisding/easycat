@@ -206,7 +206,7 @@ def test_partial_dual_claim_is_released_before_failure_result(
     monkeypatch.setattr(lock_module, "_release_lock", released.append)
 
     if blocking:
-        with pytest.raises(BlockingIOError, match="contended"):
+        with pytest.raises(BlockingIOError, match="contended"):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with path_file_claim(tmp_path / "session.sqlite", blocking=True, namespace="journal"):
                 pass
         assert len(released) == 1
@@ -234,7 +234,7 @@ def test_claim_preserves_nonblocking_resolution_failure_semantics(
 
     with path_file_claim(target, blocking=False, namespace="journal") as claimed:
         assert claimed is False
-    with pytest.raises(OSError, match="Could not resolve lock parent"):
+    with pytest.raises(OSError, match="Could not resolve lock parent"):  # noqa: SIM117 nested scopes clarify setup and cleanup
         with path_file_claim(target, blocking=True, namespace="journal"):
             pass
 

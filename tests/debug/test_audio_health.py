@@ -141,7 +141,7 @@ def test_collect_caller_silence_peak_excludes_turn_with_one_loud_frame() -> None
 
 def test_detect_dead_air_flags_large_gap_only() -> None:
     records = [
-        _tts_frame(1, "ref", turn_id="gap", **{}),
+        _tts_frame(1, "ref", turn_id="gap"),
     ]
     records[0]["timing"]["wall_ns"] = 0
     records.append(_tts_frame(2, "ref", turn_id="gap"))

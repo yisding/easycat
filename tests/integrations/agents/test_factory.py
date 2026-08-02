@@ -122,7 +122,6 @@ def test_auto_adapt_agent_consults_builtin_adapters_in_order(
 
     def miss(agent, model):
         calls.append(f"miss:{model}")
-        return None
 
     def match(agent, model):
         calls.append(f"match:{model}")
@@ -130,7 +129,6 @@ def test_auto_adapt_agent_consults_builtin_adapters_in_order(
 
     def should_not_run(agent, model):
         calls.append("late")
-        return None
 
     monkeypatch.setattr(
         agent_factory,

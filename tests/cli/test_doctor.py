@@ -27,7 +27,7 @@ def _plain_console() -> tuple[StringIO, Console]:
 def no_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Stub ``httpx.head`` so tests don't hit real provider endpoints."""
 
-    def fake_head(url, *, timeout=0.0, follow_redirects=False, **kw):  # noqa: ANN001
+    def fake_head(url, *, timeout=0.0, follow_redirects=False, **kw):
         class _R:
             status_code = 200
 
@@ -184,7 +184,7 @@ def test_doctor_env_file_ignores_non_provider_variables(
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
 
-    def fake_head(url, *, timeout=0.0, follow_redirects=False, **kw):  # noqa: ANN001
+    def fake_head(url, *, timeout=0.0, follow_redirects=False, **kw):
         assert os.environ["OPENAI_API_KEY"] == "sk-from-file"
         assert os.environ.get("HTTPS_PROXY") != attacker_proxy
         assert os.environ.get("XDG_CACHE_HOME") != attacker_cache
@@ -380,7 +380,7 @@ def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.Monkey
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
 
-    def raising_head(url, **kw):  # noqa: ANN001
+    def raising_head(url, **kw):
         raise httpx.ConnectError("no route")
 
     monkeypatch.setattr("httpx.head", raising_head)
@@ -923,12 +923,10 @@ def test_check_disk_space_fails_under_threshold(
 
 
 def test_journal_error_guidance_matches_runtime_data_dir_contract() -> None:
-    text = "\n".join(
-        [
-            REGISTRY["EASYCAT_E207"].cause,
-            REGISTRY["EASYCAT_E207"].fix,
-            REGISTRY["EASYCAT_E208"].fix,
-        ]
+    text = (
+        f"{REGISTRY['EASYCAT_E207'].cause}\n"
+        f"{REGISTRY['EASYCAT_E207'].fix}\n"
+        f"{REGISTRY['EASYCAT_E208'].fix}"
     )
 
     assert ".easycat/journals" in text

@@ -131,7 +131,7 @@ class CancelOrchestrator:
                 continue
             try:
                 await stage.handle_upstream(signal, self._run_ctx)
-            except Exception:  # noqa: BLE001 - never break cancel path
+            except Exception:
                 logger.exception("Stage %s.handle_upstream failed", stage.name)
         # Telephony helpers journal the signal without a dedicated stage
         # wrapper: one bare aggregate control-signal record keeps the

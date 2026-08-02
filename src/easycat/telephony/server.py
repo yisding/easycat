@@ -226,7 +226,7 @@ async def _start_twiml_http_listener(
     return runner, site
 
 
-async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
+async def _shutdown_twilio_voice_app(
     *,
     runtime: Any,
     media_server: Any,
@@ -243,7 +243,7 @@ async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
         if listener_error is None:
             listener_error = exc
         else:
-            logger.warning("Twilio %s also failed", stage, exc_info=True)
+            logger.warning("Twilio %s also failed", stage)
 
     try:
         # Set the drain fence before stopping the HTTP listener so accepted
@@ -252,11 +252,11 @@ async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
         # skip the independent HTTP cleanup or the runtime's session drain.
         try:
             runtime.start_draining(media_server)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             record_listener_error("media listener close", exc)
         try:
             await site.stop()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             record_listener_error("HTTP site stop", exc)
     except BaseException as exc:
         # Cleanup below still owns the runner and live media sessions, but a
@@ -272,7 +272,7 @@ async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
         try:
             try:
                 await runner.cleanup()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 record_listener_error("HTTP runner cleanup", exc)
         finally:
             try:
@@ -281,7 +281,7 @@ async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
                     drain_timeout_s=config.drain_timeout_s,
                     force_timeout_s=config.force_shutdown_timeout_s,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 record_listener_error("media runtime drain", exc)
         if body_error is None and listener_error is not None:
             raise listener_error

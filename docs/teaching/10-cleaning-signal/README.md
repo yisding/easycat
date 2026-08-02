@@ -324,7 +324,7 @@ hearing.
              if cancel.is_cancelled:
                  await tts.cancel()
                  break
-             if event.type == TTSEventType.AUDIO and event.audio is not None:
+-            if event.type == TTSEventType.AUDIO and event.audio is not None:
 -                # LocalTransport reports False for a partial fit. Sending one
 -                # callback-sized frame at a time makes acceptance atomic, so
 -                # the ledger can still credit an accepted head accurately.
@@ -336,6 +336,7 @@ hearing.
 -                        ledger.bytes_accepted += len(frame.data)
 -                if cancel.is_cancelled:
 -                    break
++            if event.type == TTSEventType.AUDIO and event.audio is not None:  # noqa: SIM102 nested branches preserve decision context
 +                if await transport.send_audio(event.audio):
 +                    # The crucial dual-input line: AEC needs to know what
 +                    # the speaker accepted, so it can subtract that pattern

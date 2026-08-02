@@ -517,19 +517,19 @@ def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
         )
     tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
     kind = JournalRecordKind(kind_str)
-    common = dict(
-        sequence=sequence,
-        session_id=session_id,
-        kind=kind,
-        name=name,
-        timing=TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns),
-        turn_id=turn_id,
-        data=data,
-        error=error,
-        input_ref=input_ref,
-        output_ref=output_ref,
-        tags=tag_set,
-    )
+    common = {
+        "sequence": sequence,
+        "session_id": session_id,
+        "kind": kind,
+        "name": name,
+        "timing": TimingInfo(wall_ns=wall_ns, mono_ns=mono_ns, cpu_ns=cpu_ns),
+        "turn_id": turn_id,
+        "data": data,
+        "error": error,
+        "input_ref": input_ref,
+        "output_ref": output_ref,
+        "tags": tag_set,
+    }
     # Reconstruct typed subclasses so their schema-declared fields are
     # populated on SQLite round-trip rather than collapsing to the base
     # JournalRecord.  Subclass-only fields are sourced from ``data``.

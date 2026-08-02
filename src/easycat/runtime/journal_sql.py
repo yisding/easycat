@@ -18,7 +18,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from easycat._numeric import is_finite_number
@@ -215,7 +215,7 @@ class _SqliteBatchCommitCoordinator:
     """
 
     _condition = threading.Condition()
-    _deadlines: list[tuple[float, int, weakref.ReferenceType[Any], int]] = []
+    _deadlines: ClassVar[list[tuple[float, int, weakref.ReferenceType[Any], int]]] = []
     _counter = itertools.count()
     _thread: threading.Thread | None = None
     _executor = concurrent.futures.ThreadPoolExecutor(
@@ -330,7 +330,7 @@ class _SqlJournalBase:
                 return -1
             result = "pass"
             return sequence
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._enter_degraded(session_id, exc)
             return -1
         finally:
@@ -944,7 +944,7 @@ class SqliteJournal(_SqlJournalBase):
                 return
             try:
                 self._commit_transaction_locked(recover_failed_batch=True)
-            except Exception as commit_exc:
+            except Exception as commit_exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 exc = commit_exc
         if exc is not None:
             self._enter_degraded(self._session_id, exc)
@@ -1045,7 +1045,7 @@ def _sanitize_replica_url(url: str) -> str:
     try:
         parsed = urlparse(url)
         return f"{parsed.scheme}://{parsed.hostname or ''}"
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "<unparseable>"
 
 
@@ -1297,7 +1297,7 @@ class LibsqlJournal(_SqlJournalBase):
     ) -> None:
         validate_persistent_session_id(session_id)
         self._redaction = validate_redaction_policy(redaction)
-        import libsql_experimental as libsql  # noqa: F811 — intentional conditional import
+        import libsql_experimental as libsql
 
         self._libsql = libsql
         self._sync_interval = _resolve_libsql_sync_interval(sync_interval_s)
@@ -1510,7 +1510,7 @@ class LibsqlJournal(_SqlJournalBase):
 
                 try:
                     self._conn.close()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     pass
         finally:
             self._release_live_journal()

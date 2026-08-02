@@ -398,7 +398,7 @@ class E2EVadModel:
             expected_sample_number = self.data_buf_size
 
         cur_seg.doa = 0
-        for sample_cpy_out in range(0, data_to_pop):
+        for sample_cpy_out in range(data_to_pop):
             # cur_seg.buffer[out_pos ++] = data_buf_.back();
             out_pos += 1
         for sample_cpy_out in range(data_to_pop, expected_sample_number):
@@ -541,7 +541,7 @@ class E2EVadModel:
         else:
             self.DetectLastFrames()
         segments = []
-        for batch_num in range(0, score.shape[0]):  # only support batch_size = 1 now
+        for batch_num in range(score.shape[0]):  # only support batch_size = 1 now
             segment_batch = []
             if len(self.output_data_buf) > 0:
                 for i in range(self.output_data_buf_offset, len(self.output_data_buf)):

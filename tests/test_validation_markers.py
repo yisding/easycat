@@ -58,9 +58,11 @@ def test_provider_scoped_live_marker_requires_surface_scope() -> None:
     )
 
     assert errors == [
-        "tests/example_test.py::test_live_openai is provider-scoped but missing "
-        "surface metadata; add one of: surface_agent, surface_stt, surface_transport, "
-        "surface_tts, surface_vad"
+        (
+            "tests/example_test.py::test_live_openai is provider-scoped but missing "
+            "surface metadata; add one of: surface_agent, surface_stt, surface_transport, "
+            "surface_tts, surface_vad"
+        )
     ]
 
 
@@ -71,9 +73,11 @@ def test_surface_scoped_contract_marker_requires_provider_scope() -> None:
     )
 
     assert errors == [
-        "tests/example_test.py::test_contract is surface-scoped but missing "
-        "provider metadata; add provider(NAME) or one of: provider_cartesia, "
-        "provider_deepgram, provider_elevenlabs, provider_openai"
+        (
+            "tests/example_test.py::test_contract is surface-scoped but missing "
+            "provider metadata; add provider(NAME) or one of: provider_cartesia, "
+            "provider_deepgram, provider_elevenlabs, provider_openai"
+        )
     ]
 
 
@@ -93,9 +97,11 @@ def test_unscoped_live_marker_requires_provider_and_surface_scope() -> None:
     )
 
     assert errors == [
-        "tests/example_test.py::test_external_tool_live uses bare integration_live; "
-        "live tests must declare provider and surface metadata, or use "
-        "integration_external/integration_local for non-provider dependencies"
+        (
+            "tests/example_test.py::test_external_tool_live uses bare integration_live; "
+            "live tests must declare provider and surface metadata, or use "
+            "integration_external/integration_local for non-provider dependencies"
+        )
     ]
 
 
@@ -117,8 +123,10 @@ def test_flaky_marker_requires_issue_owner_and_review_by() -> None:
     )
 
     assert errors == [
-        "tests/example_test.py::test_intermittent has @pytest.mark.flaky missing "
-        "metadata: owner, review_by"
+        (
+            "tests/example_test.py::test_intermittent has @pytest.mark.flaky missing "
+            "metadata: owner, review_by"
+        )
     ]
 
 
@@ -144,8 +152,10 @@ def test_release_marker_cannot_remain_flaky() -> None:
     )
 
     assert errors == [
-        "tests/example_test.py::test_release_gate is release-scoped but still "
-        "quarantined with @pytest.mark.flaky"
+        (
+            "tests/example_test.py::test_release_gate is release-scoped but still "
+            "quarantined with @pytest.mark.flaky"
+        )
     ]
 
 

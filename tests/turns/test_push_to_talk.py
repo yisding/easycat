@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from typing import Self
 
 import pytest
 
@@ -26,7 +27,7 @@ class _ManagedFakeSession(_FakeSession):
         self.entered = False
         self.exited = False
 
-    async def __aenter__(self) -> _ManagedFakeSession:
+    async def __aenter__(self) -> Self:
         self.entered = True
         return self
 

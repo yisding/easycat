@@ -34,12 +34,14 @@ def test_frame_samples_uncommon_rate_rejected():
 
 def test_livekit_aec_fails_without_library():
     """LiveKitAEC should raise ImportError if livekit is missing."""
-    with patch(
-        "easycat.echo_cancellation.require_module",
-        side_effect=ImportError("livekit unavailable"),
+    with (
+        patch(
+            "easycat.echo_cancellation.require_module",
+            side_effect=ImportError("livekit unavailable"),
+        ),
+        pytest.raises(ImportError, match="livekit"),
     ):
-        with pytest.raises(ImportError, match="livekit"):
-            LiveKitAEC()
+        LiveKitAEC()
 
 
 def _fake_audio_frame(data: bytes, **_kwargs: object) -> MagicMock:
@@ -227,12 +229,14 @@ def test_factory_enabled_without_livekit_falls_back():
 
 def test_factory_enabled_without_livekit_strict_fails():
     """Strict fallback policy should fail when enabled AEC cannot be loaded."""
-    with patch(
-        "easycat.echo_cancellation.require_module",
-        side_effect=ImportError("livekit unavailable"),
+    with (
+        patch(
+            "easycat.echo_cancellation.require_module",
+            side_effect=ImportError("livekit unavailable"),
+        ),
+        pytest.raises(RuntimeError, match="LiveKit AEC is unavailable"),
     ):
-        with pytest.raises(RuntimeError, match="LiveKit AEC is unavailable"):
-            create_echo_canceller(EchoCancellationConfig(enabled=True, fallback_policy="error"))
+        create_echo_canceller(EchoCancellationConfig(enabled=True, fallback_policy="error"))
 
 
 def test_echo_cancellation_config_rejects_unknown_fallback_policy():

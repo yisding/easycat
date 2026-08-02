@@ -540,4 +540,4 @@ def build_issues(
     return {"issues": issues, "summary": summary, "total": len(issues)}
 
 
-__all__ = ["build_issues", "IssueThresholds"]
+__all__ = ["IssueThresholds", "build_issues"]

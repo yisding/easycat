@@ -70,7 +70,7 @@ class KrispVAD(_VADBase):
                 if self._krisp_audio is None:
                     self._krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
                 self._krisp_audio.destroy_session(self._session)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             self._session = None
 
@@ -80,7 +80,7 @@ class KrispVAD(_VADBase):
             from importlib.metadata import version
 
             sdk_ver = version("krisp-audio")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
         return {
             "provider": "krisp",

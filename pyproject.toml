@@ -241,20 +241,23 @@ dev = [
     "pytest-cov>=6.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.16.0",
+    "ruff>=0.16.1",
 ]
 
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+required-version = ">=0.16.1"
 extend-exclude = ["src/easycat/cli/scaffold/templates"]
 
 [tool.ruff.lint]
+# Keep Ruff 0.16+'s curated default rule set and layer repository-specific
+# policy on top. Using ``select`` here would replace the defaults entirely.
 # C901 (mccabe complexity) and PLR0912/PLR0915 (branch/statement counts) keep
 # new code out of the >10-complexity territory the M4 refactor cleaned up in
 # the streaming/bridge hot spots.  Existing offenders are enumerated in
 # per-file-ignores below — shrink that list, never grow it.
-select = [
+extend-select = [
     "E",
     "F",
     "I",
@@ -267,6 +270,12 @@ select = [
     "B",
     "RUF006",
     "T201",
+    # High-signal extensions beyond Ruff's curated defaults.
+    "A001",
+    "A003",
+    "LOG",
+    "PERF203",
+    "PERF403",
 ]
 # ASYNC109 (explicit async timeout params) is deliberate public API here (incl.
 # timeouts.py) — permanent.

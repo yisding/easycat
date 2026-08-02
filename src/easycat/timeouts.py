@@ -44,7 +44,7 @@ def resolve_provider_name(provider: Any, fallback: str) -> str:
     if callable(version_info):
         try:
             name = version_info().get("provider")
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             name = None
         if name and name != "unknown":
             return name

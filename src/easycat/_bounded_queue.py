@@ -46,7 +46,7 @@ class BoundedAudioQueue:
         if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
             raise ValueError("max_size must be a positive integer")
         if not isinstance(policy, DropPolicy):
-            raise ValueError("policy must be a DropPolicy")
+            raise ValueError("policy must be a DropPolicy")  # noqa: TRY004 domain-specific validation error
         self._max_size = max_size
         self._policy = policy
         self._block_timeout = block_timeout
@@ -77,7 +77,7 @@ class BoundedAudioQueue:
         if hook is not None:
             try:
                 hook(self._name, kind, len(self._queue), self._drops)
-            except Exception:  # noqa: BLE001 - drop hook must never break the queue
+            except Exception:
                 logger.debug("on_drop hook raised", exc_info=True)
 
     def _observe_depth(self, value: int | None = None) -> None:

@@ -182,9 +182,8 @@ class TestUnitContextManager:
 
     def test_exception_exit(self, recorder, journal):
         c = _cursor()
-        with pytest.raises(ValueError):
-            with recorder.unit(c):
-                raise ValueError("boom")
+        with pytest.raises(ValueError), recorder.unit(c):
+            raise ValueError("boom")
 
         records = journal.read()
         assert len(records) == 2
@@ -240,9 +239,8 @@ class TestTurnCursorContextManager:
 
     def test_exception_records_framework_error_and_error_exit(self, recorder, journal):
         c = _cursor()
-        with pytest.raises(ValueError):
-            with recorder.turn_cursor(c):
-                raise ValueError("boom")
+        with pytest.raises(ValueError), recorder.turn_cursor(c):
+            raise ValueError("boom")
 
         records = journal.read()
         names = [r.name for r in records]
@@ -253,9 +251,8 @@ class TestTurnCursorContextManager:
 
     def test_base_exception_safe_exits_without_framework_error(self, recorder, journal):
         c = _cursor()
-        with pytest.raises(GeneratorExit):
-            with recorder.turn_cursor(c):
-                raise GeneratorExit()
+        with pytest.raises(GeneratorExit), recorder.turn_cursor(c):
+            raise GeneratorExit()
 
         records = journal.read()
         names = [r.name for r in records]
@@ -269,9 +266,8 @@ class TestTurnCursorContextManager:
         import asyncio
 
         c = _cursor()
-        with pytest.raises(asyncio.CancelledError):
-            with recorder.turn_cursor(c):
-                raise asyncio.CancelledError()
+        with pytest.raises(asyncio.CancelledError), recorder.turn_cursor(c):
+            raise asyncio.CancelledError()
 
         records = journal.read()
         assert "framework_error" not in [r.name for r in records]
@@ -282,10 +278,9 @@ class TestTurnCursorContextManager:
         # (here: a nested cursor left open so the stack top mismatches), the
         # fault must be swallowed rather than masking the original cancellation.
         outer = _cursor("outer")
-        with pytest.raises(GeneratorExit):
-            with recorder.turn_cursor(outer):
-                recorder.record_unit_entered(_cursor("inner"))
-                raise GeneratorExit()
+        with pytest.raises(GeneratorExit), recorder.turn_cursor(outer):
+            recorder.record_unit_entered(_cursor("inner"))
+            raise GeneratorExit()
 
 
 class TestRecorderInvariantEnforcement:

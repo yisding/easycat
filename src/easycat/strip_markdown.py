@@ -228,9 +228,8 @@ class _DelimiterScanner:
                 continue
             if ch == opener:
                 stack.append(i)
-            elif ch == closer:
-                if stack:
-                    self._matches[stack.pop()] = i
+            elif ch == closer and stack:
+                self._matches[stack.pop()] = i
             i += 1
 
         for unmatched in stack:

@@ -164,7 +164,7 @@ class QueueTransport:
             yield chunk
 
     async def send_audio(self, chunk: AudioChunk) -> None:
-        if self._fail_on_send is not None:
+        if self._fail_on_send is not None:  # noqa: SIM102 nested branches preserve decision context
             if self._fail_after_n_sends is None or self._send_count >= self._fail_after_n_sends:
                 self._send_count += 1
                 raise self._fail_on_send

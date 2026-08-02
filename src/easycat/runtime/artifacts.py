@@ -433,10 +433,10 @@ class _ArtifactAccounting:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid artifact accounting JSON") from exc
         if not isinstance(value, dict):
-            raise ValueError("invalid artifact accounting shape")
+            raise ValueError("invalid artifact accounting shape")  # noqa: TRY004 domain-specific validation error
         version = value.get("version")
         if isinstance(version, bool) or not isinstance(version, int):
-            raise ValueError("invalid artifact accounting version")
+            raise ValueError("invalid artifact accounting version")  # noqa: TRY004 domain-specific validation error
         if version != _ACCOUNTING_VERSION:
             raise _UnsupportedArtifactAccountingVersion(
                 f"unsupported artifact accounting version: {version}"
@@ -759,38 +759,37 @@ class FilesystemArtifactStore:
         del artifact_class
         ref = _sha256(payload)
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    accounting = self._load_accounting_locked(persist_missing=False)
-                    created = not self.has(ref)
-                    if not created:
-                        epoch = self._effective_artifact_epoch_locked()
-                        if not self._write_managed_artifact_epoch_locked(ref, epoch):
-                            return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                        if not self._revoke_cleanup_token_locked(ref):
-                            return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                        return ArtifactWriteReceipt(ref, created=False, cleanup_token=None)
-                    reserved = self._reserve_new_payload_locked(
-                        accounting,
-                        payload_size=len(payload),
-                    )
-                    if reserved is None:
-                        return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                accounting = self._load_accounting_locked(persist_missing=False)
+                created = not self.has(ref)
+                if not created:
                     epoch = self._effective_artifact_epoch_locked()
                     if not self._write_managed_artifact_epoch_locked(ref, epoch):
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                    if not self._put_new_locked(ref, payload):
-                        self._delete_ref_locked(ref)
+                    if not self._revoke_cleanup_token_locked(ref):
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                    cleanup_token = uuid.uuid4().hex
-                    if not self._create_cleanup_token_locked(ref, cleanup_token):
-                        self._delete_ref_locked(ref)
-                        return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                    return ArtifactWriteReceipt(
-                        ref,
-                        created=True,
-                        cleanup_token=cleanup_token,
-                    )
+                    return ArtifactWriteReceipt(ref, created=False, cleanup_token=None)
+                reserved = self._reserve_new_payload_locked(
+                    accounting,
+                    payload_size=len(payload),
+                )
+                if reserved is None:
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                epoch = self._effective_artifact_epoch_locked()
+                if not self._write_managed_artifact_epoch_locked(ref, epoch):
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                if not self._put_new_locked(ref, payload):
+                    self._delete_ref_locked(ref)
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                cleanup_token = uuid.uuid4().hex
+                if not self._create_cleanup_token_locked(ref, cleanup_token):
+                    self._delete_ref_locked(ref)
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                return ArtifactWriteReceipt(
+                    ref,
+                    created=True,
+                    cleanup_token=cleanup_token,
+                )
         except (NotImplementedError, OSError, ValueError):
             logger.warning("Artifact write claim failed for ref=%s", ref, exc_info=True)
             return ArtifactWriteReceipt("", created=False, cleanup_token=None)
@@ -832,38 +831,37 @@ class FilesystemArtifactStore:
         referenced = {ref for ref in referenced_refs if _is_sha256_ref(ref)}
         removed = 0
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    accounting = self._load_accounting_locked(persist_missing=False)
-                    managed = self._managed_artifact_epochs_locked()
-                    retirement = self._read_artifact_retirement_intent_locked()
-                    new_epoch = retirement[1] if retirement is not None else uuid.uuid4().hex
-                    self._write_artifact_epoch_locked(new_epoch)
-                    for ref, prior_epoch in managed.items():
-                        preserve_for_retirement = (
-                            retirement is not None and prior_epoch != retirement[0]
-                        )
-                        if preserve_for_retirement or prior_epoch is None or ref in referenced:
-                            if not self.has(ref):
-                                self._delete_managed_artifact_epoch_locked(ref)
-                                continue
-                            if not self._write_managed_artifact_epoch_locked(ref, new_epoch):
-                                continue
-                            if ref in referenced:
-                                self._revoke_cleanup_token_locked(ref)
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                accounting = self._load_accounting_locked(persist_missing=False)
+                managed = self._managed_artifact_epochs_locked()
+                retirement = self._read_artifact_retirement_intent_locked()
+                new_epoch = retirement[1] if retirement is not None else uuid.uuid4().hex
+                self._write_artifact_epoch_locked(new_epoch)
+                for ref, prior_epoch in managed.items():
+                    preserve_for_retirement = (
+                        retirement is not None and prior_epoch != retirement[0]
+                    )
+                    if preserve_for_retirement or prior_epoch is None or ref in referenced:
+                        if not self.has(ref):
+                            self._delete_managed_artifact_epoch_locked(ref)
                             continue
+                        if not self._write_managed_artifact_epoch_locked(ref, new_epoch):
+                            continue
+                        if ref in referenced:
+                            self._revoke_cleanup_token_locked(ref)
+                        continue
 
-                        before_bytes = self._ref_stored_bytes_locked(ref)
-                        if before_bytes > accounting.total_bytes:
-                            raise ValueError("artifact accounting baseline is inconsistent")
-                        pending = self._begin_pending_delete_locked(
-                            accounting,
-                            ref,
-                            before_bytes,
-                        )
-                        accounting = self._apply_pending_delete_locked(pending)
-                        removed += 1
-                    self._delete_artifact_retirement_intent_locked()
+                    before_bytes = self._ref_stored_bytes_locked(ref)
+                    if before_bytes > accounting.total_bytes:
+                        raise ValueError("artifact accounting baseline is inconsistent")
+                    pending = self._begin_pending_delete_locked(
+                        accounting,
+                        ref,
+                        before_bytes,
+                    )
+                    accounting = self._apply_pending_delete_locked(pending)
+                    removed += 1
+                self._delete_artifact_retirement_intent_locked()
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
                 "Artifact journal-epoch rotation failed for %s",
@@ -875,22 +873,21 @@ class FilesystemArtifactStore:
     def _prepare_journal_retirement(self) -> bool:
         """Durably record that crash promotion will retire managed live blobs."""
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    retirement = self._read_artifact_retirement_intent_locked()
-                    if retirement is None:
-                        retiring_epoch = self._read_artifact_epoch_locked()
-                        replacement_epoch = uuid.uuid4().hex
-                        # Persist the replacement before publishing it as the
-                        # current epoch. A retry can finish the rotation after
-                        # a crash between these two atomic metadata writes.
-                        self._write_artifact_retirement_intent_locked(
-                            retiring_epoch,
-                            replacement_epoch,
-                        )
-                    else:
-                        _, replacement_epoch = retirement
-                    self._write_artifact_epoch_locked(replacement_epoch)
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                retirement = self._read_artifact_retirement_intent_locked()
+                if retirement is None:
+                    retiring_epoch = self._read_artifact_epoch_locked()
+                    replacement_epoch = uuid.uuid4().hex
+                    # Persist the replacement before publishing it as the
+                    # current epoch. A retry can finish the rotation after
+                    # a crash between these two atomic metadata writes.
+                    self._write_artifact_retirement_intent_locked(
+                        retiring_epoch,
+                        replacement_epoch,
+                    )
+                else:
+                    _, replacement_epoch = retirement
+                self._write_artifact_epoch_locked(replacement_epoch)
             return True
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
@@ -903,28 +900,27 @@ class FilesystemArtifactStore:
     def _complete_journal_retirement(self) -> bool:
         """Delete every managed live blob after its crash snapshot is durable."""
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    retirement = self._read_artifact_retirement_intent_locked()
-                    if retirement is None:
-                        return True
-                    retiring_epoch, replacement_epoch = retirement
-                    self._write_artifact_epoch_locked(replacement_epoch)
-                    accounting = self._load_accounting_locked(persist_missing=False)
-                    managed = self._managed_artifact_epochs_locked()
-                    for ref, owner_epoch in managed.items():
-                        if retiring_epoch is None or owner_epoch != retiring_epoch:
-                            continue
-                        before_bytes = self._ref_stored_bytes_locked(ref)
-                        if before_bytes > accounting.total_bytes:
-                            raise ValueError("artifact accounting baseline is inconsistent")
-                        pending = self._begin_pending_delete_locked(
-                            accounting,
-                            ref,
-                            before_bytes,
-                        )
-                        accounting = self._apply_pending_delete_locked(pending)
-                    self._delete_artifact_retirement_intent_locked()
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                retirement = self._read_artifact_retirement_intent_locked()
+                if retirement is None:
+                    return True
+                retiring_epoch, replacement_epoch = retirement
+                self._write_artifact_epoch_locked(replacement_epoch)
+                accounting = self._load_accounting_locked(persist_missing=False)
+                managed = self._managed_artifact_epochs_locked()
+                for ref, owner_epoch in managed.items():
+                    if retiring_epoch is None or owner_epoch != retiring_epoch:
+                        continue
+                    before_bytes = self._ref_stored_bytes_locked(ref)
+                    if before_bytes > accounting.total_bytes:
+                        raise ValueError("artifact accounting baseline is inconsistent")
+                    pending = self._begin_pending_delete_locked(
+                        accounting,
+                        ref,
+                        before_bytes,
+                    )
+                    accounting = self._apply_pending_delete_locked(pending)
+                self._delete_artifact_retirement_intent_locked()
             return True
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
@@ -1026,15 +1022,14 @@ class FilesystemArtifactStore:
         if not _is_sha256_ref(ref):
             return
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    accounting = self._load_accounting_locked(persist_missing=False)
-                    before_bytes = self._ref_stored_bytes_locked(ref)
-                    if before_bytes > accounting.total_bytes:
-                        raise ValueError("artifact accounting baseline is inconsistent")
-                    pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
-                    self._apply_pending_delete_locked(pending)
-                    self._cap_rejected_accounting = None
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                accounting = self._load_accounting_locked(persist_missing=False)
+                before_bytes = self._ref_stored_bytes_locked(ref)
+                if before_bytes > accounting.total_bytes:
+                    raise ValueError("artifact accounting baseline is inconsistent")
+                pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
+                self._apply_pending_delete_locked(pending)
+                self._cap_rejected_accounting = None
         except (NotImplementedError, OSError, ValueError):
             logger.warning("Artifact delete claim failed for ref=%s", ref, exc_info=True)
 
@@ -1043,18 +1038,17 @@ class FilesystemArtifactStore:
         if not _is_sha256_ref(ref) or not _is_cleanup_token(cleanup_token):
             return False
         try:
-            with self._write_claim():
-                with self._reuse_session_fd_locked(create=True):
-                    accounting = self._load_accounting_locked(persist_missing=False)
-                    if self._read_cleanup_token_locked(ref) != cleanup_token:
-                        return False
-                    before_bytes = self._ref_stored_bytes_locked(ref)
-                    if before_bytes > accounting.total_bytes:
-                        raise ValueError("artifact accounting baseline is inconsistent")
-                    pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
-                    self._apply_pending_delete_locked(pending)
-                    self._cap_rejected_accounting = None
-                    return not self.has(ref)
+            with self._write_claim(), self._reuse_session_fd_locked(create=True):
+                accounting = self._load_accounting_locked(persist_missing=False)
+                if self._read_cleanup_token_locked(ref) != cleanup_token:
+                    return False
+                before_bytes = self._ref_stored_bytes_locked(ref)
+                if before_bytes > accounting.total_bytes:
+                    raise ValueError("artifact accounting baseline is inconsistent")
+                pending = self._begin_pending_delete_locked(accounting, ref, before_bytes)
+                self._apply_pending_delete_locked(pending)
+                self._cap_rejected_accounting = None
+                return not self.has(ref)
         except (NotImplementedError, OSError, ValueError):
             logger.warning(
                 "Conditional artifact delete failed for ref=%s",
@@ -1361,10 +1355,7 @@ class FilesystemArtifactStore:
             path = self._accounting_path()
             if self._path_has_link_or_reparse(path):
                 raise OSError(f"Refusing symlinked artifact accounting path: {path}")
-            try:
-                fd = os.open(path, _FILE_OPEN_FLAGS)
-            except FileNotFoundError:
-                raise
+            fd = os.open(path, _FILE_OPEN_FLAGS)
             close_fd = True
         else:
             session_fd, owns_session_fd = self._active_or_open_session_fd(create=False)
@@ -1487,7 +1478,7 @@ class FilesystemArtifactStore:
                 raise exc from None
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
                 return 0
-            raise exc
+            raise
         try:
             return os.fstat(fd).st_size
         finally:
@@ -2076,7 +2067,7 @@ class FilesystemArtifactStore:
 
     def _create_cleanup_token_with_paths(self, ref: str, payload: bytes) -> None:
         path = self._cleanup_token_path(ref)
-        if self._path_has_link_or_reparse(path):
+        if self._path_has_link_or_reparse(path):  # noqa: SIM102 nested branches preserve decision context
             if not self._delete_cleanup_token_with_paths(ref):
                 raise OSError(f"Refusing symlinked artifact cleanup token: {path}")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2128,31 +2119,28 @@ class FilesystemArtifactStore:
         if not stat.S_ISDIR(metadata.st_mode):
             raise OSError(f"Artifact session path is not a directory: {self._dir}")
         managed: dict[str, str | None] = {}
-        try:
-            candidates = self._dir.glob(f"*/*{_MANAGED_ARTIFACT_SUFFIX}")
-            for path in candidates:
-                ref = path.name.removesuffix(_MANAGED_ARTIFACT_SUFFIX)
-                if not _is_sha256_ref(ref) or path.parent.name != ref[:2]:
+        candidates = self._dir.glob(f"*/*{_MANAGED_ARTIFACT_SUFFIX}")
+        for path in candidates:
+            ref = path.name.removesuffix(_MANAGED_ARTIFACT_SUFFIX)
+            if not _is_sha256_ref(ref) or path.parent.name != ref[:2]:
+                continue
+            try:
+                if self._path_has_link_or_reparse(path):
                     continue
-                try:
-                    if self._path_has_link_or_reparse(path):
-                        continue
-                    marker_metadata = path.stat()
-                    if (
-                        not stat.S_ISREG(marker_metadata.st_mode)
-                        or marker_metadata.st_nlink != 1
-                        or marker_metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
-                    ):
-                        continue
-                    managed[ref] = _artifact_epoch_from_bytes(path.read_bytes())
-                except (OSError, ValueError):
-                    logger.warning(
-                        "Artifact ownership metadata is invalid for ref=%s; preserving",
-                        ref,
-                        exc_info=True,
-                    )
-        except OSError:
-            raise
+                marker_metadata = path.stat()
+                if (
+                    not stat.S_ISREG(marker_metadata.st_mode)
+                    or marker_metadata.st_nlink != 1
+                    or marker_metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
+                ):
+                    continue
+                managed[ref] = _artifact_epoch_from_bytes(path.read_bytes())
+            except (OSError, ValueError):
+                logger.warning(
+                    "Artifact ownership metadata is invalid for ref=%s; preserving",
+                    ref,
+                    exc_info=True,
+                )
         return managed
 
     def _delete_with_paths(self, ref: str) -> None:

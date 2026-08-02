@@ -352,9 +352,8 @@ def _write_bundle_archive(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_name: str | None = None
     try:
-        tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
-        tmp_name = tmp.name
-        tmp.close()  # Release the fd; ZipFile will open the path itself.
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as tmp:
+            tmp_name = tmp.name
         with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
             referenced_artifact_refs = _write_journal_member(zf, journal)
             _require_referenced_artifacts(
@@ -468,9 +467,7 @@ def _write_inline_manifest(
             member.write(b",")
         member.write(b'"inline_artifacts":{')
 
-        count = 0
-        for source in artifacts:
-            count += 1
+        for count, source in enumerate(artifacts, start=1):
             if count > _INLINE_ARTIFACT_COUNT_CAP:
                 raise BundleValidationError(
                     f"Bundle has more than {_INLINE_ARTIFACT_COUNT_CAP} inline artifacts",
@@ -634,11 +631,7 @@ def export_turn_bundle(source: RunBundle, turn_id: str, path: str | Path) -> Non
 
 
 def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
-    d: dict[str, Any] = {}
-    for k, v in manifest.__dict__.items():
-        if not k.startswith("_"):
-            d[k] = v
-    return d
+    return {k: v for k, v in manifest.__dict__.items() if not k.startswith("_")}
 
 
 def _collect_provider_versions(session: object) -> dict[str, Any]:
@@ -656,6 +649,6 @@ def _collect_provider_versions(session: object) -> dict[str, Any]:
         if provider is not None and hasattr(provider, "version_info"):
             try:
                 versions[attr] = provider.version_info()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
     return versions

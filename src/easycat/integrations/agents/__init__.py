@@ -39,7 +39,7 @@ from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
 from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
 from easycat.integrations.agents.template import BridgeTemplate
 
-__all__ = [
+__all__ = [  # noqa: RUF022 public extension surface order is documented
     "AgentBridgeEvent",
     "AgentRecorder",
     "AgentRunner",

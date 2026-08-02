@@ -699,7 +699,7 @@ class TestMCPWiringMockServer:
             agent.name = "Test"
             bridge = PydanticAIBridge(agent=agent, mcp_servers=["stdio://test"])
             assert bridge._mcp_servers == ["stdio://test"]
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             pytest.skip("pydantic_ai construction requires specific mock")
 
     def test_pydantic_bridge_graph_stores_mcp_servers(self):
@@ -715,7 +715,7 @@ class TestMCPWiringMockServer:
                 mcp_servers=["stdio://test"],
             )
             assert bridge._mcp_servers == ["stdio://test"]
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             pytest.skip("pydantic_ai construction requires specific mock")
 
 
@@ -835,6 +835,7 @@ class TestNoToolRegistryAfterMCP:
                 ["grep", "-r", pattern, "src/easycat/"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             assert result.stdout.strip() == "", (
                 f"Found tool pattern {pattern!r} in src/easycat/:\n{result.stdout}"
@@ -856,6 +857,7 @@ class TestNoToolRegistryAfterMCP:
                 ["grep", "-rE", pattern, "src/easycat/"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             offending = [
                 line

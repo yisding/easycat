@@ -261,7 +261,7 @@ class TestOpenAITTS:
         provider = self._make_provider()
         fake_response = StreamClosedResponse([])
 
-        with patch.object(provider._client, "stream", return_value=fake_response):
+        with patch.object(provider._client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(httpx.StreamClosed):
                 async for _event in provider.synthesize("long text"):
                     pass
@@ -276,7 +276,7 @@ class TestOpenAITTS:
         provider = self._make_provider()
         fake_response = FakeStreamResponse([], status_code=429)
 
-        with patch.object(provider._client, "stream", return_value=fake_response):
+        with patch.object(provider._client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(httpx.HTTPStatusError):
                 async for _ in provider.synthesize("error test"):
                     pass
@@ -295,7 +295,7 @@ class TestOpenAITTS:
         provider = OpenAITTS(OpenAITTSConfig(api_key="k", event_bus=bus))
         fake_response = FakeStreamResponse([], status_code=429)
 
-        with patch.object(provider._client, "stream", return_value=fake_response):
+        with patch.object(provider._client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(httpx.HTTPStatusError):
                 async for _ in provider.synthesize("error test"):
                     pass
@@ -360,7 +360,7 @@ class TestOpenAITTS:
         provider = self._make_provider()
         fake_response = FakeStreamResponse([], status_code=500)
 
-        with patch.object(provider._client, "stream", return_value=fake_response):
+        with patch.object(provider._client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(httpx.HTTPStatusError):
                 async for _ in provider.synthesize("error test"):
                     pass

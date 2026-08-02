@@ -554,7 +554,7 @@ def _tool_args_preview(args_input: Any) -> str:
     if isinstance(args_input, dict):
         try:
             return json.dumps(args_input, default=str)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return str(args_input)
     if args_input is not None:
         return str(args_input)

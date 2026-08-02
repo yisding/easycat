@@ -233,7 +233,7 @@ class ElevenLabsTTS(_WSTTSBase):
                     self._warmup_persistent_ws(),
                     timeout=self._config.warmup_timeout_s,
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # Warmup moves connection setup off the reply path but must never
             # become a session availability gate. First synthesis retries.
             logger.debug("ElevenLabs TTS warmup skipped: %s", exc)

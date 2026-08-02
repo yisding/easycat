@@ -21,11 +21,11 @@ def _custom_action_example() -> dict[str, Any]:
     code = re.search(r"```python\n(?P<code>.*?)\n   ```", section, flags=re.DOTALL)
     assert code is not None
 
-    source = "\n".join(
-        line[3:] if line.startswith("   ") else line for line in code.group("code").splitlines()
-    )
+    source = "\n".join(line.removeprefix("   ") for line in code.group("code").splitlines())
     namespace: dict[str, Any] = {}
-    exec(compile(source, str(EXERCISES), "exec"), namespace)
+    exec(  # noqa: S102 trusted documentation example executed as a contract test
+        compile(source, str(EXERCISES), "exec"), namespace
+    )
     return namespace
 
 

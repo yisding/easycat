@@ -122,7 +122,7 @@ class PeriodicHealthChecker:
         """Run a single health check. Returns True if healthy."""
         try:
             healthy = await self._provider.health_check()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             await self._record_failure(str(exc))
             return False
         if not healthy:

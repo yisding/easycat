@@ -5,6 +5,7 @@ import os
 import re
 import runpy
 from pathlib import Path
+from typing import Self
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -173,7 +174,7 @@ def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
 
 
 def test_ws_server_example_imports():
-    import examples.ws_server as ws_server
+    from examples import ws_server
 
     assert callable(ws_server.main)
 
@@ -196,7 +197,7 @@ def test_ws_server_query_token_auth_requires_explicit_env_opt_in(
     configured: str | None,
     expected: bool,
 ) -> None:
-    import examples.ws_server as ws_server
+    from examples import ws_server
 
     if configured is None:
         monkeypatch.delenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", raising=False)
@@ -209,13 +210,13 @@ def test_ws_server_query_token_auth_requires_explicit_env_opt_in(
 def test_ws_server_passes_browser_demo_opt_in_to_config_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import examples.ws_server as ws_server
+    from examples import ws_server
 
     observed: dict[str, object] = {}
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-key")
     monkeypatch.setenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", "1")
 
-    def fake_run(config, **kwargs):  # noqa: ANN001
+    def fake_run(config, **kwargs):
         observed["config"] = config
         observed.update(kwargs)
 
@@ -244,7 +245,7 @@ def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_webtransport_server_example_imports():
-    import examples.webtransport_server as webtransport_server
+    from examples import webtransport_server
 
     assert callable(webtransport_server.main)
 
@@ -322,7 +323,7 @@ async def test_docker_healthcheck_http_requires_2xx(
     )
 
     class _Client:
-        async def __aenter__(self) -> _Client:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *_args: object) -> None:
@@ -575,13 +576,13 @@ def test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig() -> Non
 
 
 def test_ws_supervisor_server_example_imports():
-    import examples.ws_supervisor_server as ws_supervisor_server
+    from examples import ws_supervisor_server
 
     assert callable(ws_supervisor_server.main)
 
 
 def test_ws_supervisor_server_defaults_to_loopback(monkeypatch: pytest.MonkeyPatch):
-    import examples.ws_supervisor_server as ws_supervisor_server
+    from examples import ws_supervisor_server
 
     monkeypatch.delenv("EASYCAT_WS_CALLER_HOST", raising=False)
     monkeypatch.delenv("EASYCAT_WS_SUPERVISOR_HOST", raising=False)
@@ -593,7 +594,7 @@ def test_ws_supervisor_server_defaults_to_loopback(monkeypatch: pytest.MonkeyPat
 
 
 def test_ws_supervisor_server_uses_configured_hosts(monkeypatch: pytest.MonkeyPatch):
-    import examples.ws_supervisor_server as ws_supervisor_server
+    from examples import ws_supervisor_server
 
     monkeypatch.setenv("EASYCAT_WS_CALLER_HOST", "0.0.0.0")
     monkeypatch.setenv("EASYCAT_WS_SUPERVISOR_HOST", "127.0.0.1")

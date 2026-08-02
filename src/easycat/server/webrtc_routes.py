@@ -622,15 +622,15 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
         if listener_error is None:
             listener_error = exc
         else:
-            logger.warning("Standalone WebRTC listener cleanup also failed", exc_info=True)
+            logger.warning("Standalone WebRTC listener cleanup also failed")
 
     try:
         await site.stop()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         record_error(exc)
     try:
         await runner.cleanup()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         record_error(exc)
     try:
         await gate.drain(
@@ -640,12 +640,12 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
             force_timeout_s=max(force_shutdown_timeout_s, 0.0),
             stop_for_key=routes._stop_managed_session,
         )
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
     try:
         await routes.cancel_cleanup_tasks(timeout_s=max(force_shutdown_timeout_s, 0.0))
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
     try:
@@ -660,7 +660,7 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
             timeout_s=force_shutdown_timeout_s,
         )
         body_error = body_error or report_error
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
 

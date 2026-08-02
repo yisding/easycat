@@ -56,7 +56,7 @@ class ReconnectConfig:
 
     def __post_init__(self) -> None:
         if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int):
-            raise ValueError("max_retries must be an integer")
+            raise ValueError("max_retries must be an integer")  # noqa: TRY004 domain-specific validation error
         if self.max_retries < -1:
             raise ValueError("max_retries must be -1 for unlimited retries or >= 0")
 
@@ -70,7 +70,7 @@ class ReconnectConfig:
             raise ValueError("backoff_factor must be >= 1.0")
 
         if not isinstance(self.jitter_factor, int | float) or isinstance(self.jitter_factor, bool):
-            raise ValueError("jitter_factor must be a number between 0.0 and 1.0")
+            raise ValueError("jitter_factor must be a number between 0.0 and 1.0")  # noqa: TRY004 domain-specific validation error
         if not is_finite_number(self.jitter_factor):
             raise ValueError("jitter_factor must be a finite number between 0.0 and 1.0")
         if self.jitter_factor < 0.0 or self.jitter_factor > 1.0:
@@ -110,7 +110,7 @@ async def connect_until_stopped(
         connect_task.cancel()
         try:
             await ws.close()
-        except BaseException as close_error:
+        except BaseException as close_error:  # noqa: BLE001 intentional boundary or best-effort cleanup
             wait_error.add_note(
                 f"WebSocket cleanup after interrupted connect failed: {close_error!r}"
             )
@@ -357,7 +357,7 @@ class ReconnectingWebSocket:
             self._retain_connection_for_close(candidate)
             try:
                 await self._close_retained_connection(candidate)
-            except BaseException as close_error:
+            except BaseException as close_error:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 install_error.add_note(f"candidate rollback close failed: {close_error!r}")
             raise
 
@@ -383,10 +383,7 @@ class ReconnectingWebSocket:
         async with self._connection_cleanup_lock:
             if not any(owned is connection for owned in self._pending_connection_closes):
                 return
-            try:
-                await connection.close()
-            except BaseException:
-                raise
+            await connection.close()
             self._release_connection_after_close(connection)
 
     async def _retry_pending_connection_closes(self) -> None:
@@ -458,7 +455,7 @@ class ReconnectingWebSocket:
             return
         try:
             connection = task.result()
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return
         self._retain_connection_for_close(connection)
         close_task = asyncio.create_task(
@@ -695,7 +692,7 @@ class ReconnectingWebSocket:
         try:
             async with self._connect_lock:
                 await self._connect_with_retry(notify_reconnect=True)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if self._closed:
                 return False
             # Reconnect is exhausted and the socket is terminally dead.

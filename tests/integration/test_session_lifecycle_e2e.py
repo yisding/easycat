@@ -442,12 +442,14 @@ async def test_webrtc_offer_with_wrong_type_rejected() -> None:
     await transport.connect()
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
                 f"http://127.0.0.1:{port}/offer",
                 json={"sdp": "v=0\r\n...", "type": "answer"},
-            ) as resp:
-                assert resp.status == 400
+            ) as resp,
+        ):
+            assert resp.status == 400
     finally:
         await transport.disconnect()
 
@@ -466,12 +468,14 @@ async def test_webrtc_offer_with_array_body_rejected() -> None:
     await transport.connect()
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
                 f"http://127.0.0.1:{port}/offer",
                 json=["not", "a", "dict"],
-            ) as resp:
-                assert resp.status == 400
+            ) as resp,
+        ):
+            assert resp.status == 400
     finally:
         await transport.disconnect()
 

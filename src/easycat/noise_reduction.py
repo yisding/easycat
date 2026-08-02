@@ -272,7 +272,7 @@ class RNNoiseReducer:
         if self._state and self._rnnoise:
             try:
                 self._rnnoise.destroy(self._state)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             self._state = None
 
@@ -344,7 +344,7 @@ class KrispNoiseReducer:
                         "krisp_audio", purpose="Krisp noise reduction"
                     )
                 self._krisp_audio.destroy_session(self._session)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             self._session = None
 
@@ -357,7 +357,7 @@ class KrispNoiseReducer:
             from importlib.metadata import version
 
             sdk_ver = version("krisp-audio")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
         return {
             "provider": "krisp",
@@ -484,7 +484,7 @@ def create_noise_reducer(config: Any = None) -> Any:
 
     cfg = config or NoiseReducerConfig()
     if not isinstance(cfg, NoiseReducerConfig):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 domain-specific validation error
             f"Unsupported noise reducer configuration type: {type(cfg).__name__!r}. "
             "Pass NoiseReducerConfig, a registered config, or a noise-reducer instance."
         )

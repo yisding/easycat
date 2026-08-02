@@ -12,7 +12,7 @@ import base64
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -38,11 +38,11 @@ class WSVoiceClient:
     connect_attempts: int = 2
     connect_retry_delay_s: float = 0.25
 
-    async def __aenter__(self) -> WSVoiceClient:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         await self.close()
 
     async def connect(self) -> None:
@@ -190,13 +190,13 @@ class WSVoiceClient:
         if self._ws is not None:
             try:
                 await self._ws.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
         if self._recv_task is not None:
             self._recv_task.cancel()
             try:
                 await self._recv_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
 
 
@@ -222,11 +222,11 @@ class TwilioVoiceClient:
     _inbound: list[dict[str, Any]] = field(default_factory=list, init=False)
     _closed: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
-    async def __aenter__(self) -> TwilioVoiceClient:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         await self.close()
 
     async def connect(self) -> None:
@@ -328,7 +328,7 @@ class TwilioVoiceClient:
         for m in self.outbound_media_frames():
             try:
                 out += base64.b64decode(m["media"]["payload"])
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
                 continue
         return bytes(out)
 
@@ -336,13 +336,13 @@ class TwilioVoiceClient:
         if self._ws is not None:
             try:
                 await self._ws.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
         if self._recv_task is not None:
             self._recv_task.cancel()
             try:
                 await self._recv_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
 
 

@@ -132,18 +132,12 @@ def test_secrets_policy_still_redacts_credentials() -> None:
 
 def test_secrets_policy_scrubs_credentials_inside_urls() -> None:
     password = "hunter" + "2"
-    authority = "".join(("alice", ":", password, "@", "acme.example"))
-    value = "".join(
-        (
-            "https://",
-            authority,
-            "/orders?order=1234567890&X-Amz-Signature=signed-value",
-        )
-    )
+    authority = f"alice:{password}@acme.example"
+    value = f"https://{authority}/orders?order=1234567890&X-Amz-Signature=signed-value"
 
     redacted = redact_text(value, policy="secrets")
 
-    redacted_authority = "".join(("alice", ":", REDACTED_SECRET, "@", "acme.example"))
+    redacted_authority = f"alice:{REDACTED_SECRET}@acme.example"
     assert redacted == (
         f"https://{redacted_authority}/orders?order=1234567890&X-Amz-Signature={REDACTED_SECRET}"
     )

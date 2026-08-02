@@ -48,4 +48,4 @@ def __dir__() -> list[str]:
     return sorted(set(list(globals()) + list(_LAZY)))
 
 
-__all__ = sorted(_LAZY)
+__all__ = sorted(_LAZY)  # noqa: PLE0605 exports are generated from the public registry

@@ -145,7 +145,7 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             audio_bytes = data.get("audio_bytes")
             if r.get("name") == TTS_FRAME_RECORD_NAME and isinstance(audio_bytes, int):
                 bucket["tts_audio_bytes"] += audio_bytes
-            if r.get("name") in (STAGE_START_RECORD_NAME, "stt_audio_in"):
+            if r.get("name") in (STAGE_START_RECORD_NAME, "stt_audio_in"):  # noqa: SIM102 nested branches preserve decision context
                 if isinstance(audio_bytes, int) and stage == "stt":
                     bucket["stt_audio_bytes"] += audio_bytes
         # A single barge-in fans an InterruptSignal across all stages, so it

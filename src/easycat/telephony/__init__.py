@@ -85,7 +85,7 @@ _LAZY_ATTR: dict[str, str] = {
     "RetryStrategyConfig": "easycat.telephony.retry",
 }
 
-__all__ = sorted(_LAZY_ATTR)
+__all__ = sorted(_LAZY_ATTR)  # noqa: PLE0605 exports are generated from the public registry
 
 
 if TYPE_CHECKING:

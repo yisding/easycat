@@ -157,15 +157,7 @@ def test_maintained_markdown_local_links_resolve() -> None:
 def test_markdown_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:
     page = tmp_path / "page.md"
     page.write_text(
-        "\n".join(
-            (
-                "# Root",
-                "## Repeated",
-                "## Repeated",
-                "## Repeated!",
-                "## Repeated",
-            )
-        ),
+        "# Root\n## Repeated\n## Repeated\n## Repeated!\n## Repeated",
         encoding="utf-8",
     )
 

@@ -1332,7 +1332,7 @@ async def test_await_drain_extends_playout_deadline_beyond_fixed_timeout(monkeyp
             return 0.0 if clock.now >= drain_at else 5000.0
 
     transport = _PlayoutTransport()
-    router, state = _make_router(transport=transport)
+    router, _state = _make_router(transport=transport)
 
     real_sleep = asyncio.sleep
 

@@ -160,7 +160,7 @@ class OpenAIAgentsBridge:
                 model_name,
                 timeout=_OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("OpenAI Agents warmup skipped: %s", exc)
 
     def _warmup_model_name(self, default_model: str) -> str:
@@ -367,7 +367,7 @@ class OpenAIAgentsBridge:
                 self._agent.mcp_servers = saved_mcp_servers
             try:
                 history = result.to_input_list()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             else:
                 # A hard ``aclose()`` cancel can snapshot before the run

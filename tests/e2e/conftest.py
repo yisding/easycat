@@ -145,7 +145,7 @@ async def _start_ws_server(session_builder: SessionBuilder) -> WSServerHandle:
             # inspect pre-stop state if needed. Post-stop journal reads are
             # also supported; cleanup happens in the fixture teardown below.
             await ws.wait_closed()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             handle.exception = exc
             raise
 
@@ -170,7 +170,7 @@ async def _stop_ws_server(handle: WSServerHandle) -> None:
     for session in sessions:
         try:
             await asyncio.wait_for(session.stop(), timeout=_TEARDOWN_TIMEOUT_S)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
     if handle.server is not None:
         handle.server.close()
@@ -181,7 +181,7 @@ async def _stop_ws_server(handle: WSServerHandle) -> None:
             # the sockets are already closed by ``close()`` above, and a
             # leaked handler task is a far cheaper failure than a dead worker.
             await asyncio.wait_for(handle.server.wait_closed(), timeout=_TEARDOWN_TIMEOUT_S)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
 

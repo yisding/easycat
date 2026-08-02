@@ -100,7 +100,7 @@ class InMemoryRingBuffer:
                 return -1
             result = "pass"
             return sequence
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._enter_degraded(session_id, exc)
             return -1
         finally:
@@ -356,5 +356,5 @@ class InMemoryRingBuffer:
                     self._decrement_and_evict_refs(evicted_refs)
                     if evicted_sequence == self._overflow_marker_sequence:
                         self._overflow_marker_sequence = None
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass

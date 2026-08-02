@@ -66,8 +66,8 @@ class TestWebTransportServerWiring:
             _noop,
         )
 
-        assert server._auth_policy is not None  # noqa: SLF001
-        assert server._session_config.auth_token is None  # noqa: SLF001
+        assert server._auth_policy is not None
+        assert server._session_config.auth_token is None
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -147,8 +147,8 @@ class TestWebTransportServerWiring:
         )
         with pytest.raises(RuntimeError, match="incompatible aioquic"):
             await server.start()
-        assert server._server is None  # noqa: SLF001
-        assert server._started is False  # noqa: SLF001
+        assert server._server is None
+        assert server._started is False
 
     @pytest.mark.asyncio
     async def test_start_requires_cert(self) -> None:
@@ -267,7 +267,7 @@ class TestWebTransportServerWiring:
         assert not second.done()
         release_serve.set()
         await asyncio.gather(first, second)
-        assert server._accepting_sessions is True  # noqa: SLF001
+        assert server._accepting_sessions is True
         await server.stop()
 
         assert serve_calls == 1
@@ -293,12 +293,12 @@ class TestWebTransportServerWiring:
         )
 
         await server.start()
-        assert server._can_accept_session() is True  # noqa: SLF001
+        assert server._can_accept_session() is True
         await server.stop()
-        assert server._can_accept_session() is False  # noqa: SLF001
+        assert server._can_accept_session() is False
 
         await server.start()
-        assert server._can_accept_session() is True  # noqa: SLF001
+        assert server._can_accept_session() is True
         await server.stop()
 
         first_bound.close.assert_called_once()
@@ -334,9 +334,9 @@ class TestWebTransportServerWiring:
         release_serve.set()
         await asyncio.gather(starting, stopping)
 
-        assert server._started is False  # noqa: SLF001
-        assert server._accepting_sessions is False  # noqa: SLF001
-        assert server._server is None  # noqa: SLF001
+        assert server._started is False
+        assert server._accepting_sessions is False
+        assert server._server is None
         bound.close.assert_called_once()
         bound.wait_closed.assert_awaited_once()
 
@@ -358,9 +358,9 @@ class TestWebTransportServerWiring:
             handler,
         )
         bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock(side_effect=wait_closed))
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
-        server._accepting_sessions = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
+        server._accepting_sessions = True
 
         stopping = asyncio.create_task(server.stop())
         await wait_closed_entered.wait()
@@ -371,20 +371,20 @@ class TestWebTransportServerWiring:
             _quic_protocol=late_protocol,  # type: ignore[arg-type]
             _session_id=0,
         )
-        assert server._can_accept_session() is False  # noqa: SLF001
-        server._dispatch_session(late_transport)  # noqa: SLF001
+        assert server._can_accept_session() is False
+        server._dispatch_session(late_transport)
 
         assert late_protocol.close_calls == [(0, "server not accepting sessions")]
-        assert server._handler_tasks == set()  # noqa: SLF001
+        assert server._handler_tasks == set()
         assert handler_called.is_set() is False
 
         release_wait_closed.set()
         await stopping
 
-        assert server._started is False  # noqa: SLF001
-        assert server._accepting_sessions is False  # noqa: SLF001
-        assert server._server is None  # noqa: SLF001
-        assert server._handler_tasks == set()  # noqa: SLF001
+        assert server._started is False
+        assert server._accepting_sessions is False
+        assert server._server is None
+        assert server._handler_tasks == set()
 
     @pytest.mark.asyncio
     async def test_server_cleanup_failures_are_best_effort_and_retryable(self) -> None:
@@ -399,16 +399,16 @@ class TestWebTransportServerWiring:
             close=Mock(side_effect=[RuntimeError("server close failed"), None]),
             wait_closed=AsyncMock(side_effect=[RuntimeError("server wait failed"), None]),
         )
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
 
         with pytest.raises(RuntimeError, match="server close failed"):
             await server.stop()
 
         bound.close.assert_called_once()
         bound.wait_closed.assert_awaited_once()
-        assert server._started is False  # noqa: SLF001
-        assert server._server is bound  # noqa: SLF001
+        assert server._started is False
+        assert server._server is bound
         with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
             await server.start()
 
@@ -416,8 +416,8 @@ class TestWebTransportServerWiring:
 
         assert bound.close.call_count == 2
         assert bound.wait_closed.await_count == 2
-        assert server._server is None  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._server is None
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_server_stop_does_not_hide_attribute_error_from_wait_closed(self) -> None:
@@ -433,14 +433,14 @@ class TestWebTransportServerWiring:
             close=Mock(),
             wait_closed=AsyncMock(side_effect=wait_error),
         )
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
 
         with pytest.raises(AttributeError, match="wait implementation failed"):
             await server.stop()
 
-        assert server._cleanup_error is wait_error  # noqa: SLF001
-        assert server._server is bound  # noqa: SLF001
+        assert server._cleanup_error is wait_error
+        assert server._server is bound
 
     @pytest.mark.asyncio
     async def test_handler_disconnect_failure_is_retained_and_retried_by_stop(self) -> None:
@@ -451,8 +451,8 @@ class TestWebTransportServerWiring:
             WebTransportTransportConfig(max_concurrent_sessions=1),
             _noop,
         )
-        server._started = True  # noqa: SLF001
-        server._accepting_sessions = True  # noqa: SLF001
+        server._started = True
+        server._accepting_sessions = True
         transport = WebTransportConnectionTransport()
         stop_error = RuntimeError("session stop failed once")
         session = SimpleNamespace(
@@ -460,21 +460,21 @@ class TestWebTransportServerWiring:
             stop=AsyncMock(side_effect=[stop_error, None]),
             close_connection=Mock(),
         )
-        transport._session = session  # type: ignore[assignment]  # noqa: SLF001
+        transport._session = session  # type: ignore[assignment]
 
-        await server._run_handler(transport)  # noqa: SLF001
+        await server._run_handler(transport)
 
-        assert transport._session_stop_pending is True  # noqa: SLF001
-        assert server._pending_transport_cleanup == {transport}  # noqa: SLF001
-        assert server._cleanup_error is stop_error  # noqa: SLF001
-        assert server._can_accept_session() is False  # noqa: SLF001
+        assert transport._session_stop_pending is True
+        assert server._pending_transport_cleanup == {transport}
+        assert server._cleanup_error is stop_error
+        assert server._can_accept_session() is False
 
         await server.stop()
 
         assert session.stop.await_count == 2
-        assert transport._session_stop_pending is False  # noqa: SLF001
-        assert server._pending_transport_cleanup == set()  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert transport._session_stop_pending is False
+        assert server._pending_transport_cleanup == set()
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_handler_does_not_suppress_process_control_from_disconnect(self) -> None:
@@ -490,10 +490,10 @@ class TestWebTransportServerWiring:
         )
 
         with pytest.raises(SystemExit, match="stop process"):
-            await server._run_handler(transport)  # type: ignore[arg-type]  # noqa: SLF001
+            await server._run_handler(transport)  # type: ignore[arg-type]
 
-        assert server._pending_transport_cleanup == set()  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._pending_transport_cleanup == set()
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_stop_retains_transport_cleanup_until_a_later_retry_succeeds(self) -> None:
@@ -509,21 +509,21 @@ class TestWebTransportServerWiring:
             stop=AsyncMock(side_effect=[first_error, retry_error, None]),
             close_connection=Mock(),
         )
-        transport._session = session  # type: ignore[assignment]  # noqa: SLF001
+        transport._session = session  # type: ignore[assignment]
 
-        await server._run_handler(transport)  # noqa: SLF001
+        await server._run_handler(transport)
 
         with pytest.raises(RuntimeError, match="server stop retry failed"):
             await server.stop()
 
-        assert server._pending_transport_cleanup == {transport}  # noqa: SLF001
-        assert server._cleanup_error is retry_error  # noqa: SLF001
+        assert server._pending_transport_cleanup == {transport}
+        assert server._cleanup_error is retry_error
 
         await server.stop()
 
         assert session.stop.await_count == 3
-        assert server._pending_transport_cleanup == set()  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._pending_transport_cleanup == set()
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_cancelled_stop_blocks_restart_until_server_cleanup_retry(self) -> None:
@@ -541,8 +541,8 @@ class TestWebTransportServerWiring:
             close=Mock(),
             wait_closed=AsyncMock(side_effect=block_wait_closed),
         )
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
 
         stopping = asyncio.create_task(server.stop())
         await wait_entered.wait()
@@ -550,16 +550,16 @@ class TestWebTransportServerWiring:
         with pytest.raises(asyncio.CancelledError):
             await stopping
 
-        assert server._started is False  # noqa: SLF001
-        assert server._server is bound  # noqa: SLF001
-        assert isinstance(server._cleanup_error, RuntimeError)  # noqa: SLF001
+        assert server._started is False
+        assert server._server is bound
+        assert isinstance(server._cleanup_error, RuntimeError)
         with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
             await server.start()
 
         bound.wait_closed = AsyncMock()
         await server.stop()
-        assert server._server is None  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._server is None
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_stop_bounds_cancellation_resistant_handler_until_retry(self) -> None:
@@ -583,18 +583,18 @@ class TestWebTransportServerWiring:
             lambda _transport: asyncio.sleep(0),
         )
         bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
         handler = asyncio.create_task(ignores_cancellation())
-        server._handler_tasks.add(handler)  # noqa: SLF001
+        server._handler_tasks.add(handler)
         await handler_started.wait()
 
         with pytest.raises(RuntimeError, match="session handler.*did not stop"):
             await asyncio.wait_for(server.stop(), timeout=1)
 
-        assert handler in server._handler_tasks  # noqa: SLF001
-        assert server._server is None  # noqa: SLF001
-        assert server._cleanup_error is not None  # noqa: SLF001
+        assert handler in server._handler_tasks
+        assert server._server is None
+        assert server._cleanup_error is not None
         with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
             await server.start()
 
@@ -602,8 +602,8 @@ class TestWebTransportServerWiring:
         await handler
         await server.stop()
 
-        assert server._handler_tasks == set()  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._handler_tasks == set()
+        assert server._cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_stop_bounds_cancellation_resistant_listener_until_retry(self) -> None:
@@ -630,16 +630,16 @@ class TestWebTransportServerWiring:
             close=Mock(),
             wait_closed=AsyncMock(side_effect=ignores_cancellation),
         )
-        server._server = bound  # noqa: SLF001
-        server._started = True  # noqa: SLF001
+        server._server = bound
+        server._started = True
 
         stopping = asyncio.create_task(server.stop())
         await wait_entered.wait()
         with pytest.raises(RuntimeError, match="listener did not close"):
             await asyncio.wait_for(stopping, timeout=1)
 
-        assert server._server is bound  # noqa: SLF001
-        assert server._cleanup_error is not None  # noqa: SLF001
+        assert server._server is bound
+        assert server._cleanup_error is not None
         with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
             await server.start()
 
@@ -654,8 +654,8 @@ class TestWebTransportServerWiring:
         await asyncio.sleep(0)
         await server.stop()
 
-        assert server._server is None  # noqa: SLF001
-        assert server._cleanup_error is None  # noqa: SLF001
+        assert server._server is None
+        assert server._cleanup_error is None
         assert bound.wait_closed.await_count == 1
 
     @pytest.mark.asyncio
@@ -667,7 +667,7 @@ class TestWebTransportServerWiring:
             WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
             lambda transport: asyncio.sleep(0),  # type: ignore[arg-type]
         )
-        server._started = True  # noqa: SLF001 — fake "started"
+        server._started = True
 
         # Run ``stop()`` from within a separate task so that
         # ``asyncio.current_task()`` inside ``stop()`` reliably matches
@@ -677,7 +677,7 @@ class TestWebTransportServerWiring:
         async def handler_calls_stop() -> None:
             handler_task = asyncio.current_task()
             assert handler_task is not None
-            server._handler_tasks.add(handler_task)  # noqa: SLF001
+            server._handler_tasks.add(handler_task)
             await server.stop()
 
         await asyncio.wait_for(asyncio.create_task(handler_calls_stop()), timeout=1)
@@ -705,8 +705,8 @@ class TestWebTransportServerWiring:
             await release_handlers.wait()
 
         server = WebTransportServer(cfg, _handler)
-        server._started = True  # noqa: SLF001
-        server._accepting_sessions = True  # noqa: SLF001
+        server._started = True
+        server._accepting_sessions = True
 
         def _make_transport() -> tuple[WebTransportConnectionTransport, _FakeQuicProtocol]:
             proto = _FakeQuicProtocol()
@@ -719,18 +719,18 @@ class TestWebTransportServerWiring:
 
         accepted = [_make_transport() for _ in range(2)]
         for t, _proto in accepted:
-            server._dispatch_session(t)  # noqa: SLF001 — exercise the real path
+            server._dispatch_session(t)
         await asyncio.wait_for(handler_started.wait(), timeout=1.0)
-        assert len(server._handler_tasks) == 2  # noqa: SLF001
+        assert len(server._handler_tasks) == 2
 
         # Third session is over the cap → force-closed, handler not invoked.
         overflow, overflow_proto = _make_transport()
-        server._dispatch_session(overflow)  # noqa: SLF001
+        server._dispatch_session(overflow)
         assert overflow_proto.close_calls == [(0, "session cap reached")]
-        assert len(server._handler_tasks) == 2  # noqa: SLF001 — unchanged
+        assert len(server._handler_tasks) == 2
 
         release_handlers.set()
-        await asyncio.gather(*server._handler_tasks, return_exceptions=True)  # noqa: SLF001
+        await asyncio.gather(*server._handler_tasks, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_can_accept_session_gate_reflects_cap(self) -> None:
@@ -746,10 +746,10 @@ class TestWebTransportServerWiring:
             await transport.wait_closed()
 
         server = WebTransportServer(cfg, _noop)
-        assert server._can_accept_session() is False  # noqa: SLF001
-        server._started = True  # noqa: SLF001
-        server._accepting_sessions = True  # noqa: SLF001
-        assert server._can_accept_session() is True  # noqa: SLF001
+        assert server._can_accept_session() is False
+        server._started = True
+        server._accepting_sessions = True
+        assert server._can_accept_session() is True
 
         release_slots = asyncio.Event()
 
@@ -757,15 +757,15 @@ class TestWebTransportServerWiring:
             await release_slots.wait()
 
         held = [asyncio.create_task(hold_slot()) for _ in range(2)]
-        server._handler_tasks.update(held)  # noqa: SLF001
+        server._handler_tasks.update(held)
         try:
             # At the cap → the protocol would send 503 and create no transport.
-            assert server._can_accept_session() is False  # noqa: SLF001
+            assert server._can_accept_session() is False
         finally:
             release_slots.set()
             await asyncio.gather(*held, return_exceptions=True)
-            server._handler_tasks.difference_update(held)  # noqa: SLF001
-        assert server._can_accept_session() is True  # noqa: SLF001 — slots freed
+            server._handler_tasks.difference_update(held)
+        assert server._can_accept_session() is True
 
 
 class _FakeManagedSession:
@@ -957,15 +957,15 @@ def test_protocol_rejects_stream_data_for_other_session() -> None:
 
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
-    proto._h3 = object()  # only asserted non-None  # noqa: SLF001
+    proto._h3 = object()  # only asserted non-None
     rec = _Recorder()
-    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
-    proto._accepted_session_id = 5  # noqa: SLF001
+    proto._wt_transport = rec  # type: ignore[assignment]
+    proto._accepted_session_id = 5
 
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         WebTransportStreamDataReceived(data=b"hi", stream_id=8, stream_ended=False, session_id=5)
     )
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         WebTransportStreamDataReceived(data=b"x", stream_id=12, stream_ended=False, session_id=9)
     )
     # Only the matching-session frame was dispatched.
@@ -997,9 +997,9 @@ def test_quic_connection_terminated_marks_session_lost() -> None:
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
     rec = _LostRecorder()
-    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
+    proto._wt_transport = rec  # type: ignore[assignment]
 
-    proto.quic_event_received(  # noqa: SLF001
+    proto.quic_event_received(
         ConnectionTerminated(error_code=0, frame_type=None, reason_phrase="bye")
     )
     assert rec.lost_calls == 1
@@ -1019,21 +1019,19 @@ def test_connect_stream_fin_marks_session_lost() -> None:
 
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
-    proto._h3 = object()  # only asserted non-None  # noqa: SLF001
+    proto._h3 = object()  # only asserted non-None
     rec = _LostRecorder()
-    proto._wt_transport = rec  # type: ignore[assignment]  # noqa: SLF001
-    proto._accepted_session_id = 5  # noqa: SLF001
+    proto._wt_transport = rec  # type: ignore[assignment]
+    proto._accepted_session_id = 5
 
     # FIN on an unrelated stream id → not our session.
-    proto._handle_h3_event(DataReceived(data=b"", stream_id=9, stream_ended=True))  # noqa: SLF001
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=9, stream_ended=True))
     # Non-final data on the CONNECT stream → session still open.
-    proto._handle_h3_event(  # noqa: SLF001
-        DataReceived(data=b"x", stream_id=5, stream_ended=False)
-    )
+    proto._handle_h3_event(DataReceived(data=b"x", stream_id=5, stream_ended=False))
     assert rec.lost_calls == 0
 
     # Lone FIN on the accepted CONNECT/session stream → session closed.
-    proto._handle_h3_event(DataReceived(data=b"", stream_id=5, stream_ended=True))  # noqa: SLF001
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=5, stream_ended=True))
     assert rec.lost_calls == 1
 
 
@@ -1049,14 +1047,14 @@ def test_termination_paths_are_noop_without_accepted_session() -> None:
 
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
-    proto._h3 = object()  # noqa: SLF001
-    proto._wt_transport = None  # noqa: SLF001
-    proto._accepted_session_id = None  # noqa: SLF001
+    proto._h3 = object()
+    proto._wt_transport = None
+    proto._accepted_session_id = None
 
-    proto.quic_event_received(  # noqa: SLF001
+    proto.quic_event_received(
         ConnectionTerminated(error_code=0, frame_type=None, reason_phrase="")
     )
-    proto._handle_h3_event(DataReceived(data=b"", stream_id=7, stream_ended=True))  # noqa: SLF001
+    proto._handle_h3_event(DataReceived(data=b"", stream_id=7, stream_ended=True))
 
 
 class _RecordingH3:
@@ -1067,7 +1065,7 @@ class _RecordingH3:
 
     def send_headers(
         self, stream_id: int, headers: list[tuple[bytes, bytes]], end_stream: bool = False
-    ) -> None:  # noqa: FBT001, FBT002
+    ) -> None:
         self.sent.append((stream_id, headers, end_stream))
 
 
@@ -1075,15 +1073,15 @@ def _connect_protocol(auth_policy: BearerTokenAuth | None) -> tuple[Any, _Record
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
     h3 = _RecordingH3()
-    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
-    proto._accept_path = "/easycat"  # noqa: SLF001
-    proto._wt_transport = None  # noqa: SLF001
-    proto._accepted_session_id = None  # noqa: SLF001
+    proto._h3 = h3  # type: ignore[assignment]
+    proto._accept_path = "/easycat"
+    proto._wt_transport = None
+    proto._accepted_session_id = None
     on_session_calls: list[Any] = []
-    proto._on_session = on_session_calls.append  # noqa: SLF001
-    proto._can_accept = lambda: True  # noqa: SLF001
-    proto._session_config = WebTransportTransportConfig()  # noqa: SLF001
-    proto._auth_policy = auth_policy  # noqa: SLF001
+    proto._on_session = on_session_calls.append
+    proto._can_accept = lambda: True
+    proto._session_config = WebTransportTransportConfig()
+    proto._auth_policy = auth_policy
     proto.transmit = lambda: None  # type: ignore[method-assign]
     return proto, h3, on_session_calls
 
@@ -1110,11 +1108,9 @@ def test_connect_bearer_auth_rejects_missing_or_invalid_token(
     if authorization is not None:
         headers.append((b"authorization", authorization))
 
-    proto._handle_h3_event(  # noqa: SLF001
-        HeadersReceived(headers=headers, stream_id=0, stream_ended=False)
-    )
+    proto._handle_h3_event(HeadersReceived(headers=headers, stream_id=0, stream_ended=False))
 
-    assert proto._wt_transport is None  # noqa: SLF001
+    assert proto._wt_transport is None
     assert on_session_calls == []
     assert dict(h3.sent[0][1]).get(b":status") == b"401"
     assert dict(h3.sent[0][1]).get(b"www-authenticate") == b"Bearer"
@@ -1129,7 +1125,7 @@ def test_connect_bearer_auth_accepts_correct_header() -> None:
     from aioquic.h3.events import HeadersReceived
 
     proto, h3, on_session_calls = _connect_protocol(BearerTokenAuth(token="sekrit"))
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         HeadersReceived(
             headers=[
                 (b":method", b"CONNECT"),
@@ -1142,7 +1138,7 @@ def test_connect_bearer_auth_accepts_correct_header() -> None:
         )
     )
 
-    assert proto._wt_transport is not None  # noqa: SLF001
+    assert proto._wt_transport is not None
     assert len(on_session_calls) == 1
     assert dict(h3.sent[0][1]).get(b":status") == b"200"
 
@@ -1164,7 +1160,7 @@ def test_connect_query_token_requires_explicit_opt_in(
     proto, h3, on_session_calls = _connect_protocol(
         BearerTokenAuth(token="sekrit", allow_query_token=allow_query_token)
     )
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         HeadersReceived(
             headers=[
                 (b":method", b"CONNECT"),
@@ -1188,7 +1184,7 @@ def test_connect_malformed_path_is_rejected_without_protocol_crash() -> None:
     from aioquic.h3.events import HeadersReceived
 
     proto, h3, on_session_calls = _connect_protocol(None)
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         HeadersReceived(
             headers=[
                 (b":method", b"CONNECT"),
@@ -1221,16 +1217,16 @@ def test_connect_with_end_stream_is_rejected_without_session() -> None:
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
     h3 = _RecordingH3()
-    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
-    proto._accept_path = "/easycat"  # noqa: SLF001
-    proto._wt_transport = None  # noqa: SLF001
-    proto._accepted_session_id = None  # noqa: SLF001
+    proto._h3 = h3  # type: ignore[assignment]
+    proto._accept_path = "/easycat"
+    proto._wt_transport = None
+    proto._accepted_session_id = None
     on_session_calls: list[Any] = []
-    proto._on_session = on_session_calls.append  # noqa: SLF001
-    proto._can_accept = lambda: True  # noqa: SLF001
+    proto._on_session = on_session_calls.append
+    proto._can_accept = lambda: True
     proto.transmit = lambda: None  # type: ignore[method-assign]
 
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         HeadersReceived(
             headers=[
                 (b":method", b"CONNECT"),
@@ -1242,7 +1238,7 @@ def test_connect_with_end_stream_is_rejected_without_session() -> None:
         )
     )
 
-    assert proto._wt_transport is None  # noqa: SLF001 — no session resources held
+    assert proto._wt_transport is None
     assert on_session_calls == []  # handler never invoked
     assert len(h3.sent) == 1
     sid, hdrs, end = h3.sent[0]
@@ -1264,17 +1260,17 @@ def test_connect_without_end_stream_is_accepted() -> None:
     cls = _get_protocol_class()
     proto = cls.__new__(cls)  # skip QUIC-bound __init__
     h3 = _RecordingH3()
-    proto._h3 = h3  # type: ignore[assignment]  # noqa: SLF001
-    proto._accept_path = "/easycat"  # noqa: SLF001
-    proto._wt_transport = None  # noqa: SLF001
-    proto._accepted_session_id = None  # noqa: SLF001
+    proto._h3 = h3  # type: ignore[assignment]
+    proto._accept_path = "/easycat"
+    proto._wt_transport = None
+    proto._accepted_session_id = None
     on_session_calls: list[Any] = []
-    proto._on_session = on_session_calls.append  # noqa: SLF001
-    proto._can_accept = lambda: True  # noqa: SLF001
-    proto._session_config = WebTransportTransportConfig()  # noqa: SLF001
+    proto._on_session = on_session_calls.append
+    proto._can_accept = lambda: True
+    proto._session_config = WebTransportTransportConfig()
     proto.transmit = lambda: None  # type: ignore[method-assign]
 
-    proto._handle_h3_event(  # noqa: SLF001
+    proto._handle_h3_event(
         HeadersReceived(
             headers=[
                 (b":method", b"CONNECT"),
@@ -1286,8 +1282,8 @@ def test_connect_without_end_stream_is_accepted() -> None:
         )
     )
 
-    assert proto._wt_transport is not None  # noqa: SLF001
+    assert proto._wt_transport is not None
     assert len(on_session_calls) == 1
-    sid, hdrs, end = h3.sent[0]
+    _sid, hdrs, end = h3.sent[0]
     assert dict(hdrs).get(b":status") == b"200"
     assert end is False

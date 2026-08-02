@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -83,10 +83,10 @@ class _EventStream:
     def __init__(self) -> None:
         self._yielded = False
 
-    async def __aenter__(self) -> _EventStream:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
     def __aiter__(self) -> _EventStream:
@@ -112,10 +112,10 @@ class _IterRun:
         self.output = "partial"
         self.result = None
 
-    async def __aenter__(self) -> _IterRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
     def __aiter__(self) -> _IterRun:
@@ -146,10 +146,10 @@ class _RunStreamResult:
         self._messages = messages
         self.output = "partial"
 
-    async def __aenter__(self) -> _RunStreamResult:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
     async def stream_text(self):
@@ -173,7 +173,7 @@ class _RunStreamAgent:
 @pytest.mark.parametrize("agent_cls", [_IterAgent, _RunStreamAgent])
 async def test_aclose_commits_current_turn_before_interruption_rewrite(
     pydantic_messages: SimpleNamespace,
-    agent_cls: type[_IterAgent] | type[_RunStreamAgent],
+    agent_cls: type[_IterAgent | _RunStreamAgent],
 ) -> None:
     prior_user = pydantic_messages.ModelRequest(
         parts=[pydantic_messages.UserPromptPart("previous")]
@@ -213,7 +213,7 @@ async def test_aclose_commits_current_turn_before_interruption_rewrite(
 @pytest.mark.parametrize("agent_cls", [_IterAgent, _RunStreamAgent])
 async def test_completed_run_appends_sdk_new_messages_to_existing_history(
     pydantic_messages: SimpleNamespace,
-    agent_cls: type[_IterAgent] | type[_RunStreamAgent],
+    agent_cls: type[_IterAgent | _RunStreamAgent],
 ) -> None:
     prior_user = pydantic_messages.ModelRequest(
         parts=[pydantic_messages.UserPromptPart("previous")]

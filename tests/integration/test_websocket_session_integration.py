@@ -71,7 +71,7 @@ async def test_create_session_websocket_streaming_barge_in(
                         "tts_payloads": [payload.text for payload in tts.payloads],
                     }
                 )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not server_result.done():
                 server_result.set_exception(exc)
         finally:

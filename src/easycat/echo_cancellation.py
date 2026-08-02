@@ -186,7 +186,7 @@ class LiveKitAEC:
             from importlib.metadata import version
 
             sdk_ver = version("livekit")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
         return {
             "provider": "livekit",
@@ -303,7 +303,7 @@ def create_echo_canceller(config: Any = None) -> Any:
 
     cfg = config or EchoCancellationConfig()
     if not isinstance(cfg, EchoCancellationConfig):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 domain-specific validation error
             f"Unsupported echo canceller configuration type: {type(cfg).__name__!r}. "
             "Pass EchoCancellationConfig, a registered config, or an echo-canceller instance."
         )

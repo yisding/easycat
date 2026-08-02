@@ -441,9 +441,11 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
             (
                 "uv sync --group dev",
                 "uv run python docs/using-easycat/10-telephony/main.py",
-                "uv sync "
-                "--extra openai --extra telephony --extra telephony-fastapi "
-                "--extra openai-agents --group dev",
+                (
+                    "uv sync "
+                    "--extra openai --extra telephony --extra telephony-fastapi "
+                    "--extra openai-agents --group dev"
+                ),
                 "uv run easycat doctor --env-file .env --json",
                 (
                     "uv run --env-file .env uvicorn examples.twilio_app:create_app "

@@ -67,6 +67,7 @@ def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
         cwd=root,
         capture_output=True,
         text=True,
+        check=False,
     )
     if proc.returncode != 0:  # pragma: no cover — diagnostic path
         pytest.skip(f"`uv build` failed:\n{proc.stderr}")
@@ -88,6 +89,7 @@ def built_sdist(tmp_path_factory: pytest.TempPathFactory) -> Path:
         cwd=root,
         capture_output=True,
         text=True,
+        check=False,
     )
     if proc.returncode != 0:  # pragma: no cover — diagnostic path
         pytest.skip(f"`uv build` failed:\n{proc.stderr}")

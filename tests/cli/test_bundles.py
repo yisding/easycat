@@ -54,7 +54,7 @@ class _FakeFollowView:
     def __init__(self, records: list[dict[str, object]]) -> None:
         self._records = records
 
-    async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+    async def follow(self, *, from_sequence: int | None, poll_interval: float):
         del from_sequence, poll_interval
         for record in self._records:
             yield record
@@ -526,7 +526,7 @@ async def test_follow_with_retry_resumes_past_yielded_sequence(capsys) -> None:
             self._attempt = 0
             self.seen_from: list[int | None] = []
 
-        async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):
             del poll_interval
             self.seen_from.append(from_sequence)
             self._attempt += 1

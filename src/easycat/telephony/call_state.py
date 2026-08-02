@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 __all__ = [
+    "SMART_TURN_SUPPRESS_STATES",
+    "TERMINAL_CLASSIFICATION_STATES",
     "CallStateChanged",
     "ClassificationGate",
     "OutboundCallState",
     "OutboundCallStateMachine",
-    "SMART_TURN_SUPPRESS_STATES",
-    "TERMINAL_CLASSIFICATION_STATES",
 ]
 
 import asyncio
@@ -719,7 +719,7 @@ class OutboundCallStateMachine:
             await self._handle_classifying_stt_final(text)
             return
 
-        if self._state == OutboundCallState.SCREENING:
+        if self._state == OutboundCallState.SCREENING:  # noqa: SIM102 nested branches preserve decision context
             if self._is_conversational(text, self._screening_patterns):
                 await self._transition(OutboundCallState.HUMAN)
 

@@ -106,7 +106,7 @@ def _make_mock_http_client(
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_receives_final():
     messages = [_el_transcript("hello world", is_final=True)]
-    stt, ws, _ = _make_el_stt_realtime(messages)
+    stt, _ws, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -122,7 +122,7 @@ async def test_elevenlabs_realtime_partial_and_final():
         _el_transcript("hel", is_final=False),
         _el_transcript("hello world", is_final=True),
     ]
-    stt, ws, _ = _make_el_stt_realtime(messages)
+    stt, _ws, _ = _make_el_stt_realtime(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
@@ -134,7 +134,7 @@ async def test_elevenlabs_realtime_partial_and_final():
 
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_connects_with_query_params():
-    stt, ws, connect_meta = _make_el_stt_realtime([])
+    stt, _ws, connect_meta = _make_el_stt_realtime([])
 
     await stt.start_stream()
     chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]

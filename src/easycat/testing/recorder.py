@@ -54,7 +54,7 @@ class RecordingAgentRecorder:
     def safe_exit_cursor(self, cursor: ExecutionCursor, reason: str | None = "error") -> None:
         try:
             self.record_unit_exited(cursor, reason=reason)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
     @contextmanager

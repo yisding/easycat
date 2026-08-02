@@ -943,9 +943,7 @@ async def test_begin_turn_shared_bookkeeping_across_paths(path):
 
     counter_before = tm._turn_counter
 
-    if path == "vad_idle":
-        await tm.on_vad_event(VADStartSpeaking())
-    elif path == "barge_in":
+    if path == "vad_idle" or path == "barge_in":
         await tm.on_vad_event(VADStartSpeaking())
     else:
         await tm.start_turn()

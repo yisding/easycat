@@ -247,13 +247,17 @@ PHASE_REVIEWS = {
             ),
             (
                 "Causality",
-                "it marks which observations may revise, which actions commit, and why "
-                "cancellation ordering preserves the next utterance",
+                (
+                    "it marks which observations may revise, which actions commit, and why "
+                    "cancellation ordering preserves the next utterance"
+                ),
             ),
             (
                 "Evidence",
-                "it cites attempt evidence for format, partial/final policy, first audio, and "
-                "interruption ordering",
+                (
+                    "it cites attempt evidence for format, partial/final policy, first audio, and "
+                    "interruption ordering"
+                ),
             ),
             (
                 "Limits",
@@ -271,8 +275,10 @@ PHASE_REVIEWS = {
             ),
             (
                 "Causality",
-                "it explains why each check precedes the proposed fix and names the strongest "
-                "supported cause",
+                (
+                    "it explains why each check precedes the proposed fix and names the strongest "
+                    "supported cause"
+                ),
             ),
             (
                 "Evidence",
@@ -297,13 +303,17 @@ PHASE_REVIEWS = {
             ),
             (
                 "Causality",
-                "it explains what changes on the selected axis and how the other axes stay "
-                "controlled",
+                (
+                    "it explains what changes on the selected axis and how the other axes stay "
+                    "controlled"
+                ),
             ),
             (
                 "Evidence",
-                "it names one invariant event/state shape and the measurement that decides the "
-                "tradeoff",
+                (
+                    "it names one invariant event/state shape and the measurement "
+                    "that decides the tradeoff"
+                ),
             ),
             (
                 "Limits",
@@ -330,13 +340,17 @@ SHIP_PHASE_REVIEW = PhaseReview(
         ),
         (
             "Evidence",
-            "all 16 offline checkpoints pass and it cites the result that changed the learner's "
-            "model most",
+            (
+                "all 16 offline checkpoints pass and it cites the result that "
+                "changed the learner's model most"
+            ),
         ),
         (
             "Limits",
-            "it states one production claim the postmortem evidence cannot prove and the next "
-            "measurement needed",
+            (
+                "it states one production claim the postmortem evidence cannot prove and the next "
+                "measurement needed"
+            ),
         ),
     ),
 )
@@ -456,7 +470,7 @@ def extract_symbol(source: str, symbol: str) -> tuple[str, int, int]:
     """Return (source_text, start_line, end_line) for a top-level symbol."""
     tree = ast.parse(source)
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # noqa: SIM102 nested branches preserve decision context
             if node.name == symbol:
                 lines = source.splitlines()
                 # ast reports node.lineno at the `def`/`class` line, which drops

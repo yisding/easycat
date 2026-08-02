@@ -78,7 +78,7 @@ class TestWebTransportConnectionTransport:
     @pytest.mark.asyncio
     async def test_connect_failure_rolls_back_before_retry_is_allowed(self) -> None:
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         session.start = AsyncMock(  # type: ignore[method-assign]
             side_effect=[RuntimeError("writer startup failed"), None]
@@ -89,21 +89,21 @@ class TestWebTransportConnectionTransport:
         with pytest.raises(RuntimeError, match="writer startup failed"):
             await t.connect()
 
-        assert t._connected is False  # noqa: SLF001
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._connection_close_pending is False  # noqa: SLF001
+        assert t._connected is False
+        assert t._session_stop_pending is False
+        assert t._connection_close_pending is False
         session.stop.assert_awaited_once()
         session.close_connection.assert_called_once_with(reason="session ended")
 
         await t.connect()
         assert session.start.await_count == 2
-        assert t._connected is True  # noqa: SLF001
+        assert t._connected is True
         await t.disconnect()
 
     @pytest.mark.asyncio
     async def test_connect_preserves_startup_error_when_owned_rollback_fails(self) -> None:
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         session.start = AsyncMock(side_effect=OSError("writer startup failed"))  # type: ignore[method-assign]
         session.stop = AsyncMock(  # type: ignore[method-assign]
@@ -116,23 +116,23 @@ class TestWebTransportConnectionTransport:
 
         assert isinstance(exc_info.value.__cause__, RuntimeError)
         assert str(exc_info.value.__cause__) == "rollback stop failed"
-        assert t._connected is False  # noqa: SLF001
-        assert t._session_stop_pending is True  # noqa: SLF001
-        assert t._connection_close_pending is False  # noqa: SLF001
-        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
+        assert t._connected is False
+        assert t._session_stop_pending is True
+        assert t._connection_close_pending is False
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)
         with pytest.raises(RuntimeError, match="cleanup is incomplete"):
             await t.connect()
 
         await t.disconnect()
 
         assert session.stop.await_count == 2
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._session_stop_pending is False
+        assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_connect_rollback_preserves_new_caller_cancellation(self) -> None:
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         startup_error = OSError("writer startup failed")
         cleanup_entered = asyncio.Event()
@@ -155,13 +155,13 @@ class TestWebTransportConnectionTransport:
             await connecting
 
         assert exc_info.value.__cause__ is startup_error
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._session_stop_pending is False
+        assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_disconnect_preserves_caller_cancellation_while_reaping_writer(self) -> None:
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         child_cancelled = asyncio.Event()
         release_child = asyncio.Event()
@@ -187,17 +187,17 @@ class TestWebTransportConnectionTransport:
         with pytest.raises(asyncio.CancelledError):
             await disconnecting
 
-        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
-        assert t._session_stop_pending is True  # noqa: SLF001
-        assert t._connection_close_pending is True  # noqa: SLF001
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)
+        assert t._session_stop_pending is True
+        assert t._connection_close_pending is True
         with pytest.raises(RuntimeError, match="cleanup is incomplete"):
             await t.connect()
 
         await t.disconnect()
 
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._connection_close_pending is False  # noqa: SLF001
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._session_stop_pending is False
+        assert t._connection_close_pending is False
+        assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_clear_audio_drains_outbound_queue(self) -> None:
@@ -208,7 +208,7 @@ class TestWebTransportConnectionTransport:
                 ok = await t.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
                 assert ok
             await t.clear_audio()
-            assert t._out_queue.qsize() == 0  # noqa: SLF001
+            assert t._out_queue.qsize() == 0
         finally:
             await t.disconnect()
 
@@ -222,7 +222,7 @@ class TestWebTransportConnectionTransport:
         )
         await t.connect()
         try:
-            await t._session.stop()  # noqa: SLF001
+            await t._session.stop()
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert not await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
@@ -238,18 +238,18 @@ class TestWebTransportConnectionTransport:
         the nominal 256 KiB high-water mark in one ``send_stream_data`` call.
         """
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
-        quic = session._quic_protocol._quic  # noqa: SLF001
+        quic = session._quic_protocol._quic
         original_send = quic.send_stream_data
         buffers: dict[int, bytearray] = {}
-        quic._streams = {}  # noqa: SLF001
+        quic._streams = {}
 
-        def buffered_send(stream_id: int, data: bytes, end_stream: bool = False) -> None:  # noqa: FBT001, FBT002
+        def buffered_send(stream_id: int, data: bytes, end_stream: bool = False) -> None:
             original_send(stream_id, data, end_stream=end_stream)
             buffer = buffers.setdefault(stream_id, bytearray())
             buffer.extend(data)
-            quic._streams[stream_id] = _FakeStream(buffer)  # noqa: SLF001
+            quic._streams[stream_id] = _FakeStream(buffer)
 
         quic.send_stream_data = buffered_send  # type: ignore[method-assign]
         await t.connect()
@@ -258,13 +258,13 @@ class TestWebTransportConnectionTransport:
             assert await t.send_audio(AudioChunk(data=source, format=PCM16_MONO_16K))
             await asyncio.sleep(0.1)
 
-            audio_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            audio_sid = session._outbound_audio_stream_id
             assert audio_sid is not None
             assert len(buffers[audio_sid]) <= _OUTBOUND_SEND_BUFFER_HIGH_WATER
             audio_writes = [data for sid, data in quic.sent if sid == audio_sid]
             # First write carries the WebTransport audio tag + sample rate.
             assert all(len(data) <= _MAX_STREAM_DATA for data in audio_writes[1:])
-            assert not t._out_queue.empty()  # noqa: SLF001 - stalled peer backpressures writer
+            assert not t._out_queue.empty()
         finally:
             await t.disconnect()
 
@@ -282,7 +282,7 @@ class TestWebTransportConnectionTransport:
     async def test_disconnect_cleanup_failures_are_best_effort_and_retryable(self) -> None:
         t = _build_connection_transport()
         await t.connect()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         original_stop = session.stop
         original_close = session.close_connection
@@ -313,26 +313,26 @@ class TestWebTransportConnectionTransport:
         # close and publishing terminal signals for every waiter.
         assert stop_calls == 1
         assert close_calls == 1
-        assert t._connected is False  # noqa: SLF001
-        assert t._on_close.is_set()  # noqa: SLF001
-        assert t._session_stop_pending is True  # noqa: SLF001
-        assert t._connection_close_pending is True  # noqa: SLF001
+        assert t._connected is False
+        assert t._on_close.is_set()
+        assert t._session_stop_pending is True
+        assert t._connection_close_pending is True
 
         await t.disconnect()
 
         assert stop_calls == 2
         assert close_calls == 2
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._connection_close_pending is False  # noqa: SLF001
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._session_stop_pending is False
+        assert t._connection_close_pending is False
+        assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_disconnect_retries_real_protocol_close_failure(self) -> None:
         t = _build_connection_transport()
         await t.connect()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
-        protocol = session._quic_protocol  # noqa: SLF001
+        protocol = session._quic_protocol
         protocol.close = Mock(  # type: ignore[method-assign]
             side_effect=[RuntimeError("QUIC close failed"), None]
         )
@@ -341,14 +341,14 @@ class TestWebTransportConnectionTransport:
             await t.disconnect()
 
         assert protocol.close.call_count == 1
-        assert t._connection_close_pending is True  # noqa: SLF001
-        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
+        assert t._connection_close_pending is True
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)
 
         await t.disconnect()
 
         assert protocol.close.call_count == 2
-        assert t._connection_close_pending is False  # noqa: SLF001
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._connection_close_pending is False
+        assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_disconnect_retries_diagnostic_only_cleanup_failure(self) -> None:
@@ -366,16 +366,16 @@ class TestWebTransportConnectionTransport:
         with pytest.raises(RuntimeError, match="diagnostic drain failed"):
             await t.disconnect()
 
-        assert t._session_stop_pending is False  # noqa: SLF001
-        assert t._connection_close_pending is False  # noqa: SLF001
-        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
+        assert t._session_stop_pending is False
+        assert t._connection_close_pending is False
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)
         with pytest.raises(RuntimeError, match="cleanup is incomplete"):
             await t.connect()
 
         await t.disconnect()
 
         assert drain.await_count == 2
-        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+        assert t._disconnect_cleanup_error is None
 
         await t.connect()
         await t.disconnect()
@@ -403,15 +403,15 @@ class TestWebTransportConnectionTransport:
             # Send enough audio that the writer task allocates an audio stream.
             await t.send_audio(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
             await asyncio.sleep(0.05)
-            session = t._session  # noqa: SLF001
+            session = t._session
             assert session is not None
-            audio_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            audio_sid = session._outbound_audio_stream_id
             assert audio_sid is not None
 
             await t.clear_audio()
-            quic = session._quic_protocol._quic  # noqa: SLF001
+            quic = session._quic_protocol._quic
             assert (audio_sid, 0) in quic.resets
-            assert session._outbound_audio_stream_id is None  # noqa: SLF001
+            assert session._outbound_audio_stream_id is None
         finally:
             await t.disconnect()
 
@@ -433,12 +433,10 @@ class TestWebTransportConnectionTransport:
         # Simulate the protocol feeding early audio before connect() runs:
         # client opens its audio stream (tag 0x01) and writes a frame.
         early = b"\x11\x22\x33\x44"
-        t._feed_stream_data(  # noqa: SLF001
-            stream_id=12, data=_audio_frame(early), ended=False
-        )
+        t._feed_stream_data(stream_id=12, data=_audio_frame(early), ended=False)
         await t.connect()
         try:
-            chunk = await asyncio.wait_for(t._in_queue.get(), timeout=1)  # noqa: SLF001
+            chunk = await asyncio.wait_for(t._in_queue.get(), timeout=1)
             assert chunk is not None
             assert chunk.data == early
         finally:
@@ -471,16 +469,16 @@ class TestWebTransportConnectionTransport:
     @pytest.mark.asyncio
     async def test_force_close_wakes_consumers_when_quic_close_raises(self) -> None:
         t = _build_connection_transport()
-        session = t._session  # noqa: SLF001
+        session = t._session
         assert session is not None
         session.close_connection = Mock(side_effect=RuntimeError("close failed"))  # type: ignore[method-assign]
 
         with pytest.raises(RuntimeError, match="close failed"):
             t.force_close(reason="shutdown")
 
-        assert t._on_close.is_set()  # noqa: SLF001
-        assert await t._in_queue.get() is None  # noqa: SLF001
-        assert await t._out_queue.get() is None  # noqa: SLF001
+        assert t._on_close.is_set()
+        assert await t._in_queue.get() is None
+        assert await t._out_queue.get() is None
 
     @pytest.mark.asyncio
     async def test_connection_lost_marks_disconnected_and_wakes_writer(self) -> None:
@@ -497,21 +495,21 @@ class TestWebTransportConnectionTransport:
         await t.connect()
         try:
             # Stop the writer so it cannot drain, then fill the queue.
-            await t._session.stop()  # noqa: SLF001
+            await t._session.stop()
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
             assert not await t.send_audio(AudioChunk(data=b"\x00", format=PCM16_MONO_16K))
 
-            t._mark_connection_lost()  # noqa: SLF001
+            t._mark_connection_lost()
 
-            assert t._connected is False  # noqa: SLF001
-            assert not t._client_connected.is_set()  # noqa: SLF001
-            assert t._on_close.is_set()  # noqa: SLF001
+            assert t._connected is False
+            assert not t._client_connected.is_set()
+            assert t._on_close.is_set()
             # The writer sentinel must have been delivered despite the
             # full queue (one chunk dropped to make room).
             seen_sentinel = False
-            while not t._out_queue.empty():  # noqa: SLF001
-                if t._out_queue.get_nowait() is None:  # noqa: SLF001
+            while not t._out_queue.empty():
+                if t._out_queue.get_nowait() is None:
                     seen_sentinel = True
             assert seen_sentinel
             # send_audio now refuses — the transport is marked disconnected.
@@ -571,19 +569,19 @@ class TestWebTransportTransportConformance:
             WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
         )
         await transport.connect()
-        server = transport._server  # noqa: SLF001
+        server = transport._server
         assert server is not None
 
         with pytest.raises(RuntimeError, match="server cleanup failed"):
             await transport.disconnect()
 
-        assert transport._connected is False  # noqa: SLF001
-        assert transport._server is server  # noqa: SLF001
+        assert transport._connected is False
+        assert transport._server is server
 
         await transport.disconnect()
 
         assert server.stop_calls == 2
-        assert transport._server is None  # noqa: SLF001
+        assert transport._server is None
 
     @pytest.mark.asyncio
     async def test_concurrent_connects_publish_exactly_one_internal_server(
@@ -594,7 +592,7 @@ class TestWebTransportTransportConformance:
         release_start = asyncio.Event()
 
         class _BlockingServer:
-            instances: list[_BlockingServer] = []
+            instances: list[_BlockingServer] = []  # noqa: RUF012 test fake uses shared class fixture
 
             def __init__(self, *_: object, **__: object) -> None:
                 self._cleanup_error = None
@@ -629,8 +627,8 @@ class TestWebTransportTransportConformance:
         await asyncio.gather(first, second)
 
         assert len(_BlockingServer.instances) == 1
-        assert transport._server is _BlockingServer.instances[0]  # noqa: SLF001
-        assert transport._connected is True  # noqa: SLF001
+        assert transport._server is _BlockingServer.instances[0]
+        assert transport._connected is True
         await transport.disconnect()
 
     @pytest.mark.asyncio
@@ -666,7 +664,7 @@ class TestWebTransportTransportConformance:
 
         connecting = asyncio.create_task(transport.connect())
         await start_entered.wait()
-        server = transport._server  # noqa: SLF001
+        server = transport._server
         assert server is not None
         disconnecting = asyncio.create_task(transport.disconnect())
         await asyncio.sleep(0)
@@ -677,8 +675,8 @@ class TestWebTransportTransportConformance:
 
         assert server.stop_calls == 1
         assert server._started is False
-        assert transport._connected is False  # noqa: SLF001
-        assert transport._server is None  # noqa: SLF001
+        assert transport._connected is False
+        assert transport._server is None
 
     @pytest.mark.asyncio
     async def test_receive_audio_exits_after_inner_session_ends(self) -> None:
@@ -694,9 +692,9 @@ class TestWebTransportTransportConformance:
         await inner.connect()
         # Wire the outer's "active" slot manually since we're not running a
         # real server in this unit test.
-        outer._active = inner  # noqa: SLF001
-        outer._connected = True  # noqa: SLF001
-        outer._client_connected.set()  # noqa: SLF001
+        outer._active = inner
+        outer._connected = True
+        outer._client_connected.set()
 
         # Start iterating; should block waiting for chunks.
         recv_task = asyncio.create_task(self._collect_chunks(outer))
@@ -715,7 +713,7 @@ class TestWebTransportTransportConformance:
         outer = WebTransportTransport(
             WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
         )
-        outer._connected = True  # noqa: SLF001
+        outer._connected = True
         recv_task = asyncio.create_task(self._collect_chunks(outer))
         await asyncio.sleep(0)
         await outer.disconnect()

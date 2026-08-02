@@ -22,6 +22,7 @@ class TestNoToolRegistry:
                 ["grep", "-r", pattern, "src/easycat/"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             assert result.stdout.strip() == "", (
                 f"Found tool registry pattern {pattern!r} in src/easycat/:\n{result.stdout}"
@@ -44,6 +45,7 @@ class TestNoRealtimeBridgeSurface:
                     ["grep", "-r", pattern, search_dir],
                     capture_output=True,
                     text=True,
+                    check=False,
                 )
                 assert result.stdout.strip() == "", (
                     f"Found realtime pattern {pattern!r} in {search_dir}:\n{result.stdout}"

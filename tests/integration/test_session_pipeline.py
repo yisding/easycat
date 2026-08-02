@@ -131,7 +131,7 @@ class MultiSentenceStreamingAgent(_TestBridgeBase):
     async def invoke(
         self, turn_input, recorder, cancel_token: CancelToken | None = None
     ) -> AsyncIterator[AgentBridgeEvent]:
-        words = "Hello world. How are you? I am fine.".split(" ")
+        words = ["Hello", "world.", "How", "are", "you?", "I", "am", "fine."]
         accumulated = ""
         for i, word in enumerate(words):
             if cancel_token and cancel_token.is_cancelled:

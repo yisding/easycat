@@ -78,7 +78,7 @@ def _coerce_level(level: int | str) -> int:
         return level
     resolved = logging.getLevelName(level.upper())
     if not isinstance(resolved, int):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 domain-specific validation error
             f"Unknown logging level: {level!r}. Use one of "
             "DEBUG, INFO, WARNING, ERROR, CRITICAL (or an int)."
         )

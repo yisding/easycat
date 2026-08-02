@@ -53,7 +53,7 @@ class _FakeQuicConnection:
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         self.resets.append((stream_id, error_code))
 
-    def send_stream_data(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:  # noqa: FBT001, FBT002
+    def send_stream_data(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
         self.sent.append((stream_id, data))
 
 

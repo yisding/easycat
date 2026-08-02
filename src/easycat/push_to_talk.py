@@ -8,7 +8,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol, TextIO
+from typing import Literal, Protocol, Self, TextIO
 
 
 class PushToTalkSession(Protocol):
@@ -22,7 +22,7 @@ class PushToTalkSession(Protocol):
 class ManagedPushToTalkSession(PushToTalkSession, Protocol):
     """Push-to-talk session that also owns the async context lifecycle."""
 
-    async def __aenter__(self) -> ManagedPushToTalkSession: ...
+    async def __aenter__(self) -> Self: ...
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
@@ -54,7 +54,7 @@ class _SelectorLineReader:
     def _on_readable(self) -> None:
         try:
             got_line = bool(self._stream.readline())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self.close()
             self._publish(exc)
             return
@@ -102,7 +102,7 @@ class _ThreadLineReader:
         def _read_once() -> None:
             try:
                 result = bool(self._stream.readline())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 try:
                     self._loop.call_soon_threadsafe(_fail, exc)
                 except RuntimeError:

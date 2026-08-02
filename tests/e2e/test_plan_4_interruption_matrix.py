@@ -104,7 +104,7 @@ async def test_deep_workflow_records_framework_units() -> None:
             text: str,
             *,
             recorder: AgentRecorder,
-            cancel_token=None,  # noqa: ANN001
+            cancel_token=None,
         ):
             cursor = ExecutionCursor(
                 unit_id="user-step-1",

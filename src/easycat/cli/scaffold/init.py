@@ -917,10 +917,8 @@ def _pyproject_name(project_name: str) -> str:
 
 
 def _should_template(source: Path) -> bool:
-    if source.suffix in _TEMPLATED_SUFFIXES:
-        return True
     # ``.env.example`` has suffix ``.example`` — caught above.
-    return False
+    return source.suffix in _TEMPLATED_SUFFIXES
 
 
 def _render_text(text: str, mapping: dict[str, str]) -> str:

@@ -157,69 +157,69 @@ def test_pydantic_ai_workflow_voice_example_imports(monkeypatch: pytest.MonkeyPa
 
 
 def test_push_to_talk_example_imports():
-    import examples.push_to_talk as push_to_talk
+    from examples import push_to_talk
 
     assert callable(push_to_talk.main)
 
 
 def test_custom_tts_provider_example_imports():
-    import examples.custom_tts_provider as custom_tts_provider
+    from examples import custom_tts_provider
 
     assert callable(custom_tts_provider.main)
 
 
 def test_custom_vad_provider_example_imports():
-    import examples.custom_vad_provider as custom_vad_provider
+    from examples import custom_vad_provider
 
     assert callable(custom_vad_provider.main)
 
 
 def test_custom_stt_provider_example_imports():
-    import examples.custom_stt_provider as custom_stt_provider
+    from examples import custom_stt_provider
 
     assert callable(custom_stt_provider.main)
 
 
 def test_custom_transport_example_imports():
-    import examples.custom_transport as custom_transport
+    from examples import custom_transport
 
     assert callable(custom_transport.main)
 
 
 def test_agent_event_subscription_example_imports():
     pytest.importorskip("agents")
-    import examples.agent_event_subscription as agent_event_subscription
+    from examples import agent_event_subscription
 
     assert callable(agent_event_subscription.main)
 
 
 def test_vad_backends_example_imports():
-    import examples.vad_backends as vad_backends
+    from examples import vad_backends
 
     assert callable(vad_backends.main)
 
 
 def test_reconnecting_ws_client_example_imports():
-    import examples.reconnecting_ws_client as reconnecting_ws_client
+    from examples import reconnecting_ws_client
 
     assert callable(reconnecting_ws_client.main)
 
 
 def test_telephony_helpers_example_imports():
-    import examples.telephony_helpers as telephony_helpers
+    from examples import telephony_helpers
 
     assert callable(telephony_helpers.main)
 
 
 def test_debug_bundle_example_imports():
-    import examples.debug_bundle as debug_bundle
+    from examples import debug_bundle
 
     assert callable(debug_bundle.main)
 
 
 def test_journal_ui_example_imports():
     pytest.importorskip("agents")
-    import examples.journal_ui as journal_ui
+    from examples import journal_ui
 
     assert callable(journal_ui.main)
 
@@ -267,7 +267,7 @@ def test_twilio_example_factory(monkeypatch: pytest.MonkeyPatch):
     if importlib.util.find_spec("agents") is None:
         pytest.skip("openai-agents not installed")
     monkeypatch.setenv("TWILIO_AUTH_TOKEN", "twilio-test-token")
-    import examples.twilio_app as twilio_app
+    from examples import twilio_app
 
     app = twilio_app.create_app(api_key="test-key", stream_url="wss://example.com/stream")
     assert app is not None
@@ -297,7 +297,7 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
 def test_twilio_example_missing_openai_key_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    import examples.twilio_app as twilio_app
+    from examples import twilio_app
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -311,7 +311,7 @@ def test_twilio_example_missing_openai_key_is_actionable(
 
 
 def test_twilio_example_missing_auth_token_is_actionable(monkeypatch: pytest.MonkeyPatch):
-    import examples.twilio_app as twilio_app
+    from examples import twilio_app
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)

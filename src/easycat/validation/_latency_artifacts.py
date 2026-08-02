@@ -101,14 +101,14 @@ def build_reliability_artifact(
 def load_latency_samples(raw: str) -> list[LatencySample]:
     payload = json.loads(raw)
     if not isinstance(payload, list):
-        raise ValueError("latency samples payload must be a list")
+        raise ValueError("latency samples payload must be a list")  # noqa: TRY004 domain-specific validation error
     return [LatencySample.from_dict(item) for item in payload if isinstance(item, dict)]
 
 
 def load_reliability_samples(raw: str) -> list[ReliabilitySample]:
     payload = json.loads(raw)
     if not isinstance(payload, list):
-        raise ValueError("reliability samples payload must be a list")
+        raise ValueError("reliability samples payload must be a list")  # noqa: TRY004 domain-specific validation error
     return [ReliabilitySample.from_dict(item) for item in payload if isinstance(item, dict)]
 
 

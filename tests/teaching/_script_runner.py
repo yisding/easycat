@@ -88,7 +88,7 @@ def _execute_script(
                 runpy.run_path(str(script), run_name="__main__")
             except SystemExit as exc:
                 returncode = _system_exit_code(exc, stderr)
-            except BaseException:
+            except BaseException:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 traceback.print_exc(file=stderr)
                 returncode = 1
             else:

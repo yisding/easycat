@@ -264,9 +264,9 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
 
     for chapter_dir in _chapter_dirs():
         exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
-        self_check_count = len(re.findall(r"^## Self-check$", exercises, re.M))
-        applied_task_count = len(re.findall(r"^## (?:\d+\.|Bonus\b)", exercises, re.M))
-        level_two_headings = re.findall(r"^## .+$", exercises, re.M)
+        self_check_count = len(re.findall(r"^## Self-check$", exercises, re.MULTILINE))
+        applied_task_count = len(re.findall(r"^## (?:\d+\.|Bonus\b)", exercises, re.MULTILINE))
+        level_two_headings = re.findall(r"^## .+$", exercises, re.MULTILINE)
         has_closing_self_check = bool(level_two_headings) and (
             level_two_headings[-1] == "## Self-check"
         )
@@ -507,7 +507,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     for section, command_names in _app._JOURNEY_SECTIONS:
         assert section in cli_section
         for command_name in command_names:
-            assert re.search(rf"^\s+{re.escape(command_name)}\s+", cli_section, re.M)
+            assert re.search(rf"^\s+{re.escape(command_name)}\s+", cli_section, re.MULTILINE)
             assert _app._COMMAND_TEXT[command_name].journey in cli_section
     for command, purpose in _app._CLI_HINTS:
         assert f"Run {command} for {purpose}" in cli_section

@@ -136,7 +136,7 @@ def test_encode_peaks_png_clean_audio_has_no_red_columns():
     # format ceiling, so NO column should be painted red.  This is the bug
     # the full-scale clip floor fixes — the old per-strip-max floor always
     # tinted the loudest column even on clean audio.
-    pcm = array("h", [int(4000 * (1 if i % 2 else -1)) for i in range(64)]).tobytes()
+    pcm = array("h", [(4000 * (1 if i % 2 else -1)) for i in range(64)]).tobytes()
     peaks = decode_pcm_peaks(pcm, sample_width=2, channels=1, buckets=16)
     png = encode_peaks_png(peaks, width=32, height=16, full_scale_value=full_scale(2))
     raw = zlib.decompress(_parse_png_chunks(png)[1][1])
@@ -171,7 +171,7 @@ def test_decode_pcm_peaks_mulaw_width_one_is_unsupported():
     # it, and decoding yields only silence pads (no spurious peaks).
     assert is_supported_width(1) is False
     assert is_supported_width(2) is True
-    blob = bytes(range(0, 256)) * 4  # arbitrary mu-law-ish bytes
+    blob = bytes(range(256)) * 4  # arbitrary mu-law-ish bytes
     peaks = decode_pcm_peaks(blob, sample_width=1, channels=1, buckets=8)
     assert peaks == [(0, 0)] * 8
 

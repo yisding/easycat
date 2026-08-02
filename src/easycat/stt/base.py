@@ -201,11 +201,10 @@ class STTBase:
             # Segment-control writes share the provider socket with audio.
             # Preserve wire order so a finalize message cannot overtake an
             # append that is still suspended under transport backpressure.
-            async with self._audio_send_lock:
-                async with self._lifecycle_lock:
-                    if not self._running or stream_generation != self._stream_generation:
-                        return False
-                    return await self._on_commit_segment()
+            async with self._audio_send_lock, self._lifecycle_lock:
+                if not self._running or stream_generation != self._stream_generation:
+                    return False
+                return await self._on_commit_segment()
         async with self._lifecycle_lock:
             if not self._running:
                 return False
@@ -397,7 +396,7 @@ class STTBase:
         ) from last_exc
 
     @staticmethod
-    def _validate_positive_limit(name: str, value: int | float | None) -> None:
+    def _validate_positive_limit(name: str, value: float | None) -> None:
         if value is None:
             return
         if (

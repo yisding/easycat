@@ -339,7 +339,7 @@ class TTSScheduler:
             return
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
     async def cancel(self) -> None:

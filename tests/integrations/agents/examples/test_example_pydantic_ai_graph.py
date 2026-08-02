@@ -10,7 +10,7 @@ This fixture runs end-to-end using mock objects.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -55,10 +55,10 @@ class _MockGraphRun:
         self.result = result
         self.history = history
 
-    async def __aenter__(self) -> _MockGraphRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockGraphRun:

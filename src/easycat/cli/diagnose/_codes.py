@@ -21,9 +21,9 @@ from dataclasses import dataclass
 from easycat.errors import REGISTRY, ErrorEntry
 
 __all__ = [
+    "META_ENTRIES",
     "REGISTRY",
     "ErrorEntry",
-    "META_ENTRIES",
     "MetaEntry",
 ]
 

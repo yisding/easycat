@@ -681,15 +681,6 @@ EASYCAT_E605 = register(
 
 
 __all__ = [
-    "EasyCatError",
-    "EasyConfigError",
-    "ErrorEntry",
-    "ErrorFactory",
-    "REGISTRY",
-    "register",
-    "get_entry",
-    "all_codes",
-    "suggest_codes",
     "EASYCAT_E101",
     "EASYCAT_E102",
     "EASYCAT_E103",
@@ -719,4 +710,13 @@ __all__ = [
     "EASYCAT_E603",
     "EASYCAT_E604",
     "EASYCAT_E605",
+    "REGISTRY",
+    "EasyCatError",
+    "EasyConfigError",
+    "ErrorEntry",
+    "ErrorFactory",
+    "all_codes",
+    "get_entry",
+    "register",
+    "suggest_codes",
 ]

@@ -217,7 +217,7 @@ async def test_fifty_turns_single_session_scripted(
         active_sessions=1,
         memory_growth_kib=memory_growth_kib,
         dropped_frames=len(overflows),
-        queue_depth=session._outbound_queue.qsize(),  # noqa: SLF001 - stress telemetry
+        queue_depth=session._outbound_queue.qsize(),
     )
     assert rss_after_kib - rss_before_kib < 250 * 1024, (
         f"RSS growth too large: {rss_after_kib - rss_before_kib} KiB"
@@ -309,8 +309,8 @@ async def test_concurrent_sessions_journal_isolation(
             bool(session.journal and session.journal.degraded) for session in sessions
         ),
         active_sessions=len(sessions),
-        dropped_frames=sum(session._outbound_queue.drops for session in sessions),  # noqa: SLF001
-        queue_depth=max((session._outbound_queue.qsize() for session in sessions), default=0),  # noqa: SLF001
+        dropped_frames=sum(session._outbound_queue.drops for session in sessions),
+        queue_depth=max((session._outbound_queue.qsize() for session in sessions), default=0),
     )
 
 
@@ -374,6 +374,6 @@ async def test_ten_turns_live_openai(
         event_loop_lag_ms=event_loop_lag_ms,
         journal_degraded=session.journal.degraded,
         active_sessions=1,
-        dropped_frames=session._outbound_queue.drops,  # noqa: SLF001 - stress telemetry
-        queue_depth=session._outbound_queue.qsize(),  # noqa: SLF001 - stress telemetry
+        dropped_frames=session._outbound_queue.drops,
+        queue_depth=session._outbound_queue.qsize(),
     )

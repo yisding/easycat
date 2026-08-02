@@ -129,7 +129,7 @@ async def test_ws_full_turn_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
                         "tts_payloads": len(tts.payloads),
                     }
                 )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -246,7 +246,7 @@ async def test_ws_sample_rate_negotiation(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -459,7 +459,7 @@ async def test_ws_multi_turn_single_connection(
             finals.append(f2.text)
             if not result_future.done():
                 result_future.set_result(finals)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -530,7 +530,7 @@ async def test_ws_audio_format_message_sent_once(
             await collector.wait_for(BotStoppedSpeaking, timeout=3.0)
             if not result_future.done():
                 result_future.set_result({"done": True})
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -598,7 +598,7 @@ async def test_ws_empty_binary_message_ignored(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -659,7 +659,7 @@ async def test_ws_invalid_json_control_message(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -724,7 +724,7 @@ async def test_ws_format_negotiation_before_audio(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -790,7 +790,7 @@ async def test_ws_invalid_sample_rate_ignored(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -1064,7 +1064,7 @@ async def test_ws_barge_in_through_websocket(
             interruption = await collector.wait_for(Interruption, timeout=5.0)
             if not result_future.done():
                 result_future.set_result({"interrupted": interruption is not None})
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:

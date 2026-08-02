@@ -24,15 +24,15 @@ from tests.session._session_core_helpers import (
 
 
 def _config(**overrides) -> SessionConfig:
-    defaults = dict(
-        transport=FakeTransport(),
-        vad=FakeVAD(),
-        stt=FakeSTT(),
-        agent=FakeAgent(),
-        tts=FakeTTS(),
-        noise_reducer=PassthroughNoiseReducer(),
-        enable_noise_reduction=False,
-    )
+    defaults = {
+        "transport": FakeTransport(),
+        "vad": FakeVAD(),
+        "stt": FakeSTT(),
+        "agent": FakeAgent(),
+        "tts": FakeTTS(),
+        "noise_reducer": PassthroughNoiseReducer(),
+        "enable_noise_reduction": False,
+    }
     defaults.update(overrides)
     return SessionConfig(**defaults)
 

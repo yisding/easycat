@@ -11,7 +11,7 @@ from easycat.validation.report import (
 )
 
 
-def _validation_run(**overrides) -> ValidationRun:  # noqa: ANN003
+def _validation_run(**overrides) -> ValidationRun:
     values = {
         "run_id": "20260521T120000Z-quick-12345",
         "command": ["uv", "run", "pytest", "-q"],

@@ -9,7 +9,7 @@ This fixture runs end-to-end using mock objects.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -61,10 +61,10 @@ class _MockNodeStream:
     def __init__(self, events: list[Any]) -> None:
         self._events = events
 
-    async def __aenter__(self) -> _MockNodeStream:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockNodeStream:
@@ -97,10 +97,10 @@ class _MockAgentRun:
         self.result = None
         self.ctx = type("Ctx", (), {})()
 
-    async def __aenter__(self) -> _MockAgentRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockAgentRun:

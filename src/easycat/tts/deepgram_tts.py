@@ -188,7 +188,7 @@ class DeepgramTTS(_WSTTSBase):
                     self._ensure_ws(),
                     timeout=self._config.warmup_timeout_s,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 # Warmup is a latency optimization, not an availability gate. Drop
                 # the failed wrapper so the first synthesis gets a clean retry.
                 logger.debug("Deepgram TTS warmup skipped: %s", exc)
@@ -282,7 +282,7 @@ class DeepgramTTS(_WSTTSBase):
         # Deepgram's stream has no context IDs. Serializing guarantees exactly
         # one recv_iter consumer and one outstanding Flush cycle on the shared
         # connection, matching the provider's sequential streaming contract.
-        async with self._stream_lock:
+        async with self._stream_lock:  # noqa: SIM117 nested scopes clarify setup and cleanup
             # async-for does not close a delegated async generator when this
             # outer generator is closed. Own it explicitly so caller early
             # exit deterministically runs the socket/cycle cleanup below.

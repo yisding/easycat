@@ -25,7 +25,7 @@ from easycat.integrations.agents.base import (
 class _CustomBridge:
     """Minimal ExternalAgentBridge implementation."""
 
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     async def invoke(
         self,

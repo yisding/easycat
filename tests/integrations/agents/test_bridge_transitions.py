@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 from unittest.mock import patch
 
 import pytest
@@ -151,10 +151,10 @@ class _MockNodeStream:
     def __init__(self, events: list[Any]) -> None:
         self._events = events
 
-    async def __aenter__(self) -> _MockNodeStream:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockNodeStream:
@@ -200,10 +200,10 @@ class _MockAgentRun:
         self.result = None
         self.ctx = _MockAgentRunCtx()
 
-    async def __aenter__(self) -> _MockAgentRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockAgentRun:
@@ -261,10 +261,10 @@ class _MockGraphRun:
         self.result = result
         self.history = history
 
-    async def __aenter__(self) -> _MockGraphRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _MockGraphRun:

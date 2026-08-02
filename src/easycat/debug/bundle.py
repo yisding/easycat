@@ -97,7 +97,7 @@ class RunBundle:
         results: list[dict[str, Any]] = []
         for r in self.records():
             data = r.get("data") or {}
-            if isinstance(data, dict):
+            if isinstance(data, dict):  # noqa: SIM102 nested branches preserve decision context
                 if data.get("stage") == stage_name or data.get("observed_stage") == stage_name:
                     results.append(r)
         return results
@@ -258,9 +258,8 @@ class RunBundle:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name: str | None = None
         try:
-            tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
-            tmp_name = tmp.name
-            tmp.close()  # Release the fd; ZipFile reopens the path itself.
+            with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as tmp:
+                tmp_name = tmp.name
             with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
                 zf.writestr("journal.ndjson", self.journal_ndjson)
@@ -392,7 +391,7 @@ def _add_partial_journal_data(record: dict[str, Any], raw_data: Any) -> None:
         return
     try:
         record["data"] = json.loads(raw_data)
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         # Partially-written journal data has historically been retained as raw
         # evidence. JSON parsing can also raise UnicodeDecodeError, ValueError
         # (for over-large integer literals), or RecursionError, so keep every

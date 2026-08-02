@@ -5,8 +5,6 @@ Do not edit by hand: change the ``guard-*`` recipe in the justfile, then
 run ``uv run python scripts/regen_guard_commands.py``.
 """
 
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (

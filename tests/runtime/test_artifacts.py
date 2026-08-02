@@ -207,7 +207,7 @@ class TestFilesystemArtifactStore:
                 with store._write_claim():
                     if entered is not None:
                         entered.set()
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 errors.append(exc)
 
         first = threading.Thread(target=take_claim)
@@ -1925,6 +1925,7 @@ raise SystemExit(os.waitstatus_to_exitcode(status))
             text=True,
             capture_output=True,
             timeout=10,
+            check=False,
         )
 
         assert completed.returncode == 0, (
@@ -1992,6 +1993,7 @@ if child_mode:
             text=True,
             capture_output=True,
             timeout=10,
+            check=False,
         )
 
         assert completed.returncode == 0, (

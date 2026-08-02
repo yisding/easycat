@@ -26,7 +26,7 @@ class _TestBridgeBase:
     instances thanks to Protocol structural typing.
     """
 
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self) -> None:
         self._history: list[dict[str, str]] = []

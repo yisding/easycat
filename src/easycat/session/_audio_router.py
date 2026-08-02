@@ -373,7 +373,7 @@ class AudioRouter:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        if self._outbound_task and not self._outbound_task.done():
+        if self._outbound_task and not self._outbound_task.done():  # noqa: SIM102 nested branches preserve decision context
             if self._outbound_in_flight != 0 or not self._outbound_queue.empty():
                 self._update_outbound_idle()
                 try:
@@ -1076,10 +1076,7 @@ class AudioRouter:
         if sent_size <= 0 or self._playback_ack_transport is None:
             return
 
-        if turn.bytes_since_last_mark >= self._playback_mark_bytes_interval:
-            turn.bytes_since_last_mark = 0
-            await self._send_playback_mark(turn)
-        elif (
+        if turn.bytes_since_last_mark >= self._playback_mark_bytes_interval or (
             turn.bytes_since_last_mark > 0
             and self._turn_manager.state != TurnManagerState.BOT_SPEAKING
             and self._outbound_queue.empty()

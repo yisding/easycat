@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from typing import Self
 from unittest.mock import patch
 
 import pytest
@@ -78,14 +79,14 @@ class _StubSession:
     async def wait_closed(self) -> None:
         await self.closed.wait()
 
-    async def __aenter__(self) -> _StubSession:
+    async def __aenter__(self) -> Self:
         await self.start()
         return self
 
-    async def __aexit__(self, *exc) -> None:  # noqa: ANN002
+    async def __aexit__(self, *exc) -> None:
         await self.stop(force=True)
 
-    def subscribe_event(self, *a, **kw) -> None:  # noqa: ANN002,ANN003
+    def subscribe_event(self, *a, **kw) -> None:
         self.events.append("subscribe")
 
 
@@ -93,7 +94,7 @@ def _install_immediate_shutdown(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     installs: list[str] = []
 
     @contextmanager
-    def install_shutdown(_loop, stop_event):  # noqa: ANN001,ANN202
+    def install_shutdown(_loop, stop_event):
         installs.append("install")
         stop_event.set()
         try:
@@ -150,7 +151,7 @@ def test_run_session_exits_when_session_stops_itself(
     class SelfStoppingSession(_StubSession):
         stop_task: asyncio.Task[None] | None = None
 
-        async def __aenter__(self) -> SelfStoppingSession:
+        async def __aenter__(self) -> Self:
             await self.start()
             self.stop_task = asyncio.create_task(self._stop_after_entry())
             return self
@@ -163,14 +164,14 @@ def test_run_session_exits_when_session_stops_itself(
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
     @contextmanager
-    def signal_scope(_loop, _stop_event):  # noqa: ANN001,ANN202
+    def signal_scope(_loop, _stop_event):
         yield handlers_installed
 
     monkeypatch.setattr("easycat.helpers._shutdown_signal_handler_scope", signal_scope)
 
     real_asyncio_run = asyncio.run
 
-    def bounded_run(coro) -> None:  # noqa: ANN001
+    def bounded_run(coro) -> None:
         async def run_with_timeout() -> None:
             await asyncio.wait_for(coro, timeout=0.5)
 

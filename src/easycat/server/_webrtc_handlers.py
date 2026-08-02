@@ -269,7 +269,7 @@ class WebRTCSignalingHandlers:
         try:
             payload = await request.json()
             snapshot = sanitize_webrtc_stats_snapshot(payload)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return web.Response(
                 status=400,
                 text=json.dumps({"error": f"Invalid WebRTC stats payload: {exc}"}),

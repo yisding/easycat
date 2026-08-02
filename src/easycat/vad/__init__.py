@@ -31,12 +31,12 @@ from easycat.vad.silero import SileroVAD
 from easycat.vad.ten import TenVAD
 
 __all__ = [
+    "VAD_PROVIDER_ENTRY_POINT_GROUP",
     "FunASROnnxVAD",
     "KrispVAD",
     "SileroVAD",
     "TenVAD",
     "VADBackend",
-    "VAD_PROVIDER_ENTRY_POINT_GROUP",
     "VADConfig",
     "available_vad_providers",
     "create_vad",

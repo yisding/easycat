@@ -842,7 +842,7 @@ class LangGraphBridge:
                 pre_state_ref=actual_pre_ref,
                 post_state_ref=plan.post_state_ref,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # Match the standard protocol: a degraded journal prevents the
             # framework mutation from being scheduled.
             return
@@ -1075,7 +1075,7 @@ class LangGraphBridge:
                     # operation for retry instead of silently discarding them.
                     self._pending_state_mutations = pending[index:] + self._pending_state_mutations
                 recorder.record_framework_error(ErrorInfo.from_exception(exc))
-                logger.error("Failed to flush pending LangGraph state mutation", exc_info=True)
+                logger.exception("Failed to flush pending LangGraph state mutation")
                 raise
 
             try:
@@ -1336,7 +1336,7 @@ class LangGraphBridge:
             for it in interrupts:
                 value = getattr(it, "value", it)
                 previews.append(repr(value)[:120])
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             previews = [repr(interrupts)[:200]]
         raise BridgeInputError(
             "LangGraph graph paused on interrupt() — voice runtimes cannot "
@@ -1534,7 +1534,7 @@ class LangGraphBridge:
         if state is None and not self._async_state_surface:
             try:
                 state = self._graph.get_state(self._config())
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 return b"{}"
         if state is None:
             return b"{}"
@@ -1767,7 +1767,7 @@ def _is_add_messages_reducer(operator: Any) -> bool:
 
         if operator is add_messages:
             return True
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
         pass
     if getattr(operator, "__module__", "") == "langgraph.graph.message":
         return True
@@ -1793,8 +1793,8 @@ def _pending_interrupts(state: Any) -> tuple[Any, ...]:
     try:
         for task in tasks:
             for interrupt in getattr(task, "interrupts", ()) or ():
-                collected.append(interrupt)
-    except Exception:
+                collected.append(interrupt)  # noqa: PERF402 flatten nested interrupt collections
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return ()
     return tuple(collected)
 

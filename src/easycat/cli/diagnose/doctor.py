@@ -189,7 +189,7 @@ def _load_scaffold_requirements(
 
     scaffold = data.get("tool", {}).get("easycat", {}).get("scaffold")
     if not isinstance(scaffold, dict):
-        raise ValueError(f"{path} {_SCAFFOLD_TABLE_HEADER} must be a table")
+        raise ValueError(f"{path} {_SCAFFOLD_TABLE_HEADER} must be a table")  # noqa: TRY004 domain-specific validation error
     template = scaffold.get("template")
     required_env = scaffold.get("required_env")
     optional_env = scaffold.get("optional_env", [])

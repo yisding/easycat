@@ -833,7 +833,7 @@ def _report_exit_code(
         return 0
     try:
         if isinstance(raw_exit_code, bool):
-            raise ValueError
+            raise ValueError  # noqa: TRY004 domain-specific validation error
         if isinstance(raw_exit_code, int):
             return raw_exit_code
         if isinstance(raw_exit_code, float):

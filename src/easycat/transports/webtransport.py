@@ -111,7 +111,7 @@ from easycat._net import normalize_auth_token
 from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
-    _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
+    _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # noqa: PLC0414 compatibility export
 )
 from easycat.transports._base import (
     AudioQueueMixin,
@@ -146,7 +146,7 @@ def _track_background_cleanup(future: asyncio.Future[Any]) -> None:
         if not done.cancelled():
             try:
                 done.exception()
-            except Exception:  # pragma: no cover - defensive teardown
+            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
                 pass
 
     future.add_done_callback(finish)
@@ -1138,7 +1138,7 @@ def _get_protocol_class() -> type:
             ``connection_lost`` — can all funnel through here safely.
             """
             if self._wt_transport is not None:
-                self._wt_transport._mark_connection_lost()  # noqa: SLF001
+                self._wt_transport._mark_connection_lost()
 
         def _handle_h3_event(self, event: Any) -> None:
             assert self._h3 is not None
@@ -1159,10 +1159,10 @@ def _get_protocol_class() -> type:
                         self._accepted_session_id,
                     )
                     return
-                self._wt_transport._feed_stream_data(  # noqa: SLF001
+                self._wt_transport._feed_stream_data(
                     event.stream_id, event.data, event.stream_ended
                 )
-            elif isinstance(event, h3_events.DataReceived):
+            elif isinstance(event, h3_events.DataReceived):  # noqa: SIM102 nested branches preserve decision context
                 # A browser ``transport.close()`` closes the WebTransport
                 # session by FINning the CONNECT stream; aioquic surfaces that
                 # as a ``DataReceived`` with ``stream_ended`` on the CONNECT /
@@ -1337,7 +1337,7 @@ def _preflight_aioquic_backpressure_api() -> None:
             )
     except _AioquicBackpressureCompatibilityError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         _raise_aioquic_backpressure_incompatible(
             f"compatibility probe raised {type(exc).__name__}"
         )
@@ -1479,7 +1479,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
                         startup_error,
                     )
                     continue
-                except Exception:
+                except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                     break
             try:
                 cleanup_task.result()
@@ -1906,7 +1906,7 @@ class WebTransportServer:
             except asyncio.CancelledError as exc:
                 self._record_handler_cleanup_failure(transport, exc)
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 self._record_handler_cleanup_failure(transport, exc)
 
     def _record_handler_cleanup_failure(
@@ -1918,7 +1918,7 @@ class WebTransportServer:
         # A completed handler task is removed from _handler_tasks, so retain
         # the exact transport separately until server stop can retry it.
         self._pending_transport_cleanup.add(transport)
-        cleanup_error = transport._disconnect_cleanup_error  # noqa: SLF001
+        cleanup_error = transport._disconnect_cleanup_error
         if cleanup_error is None:
             cleanup_error = (
                 exc
@@ -2015,7 +2015,7 @@ class WebTransportServer:
             if not task.cancelled():
                 try:
                     task.result()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     # The preceding stop already surfaced this listener
                     # failure. It is now safe to make one fresh retry because
                     # the old waiter is complete, not concurrent.
@@ -2188,7 +2188,7 @@ class WebTransportTransport(AudioQueueMixin):
             self._active = transport
             # Forward the (late-attached) session bus so the inner session's
             # drop/poison/abort conditions are journaled in this path too.
-            transport._event_bus = self._event_bus  # noqa: SLF001
+            transport._event_bus = self._event_bus
             self._client_connected.set()
             try:
                 await transport.wait_closed()

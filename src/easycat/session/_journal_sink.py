@@ -228,14 +228,14 @@ def _to_jsonable(value: Any) -> Any:
         except TypeError:
             try:
                 return _coerce_json_native(dump())
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 return value
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return value
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         try:
             data = dataclasses.asdict(value)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return value
         action_type = getattr(value, "type", None)
         if action_type is not None:
@@ -359,7 +359,7 @@ async def _await_owned_write(operation: asyncio.Task[None]) -> None:
                 continue
         try:
             operation.result()
-        except BaseException:
+        except BaseException:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             # Cancellation remains caller-visible, but retrieving the result
             # prevents a detached operation exception warning.
             pass

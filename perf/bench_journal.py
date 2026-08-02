@@ -48,7 +48,7 @@ def _git_sha() -> str:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
         ).strip()[:12]
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "unknown"
 
 

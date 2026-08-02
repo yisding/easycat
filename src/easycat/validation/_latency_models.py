@@ -235,7 +235,7 @@ def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise ValueError("reliability integer values must be finite integers")
+        raise ValueError("reliability integer values must be finite integers")  # noqa: TRY004 domain-specific validation error
     if isinstance(value, int):
         return value
     if isinstance(value, float):

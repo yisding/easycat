@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 VALIDATION_SCOPE_MARKERS = frozenset({"contract", "integration_live", "latency"})
 
@@ -72,7 +72,7 @@ def validate_flaky_marker(
     if "flaky" not in marker_names:
         return []
 
-    today = today or date.today()
+    today = today or datetime.now(UTC).date()
     errors: list[str] = []
     missing = [
         name for name in REQUIRED_FLAKY_METADATA if not str(marker_kwargs.get(name, "")).strip()

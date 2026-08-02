@@ -105,14 +105,15 @@ def main(argv: list[str]) -> int:
     for module_name in dict.fromkeys(modules):
         try:
             importlib.import_module(module_name)
-        except Exception as error:  # surface any import-time breakage loudly
+        # Surface any import-time breakage loudly.
+        except Exception as error:  # noqa: BLE001 boundary
             failures.append(f"{module_name}: {error!r}")
         else:
             print(f"imported: {module_name}")
     for target in adapter_targets(extra):
         try:
             _import_adapter(target)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 intentional boundary or best-effort cleanup
             failures.append(f"{target}: {error!r}")
         else:
             print(f"imported adapter: {target}")

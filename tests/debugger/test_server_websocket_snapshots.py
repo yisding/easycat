@@ -22,12 +22,11 @@ async def test_websocket_emits_snapshot_for_bundle(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
-            payload = msg.json()
-            assert payload["type"] == "snapshot"
-            assert payload["record_count"] > 0
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+        payload = msg.json()
+        assert payload["type"] == "snapshot"
+        assert payload["record_count"] > 0
 
 
 async def test_websocket_live_source_pushes_on_growth_without_serializing():
@@ -66,22 +65,21 @@ async def test_websocket_live_source_pushes_on_growth_without_serializing():
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            first = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
-            assert first["type"] == "snapshot"
-            assert first["record_count"] == 1
-            # Grow the journal; the 500ms poll should surface the new count.
-            journal.append(kind=JournalRecordKind.EVENT, name="second", session_id="s")
-            # Drain frames until the next snapshot (a records batch may precede
-            # it) and assert the count caught up.
-            saw_snapshot_2 = False
-            for _ in range(4):
-                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
-                if frame["type"] == "snapshot" and frame["record_count"] == 2:
-                    saw_snapshot_2 = True
-                    break
-            assert saw_snapshot_2
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        first = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+        assert first["type"] == "snapshot"
+        assert first["record_count"] == 1
+        # Grow the journal; the 500ms poll should surface the new count.
+        journal.append(kind=JournalRecordKind.EVENT, name="second", session_id="s")
+        # Drain frames until the next snapshot (a records batch may precede
+        # it) and assert the count caught up.
+        saw_snapshot_2 = False
+        for _ in range(4):
+            frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            if frame["type"] == "snapshot" and frame["record_count"] == 2:
+                saw_snapshot_2 = True
+                break
+        assert saw_snapshot_2
     # ``records()`` was called at most once per growth (two snapshots), never
     # on the idle change-detection probe.
     assert calls["n"] <= 2
@@ -109,31 +107,30 @@ async def test_websocket_pushes_only_new_records_batch_on_growth():
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            # Collect the initial snapshot + records batch for the seed record.
-            seen = []
-            for _ in range(2):
-                seen.append((await asyncio.wait_for(ws.receive(), timeout=2.0)).json())
-            batch = next((m for m in seen if m["type"] == "records"), None)
-            assert batch is not None
-            assert [r["sequence"] for r in batch["records"]] == [1]
-            assert batch["from_seq"] == 1
-            assert batch["to_seq"] == 1
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        # Collect the initial snapshot + records batch for the seed record.
+        seen = []
+        for _ in range(2):
+            seen.append((await asyncio.wait_for(ws.receive(), timeout=2.0)).json())
+        batch = next((m for m in seen if m["type"] == "records"), None)
+        assert batch is not None
+        assert [r["sequence"] for r in batch["records"]] == [1]
+        assert batch["from_seq"] == 1
+        assert batch["to_seq"] == 1
 
-            # Grow by two records; the next batch must carry ONLY the new ones.
-            journal.append(kind=JournalRecordKind.EVENT, name="second", session_id="s")
-            journal.append(kind=JournalRecordKind.EVENT, name="third", session_id="s")
-            next_batch = None
-            for _ in range(5):
-                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
-                if frame["type"] == "records":
-                    next_batch = frame
-                    break
-            assert next_batch is not None
-            assert [r["sequence"] for r in next_batch["records"]] == [2, 3]
-            assert next_batch["from_seq"] == 2
-            assert next_batch["to_seq"] == 3
+        # Grow by two records; the next batch must carry ONLY the new ones.
+        journal.append(kind=JournalRecordKind.EVENT, name="second", session_id="s")
+        journal.append(kind=JournalRecordKind.EVENT, name="third", session_id="s")
+        next_batch = None
+        for _ in range(5):
+            frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            if frame["type"] == "records":
+                next_batch = frame
+                break
+        assert next_batch is not None
+        assert [r["sequence"] for r in next_batch["records"]] == [2, 3]
+        assert next_batch["from_seq"] == 2
+        assert next_batch["to_seq"] == 3
 
 
 async def test_websocket_drains_capped_burst_across_ticks(monkeypatch):
@@ -164,26 +161,25 @@ async def test_websocket_drains_capped_burst_across_ticks(monkeypatch):
     from aiohttp.test_utils import TestClient, TestServer
 
     seen_seqs: set[int] = set()
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            # Drain the seed snapshot + batch (sequence 1).
-            for _ in range(2):
-                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
-                if frame["type"] == "records":
-                    seen_seqs.update(r["sequence"] for r in frame["records"])
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        # Drain the seed snapshot + batch (sequence 1).
+        for _ in range(2):
+            frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            if frame["type"] == "records":
+                seen_seqs.update(r["sequence"] for r in frame["records"])
 
-            # Burst of four records at once (sequences 2..5). With cap=2 the
-            # first tick can only carry two; the remainder must still arrive on
-            # later ticks even though latest_seq no longer changes.
-            for name in ("a", "b", "c", "d"):
-                journal.append(kind=JournalRecordKind.EVENT, name=name, session_id="s")
+        # Burst of four records at once (sequences 2..5). With cap=2 the
+        # first tick can only carry two; the remainder must still arrive on
+        # later ticks even though latest_seq no longer changes.
+        for name in ("a", "b", "c", "d"):
+            journal.append(kind=JournalRecordKind.EVENT, name=name, session_id="s")
 
-            for _ in range(12):
-                if {2, 3, 4, 5} <= seen_seqs:
-                    break
-                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
-                if frame["type"] == "records":
-                    seen_seqs.update(r["sequence"] for r in frame["records"])
+        for _ in range(12):
+            if {2, 3, 4, 5} <= seen_seqs:
+                break
+            frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+            if frame["type"] == "records":
+                seen_seqs.update(r["sequence"] for r in frame["records"])
 
     assert {1, 2, 3, 4, 5} <= seen_seqs
 
@@ -229,22 +225,21 @@ async def test_websocket_idle_tick_never_materializes_full_journal():
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            # Drain the seed snapshot + records batch.
-            for _ in range(2):
-                await asyncio.wait_for(ws.receive(), timeout=2.0)
-            # Sit through several caught-up (idle) 500ms ticks with no growth.
-            # The loop should keep polling without materializing the journal.
-            for _ in range(3):
-                await ws.send_json({"action": "ping"})
-                saw_pong = False
-                for _ in range(4):
-                    msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
-                    if msg.json().get("type") == "pong":
-                        saw_pong = True
-                        break
-                assert saw_pong
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        # Drain the seed snapshot + records batch.
+        for _ in range(2):
+            await asyncio.wait_for(ws.receive(), timeout=2.0)
+        # Sit through several caught-up (idle) 500ms ticks with no growth.
+        # The loop should keep polling without materializing the journal.
+        for _ in range(3):
+            await ws.send_json({"action": "ping"})
+            saw_pong = False
+            for _ in range(4):
+                msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+                if msg.json().get("type") == "pong":
+                    saw_pong = True
+                    break
+            assert saw_pong
 
     # The full materializer is never used on the live WS path: the only-new
     # tail rides the bounded ``records_since`` fetch, and idle ticks fetch
@@ -265,7 +260,7 @@ async def test_records_since_caps_and_advances_cursor():
         label="t",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
     batch, cursor = _records_since(source, after_seq=3, cap=4)
@@ -298,18 +293,17 @@ async def test_websocket_responds_to_ping_with_pong():
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    async with TestClient(TestServer(app)) as client:
-        async with client.ws_connect("/ws") as ws:
-            # First message is the snapshot.
-            await asyncio.wait_for(ws.receive(), timeout=2.0)
-            await ws.send_str('{"action":' + "9" * 5000 + "}")
-            await ws.send_str("[]")
-            await ws.send_json({"action": "ping"})
-            # Pong arrives, possibly after another snapshot.
-            saw_pong = False
-            for _ in range(5):
-                msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
-                if msg.json().get("type") == "pong":
-                    saw_pong = True
-                    break
-            assert saw_pong
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws") as ws:
+        # First message is the snapshot.
+        await asyncio.wait_for(ws.receive(), timeout=2.0)
+        await ws.send_str('{"action":' + "9" * 5000 + "}")
+        await ws.send_str("[]")
+        await ws.send_json({"action": "ping"})
+        # Pong arrives, possibly after another snapshot.
+        saw_pong = False
+        for _ in range(5):
+            msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            if msg.json().get("type") == "pong":
+                saw_pong = True
+                break
+        assert saw_pong

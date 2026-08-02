@@ -484,14 +484,11 @@ def is_conversational(
     # while excluding voicemail greetings and IVR announcements which
     # are almost always 9+ words.  Screening follow-ups in the 6-8
     # word range are caught by the interrogative-starter check above.
-    if word_count <= max_words:
-        return True
-
     # ── Step 4: Reject longer utterances ─────────────────────────
     # Utterances exceeding max_words that don't match screening
     # are likely voicemail greetings, carrier announcements, or other
     # non-conversational speech.
-    return False
+    return word_count <= max_words
 
 
 def coherence_score(callee_texts: list[str], bot_texts: list[str]) -> float:

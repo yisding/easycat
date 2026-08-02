@@ -1059,7 +1059,7 @@ class _TwilioProtocolMixin:
 
         try:
             mulaw_data = base64.b64decode(payload)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return
         self._diagnostics.observe_media_timestamp(
@@ -1411,8 +1411,7 @@ def _mulaw_encode_sample(sample: int) -> int:
     else:
         sign = 0x00
 
-    if sample > _MULAW_CLIP:
-        sample = _MULAW_CLIP
+    sample = min(sample, _MULAW_CLIP)
 
     sample += _MULAW_BIAS
     exponent = 7

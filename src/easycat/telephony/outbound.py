@@ -239,7 +239,7 @@ class OutboundCallManager:
     ) -> None:
         # Lazy-import twilio at instantiation time.
         try:
-            from twilio.rest import Client as TwilioClient  # noqa: F401
+            from twilio.rest import Client as TwilioClient
         except ImportError:
             raise ImportError(
                 "The 'twilio' package is required for OutboundCallManager. "
@@ -436,7 +436,7 @@ class OutboundCallManager:
             call_sid = call.sid
             if not isinstance(call_sid, str) or not call_sid:
                 raise ValueError("Twilio call creation returned an empty call SID")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return None, cancellation, exc, None, None, placement_epoch
 
         if self._placement_epoch_is_current(placement_epoch) and cancellation is None:
@@ -560,13 +560,13 @@ class OutboundCallManager:
             except asyncio.CancelledError as exc:
                 if cancellation is None:
                     cancellation = exc
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 # Read the provider exception from ``result`` below after
                 # leaving the wait loop.
                 break
         try:
             return create_task.result(), cancellation, None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return None, cancellation, exc
 
     async def _complete_call_owned(
@@ -587,11 +587,11 @@ class OutboundCallManager:
             except asyncio.CancelledError as exc:
                 if cancellation is None:
                     cancellation = exc
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 break
         try:
             cleanup_task.result()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return exc, cancellation
         return None, cancellation
 
@@ -614,7 +614,7 @@ class OutboundCallManager:
         self._synthetic_failure_event_ids.add(failure_event_id)
         try:
             await self._event_bus.emit(failure_event)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             dispatch_error = exc
         finally:
             self._synthetic_failure_event_ids.discard(failure_event_id)
@@ -679,7 +679,7 @@ class OutboundCallManager:
                 error=RuntimeError("CallInitiated dispatch was cancelled"),
                 cancellation=exc,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return await self._finish_dispatch_failed_call(
                 call_sid=call_sid,
                 error=exc,
@@ -729,7 +729,7 @@ class OutboundCallManager:
         secondary_dispatch_error: Exception | None = None
         try:
             await self._event_bus.emit(failure_event)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             secondary_dispatch_error = exc
         finally:
             self._synthetic_failure_event_ids.discard(failure_event_id)

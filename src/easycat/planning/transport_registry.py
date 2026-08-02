@@ -323,10 +323,10 @@ __all__ = [
     "EXTRA_PROBE_MODULE",
     "NOISE_REDUCER_BACKENDS",
     "NON_CATALOG_ROLES",
-    "RoleBackend",
     "TRANSPORT_BACKENDS",
     "TRANSPORT_BACKENDS_BY_CONFIG_TYPE",
     "TRANSPORT_CONFIG_TYPE_TO_SHORTCUT",
     "VAD_BACKENDS",
+    "RoleBackend",
     "probe_module_for_extra",
 ]
