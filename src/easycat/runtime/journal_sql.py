@@ -1452,18 +1452,21 @@ class LibsqlJournal(_SqlJournalBase):
         try:
             with self._lock:
                 try:
-                    self._conn.sync()
-                    harden_sqlite_files(self._db_path)
-                except Exception:
-                    logger.debug("libsql final sync failed on close", exc_info=True)
-
-                try:
                     self._conn.execute(
                         "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
                     )
                     self._conn.commit()
                 except Exception:
                     logger.debug("libsql live-owner marker cleanup failed", exc_info=True)
+
+                # Remove the local owner marker before the final remote sync.
+                # Syncing first would publish the live marker and then close
+                # with its deletion only committed to the local replica.
+                try:
+                    self._conn.sync()
+                    harden_sqlite_files(self._db_path)
+                except Exception:
+                    logger.debug("libsql final sync failed on close", exc_info=True)
 
                 try:
                     self._conn.close()
