@@ -1361,6 +1361,11 @@ class Session:
             raise RuntimeError("Session.stop() requires a running asyncio task")
         if self._start_task is current_task:
             raise RuntimeError("Session.stop() cannot run reentrantly during start()")
+        if current_task.cancelling():
+            # Deliver a newly-pending cancellation before sampling baselines
+            # used to distinguish caller cancellation from a joined stop.
+            # A previously caught cancellation is not re-delivered here.
+            await asyncio.sleep(0)
 
         # Serialize the startup transaction against teardown, but release the
         # lock before the potentially long stop body so a force caller can
