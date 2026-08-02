@@ -1,4 +1,6 @@
+import asyncio
 import hashlib
+import threading
 
 import pytest
 
@@ -602,6 +604,66 @@ def test_journal_sink_stores_artifact_refs_before_record() -> None:
     assert record.output_ref is not None
     assert artifact_store.has(record.input_ref)
     assert artifact_store.has(record.output_ref)
+
+
+@pytest.mark.asyncio
+async def test_async_artifact_write_finishes_referencing_record_before_cancellation() -> None:
+    class BlockingArtifactStore(InMemoryArtifactStore):
+        writes_block = True
+
+        def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+            super().__init__()
+            self._loop = loop
+            self.started = asyncio.Event()
+            self.release = threading.Event()
+            self.finished = asyncio.Event()
+
+        def put(
+            self,
+            payload: bytes,
+            *,
+            artifact_class: str = "debug_verbose",
+        ) -> str:
+            del artifact_class
+            self._loop.call_soon_threadsafe(self.started.set)
+            try:
+                if not self.release.wait(timeout=5):
+                    raise AssertionError("timed out waiting to release artifact write")
+                return super().put(payload)
+            finally:
+                self._loop.call_soon_threadsafe(self.finished.set)
+
+    artifact_store = BlockingArtifactStore(asyncio.get_running_loop())
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    sink = SessionJournalSink(
+        event_bus=EventBus(),
+        journal=journal,
+        artifact_store=artifact_store,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    payload = b"cancelled artifact write"
+    task = asyncio.create_task(
+        sink.append_record_async(name="artifact_record", input_bytes=payload)
+    )
+
+    await asyncio.wait_for(artifact_store.started.wait(), timeout=5)
+    task.cancel()
+    await asyncio.sleep(0)
+    operation_still_owned = not task.done()
+    journal_was_empty_while_blocked = journal.read() == []
+    artifact_store.release.set()
+    await asyncio.wait_for(artifact_store.finished.wait(), timeout=5)
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert operation_still_owned
+    assert journal_was_empty_while_blocked
+    [record] = journal.read()
+    expected_ref = hashlib.sha256(payload).hexdigest()
+    assert record.input_ref == expected_ref
+    assert artifact_store.has(expected_ref)
 
 
 @pytest.mark.asyncio
