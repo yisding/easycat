@@ -744,15 +744,17 @@ class WebRTCTransport(AudioQueueMixin):
         if self._pc is None or self._outbound_track is None:
             return False
 
-        from easycat._audio_utils import resample
+        from easycat._audio_utils import resample, to_mono, validate_pcm16_format
 
         # Transport sends have a per-call delivery result and no tail-send
         # phase. Keep this fallback conversion immediate; normal configured
         # sessions already perform stateful output alignment in TTSBase.
+        validate_pcm16_format("chunk.format", chunk.format)
+        pcm_data = chunk.data
+        if chunk.format.channels != 1:
+            pcm_data = to_mono(pcm_data, chunk.format.channels)
         if chunk.format.sample_rate != WEBRTC_SAMPLE_RATE:
-            pcm_data = resample(chunk.data, chunk.format.sample_rate, WEBRTC_SAMPLE_RATE)
-        else:
-            pcm_data = chunk.data
+            pcm_data = resample(pcm_data, chunk.format.sample_rate, WEBRTC_SAMPLE_RATE)
 
         self._outbound._event_bus = self._event_bus
         accepted = self._outbound.enqueue(

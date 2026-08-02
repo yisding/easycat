@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import struct
 from collections.abc import Callable, Iterable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
 from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 from easycat.transports.webrtc import (
@@ -1023,6 +1024,37 @@ class TestWebRTCStatsArtifact:
 
         assert response.status == 429
         assert not stats_path.exists()
+
+
+class TestWebRTCOutboundNormalization:
+    @pytest.mark.asyncio
+    async def test_send_audio_downmixes_stereo_before_webrtc_enqueue(self) -> None:
+        transport = WebRTCTransport()
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+        source_format = AudioFormat(sample_rate=48_000, channels=2, sample_width=2)
+        stereo = struct.pack("<1920h", *([1_000, 3_000] * 960))
+        chunk = AudioChunk(data=stereo, format=source_format)
+
+        assert await transport.send_audio(chunk) is True
+
+        queued = transport._outbound._queue.get_nowait()
+        assert len(queued.transport_data) == 960 * 2
+        assert struct.unpack("<960h", queued.transport_data) == (2_000,) * 960
+        assert queued.original_chunk is chunk
+
+    @pytest.mark.asyncio
+    async def test_send_audio_rejects_non_pcm16_input(self) -> None:
+        transport = WebRTCTransport()
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+        chunk = AudioChunk(
+            data=b"\x80" * 960,
+            format=AudioFormat(sample_rate=48_000, channels=1, sample_width=1),
+        )
+
+        with pytest.raises(ValueError, match="chunk.format must be PCM16"):
+            await transport.send_audio(chunk)
 
 
 @pytest.mark.integration_socket
