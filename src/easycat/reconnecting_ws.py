@@ -28,9 +28,11 @@ logger = logging.getLogger(__name__)
 # ContextVar scopes that narrow exemption to the callback task (and work it
 # deliberately spawns) instead of briefly publishing a half-primed socket to
 # every concurrent producer.
-_RECONNECT_CALLBACK_SOCKET: ContextVar[ReconnectingWebSocket | None] = ContextVar(
-    "reconnect_callback_socket",
-    default=None,
+_RECONNECT_CALLBACK_SOCKET: ContextVar[tuple[ReconnectingWebSocket, ClientConnection] | None] = (
+    ContextVar(
+        "reconnect_callback_socket",
+        default=None,
+    )
 )
 
 # Callback types for connection lifecycle hooks.
@@ -184,6 +186,11 @@ class ReconnectingWebSocket:
         # concurrent write blocks briefly across a recv_iter-driven reconnect
         # instead of racing against a half-replaced socket.
         self._connected = asyncio.Event()
+        # Exact candidate currently being primed by ``on_reconnect``. A child
+        # task inherits the callback's ContextVar, so this separate active
+        # marker prevents that inherited value from becoming a permanent bypass
+        # after installation completes or a later socket generation begins.
+        self._reconnect_callback_candidate: ClientConnection | None = None
         # True once an initial connection has succeeded. Before that,
         # send()/recv() fail fast rather than waiting on a reconnect that
         # isn't happening.
@@ -315,11 +322,14 @@ class ReconnectingWebSocket:
         self._connected.clear()
         try:
             if (notify_reconnect or attempt > 0) and self._on_reconnect:
-                callback_token = _RECONNECT_CALLBACK_SOCKET.set(self)
+                self._reconnect_callback_candidate = candidate
+                callback_token = _RECONNECT_CALLBACK_SOCKET.set((self, candidate))
                 try:
                     await self._invoke_callback(self._on_reconnect)
                 finally:
                     _RECONNECT_CALLBACK_SOCKET.reset(callback_token)
+                    if self._reconnect_callback_candidate is candidate:
+                        self._reconnect_callback_candidate = None
             # The callback may need to replay session configuration or an
             # in-flight request. Only release ordinary send()/recv() callers
             # once that primer has completed, otherwise a concurrent frame
@@ -479,8 +489,15 @@ class ReconnectingWebSocket:
 
     def _reconnect_callback_connection(self) -> ClientConnection | None:
         """Return the candidate socket only to its active primer callback."""
-        if _RECONNECT_CALLBACK_SOCKET.get() is self:
-            return self._ws
+        callback = _RECONNECT_CALLBACK_SOCKET.get()
+        if callback is not None:
+            owner, candidate = callback
+            if (
+                owner is self
+                and self._reconnect_callback_candidate is candidate
+                and self._ws is candidate
+            ):
+                return candidate
         return None
 
     async def _wait_until_connected(self) -> None:
