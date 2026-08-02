@@ -302,7 +302,7 @@ above for the same swap):
   beyond the `/metrics` snapshot, install an OTel SDK and exporter
   (`opentelemetry-sdk`, `opentelemetry-exporter-otlp`; EasyCat treats OTel as
   fully optional and never pulls it in as a hard dependency — see
-  [observability.md](../observability.md#d-—-opentelemetry-facade)) and
+  [observability.md](../observability.md#d-opentelemetry-facade)) and
   initialize the SDK's `MeterProvider`/`TracerProvider` in your own `config()`
   factory before creating sessions. Point the standard OTel SDK environment
   variables at your collector — nothing container-specific:

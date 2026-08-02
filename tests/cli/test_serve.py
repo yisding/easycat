@@ -115,6 +115,7 @@ def test_serve_manifest_reads_path_from_environment(
         run=lambda: None,
     )
     built: list[Path] = []
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("EASYCAT_MANIFEST", str(manifest))
     monkeypatch.setattr(
         serve_mod,
@@ -122,6 +123,11 @@ def test_serve_manifest_reads_path_from_environment(
         lambda path, *, profile: built.append(path) or server,
     )
     monkeypatch.setattr(serve_mod, "_run_manifest_server", lambda _server: None)
+    monkeypatch.setattr(
+        serve_mod,
+        "_validate_playground_config",
+        lambda: pytest.fail("manifest serving must not build the OpenAI playground"),
+    )
 
     result = cli.invoke(typer_app, ["serve"])
 

@@ -48,6 +48,12 @@ def _serve_token_from_env() -> str | None:
     return os.environ.get("EASYCAT_SERVE_TOKEN") or None
 
 
+def _manifest_from_env() -> Path | None:
+    """Resolve the manifest env var independently of Typer's envvar support."""
+    value = os.environ.get("EASYCAT_MANIFEST")
+    return Path(value) if value else None
+
+
 def _is_loopback(host: str) -> bool:
     """Reuse the canonical loopback check (covers all 127.0.0.0/8 / ``::1`` /
     ``::ffff:127.*`` forms, not just the three literals) so the CLI pre-flight
@@ -286,6 +292,11 @@ def serve(
     ),
 ) -> None:
     """Serve the playground, or use --manifest for a declarative VoiceServer."""
+    # Typer 0.26 is the supported dependency floor, but it does not populate
+    # Path options from ``envvar=`` in every supported Click combination. Keep
+    # the option metadata for help and newer Typer versions, while resolving
+    # the documented fallback ourselves when the CLI option was not supplied.
+    manifest = manifest or _manifest_from_env()
     if manifest is not None:
         server = _build_manifest_server(manifest, profile=profile)
         _announce_manifest_server(server, manifest=manifest, profile=profile)

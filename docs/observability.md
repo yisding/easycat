@@ -259,7 +259,7 @@ copies it no longer owns.
   distinct concepts. Dev mode also never opens a tab in CI / non-interactive
   shells (same loopback + interactive-terminal guards as the autolaunch path).
 
-### D — OpenTelemetry facade
+### D: OpenTelemetry facade
 
 `easycat._observability` is a thin facade over the OpenTelemetry API for
 production **metrics and traces**.

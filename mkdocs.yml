@@ -189,6 +189,8 @@ nav:
       - Chapter 9 — Decisions and pitfalls: development/09-decisions-and-pitfalls.md
       - Chapter 10 — Guided change recipes: development/10-guided-change-recipes.md
   - Reference:
+      - Installation: install.md
+      - CLI: cli.md
       - Architecture: architecture.md
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
