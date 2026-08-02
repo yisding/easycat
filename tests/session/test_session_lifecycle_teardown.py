@@ -680,6 +680,51 @@ async def test_force_stop_cancels_in_progress_start_without_waiting_for_connect(
 
 
 @pytest.mark.asyncio
+async def test_force_stop_does_not_resurrect_after_cancel_resistant_connect():
+    class CancelResistantConnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_entered = asyncio.Event()
+            self.release_connect = asyncio.Event()
+            self.disconnect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_entered.set()
+            try:
+                await self.release_connect.wait()
+            except asyncio.CancelledError:
+                # Simulate a provider that treats cancellation as a retryable
+                # connect interruption and completes its handshake anyway.
+                await self.release_connect.wait()
+            await super().connect()
+
+        async def disconnect(self) -> None:
+            self.disconnect_calls += 1
+            self.connected = False
+            await super().disconnect()
+
+    transport = CancelResistantConnectTransport()
+    session = Session(_full_config(transport=transport))
+    starting = asyncio.create_task(session.start())
+    await asyncio.wait_for(transport.connect_entered.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(force=True), timeout=1)
+    assert session._closed
+    assert not session.is_running
+
+    transport.release_connect.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(starting, timeout=1)
+
+    assert session._closed
+    assert not session.is_running
+    assert session._audio_router.pipeline_task is None
+    assert session._audio_router.outbound_task is None
+    assert transport.disconnect_calls == 2
+    assert not transport.connected
+
+
+@pytest.mark.asyncio
 async def test_session_start_rolls_back_after_connect_failure():
     class FlakyTransport(FakeTransport):
         def __init__(self) -> None:
