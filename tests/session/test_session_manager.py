@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from easycat import session_manager as session_manager_module
 from easycat.session import Session
 from easycat.session_manager import SessionManager
 from tests.session._session_core_helpers import FakeTransport, _full_config
@@ -19,6 +20,91 @@ class _DummySession:
 
     async def stop(self) -> None:
         self.stopped += 1
+
+
+@pytest.mark.asyncio
+async def test_await_owned_stop_ignores_preexisting_cancellation_count() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+    owned.cancel()
+    await asyncio.gather(owned, return_exceptions=True)
+
+    async def reap_after_caught_cancellation() -> tuple[bool, int]:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        completed = await session_manager_module._await_owned_stop(owned)
+        return completed, current.cancelling()
+
+    caller = asyncio.create_task(reap_after_caught_cancellation())
+
+    assert await caller == (False, 1)
+    assert owned.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_await_owned_stop_preserves_cancellation_pending_at_entry() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+
+    async def cancel_before_await() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await session_manager_module._await_owned_stop(owned)
+
+    caller = asyncio.create_task(cancel_before_await())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert not owned.done()
+    owned.cancel()
+    await asyncio.gather(owned, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_await_owned_stop_prioritizes_new_caller_cancellation() -> None:
+    owned_started = asyncio.Event()
+    awaiting_owned = asyncio.Event()
+    continued = asyncio.Event()
+
+    async def wait_forever() -> None:
+        owned_started.set()
+        await asyncio.Event().wait()
+
+    owned = asyncio.create_task(wait_forever())
+    await owned_started.wait()
+
+    async def reap_after_caught_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        awaiting_owned.set()
+        await session_manager_module._await_owned_stop(owned)
+        continued.set()
+
+    caller = asyncio.create_task(reap_after_caught_cancellation())
+
+    def cancel_caller(_task: asyncio.Task[None]) -> None:
+        caller.cancel()
+
+    # Register before _await_owned_stop() creates shield's child callback so
+    # both cancellations are visible when its CancelledError handler runs.
+    owned.add_done_callback(cancel_caller)
+    await awaiting_owned.wait()
+    owned.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert caller.cancelling() == 2
+    assert owned.cancelled()
+    assert not continued.is_set()
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ import asyncio
 
 import pytest
 
+from easycat.server import transports as server_transports
 from easycat.server.config import VoiceServerConfig
 from easycat.server.transports import CapacityGate
 from easycat.server.webrtc_routes import WebRTCRoutes
@@ -158,6 +159,76 @@ def _make_gate(sessions: dict[int, object]) -> CapacityGate[int]:
 
 def _pairs(sessions: dict[int, object]):
     return lambda: list(sessions.items())
+
+
+async def test_safe_await_ignores_preexisting_cancellation_count() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+    owned.cancel()
+    await asyncio.gather(owned, return_exceptions=True)
+
+    async def reap_after_caught_cancellation() -> int:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        await server_transports._safe_await(owned)
+        return current.cancelling()
+
+    caller = asyncio.create_task(reap_after_caught_cancellation())
+
+    assert await caller == 1
+    assert owned.cancelled()
+
+
+async def test_safe_await_preserves_cancellation_pending_at_entry() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+
+    async def cancel_before_await() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await server_transports._safe_await(owned)
+
+    caller = asyncio.create_task(cancel_before_await())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert owned.cancelled()
+
+
+async def test_safe_await_propagates_new_cancellation_count() -> None:
+    owned_started = asyncio.Event()
+    awaiting_owned = asyncio.Event()
+
+    async def wait_forever() -> None:
+        owned_started.set()
+        await asyncio.Event().wait()
+
+    owned = asyncio.create_task(wait_forever())
+    await owned_started.wait()
+
+    async def reap_after_caught_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        awaiting_owned.set()
+        await server_transports._safe_await(owned)
+
+    caller = asyncio.create_task(reap_after_caught_cancellation())
+    await awaiting_owned.wait()
+    caller.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert caller.cancelling() == 2
+    assert owned.cancelled()
 
 
 @pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])

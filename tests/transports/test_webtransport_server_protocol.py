@@ -441,6 +441,89 @@ class TestWebTransportServerWiring:
         assert server._server is bound  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_handler_disconnect_failure_is_retained_and_retried_by_stop(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(max_concurrent_sessions=1),
+            _noop,
+        )
+        server._started = True  # noqa: SLF001
+        server._accepting_sessions = True  # noqa: SLF001
+        transport = WebTransportConnectionTransport()
+        stop_error = RuntimeError("session stop failed once")
+        session = SimpleNamespace(
+            start=AsyncMock(),
+            stop=AsyncMock(side_effect=[stop_error, None]),
+            close_connection=Mock(),
+        )
+        transport._session = session  # type: ignore[assignment]  # noqa: SLF001
+
+        await server._run_handler(transport)  # noqa: SLF001
+
+        assert transport._session_stop_pending is True  # noqa: SLF001
+        assert server._pending_transport_cleanup == {transport}  # noqa: SLF001
+        assert server._cleanup_error is stop_error  # noqa: SLF001
+        assert server._can_accept_session() is False  # noqa: SLF001
+
+        await server.stop()
+
+        assert session.stop.await_count == 2
+        assert transport._session_stop_pending is False  # noqa: SLF001
+        assert server._pending_transport_cleanup == set()  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_handler_does_not_suppress_process_control_from_disconnect(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(WebTransportTransportConfig(), _noop)
+        stop = SystemExit("stop process")
+        transport = SimpleNamespace(
+            connect=AsyncMock(),
+            disconnect=AsyncMock(side_effect=stop),
+            _disconnect_cleanup_error=None,
+        )
+
+        with pytest.raises(SystemExit, match="stop process"):
+            await server._run_handler(transport)  # type: ignore[arg-type]  # noqa: SLF001
+
+        assert server._pending_transport_cleanup == set()  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_stop_retains_transport_cleanup_until_a_later_retry_succeeds(self) -> None:
+        async def _noop(_transport: WebTransportConnectionTransport) -> None:
+            return
+
+        server = WebTransportServer(WebTransportTransportConfig(), _noop)
+        transport = WebTransportConnectionTransport()
+        first_error = RuntimeError("handler disconnect failed")
+        retry_error = RuntimeError("server stop retry failed")
+        session = SimpleNamespace(
+            start=AsyncMock(),
+            stop=AsyncMock(side_effect=[first_error, retry_error, None]),
+            close_connection=Mock(),
+        )
+        transport._session = session  # type: ignore[assignment]  # noqa: SLF001
+
+        await server._run_handler(transport)  # noqa: SLF001
+
+        with pytest.raises(RuntimeError, match="server stop retry failed"):
+            await server.stop()
+
+        assert server._pending_transport_cleanup == {transport}  # noqa: SLF001
+        assert server._cleanup_error is retry_error  # noqa: SLF001
+
+        await server.stop()
+
+        assert session.stop.await_count == 3
+        assert server._pending_transport_cleanup == set()  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_cancelled_stop_blocks_restart_until_server_cleanup_retry(self) -> None:
         wait_entered = asyncio.Event()
 

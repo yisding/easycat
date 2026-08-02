@@ -327,6 +327,23 @@ class WebTransportTransportConfig:
             or self.outbound_max_pending < 1
         ):
             raise ValueError("outbound_max_pending must be an integer >= 1")
+        if (
+            isinstance(self.max_concurrent_sessions, bool)
+            or not isinstance(self.max_concurrent_sessions, int)
+            or self.max_concurrent_sessions < 1
+        ):
+            raise ValueError("max_concurrent_sessions must be an integer >= 1")
+        if (
+            self.audio_format.encoding != "pcm"
+            or self.audio_format.sample_width != 2
+            or self.audio_format.channels != 1
+        ):
+            raise ValueError(
+                "audio_format must be mono PCM16 audio "
+                f"(got encoding={self.audio_format.encoding!r}, "
+                f"sample_width={self.audio_format.sample_width!r}, "
+                f"channels={self.audio_format.channels!r})"
+            )
 
 
 def _build_quic_configuration(certfile: str, keyfile: str) -> QuicConfiguration:
@@ -1625,6 +1642,10 @@ class WebTransportServer:
         self._session_handler = session_handler
         self._server: QuicServer | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
+        # A handler task can finish after its transport's disconnect fails.
+        # Keep the exact transport reachable so stop() can retry that owned
+        # cleanup instead of discarding it with the completed handler task.
+        self._pending_transport_cleanup: set[WebTransportConnectionTransport] = set()
         self._started = False
         # Protocol admission is distinct from the bound-server handle: stop()
         # closes it synchronously before snapshotting handlers, so a queued
@@ -1657,7 +1678,8 @@ class WebTransportServer:
         return (
             self._started
             and self._accepting_sessions
-            and len(self._handler_tasks) < self._config.max_concurrent_sessions
+            and len(self._handler_tasks) + len(self._pending_transport_cleanup)
+            < self._config.max_concurrent_sessions
         )
 
     def _dispatch_session(self, transport: WebTransportConnectionTransport) -> None:
@@ -1674,7 +1696,8 @@ class WebTransportServer:
             logger.warning("Rejecting WebTransport session — server is not accepting sessions")
             transport.force_close(reason="server not accepting sessions")
             return
-        if len(self._handler_tasks) >= self._config.max_concurrent_sessions:
+        owned_sessions = len(self._handler_tasks) + len(self._pending_transport_cleanup)
+        if owned_sessions >= self._config.max_concurrent_sessions:
             logger.warning(
                 "Rejecting WebTransport session — %d concurrent cap reached",
                 self._config.max_concurrent_sessions,
@@ -1713,7 +1736,7 @@ class WebTransportServer:
             ) from self._cleanup_error
         if self._started:
             return
-        if self._server is not None or self._handler_tasks:
+        if self._server is not None or self._handler_tasks or self._pending_transport_cleanup:
             raise RuntimeError(
                 "WebTransportServer cannot start while previous resources "
                 "remain; call stop() again to retry cleanup"
@@ -1765,8 +1788,33 @@ class WebTransportServer:
         finally:
             try:
                 await transport.disconnect()
-            except Exception:
-                logger.debug("Error while disconnecting WebTransport session", exc_info=True)
+            except asyncio.CancelledError as exc:
+                self._record_handler_cleanup_failure(transport, exc)
+                raise
+            except Exception as exc:
+                self._record_handler_cleanup_failure(transport, exc)
+
+    def _record_handler_cleanup_failure(
+        self,
+        transport: WebTransportConnectionTransport,
+        exc: Exception | asyncio.CancelledError,
+    ) -> None:
+        """Retain retryable handler cleanup without swallowing process control."""
+        # A completed handler task is removed from _handler_tasks, so retain
+        # the exact transport separately until server stop can retry it.
+        self._pending_transport_cleanup.add(transport)
+        cleanup_error = transport._disconnect_cleanup_error  # noqa: SLF001
+        if cleanup_error is None:
+            cleanup_error = (
+                exc
+                if isinstance(exc, Exception)
+                else RuntimeError(
+                    "WebTransport handler disconnect was interrupted by cancellation"
+                )
+            )
+        if self._cleanup_error is None:
+            self._cleanup_error = cleanup_error
+        logger.debug("Error while disconnecting WebTransport session", exc_info=exc)
 
     async def stop(self) -> None:
         current = asyncio.current_task()
@@ -1790,6 +1838,27 @@ class WebTransportServer:
                 self._lifecycle_owner = None
                 self._lifecycle_action = None
 
+    async def _retry_pending_transport_cleanup(self) -> list[Exception]:
+        """Retry exact transports retained after handler disconnect failure."""
+        cleanup_errors: list[Exception] = []
+        for transport in list(self._pending_transport_cleanup):
+            try:
+                await transport.disconnect()
+            except asyncio.CancelledError:
+                # The connection transport retains its own interrupted-cleanup
+                # ledger. Keep it in the server ledger and preserve caller
+                # cancellation through stop().
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "WebTransport retained session cleanup failed",
+                    exc_info=exc,
+                )
+                cleanup_errors.append(exc)
+            else:
+                self._pending_transport_cleanup.discard(transport)
+        return cleanup_errors
+
     async def _stop_unlocked(self) -> None:
         """Stop while the caller owns ``_lifecycle_lock``."""
         # Close admission before inspecting/snapshotting handlers. Protocol
@@ -1800,6 +1869,7 @@ class WebTransportServer:
             not self._started
             and self._server is None
             and not self._handler_tasks
+            and not self._pending_transport_cleanup
             and self._cleanup_error is None
         ):
             return
@@ -1817,23 +1887,25 @@ class WebTransportServer:
         # bookkeeping.
         self._handler_tasks.difference_update(others)
 
-        cleanup_errors: list[Exception] = []
+        cleanup_errors = await self._retry_pending_transport_cleanup()
         server = self._server
+        server_cleanup_errors: list[Exception] = []
         if server is not None:
             try:
                 server.close()
             except Exception as exc:
                 logger.exception("WebTransport server close failed", exc_info=exc)
-                cleanup_errors.append(exc)
+                server_cleanup_errors.append(exc)
             wait_closed = getattr(server, "wait_closed", None)
             if wait_closed is not None:
                 try:
                     await wait_closed()
                 except Exception as exc:
                     logger.exception("WebTransport server wait_closed failed", exc_info=exc)
-                    cleanup_errors.append(exc)
-            if not cleanup_errors and self._server is server:
+                    server_cleanup_errors.append(exc)
+            if not server_cleanup_errors and self._server is server:
                 self._server = None
+        cleanup_errors.extend(server_cleanup_errors)
         self._cleanup_error = cleanup_errors[0] if cleanup_errors else None
         if cleanup_errors:
             raise cleanup_errors[0]

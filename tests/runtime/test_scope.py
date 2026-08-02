@@ -239,6 +239,113 @@ async def test_runtime_scope_cancel_and_drain_cancels_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_ignores_preexisting_cancellation_count() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def wait_forever() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    owned = scope.create_task("worker", wait_forever())
+    await started.wait()
+
+    async def drain_after_caught_cancellation() -> int:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        await scope.cancel_and_drain("worker")
+        return current.cancelling()
+
+    caller = asyncio.create_task(drain_after_caught_cancellation())
+
+    assert await caller == 1
+    assert owned.cancelled()
+    assert cleaned_up.is_set()
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_preserves_cancellation_pending_at_entry() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+
+    async def wait_forever() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    owned = scope.create_task("worker", wait_forever())
+    await started.wait()
+
+    async def cancel_before_drain() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await scope.cancel_and_drain("worker")
+
+    caller = asyncio.create_task(cancel_before_drain())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    await asyncio.gather(owned, return_exceptions=True)
+    await scope.cancel_and_drain("worker")
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_propagates_new_cancellation_count() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    awaiting_drain = asyncio.Event()
+
+    async def wait_forever() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    owned = scope.create_task("worker", wait_forever())
+    await started.wait()
+
+    async def drain_after_caught_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        assert current.cancelling() == 1
+
+        awaiting_drain.set()
+        await scope.cancel_and_drain("worker")
+
+    caller = asyncio.create_task(drain_after_caught_cancellation())
+    await awaiting_drain.wait()
+    await cleanup_started.wait()
+    caller.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert caller.cancelling() == 2
+
+    release_cleanup.set()
+    await asyncio.gather(owned, return_exceptions=True)
+    await scope.cancel_and_drain("worker")
+    assert scope.empty
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_cancel_and_drain_detaches_caller_and_cancels_siblings() -> None:
     scope = RuntimeScope()
     sibling_started = asyncio.Event()
