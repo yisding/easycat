@@ -715,6 +715,44 @@ async def test_finalize_speaking_turn_does_not_clear_turn_started_during_mark_fl
     assert turn_manager.state.value == "idle"
 
 
+@pytest.mark.asyncio
+async def test_finalize_speaking_turn_does_not_stop_successor_during_action_drain() -> None:
+    """Cancellation-resistant action cleanup must not stop a barge-in successor."""
+    drain_entered = asyncio.Event()
+    release_drain = asyncio.Event()
+
+    async def _drain() -> bool:
+        drain_entered.set()
+        try:
+            await release_drain.wait()
+        except asyncio.CancelledError:
+            await release_drain.wait()
+        return False
+
+    tts = _RecordingTTS()
+    scheduler, ctx = _build_scheduler(tts=tts, drain_session_actions=_drain)
+    old_turn = TurnContext("old-turn", CancelToken())
+    successor = TurnContext("successor", CancelToken())
+    ctx["current_turn_ref"]["turn"] = old_turn
+    turn_manager = ctx["turn_manager"]
+    await turn_manager.bot_started_speaking()
+
+    finalizer = asyncio.create_task(
+        scheduler.finalize_speaking_turn(old_turn, turn_generation=old_turn.generation)
+    )
+    await drain_entered.wait()
+    finalizer.cancel()
+
+    ctx["current_turn_ref"]["turn"] = successor
+    turn_manager.reset()
+    turn_manager.begin_application_turn(successor.id, successor.cancel_token)
+    await turn_manager.bot_started_speaking()
+
+    release_drain.set()
+    assert await finalizer is False
+    assert turn_manager.state.value == "bot_speaking"
+
+
 # ── Tests: synthesize_sentences stub ─────────────────────────
 
 

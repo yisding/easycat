@@ -2151,7 +2151,7 @@ async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
         order.append("bot_stopped")
 
     session.event_bus.subscribe(BotStoppedSpeaking, _record_stopped)
-    session._turn = TurnContext("turn-stop2", CancelToken())
+    session.begin_turn("turn-stop2", CancelToken())
     await session._turn_runner.run_streaming_agent("hello", token=None)
     assert len(stopped) == 1
     assert order == ["agent_final", "bot_stopped"]
