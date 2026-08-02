@@ -23,6 +23,7 @@ import pytest
 
 from easycat.runtime import SqliteJournal, run_retention
 from easycat.runtime import journal_retention as journal_retention_module
+from easycat.runtime._journal_lock import _LOCK_BUCKET_COUNT, journal_file_claim
 from easycat.runtime.records import JournalRecordKind
 
 
@@ -269,6 +270,20 @@ def test_retention_ignores_symlinked_journal_file(tmp_path):
     assert not (tmp_path / "archive").exists()
 
 
+def test_archive_session_symlink_returns_failure_sentinel(tmp_path):
+    outside_root = tmp_path / "outside"
+    target = _seed_journal(outside_root, "target")
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    linked = journals / "linked.sqlite"
+    linked.symlink_to(target)
+
+    assert retention_module._archive_session(tmp_path, linked) is None
+    assert linked.is_symlink()
+    assert target.exists()
+    assert not (tmp_path / "archive").exists()
+
+
 def test_retention_refuses_symlinked_archive_directory(tmp_path):
     stale = _seed_journal(tmp_path, "stale-sess")
     target = tmp_path / "outside-archive"
@@ -424,6 +439,50 @@ def test_retention_rechecks_liveness_after_acquiring_journal_claim(
         release_claim.set()
         retention_thread.join(2)
         live.close()
+
+
+def test_retention_stops_when_another_sweep_holds_oldest_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oldest = _seed_journal(tmp_path, "oldest")
+    newest = _seed_journal(tmp_path, "newest")
+    _backdate(oldest, age_days=2)
+    _backdate(newest, age_days=1)
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def contend_oldest(path, *, blocking):
+        if path == oldest and not blocking:
+            yield False
+            return
+        with original_claim(path, blocking=blocking) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", contend_oldest)
+
+    removed = run_retention(
+        tmp_path,
+        max_sessions=1,
+        max_age_days=10**9,
+        mode="delete",
+    )
+
+    assert removed == 0
+    assert oldest.exists()
+    assert newest.exists()
+
+
+def test_journal_claim_lock_namespace_is_bounded(tmp_path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+
+    for index in range(_LOCK_BUCKET_COUNT * 2):
+        with journal_file_claim(journals / f"session-{index}.sqlite", blocking=True) as claimed:
+            assert claimed is True
+
+    lock_files = list(journals.glob(".easycat-journal-*.lock"))
+    assert 1 <= len(lock_files) <= _LOCK_BUCKET_COUNT
 
 
 def test_retention_never_sweeps_callers_own_db_even_if_oldest(tmp_path):

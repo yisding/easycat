@@ -16,6 +16,7 @@ import asyncio
 import logging
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
@@ -128,11 +129,20 @@ class SmartTurnONNX:
     ) -> None:
         timeout_s = _finite_positive_duration("timeout_s", timeout_s)
         max_audio_seconds = _finite_positive_duration("max_audio_seconds", max_audio_seconds)
+        max_audio_samples = self._SAMPLE_RATE * max_audio_seconds
+        if (
+            not math.isfinite(max_audio_samples)
+            or max_audio_samples < 1
+            or max_audio_samples > sys.maxsize
+        ):
+            raise ValueError(
+                "max_audio_seconds must produce a positive, representable audio window"
+            )
 
         self._model_path = model_path
         self._threshold = _validate_probability_threshold("threshold", threshold)
         self._timeout_s = timeout_s
-        self._max_audio_samples = int(self._SAMPLE_RATE * max_audio_seconds)
+        self._max_audio_samples = int(max_audio_samples)
         self._session: Any = None  # ort.InferenceSession (lazy)
         self._feature_extractor: Any = None  # NumPy Whisper frontend (lazy)
         self._np: Any = None  # numpy module (lazy)

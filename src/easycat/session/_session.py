@@ -1376,6 +1376,11 @@ class Session:
             raise RuntimeError("Session.stop() requires a running asyncio task")
         if self._start_task is current_task:
             raise RuntimeError("Session.stop() cannot run reentrantly during start()")
+        if current_task.cancelling():
+            # Deliver a newly-pending cancellation before sampling baselines
+            # used to distinguish caller cancellation from a joined stop.
+            # A previously caught cancellation is not re-delivered here.
+            await asyncio.sleep(0)
 
         # Serialize the startup transaction against teardown, but release the
         # lock before the potentially long stop body so a force caller can
@@ -1743,7 +1748,14 @@ class Session:
         still recognizing a manager-only turn whose Session pointer has not
         been installed yet.
         """
-        if self._turn is not turn:
+        active_turn = self._turn
+        manager_only_turn_was_installed = (
+            turn is None
+            and active_turn is not None
+            and manager_token is not None
+            and active_turn.cancel_token is manager_token
+        )
+        if active_turn is not turn and not manager_only_turn_was_installed:
             return False
         active_manager_token = self._turn_manager.cancel_token
         if active_manager_token is not None and active_manager_token is not manager_token:
@@ -1845,6 +1857,10 @@ class Session:
         self._tts_scheduler.set_playback_suppressed(True)
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
+        # Start provider cancellation before the transport clear yields to a
+        # successor admission. Calling the shared provider afterwards could
+        # cancel synthesis that belongs to the newly installed turn.
+        await self._tts_scheduler.synthesizer.cancel()
         await clear_audio_if_supported(self.transport)
         # A VAD barge-in can install a successor while a delayed transport
         # clear is in flight. Its shared TTS provider and BOT_SPEAKING state
@@ -1852,7 +1868,6 @@ class Session:
         # must not touch either one.
         if self._turn is not turn:
             return
-        await self._tts_scheduler.synthesizer.cancel()
         if self._turn is turn and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 

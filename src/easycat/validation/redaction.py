@@ -249,7 +249,7 @@ def _redact_runtime_secret_value(value: Any, secrets: Sequence[str]) -> Any:
 def _parse_json(value: str, artifact_format: TextArtifactFormat) -> Any:
     try:
         return json.loads(value)
-    except (json.JSONDecodeError, RecursionError):
+    except json.JSONDecodeError:
         raise
     except Exception as exc:
         raise ArtifactRedactionError(artifact_format, "parse", exc) from exc
@@ -355,7 +355,7 @@ def _redact_artifact_text(
         if artifact_format == "json":
             return _redact_json_text(value, secrets)
         return _redact_jsonl_text(value, secrets)
-    except (json.JSONDecodeError, RecursionError):
+    except json.JSONDecodeError:
         # Keep malformed evidence malformed so the normal artifact parser can
         # report it, but still remove exact secrets from its source text.
         return _scrub_unstructured_artifact(value, secrets, artifact_format)
