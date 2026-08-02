@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal, TypeVar
@@ -101,7 +102,14 @@ async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
 class _BridgeToolDrain:
     """Route only lifecycle events for tool calls observed before cancellation."""
 
-    pending_call_ids: set[str | None] = field(default_factory=set)
+    pending_call_counts: Counter[str | None] = field(default_factory=Counter)
+
+    def _finish_call(self, call_id: str | None) -> None:
+        remaining = self.pending_call_counts[call_id] - 1
+        if remaining > 0:
+            self.pending_call_counts[call_id] = remaining
+        else:
+            self.pending_call_counts.pop(call_id, None)
 
     def route(
         self,
@@ -113,17 +121,17 @@ class _BridgeToolDrain:
         call_id = getattr(event, "call_id", None)
         if not cancelled:
             if kind == "tool_started":
-                self.pending_call_ids.add(call_id)
+                self.pending_call_counts[call_id] += 1
             elif kind == "tool_result":
-                self.pending_call_ids.discard(call_id)
+                self._finish_call(call_id)
             return "emit"
-        if not self.pending_call_ids or kind == "done":
+        if not self.pending_call_counts or kind == "done":
             return "stop"
-        if kind == "tool_delta" and call_id in self.pending_call_ids:
+        if kind == "tool_delta" and self.pending_call_counts[call_id] > 0:
             return "emit"
-        if kind == "tool_result" and call_id in self.pending_call_ids:
-            self.pending_call_ids.discard(call_id)
-            return "emit_stop" if not self.pending_call_ids else "emit"
+        if kind == "tool_result" and self.pending_call_counts[call_id] > 0:
+            self._finish_call(call_id)
+            return "emit_stop" if not self.pending_call_counts else "emit"
         return "drop"
 
 
