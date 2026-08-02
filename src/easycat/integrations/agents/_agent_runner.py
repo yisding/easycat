@@ -17,8 +17,8 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Mapping
-from dataclasses import dataclass
-from typing import Any, ClassVar, TypeVar
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, Literal, TypeVar
 from uuid import uuid4
 
 from easycat._numeric import is_finite_number
@@ -95,6 +95,64 @@ async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
     if aclose is not None:
         with contextlib.suppress(Exception):
             await aclose()
+
+
+@dataclass
+class _BridgeToolDrain:
+    """Route only lifecycle events for tool calls observed before cancellation."""
+
+    pending_call_ids: set[str | None] = field(default_factory=set)
+
+    def route(
+        self,
+        event: AgentBridgeEvent,
+        *,
+        cancelled: bool,
+    ) -> Literal["emit", "emit_stop", "drop", "stop"]:
+        kind = getattr(event, "kind", None)
+        call_id = getattr(event, "call_id", None)
+        if not cancelled:
+            if kind == "tool_started":
+                self.pending_call_ids.add(call_id)
+            elif kind == "tool_result":
+                self.pending_call_ids.discard(call_id)
+            return "emit"
+        if not self.pending_call_ids or kind == "done":
+            return "stop"
+        if kind == "tool_delta" and call_id in self.pending_call_ids:
+            return "emit"
+        if kind == "tool_result" and call_id in self.pending_call_ids:
+            self.pending_call_ids.discard(call_id)
+            return "emit_stop" if not self.pending_call_ids else "emit"
+        return "drop"
+
+
+async def _next_bridge_event(
+    inner_iter: AsyncIterator[AgentBridgeEvent],
+    *,
+    deadline: float | None,
+    timeout: float | None,
+    cancel_token: CancelToken | None,
+    tool_drain: _BridgeToolDrain,
+) -> tuple[AgentBridgeEvent | None, bool]:
+    """Read the next deliverable event, draining pre-cancel tool lifecycles."""
+    while True:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AgentTimeoutError(timeout or 0)
+            event = await _await_with_timeout(inner_iter.__anext__(), remaining)
+        else:
+            event = await inner_iter.__anext__()
+        decision = tool_drain.route(
+            event,
+            cancelled=bool(cancel_token and cancel_token.is_cancelled),
+        )
+        if decision == "stop":
+            return None, False
+        if decision == "drop":
+            continue
+        return event, decision == "emit_stop"
 
 
 # ── Configuration ───────────────────────────────────────────────────
@@ -340,16 +398,17 @@ class AgentRunner:
         timeout = self._config.timeout
         deadline = time.monotonic() + timeout if timeout is not None else None
         inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
+        tool_drain = _BridgeToolDrain()
         try:
             while True:
                 try:
-                    if deadline is not None:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise AgentTimeoutError(timeout or 0)
-                        event = await _await_with_timeout(inner_iter.__anext__(), remaining)
-                    else:
-                        event = await inner_iter.__anext__()
+                    event, stop_after = await _next_bridge_event(
+                        inner_iter,
+                        deadline=deadline,
+                        timeout=timeout,
+                        cancel_token=cancel_token,
+                        tool_drain=tool_drain,
+                    )
                 except StopAsyncIteration as exc:
                     error = RuntimeError("Agent bridge ended before a terminal done event")
                     recorder.record_framework_error(ErrorInfo.from_exception(error))
@@ -359,10 +418,7 @@ class AgentRunner:
                     # runner never recorded this turn, so its shadow history
                     # stays in sync without a manual rollback.
                     raise AgentTimeoutError(timeout or 0) from None
-                # A bridge can yield an event after it has observed neither
-                # the token nor generator closure.  Do not expose that stale
-                # event or mirror it into the runner's advisory history.
-                if cancel_token and cancel_token.is_cancelled:
+                if event is None:
                     return
                 kind = getattr(event, "kind", None)
                 text = getattr(event, "text", "") or ""
@@ -374,6 +430,8 @@ class AgentRunner:
                     yield event
                     return
                 yield event
+                if stop_after:
+                    return
         finally:
             # Closing the runner mid-yield does not automatically close the
             # wrapped bridge. Finish its partial-turn cleanup synchronously so
