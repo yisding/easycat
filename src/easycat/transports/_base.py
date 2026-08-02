@@ -680,19 +680,19 @@ class ServerTransportBase(AudioQueueMixin):
         self,
         cleanup_errors: list[Exception],
     ) -> None:
+        caller = asyncio.current_task()
+        if caller is not None and caller in self._emit_tasks:
+            # Diagnostic emitters execute application subscribers. More than
+            # one subscriber can concurrently request disconnect: the first
+            # owns ``_lifecycle_lock`` while a sibling waits for it. Awaiting
+            # that sibling here would form caller -> sibling -> lifecycle-lock
+            # cycle. Diagnostic draining is lifecycle tidiness only; once this
+            # disconnect releases the lock, every emitter can finish normally.
+            return
         emit_cleanup_task = self._disconnect_emit_cleanup_task
         if emit_cleanup_task is None:
-            caller = asyncio.current_task()
-            # ``disconnect()`` can be invoked from an EventBus handler owned
-            # by a tracked diagnostic task. The helper below is a separate
-            # task, so it must explicitly exclude that parent emitter rather
-            # than relying only on _drain_emit_tasks()'s current-task guard.
-            if caller is not None and caller in self._emit_tasks:
-                drain = self._drain_emit_tasks(exclude_task=caller)
-            else:
-                drain = self._drain_emit_tasks()
             emit_cleanup_task = asyncio.create_task(
-                drain,
+                self._drain_emit_tasks(),
                 name=f"{self._transport_name.lower()}_diagnostic_cleanup",
             )
             self._disconnect_emit_cleanup_task = emit_cleanup_task
