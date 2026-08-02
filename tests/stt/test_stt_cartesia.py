@@ -495,6 +495,8 @@ async def test_cartesia_reconnect_promotes_partial_before_replacement_final():
             (STTEventType.FINAL, "before reconnect"),
             (STTEventType.FINAL, "after reconnect"),
         ]
+        assert emitted[1].ends_turn is False
+        assert emitted[2].ends_turn is True
     finally:
         await stt.close()
 
@@ -533,6 +535,54 @@ async def test_cartesia_reconnect_does_not_finalize_replacement_socket_send():
     finally:
         release_send.set()
         await asyncio.gather(send_task, return_exceptions=True)
+
+
+async def test_cartesia_resamples_replacement_audio_after_reconnect_reset():
+    class ProbeResampler:
+        def __init__(self) -> None:
+            self.state = "dropped"
+            self.processed_states: list[str] = []
+
+        def reset(self) -> None:
+            self.state = "replacement"
+
+        def process(self, data: bytes, sample_rate: int) -> bytes:
+            _ = data, sample_rate
+            self.processed_states.append(self.state)
+            return self.state.encode()
+
+    class FencedSocket:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.sent: list[bytes] = []
+
+        async def send_prepared(self, prepare):
+            self.entered.set()
+            await self.release.wait()
+            message = prepare()
+            if message is None:
+                return False
+            self.sent.append(message)
+            return True
+
+    stt = CartesiaSTT(CartesiaSTTConfig(api_key="k"))
+    resampler = ProbeResampler()
+    socket = FencedSocket()
+    stt._audio_resampler = resampler  # type: ignore[assignment]
+    stt._ws = socket  # type: ignore[assignment]
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=20))[0]
+
+    send_task = asyncio.create_task(stt._on_audio(chunk))
+    await asyncio.wait_for(socket.entered.wait(), timeout=0.5)
+    assert resampler.processed_states == []
+
+    await stt._on_reconnect()
+    socket.release.set()
+    await asyncio.wait_for(send_task, timeout=0.5)
+
+    assert resampler.processed_states == ["replacement"]
+    assert socket.sent == [b"replacement"]
 
 
 # ── Multiple streams ─────────────────────────────────────────────

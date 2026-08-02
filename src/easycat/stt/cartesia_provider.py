@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
@@ -158,6 +159,7 @@ class CartesiaSTT(WebSocketSTTBase):
                     confidence=partial.confidence,
                     language=partial.language,
                     word_timestamps=partial.word_timestamps,
+                    ends_turn=False,
                 )
             )
         self._audio_resampler.reset()
@@ -165,9 +167,18 @@ class CartesiaSTT(WebSocketSTTBase):
         self._finalized_epoch = self._audio_epoch
 
     async def _on_audio(self, chunk: AudioChunk) -> None:
-        await self._append_audio(
-            self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
+        await self._prepare_and_send_audio(
+            lambda: self._audio_resampler.process(chunk.data, chunk.format.sample_rate)
         )
+
+    async def _prepare_and_send_audio(self, prepare: Callable[[], bytes]) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+
+        sent = await ws.send_prepared(lambda: prepare() or None)
+        if sent:
+            self._audio_epoch += 1
 
     async def _append_audio(self, data: bytes) -> None:
         if data:
@@ -179,7 +190,7 @@ class CartesiaSTT(WebSocketSTTBase):
             self._audio_epoch += 1
 
     async def _flush_audio_resampler(self) -> None:
-        await self._append_audio(self._audio_resampler.finish())
+        await self._prepare_and_send_audio(self._audio_resampler.finish)
 
     async def _on_commit_segment(self) -> bool:
         await self._flush_audio_resampler()
