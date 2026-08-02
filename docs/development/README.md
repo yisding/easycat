@@ -103,7 +103,7 @@ Most chapters use read-only commands such as:
 ```bash
 rg "class Session|def create_session" src/easycat tests
 uv run easycat docs --audience maintainers
-uv run pytest tests/session/test_session_lifecycle.py
+uv run pytest tests/session/test_session_lifecycle_teardown.py
 ```
 
 If a named test file changes, use `rg` to find its current focused successor.

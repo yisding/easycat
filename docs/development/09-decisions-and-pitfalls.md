@@ -333,7 +333,7 @@ The most failure-prone awaits cross ownership changes:
 | graceful stop → force escalation | two teardown owners | stop-task ownership transfer |
 | session start → failure/cancel | partial resources leak | shielded rollback |
 | journal artifact → record append | dangling ref | artifact-first commit |
-| session registry → start/stop | unreachable partial session | publish/remove only after success |
+| session registry → start/stop | unreachable partial session | reserve the key before start; release it after failed start or successful stop |
 
 Whenever adding an `await`, ask:
 

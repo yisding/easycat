@@ -410,22 +410,25 @@ document and test the submodule contract instead.
 
 1. Write the maintained page and link it from
    [`docs/README.md`](../README.md).
-2. Add one route entry in
+2. Register the page in the intended order and nesting under `nav` in
+   [`mkdocs.yml`](../../mkdocs.yml).
+3. Add one route entry in
    [`cli/_app.py`](../../src/easycat/cli/_app.py) with unique label/path,
    audience, Diátaxis category, useful description, and valid commands.
-3. Add focused route-contract assertions when commands must track another
+4. Add focused route-contract assertions when commands must track another
    source.
-4. Regenerate:
+5. Regenerate:
 
    ```bash
    uv run python scripts/regen_llms_txt.py
    ```
 
-5. Verify:
+6. Verify:
 
    ```bash
    uv run easycat docs --audience maintainers
    uv run python scripts/regen_llms_txt.py --check
+   uv run mkdocs build --strict
    just guard-docs
    ```
 

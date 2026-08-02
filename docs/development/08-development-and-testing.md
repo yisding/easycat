@@ -35,6 +35,7 @@ project `.env`, use:
 
 ```bash
 uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
 ```
 
 Never add credentials to tests, cassettes, examples, or committed environment
@@ -264,6 +265,7 @@ The documentation route registry lives in
 
 - `easycat docs`;
 - audience-filtered human and JSON output;
+- `easycat explain json-schema` for the standard machine-readable envelope;
 - [`llms.txt`](../../llms.txt); and
 - [`llms-full.txt`](../../llms-full.txt).
 
