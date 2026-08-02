@@ -154,6 +154,36 @@ class TestLangChainBridgeInvoke:
         assert [event.kind for event in events][-1] == "done"
 
     @pytest.mark.asyncio
+    async def test_ignores_stream_events_with_invalid_parent_ids(self):
+        runnable = _MockRunnable(
+            [
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "malformed",
+                    "parent_ids": 1,
+                    "data": {},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="still works")},
+                },
+            ]
+        )
+        bridge = LangChainBridge(runnable)
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(event)
+
+        text = "".join(event.text for event in events if event.kind == "text_delta")
+        assert text == "still works"
+        assert [event.kind for event in events][-1] == "done"
+
+    @pytest.mark.asyncio
     async def test_parallel_model_runs_do_not_violate_recorder_stack(self):
         """``RunnableParallel`` can start two chat-model runs before either
         finishes, so the recorder's strict LIFO closure has to tolerate an

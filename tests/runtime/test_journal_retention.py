@@ -94,6 +94,32 @@ def test_age_window_archives_stale_journal_keeps_fresh(tmp_path):
     assert [p.name for p in archives] == ["stale-sess.tar.gz"]
 
 
+def test_failed_source_removal_does_not_accumulate_duplicate_archives(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _seed_journal(tmp_path, "stuck")
+    monkeypatch.setattr(
+        journal_retention_module,
+        "_remove_session",
+        lambda _root, _path: False,
+    )
+
+    for _ in range(2):
+        assert (
+            run_retention(
+                tmp_path,
+                max_sessions=0,
+                max_age_days=10**9,
+                mode="archive",
+            )
+            == 0
+        )
+
+    assert source.exists()
+    assert list((tmp_path / "archive").iterdir()) == []
+
+
 def test_archive_retention_preserves_prior_archive_for_reused_session_id(tmp_path):
     """A later reuse of an id must not overwrite its earlier archive."""
     _seed_journal(tmp_path, "reused-sess")
@@ -381,9 +407,7 @@ def test_retention_rechecks_liveness_after_acquiring_journal_claim(
     monkeypatch.setattr(journal_retention_module, "journal_file_claim", delayed_claim)
     removed: list[int] = []
     retention_thread = threading.Thread(
-        target=lambda: removed.append(
-            run_retention(tmp_path, max_age_days=14, mode="archive")
-        ),
+        target=lambda: removed.append(run_retention(tmp_path, max_age_days=14, mode="archive")),
     )
     retention_thread.start()
     assert entered_claim.wait(2)
