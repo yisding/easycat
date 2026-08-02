@@ -183,6 +183,22 @@ async def test_safe_await_ignores_preexisting_cancellation_count() -> None:
     assert owned.cancelled()
 
 
+async def test_safe_await_preserves_cancellation_pending_at_entry() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+
+    async def cancel_before_await() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await server_transports._safe_await(owned)
+
+    caller = asyncio.create_task(cancel_before_await())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert owned.cancelled()
+
+
 async def test_safe_await_propagates_new_cancellation_count() -> None:
     owned_started = asyncio.Event()
     awaiting_owned = asyncio.Event()

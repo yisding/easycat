@@ -353,6 +353,38 @@ class TestWebSocketDegradedEvents:
         assert transport._disconnect_cleanup_pending is False
 
     @pytest.mark.asyncio
+    async def test_concurrent_emitters_can_both_disconnect_server_transport(self) -> None:
+        transport = WebSocketTransport(WebSocketTransportConfig(port=0))
+        bus = EventBus()
+        transport._event_bus = bus
+        transport._connected = True
+        transport._server = _ClosedServer()  # type: ignore[assignment]
+        both_entered = asyncio.Event()
+        finished = asyncio.Event()
+        entered = 0
+        completed = 0
+
+        async def _handler(_event: TransportDegraded) -> None:
+            nonlocal entered, completed
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await both_entered.wait()
+            await transport.disconnect()
+            completed += 1
+            if completed == 2:
+                finished.set()
+
+        bus.subscribe(TransportDegraded, _handler)
+        transport._emit_degraded("first", "first concurrent observer")
+        transport._emit_degraded("second", "second concurrent observer")
+
+        await asyncio.wait_for(finished.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert transport._emit_tasks == set()
+        assert transport._disconnect_cleanup_pending is False
+
+    @pytest.mark.asyncio
     async def test_stale_connection_cleanup_does_not_clear_new_client(self) -> None:
         old_ws = _RaceServerWS()
         new_ws = _RaceServerWS()
