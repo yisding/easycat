@@ -150,12 +150,13 @@ emitting the new public event themselves.
 Add one `ProviderSpec` in
 [`stt/factory.py`](../../src/easycat/stt/factory.py) or
 [`tts/factory.py`](../../src/easycat/tts/factory.py). Include credential env,
-extra, API domains, probe module, and capabilities. Two registration points
-live outside the catalog:
+API domains, probe module, capabilities, and an install-extra name when the
+provider has optional dependencies. Two registration points live outside the
+catalog:
 
-- declare the spec's install extra in `pyproject.toml`
-  `[project.optional-dependencies]` (even a no-dependency marker extra) and
-  wire it into the `all` union; and
+- if the provider has optional dependencies, declare its install extra in
+  `pyproject.toml` `[project.optional-dependencies]` and wire those dependency
+  requirements into the `all` union; do not create empty marker extras; and
 - add a `ProviderSurfaceContract` row in
   [`tests/contracts/provider_surface_matrix.py`](../../tests/contracts/provider_surface_matrix.py) —
   the matrix tests fail if a registered provider has no row.
