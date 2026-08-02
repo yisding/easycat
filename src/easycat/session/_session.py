@@ -1838,12 +1838,22 @@ class Session:
         ``on_turn_ended`` coroutine (agent consumer included), so cancelling it
         would abort the agent stream.
         """
+        turn = self._turn
         self._tts_scheduler.set_playback_suppressed(True)
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
-        await clear_audio_if_supported(self.transport)
+        # Start provider cancellation before the transport clear yields to a
+        # successor admission. Calling the shared provider afterwards could
+        # cancel synthesis that belongs to the newly installed turn.
         await self._tts_scheduler.synthesizer.cancel()
-        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+        await clear_audio_if_supported(self.transport)
+        # A VAD barge-in can install a successor while a delayed transport
+        # clear is in flight. Its shared TTS provider and BOT_SPEAKING state
+        # belong to that successor, so this stale playback-only cancellation
+        # must not touch either one.
+        if self._turn is not turn:
+            return
+        if self._turn is turn and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
     async def reset_state(self) -> None:
