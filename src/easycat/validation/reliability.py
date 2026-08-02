@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from easycat._numeric import is_finite_number
+
 try:
     import resource as _resource
 except ImportError:  # pragma: no cover - Windows fallback
@@ -25,7 +27,9 @@ class EventLoopLagSampler:
     """
 
     def __init__(self, *, interval_s: float = 0.02) -> None:
-        self._interval_s = interval_s
+        if not is_finite_number(interval_s) or interval_s <= 0:
+            raise ValueError("interval_s must be a finite positive number")
+        self._interval_s = float(interval_s)
         self._task: asyncio.Task[None] | None = None
         self._running = False
         self._started = False

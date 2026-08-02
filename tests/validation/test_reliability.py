@@ -27,6 +27,17 @@ def test_event_loop_lag_sampler_is_importable_from_validation() -> None:
     from easycat.validation import EventLoopLagSampler  # noqa: F401
 
 
+@pytest.mark.parametrize(
+    "interval_s",
+    [0, -0.01, True, "0.02", float("nan"), float("inf"), float("-inf")],
+)
+def test_event_loop_lag_sampler_rejects_invalid_interval(interval_s: object) -> None:
+    from easycat.validation import EventLoopLagSampler
+
+    with pytest.raises(ValueError, match="interval_s must be a finite positive number"):
+        EventLoopLagSampler(interval_s=interval_s)  # type: ignore[arg-type]
+
+
 async def test_event_loop_lag_sampler_measures_blocking_call() -> None:
     from easycat.validation import EventLoopLagSampler
 
