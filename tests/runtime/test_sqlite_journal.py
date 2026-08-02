@@ -84,6 +84,54 @@ class TestSqliteJournalBasics:
 
         assert not (tmp_path.parent / "escape.sqlite").exists()
 
+    def test_rejects_symlinked_journal_directory_without_touching_target(self, tmp_path):
+        target = tmp_path / "outside-journals"
+        target.mkdir()
+        os.chmod(target, 0o755)
+        (tmp_path / "journals").symlink_to(target, target_is_directory=True)
+
+        journal: SqliteJournal | None = None
+        try:
+            with pytest.raises(OSError, match="symlink"):
+                journal = SqliteJournal("linked", data_dir=tmp_path)
+        finally:
+            if journal is not None:
+                journal.close()
+
+        assert _mode(target) == 0o755
+        assert not (target / "linked.sqlite").exists()
+
+    def test_rejects_symlinked_journal_file_without_touching_target(self, tmp_path):
+        target = tmp_path / "outside.sqlite"
+        conn = sqlite3.connect(target)
+        try:
+            conn.execute("CREATE TABLE preserved (value TEXT)")
+            conn.commit()
+        finally:
+            conn.close()
+        os.chmod(target, 0o640)
+
+        journals = tmp_path / "journals"
+        journals.mkdir()
+        (journals / "linked.sqlite").symlink_to(target)
+
+        journal: SqliteJournal | None = None
+        try:
+            with pytest.raises(OSError, match="symlink"):
+                journal = SqliteJournal("linked", data_dir=tmp_path)
+        finally:
+            if journal is not None:
+                journal.close()
+
+        assert _mode(target) == 0o640
+        conn = sqlite3.connect(target)
+        try:
+            assert conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall() == [("preserved",)]
+        finally:
+            conn.close()
+
     def test_append_and_read(self, journal):
         seq = journal.append(
             kind=JournalRecordKind.EVENT,
@@ -989,6 +1037,57 @@ class TestCrashRecovery:
             if j is not None:
                 j.close()
 
+    def test_private_file_helpers_fallback_without_fchmod(self, tmp_path, monkeypatch):
+        from easycat.runtime import _private_files as private_files
+
+        monkeypatch.setattr(private_files.os, "fchmod", None)
+        monkeypatch.setattr(private_files, "_SUPPORTS_DIRECTORY_HANDLES", False)
+        directory = tmp_path / "private"
+        path = directory / "secret"
+
+        private_files.mkdir_private(directory)
+        private_files.touch_private_file(path)
+
+        assert _mode(directory) == 0o700
+        assert _mode(path) == 0o600
+
+    def test_private_path_checks_fail_closed_on_metadata_error(self, tmp_path, monkeypatch):
+        from easycat.runtime import _private_files as private_files
+
+        guarded = tmp_path / "guarded"
+        guarded.mkdir()
+        real_lstat = type(guarded).lstat
+
+        def denied_lstat(path):
+            if path == guarded:
+                raise PermissionError(str(path))
+            return real_lstat(path)
+
+        monkeypatch.setattr(type(guarded), "lstat", denied_lstat)
+
+        assert private_files._path_is_link_or_reparse(guarded)
+
+    def test_private_copy_falls_back_without_descriptor_relative_io(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from easycat.runtime import _private_files as private_files
+
+        monkeypatch.setattr(private_files, "_SUPPORTS_DESCRIPTOR_PRIVATE_COPY", False)
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+        source_dir.mkdir()
+        target_dir.mkdir()
+        source = source_dir / "journal.sqlite"
+        target = target_dir / "journal.sqlite"
+        source.write_bytes(b"durable journal")
+
+        private_files.copy_private_file(source, target)
+
+        assert target.read_bytes() == b"durable journal"
+        assert _mode(target) == 0o600
+
     def test_crash_dump_files_are_private_under_permissive_umask(self, tmp_path):
         old_umask = os.umask(0o022)
         try:
@@ -1020,7 +1119,7 @@ class TestCrashRecovery:
         _simulate_crash_after_flush(j1)
 
         with mock.patch(
-            "easycat.runtime.journal_sql.shutil.copy2",
+            "easycat.runtime.crash_sweep.copy_private_file",
             side_effect=OSError("disk full"),
         ):
             j2 = SqliteJournal("sess", data_dir=tmp_path)

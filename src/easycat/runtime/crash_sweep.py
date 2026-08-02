@@ -23,7 +23,7 @@ import sqlite3
 from pathlib import Path
 
 from easycat.runtime._private_files import (
-    chmod_private_file,
+    copy_private_file,
     mkdir_private,
     sqlite_readonly_uri,
 )
@@ -107,6 +107,8 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     recent committed records may live only in the WAL and a bare copy would
     lose them.
     """
+    if db_path.is_symlink():
+        raise OSError(f"Refusing symlinked journal path: {db_path}")
     try:
         conn = sqlite3.connect(str(db_path))
         try:
@@ -116,16 +118,16 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
     except sqlite3.OperationalError:
         pass  # Best-effort; copy WAL sidecars below as a fallback.
 
-    shutil.copy2(str(db_path), str(crash_path))
-    chmod_private_file(crash_path)
+    copy_private_file(db_path, crash_path)
     # Also copy WAL/SHM sidecars if the checkpoint was incomplete (e.g. a
     # concurrent reader held the file) so no committed page is lost.
     for suffix in ("-wal", "-shm"):
         sidecar = Path(str(db_path) + suffix)
-        if sidecar.exists():
-            crash_sidecar = Path(str(crash_path) + suffix)
-            shutil.copy2(str(sidecar), str(crash_sidecar))
-            chmod_private_file(crash_sidecar)
+        crash_sidecar = Path(str(crash_path) + suffix)
+        try:
+            copy_private_file(sidecar, crash_sidecar)
+        except FileNotFoundError:
+            pass
 
 
 def crash_dump_artifact_root(crash_path: Path) -> Path:
@@ -197,8 +199,7 @@ def snapshot_crash_dump_artifacts(
         target_dir = artifact_root / ref[:2]
         mkdir_private(target_dir)
         target = target_dir / f"{ref}.bin"
-        shutil.copy2(str(source), str(target))
-        chmod_private_file(target)
+        copy_private_file(source, target)
 
 
 def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
@@ -271,6 +272,11 @@ def _crashed_state(db_path: Path) -> str:
     2. A ``BEGIN IMMEDIATE`` write-lock probe on a would-be crash, as a
        backstop for an actively-writing session: if the lock is held, skip.
     """
+    try:
+        if db_path.is_symlink():
+            return "skip"
+    except OSError:
+        return "skip"
     read_state = _read_only_state(db_path)
     if read_state != "crashed":
         return read_state
@@ -375,6 +381,11 @@ def is_journal_live(db_path: Path) -> bool:
     journal is never mutated.
     """
     try:
+        if db_path.is_symlink():
+            return True
+    except OSError:
+        return True
+    try:
         conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
     except sqlite3.DatabaseError:
         return True  # Unreadable -> preserve rather than risk a live DB.
@@ -442,6 +453,12 @@ def sweep_crashed_journals(data_dir: str | Path, *, skip: Path | None = None) ->
 
     promoted = 0
     for db_path in sorted(journals_dir.glob("*.sqlite")):
+        try:
+            linked = db_path.is_symlink()
+        except OSError:
+            continue
+        if linked:
+            continue
         if _is_skipped(db_path, skip_resolved):
             continue
         if _crashed_state(db_path) != "crashed":
@@ -466,6 +483,8 @@ def _promote_one(root: Path, db_path: Path) -> bool:
     crash_path: Path | None = None
     artifact_root: Path | None = None
     try:
+        if db_path.is_symlink():
+            return False
         crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
         _copy_journal_to_crash_dump(db_path, crash_path)
         snapshot_crash_dump_artifacts(root, db_path, artifact_root)
@@ -491,6 +510,8 @@ def _promote_one(root: Path, db_path: Path) -> bool:
 def _remove_journal(db_path: Path) -> bool:
     """Delete *db_path* and its WAL/SHM sidecars; False on failure."""
     try:
+        if db_path.is_symlink():
+            return False
         if not db_path.exists():
             return False
         db_path.unlink()

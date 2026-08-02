@@ -247,6 +247,53 @@ def test_retention_no_journals_dir_age_window(tmp_path):
     assert removed == 0
 
 
+def test_retention_ignores_symlinked_journal_file(tmp_path):
+    outside_root = tmp_path / "outside"
+    target = _seed_journal(outside_root, "target")
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    linked = journals / "linked.sqlite"
+    linked.symlink_to(target)
+
+    removed = run_retention(tmp_path, max_sessions=0, max_age_days=10**9, mode="archive")
+
+    assert removed == 0
+    assert linked.is_symlink()
+    assert target.exists()
+    assert not (tmp_path / "archive").exists()
+
+
+def test_archive_session_symlink_returns_failure_sentinel(tmp_path):
+    outside_root = tmp_path / "outside"
+    target = _seed_journal(outside_root, "target")
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    linked = journals / "linked.sqlite"
+    linked.symlink_to(target)
+
+    assert retention_module._archive_session(tmp_path, linked) is None
+    assert linked.is_symlink()
+    assert target.exists()
+    assert not (tmp_path / "archive").exists()
+
+
+def test_retention_refuses_symlinked_archive_directory(tmp_path):
+    stale = _seed_journal(tmp_path, "stale-sess")
+    target = tmp_path / "outside-archive"
+    target.mkdir()
+    os.chmod(target, 0o755)
+    archive = tmp_path / "archive"
+    archive.symlink_to(target, target_is_directory=True)
+
+    removed = run_retention(tmp_path, max_sessions=0, max_age_days=10**9, mode="archive")
+
+    assert removed == 0
+    assert stale.exists()
+    assert archive.is_symlink()
+    assert target.stat().st_mode & 0o777 == 0o755
+    assert list(target.iterdir()) == []
+
+
 # --- Liveness guards (FWP4): never sweep a LIVE or caller-owned journal ---
 
 

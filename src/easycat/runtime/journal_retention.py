@@ -155,7 +155,11 @@ class _RetentionSweep:
 
         # Guard file existence to avoid racing a concurrent crash-durability
         # sweep that may have already removed the file out from under us.
-        if not oldest.exists():
+        try:
+            unavailable = oldest.is_symlink() or not oldest.exists()
+        except OSError:
+            unavailable = True
+        if unavailable:
             self._total_bytes -= fsize
             return False
         archive_path: Path | None = None
@@ -188,6 +192,8 @@ def _journal_files_oldest_first(journals_dir: Path) -> list[Path]:
     statted: list[tuple[float, Path]] = []
     for path in journals_dir.glob("*.sqlite"):
         try:
+            if path.is_symlink():
+                continue
             statted.append((path.stat().st_mtime, path))
         except OSError:
             continue
@@ -198,6 +204,8 @@ def _journal_files_oldest_first(journals_dir: Path) -> list[Path]:
 def _session_bytes(root: Path, db_path: Path) -> int | None:
     """Total bytes for a session: DB + WAL/SHM sidecars + artifacts."""
     try:
+        if db_path.is_symlink():
+            return None
         size = db_path.stat().st_size
     except OSError:
         return None
@@ -227,6 +235,8 @@ def _archive_session(root: Path, oldest: Path) -> Path | None:
     archive_dir = root / "archive"
     archive_path: Path | None = None
     try:
+        if oldest.is_symlink():
+            return None
         mkdir_private(archive_dir)
         archive_path = _reserve_archive_path(archive_dir, oldest.stem)
         # Checkpoint WAL so all data is in the main database file
@@ -293,6 +303,8 @@ def _reserve_archive_path(archive_dir: Path, session_id: str) -> Path:
 def _remove_session(root: Path, oldest: Path) -> bool:
     """Delete the journal, its WAL/SHM sidecars, and artifacts; False on failure."""
     try:
+        if oldest.is_symlink():
+            return False
         oldest.unlink()
         # Also remove the WAL/SHM sidecars if present.
         for suffix in (".sqlite-wal", ".sqlite-shm"):
