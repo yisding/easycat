@@ -222,7 +222,7 @@ async def _start_twiml_http_listener(
     return runner, site
 
 
-async def _shutdown_twilio_voice_app(
+async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
     *,
     runtime: Any,
     media_server: Any,
