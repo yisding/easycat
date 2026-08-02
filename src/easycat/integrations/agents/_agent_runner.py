@@ -115,11 +115,14 @@ class AgentRunnerConfig:
     preemptive_max_retries: int = 3
 
     def __post_init__(self) -> None:
-        if self.timeout is None:
-            return
-        if not is_finite_number(self.timeout):
+        if self.timeout is not None and not is_finite_number(self.timeout):
             raise ValueError("AgentRunnerConfig.timeout must be a finite number or None")
-        self.timeout = float(self.timeout)
+        if self.timeout is not None:
+            self.timeout = float(self.timeout)
+        if isinstance(self.preemptive_max_retries, bool) or not isinstance(
+            self.preemptive_max_retries, int
+        ):
+            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be an integer")
 
 
 @dataclass
