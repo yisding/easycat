@@ -276,7 +276,8 @@ class AgentStage:
                             # post-yield code is not a reliable audit boundary
                             # for text already handed to downstream TTS or text
                             # clients.
-                            if journal_enabled:
+                            cancelled = bool(cancel_token and cancel_token.is_cancelled)
+                            if journal_enabled and not cancelled:
                                 journal_append_event(
                                     ctx,
                                     stage=self.name,
@@ -284,12 +285,13 @@ class AgentStage:
                                     turn_id=turn.id,
                                     data_extra={"type": "TEXT_DELTA", "text": text},
                                 )
-                            if not (cancel_token and cancel_token.is_cancelled):
+                            if not cancelled:
                                 accumulated.append(text)
                             yield event
                             continue
                         elif kind == "done":
-                            if text:
+                            cancelled = bool(cancel_token and cancel_token.is_cancelled)
+                            if text and not cancelled:
                                 if journal_enabled:
                                     journal_append_event(
                                         ctx,
@@ -298,8 +300,7 @@ class AgentStage:
                                         turn_id=turn.id,
                                         data_extra={"type": "DONE", "text": text},
                                     )
-                                if not (cancel_token and cancel_token.is_cancelled):
-                                    accumulated = [text]
+                                accumulated = [text]
                         elif kind == "tool_started" and getattr(event, "tool_name", ""):
                             if journal_enabled:
                                 journal_append_event(
@@ -373,7 +374,13 @@ class AgentStage:
             # ``GeneratorExit`` at the yield above).
             if not errored:
                 elapsed_ms = (time.perf_counter() - started) * 1000
-                final_text = "".join(accumulated)
+                # Cancellation can arrive while a terminal bridge stream is
+                # being drained after its ``done`` event. Recheck at the
+                # commit boundary so unheard terminal text cannot enter the
+                # raw-bridge shadow history or stage completion record.
+                final_text = (
+                    "" if cancel_token and cancel_token.is_cancelled else "".join(accumulated)
+                )
                 if (
                     self._tracks_history
                     and input_role != "system"

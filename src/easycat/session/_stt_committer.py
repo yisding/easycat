@@ -260,6 +260,7 @@ class STTCommitter:
         *,
         pause_generation: int | None = None,
     ) -> None:
+        owner_task = asyncio.current_task()
         commit_segment = getattr(self._stt_getter(), "commit_segment", None)
         if (
             turn is None
@@ -317,7 +318,8 @@ class STTCommitter:
                 self._pause_generation_by_future.pop(future, None)
                 if not future.done():
                     future.set_result("")
-            self._segment_commit_task = None
+            if self._segment_commit_task is owner_task:
+                self._segment_commit_task = None
 
     async def await_pending(self, turn: TurnContext | None) -> bool:
         if turn is None or turn is self._no_turn:
@@ -477,10 +479,37 @@ class STTCommitter:
 
     # ── Cancellation ──────────────────────────────────────────────
 
+    async def _cancel_segment_commit_handoff(self, turn: TurnContext | None) -> None:
+        """Bound cancellation cleanup that gates a successor STT stream."""
+        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
+        try:
+            if timeout:
+                await asyncio.wait_for(
+                    self._runtime_scope.cancel_and_drain("stt_segment_commit"),
+                    timeout=timeout,
+                )
+            else:
+                await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+        except TimeoutError:
+            assert timeout is not None
+            # A provider coroutine can catch cancellation and remain in
+            # cleanup indefinitely. Stop treating those expired tasks as a
+            # lifecycle gate so successor admission and later shutdown do not
+            # repeat the same unbounded drain.
+            for task in self._runtime_scope.tasks("stt_segment_commit"):
+                self._runtime_scope.discard(task)
+            self._segment_commit_task = None
+            self.resolve_pending(turn, "")
+            provider = self._stt_getter()
+            name = resolve_provider_name(provider, "stt")
+            err = STTTimeoutError(name, timeout)
+            logger.warning("STT segment commit cancellation timed out: %s", err)
+            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+
     async def cancel(self, turn: TurnContext | None = None) -> None:
         """Cancel all STT work; preserves the original ``_cancel_stt`` ordering."""
         await self._runtime_scope.cancel_and_drain("stt_pause_commit")
-        await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+        await self._cancel_segment_commit_handoff(turn)
         # The committed-transcript fast path may still be closing the same
         # provider in parallel with agent work. Drain it before invoking the
         # provider teardown below so a barge-in cannot issue concurrent closes

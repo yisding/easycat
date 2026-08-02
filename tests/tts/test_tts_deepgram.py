@@ -570,6 +570,20 @@ class TestDeepgramTTS:
         assert json.loads(fake_ws._sent[0]) == {"type": "Speak", "text": "Hello"}
         assert json.loads(fake_ws._sent[1]) == {"type": "Flush"}
 
+    async def test_replay_primer_does_not_reacquire_send_lock(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS()
+        provider._ws = fake_ws
+        provider._pending_text = "Hello"
+
+        async with provider._send_lock:
+            await asyncio.wait_for(provider._replay_request(), timeout=1)
+
+        assert [json.loads(message) for message in fake_ws._sent] == [
+            {"type": "Speak", "text": "Hello"},
+            {"type": "Flush"},
+        ]
+
     async def test_replay_request_resends_frames_mid_stream(self):
         """A mid-stream recv_iter-driven reconnect replays the Speak/Flush frames.
 

@@ -809,7 +809,9 @@ class VoiceServer:
             )
             if succeeded and self._site is site:
                 self._site = None
-        if self._runner is not None:
+        site_cleanup = self._listener_cleanup_tasks.get("HTTP site stop")
+        site_cleanup_pending = site_cleanup is not None and not site_cleanup.done()
+        if self._runner is not None and not site_cleanup_pending:
             runner = self._runner
             succeeded = await self._attempt_bounded_listener_cleanup(
                 "HTTP runner cleanup",
