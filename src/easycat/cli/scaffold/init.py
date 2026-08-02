@@ -418,6 +418,8 @@ def _validate_git_source_url(value: str) -> str:
         raise _invalid_git_source("URL must be a non-empty string without whitespace")
 
     parsed = urlsplit(value)
+    if parsed.query or parsed.fragment:
+        raise _invalid_git_source("URLs must not include query strings or fragments")
     if parsed.scheme:
         if parsed.scheme not in {"git", "http", "https", "ssh"}:
             raise _invalid_git_source(

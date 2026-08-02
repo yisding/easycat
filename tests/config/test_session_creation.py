@@ -396,6 +396,67 @@ def test_create_session_accepts_root_exported_named_provider_configs() -> None:
     assert session.tts._config.event_bus is session.event_bus
 
 
+@pytest.mark.parametrize(
+    ("field_name", "provider_config", "kind"),
+    [
+        (
+            "stt",
+            STTProviderConfig(
+                provider="deepgram",
+                api_key="test-key",
+                params={"encoding": "mp3"},
+            ),
+            "STT",
+        ),
+        (
+            "tts",
+            TTSProviderConfig(
+                provider="deepgram",
+                api_key="test-key",
+                params={"encoding": "mp3"},
+            ),
+            "TTS",
+        ),
+    ],
+)
+def test_named_provider_configs_wrap_value_validation_errors(
+    field_name: str,
+    provider_config: STTProviderConfig | TTSProviderConfig,
+    kind: str,
+) -> None:
+    with pytest.raises(
+        EasyConfigError,
+        match=rf"Invalid params for 'deepgram' {kind} provider",
+    ) as exc_info:
+        EasyConfig(**{field_name: provider_config})
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert f"Unsupported Deepgram {kind} encoding" in str(exc_info.value)
+
+
+def test_named_provider_configs_preserve_easycat_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stt.factory import _CATALOG
+
+    _CATALOG.discover()
+    provider_cls, _config_cls = _CATALOG.providers["deepgram"]
+    expected = EasyConfigError("provider-specific validation failed")
+
+    class _FailingConfig:
+        def __init__(self, **_kwargs: object) -> None:
+            raise expected
+
+    monkeypatch.setitem(_CATALOG.providers, "deepgram", (provider_cls, _FailingConfig))
+
+    with pytest.raises(EasyConfigError) as exc_info:
+        EasyConfig(
+            stt=STTProviderConfig(provider="deepgram", api_key="test-key"),
+        )
+
+    assert exc_info.value is expected
+
+
 def test_create_session_accepts_custom_provider_instances_without_sessionconfig(  # noqa: C901
     monkeypatch: pytest.MonkeyPatch,
 ):

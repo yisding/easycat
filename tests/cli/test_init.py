@@ -1357,6 +1357,10 @@ def test_init_rejects_git_revision_without_url(
         "../easycat",
         "file:///home/developer/easycat",
         "https://token@example.com/yisding/easycat.git",
+        "https://github.com/yisding/easycat.git?access_token=secret",
+        "https://github.com/yisding/easycat.git#access_token=secret",
+        "git@github.com:yisding/easycat.git?access_token=secret",
+        "git@github.com:yisding/easycat.git#access_token=secret",
         "https://github.com/yisding/easycat repo.git",
     ],
 )

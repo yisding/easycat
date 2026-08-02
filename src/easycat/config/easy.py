@@ -29,7 +29,7 @@ from easycat.echo_cancellation import (
     is_echo_canceller_config,
     parse_echo_canceller_string,
 )
-from easycat.errors import EASYCAT_E203, EasyConfigError
+from easycat.errors import EASYCAT_E203, EasyCatError, EasyConfigError
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, parse_noise_reducer_string
@@ -435,7 +435,9 @@ def _resolve_named_provider_config(
         kwargs["api_key"] = resolved_key
     try:
         return config_cls(**kwargs)
-    except TypeError as exc:
+    except EasyCatError:
+        raise
+    except (TypeError, ValueError) as exc:
         raise EasyConfigError(
             f"Invalid params for {provider_name!r} {kind} provider: {exc}"
         ) from exc
