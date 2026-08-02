@@ -93,7 +93,8 @@ review checklist and field manual.
 For each chapter:
 
 1. read the explanation and redraw its main diagram from memory;
-2. open the linked implementation in the order shown under “Read the code”;
+2. open the implementation files linked from the chapter in the order they
+   appear (chapter 1's “Read the Code in This Order” seeds the wider tour);
 3. locate the linked contract tests and state what failure each one prevents;
 4. run the suggested inspection command from the repository root; and
 5. answer the checkpoint questions without looking back.

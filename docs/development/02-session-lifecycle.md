@@ -86,9 +86,9 @@ The main collaborators have narrow responsibilities:
 | Collaborator | Owns | Does not own |
 | --- | --- | --- |
 | [`AudioRouter`](../../src/easycat/session/_audio_router.py) | ingress, outbound queue drain, transport delivery accounting, AEC reference feed | turn policy or agent history |
-| [`STTCommitter`](../../src/easycat/session/_stt_committer.py) | STT stream/event lifecycle and segment commits | when a user turn semantically ends |
+| [`STTCommitter`](../../src/easycat/session/_stt_committer.py) | STT event consumption, segment commits, stream teardown | stream start and pre-roll priming (TurnRunner), or when a user turn semantically ends |
 | [`TTSScheduler`](../../src/easycat/session/_tts_scheduler.py) | TTS payload preparation, synthesis scheduling, TTS cancellation | agent stream grammar |
-| [`TurnRunner`](../../src/easycat/session/_turn_runner.py) | transcript-to-agent-to-TTS orchestration for voice and text turns | raw transport receive loop |
+| [`TurnRunner`](../../src/easycat/session/_turn_runner.py) | turn-start STT stream priming plus transcript-to-agent-to-TTS orchestration for voice and text turns | raw transport receive loop |
 | [`CancelOrchestrator`](../../src/easycat/session/_cancel_orchestrator.py) | control-signal propagation and interruption-history policy | deciding that speech is a barge-in |
 | [`GreetingController`](../../src/easycat/session/_greeting.py) | one first-answer greeting task | general agent turns |
 | [`SessionJournalSink`](../../src/easycat/session/_journal_sink.py) | event-to-record projection | application reaction to events |
@@ -268,16 +268,22 @@ flowchart TD
     OWNER["join or become teardown owner"]
     GATE["mark not running"]
     TURN["finish/cancel prompt, text, preemptive, and turn work"]
-    PIPE["stop ingress, STT, TTS, outbound, scoped tasks"]
+    PIPE["stop ingress and STT/TTS work"]
     HELP["stop health checks and helpers"]
+    OUT["close outbound queue,\nstop outbound drain and heartbeat"]
     TRANS["disconnect transport"]
     TM["shutdown TurnManager"]
     PROV["close agent and audio providers"]
     DEBUG["finalize journal/artifacts\npreserve read-only view"]
     CLOSED["mark closed + optional record_to export"]
 
-    REQUEST --> OWNER --> GATE --> TURN --> PIPE --> HELP --> TRANS --> TM --> PROV --> DEBUG --> CLOSED
+    REQUEST --> OWNER --> GATE --> TURN --> PIPE --> HELP --> OUT --> TRANS --> TM --> PROV --> DEBUG --> CLOSED
 ```
+
+A forced stop cancels the outbound drain earlier, during the pipeline
+cancellation step; the later `stop_outbound()` call is idempotent. In both
+modes the outbound drain must be stopped before `transport.disconnect()`, or
+a pending `send_audio()` could hang on a disconnected transport.
 
 Do not move provider or journal teardown earlier to make a timeout look
 bounded. Late cleanup tasks may still need them. Do not detach a

@@ -47,7 +47,13 @@ BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-MARKDOWN_TARGETS = ("docs/validation.md", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md")
+MARKDOWN_TARGETS = (
+    "docs/validation.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "docs/development/08-development-and-testing.md",
+)
 MODULE_TARGET = Path("src") / "easycat" / "cli" / "_guard_commands.py"
 
 

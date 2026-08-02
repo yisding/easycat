@@ -38,8 +38,11 @@ low-cardinality telemetry. The detailed policy lives in
 
 ## 6.2 EventBus Is Live Control
 
-[`EventBus.emit`](../../src/easycat/events.py) invokes matching handlers inline
-in subscription order and awaits asynchronous handlers. The default error
+[`EventBus.emit`](../../src/easycat/events.py) invokes matching handlers
+inline and awaits asynchronous handlers. Dispatch order is: `subscribe_all`
+handlers first, then handlers for the exact event type, then handlers for each
+parent class up to `Event`; subscription order is preserved only within each
+of those buckets. The default error
 policy logs/counts a handler failure and continues; strict tests can select
 `handler_error_policy="raise"`.
 

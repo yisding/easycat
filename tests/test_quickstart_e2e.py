@@ -243,6 +243,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
             "uv run easycat init --list-templates",
         ),
         "Contribute or validate a change": (
+            "[Developer textbook](docs/development/)",
             "[Contributing](CONTRIBUTING.md)",
             "uv run easycat validate quick",
         ),

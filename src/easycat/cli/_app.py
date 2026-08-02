@@ -679,6 +679,22 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Developer textbook",
+        "path": "docs/development/",
+        "audience": "maintainers",
+        "diataxis": "explanation",
+        "description": (
+            "Work through the chapter-by-chapter source, test, decision, and "
+            "change-recipe tour for new maintainers."
+        ),
+        "commands": (
+            "uv run easycat docs --audience maintainers",
+            "uv run python scripts/regen_llms_txt.py",
+            "just guard-docs",
+            "just guard-contributing",
+        ),
+    },
+    {
         "label": "Session graduation",
         "path": "docs/from-easyconfig-to-session.md",
         "audience": "app builders",

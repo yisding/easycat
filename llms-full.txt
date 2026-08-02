@@ -535,6 +535,22 @@ uv run easycat validate report .easycat/validation/latest.json
 uv run easycat validate report .easycat/validation/latest.json --json
 ```
 
+## Developer textbook
+
+- Path: docs/development/
+- URL: https://github.com/yisding/easycat/tree/main/docs/development
+- Audience: maintainers
+- Work through the chapter-by-chapter source, test, decision, and change-recipe tour for new maintainers.
+
+Commands:
+
+```bash
+uv run easycat docs --audience maintainers
+uv run python scripts/regen_llms_txt.py
+just guard-docs
+just guard-contributing
+```
+
 ## Session graduation
 
 - Path: docs/from-easyconfig-to-session.md
