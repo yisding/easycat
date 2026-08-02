@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
 import time
@@ -129,13 +130,25 @@ class VADStage:
                 {"easycat.stage": self.name, "easycat.surface": "stt"},
             ):
                 events: list[Any] = []
-                async for event in self._provider.process(input):
-                    events.append(event)
-                    if len(events) >= self._MAX_EVENTS_PER_CHUNK:
-                        logger.warning(
-                            "VAD provider yielded too many events for a single chunk; truncating"
-                        )
-                        break
+                stream = self._provider.process(input)
+                try:
+                    async for event in stream:
+                        events.append(event)
+                        if len(events) >= self._MAX_EVENTS_PER_CHUNK:
+                            logger.warning(
+                                "VAD provider yielded too many events for a single chunk; "
+                                "truncating"
+                            )
+                            break
+                finally:
+                    # The event cap deliberately leaves an over-producing
+                    # provider iterator early.  ``async for`` does not close
+                    # a retained async generator on ``break``, so forward the
+                    # close explicitly to release its stream/session promptly.
+                    aclose = getattr(stream, "aclose", None)
+                    if callable(aclose):
+                        with contextlib.suppress(Exception):
+                            await aclose()
                 result = events
         except Exception as exc:
             result_attr = "fail"

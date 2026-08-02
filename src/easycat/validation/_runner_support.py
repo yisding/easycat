@@ -125,14 +125,20 @@ def run_subprocess(
     cwd: str | Path | None = None,
 ) -> CommandResult:
     """Run a validation command and capture its text streams without raising."""
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=dict(env) if env is not None else None,
-        cwd=str(cwd) if cwd is not None else None,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=dict(env) if env is not None else None,
+            cwd=str(cwd) if cwd is not None else None,
+        )
+    except OSError as exc:
+        # Missing/blocked command executables (for example a missing ``uv``)
+        # are validation failures, not orchestration crashes: callers still
+        # need their redacted logs and a durable failed report.
+        return CommandResult(exit_code=127, stderr=str(exc))
     return CommandResult(
         exit_code=completed.returncode,
         stdout=completed.stdout,

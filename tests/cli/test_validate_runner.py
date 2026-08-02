@@ -178,6 +178,31 @@ def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> 
     assert (tmp_path / "latest.json").exists()
 
 
+def test_validation_runner_missing_command_still_writes_failed_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable pytest launcher must not skip the validation report."""
+
+    def missing_command(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "missing-validation-command")
+
+    monkeypatch.setattr("easycat.validation._runner_support.subprocess.run", missing_command)
+
+    result = run_validation_slice(
+        "quick",
+        artifacts_dir=tmp_path,
+        started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.report_path.read_text())
+    assert payload["status"] == "fail"
+    assert payload["tool_exit_codes"] == {"pytest": 127}
+    assert "missing-validation-command" in (result.run_dir / "stderr.log").read_text()
+    assert (tmp_path / "latest.json").exists()
+
+
 @pytest.mark.parametrize(
     "runtime_secret_env_var",
     RUNTIME_SECRET_ENV_VARS,

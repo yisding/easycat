@@ -1208,6 +1208,30 @@ class TestReplayDecision:
         assert all(e["fields"]["turn_id"] == "t-1" for e in events)
         assert all("timestamp" in e["fields"] for e in events)
 
+    async def test_vad_stage_closes_overproducing_provider_stream(self):
+        """The per-chunk event cap must not retain a provider stream."""
+
+        class _OverproducingVAD:
+            def __init__(self) -> None:
+                self.closed = False
+                self.stream = self._events()
+
+            async def _events(self):
+                try:
+                    for _ in range(VADStage._MAX_EVENTS_PER_CHUNK + 1):
+                        yield object()
+                finally:
+                    self.closed = True
+
+            def process(self, chunk):
+                return self.stream
+
+        provider = _OverproducingVAD()
+        result = await VADStage(provider).execute(b"\x00\x00", _make_ctx(), _make_turn())
+
+        assert len(result) == VADStage._MAX_EVENTS_PER_CHUNK
+        assert provider.closed is True
+
     def test_vad_replay_decision_none_before_run(self):
         stage = VADStage(_StubVAD())
         assert stage.replay_decision(stage.snapshot_state()) is None

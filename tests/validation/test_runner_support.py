@@ -9,6 +9,7 @@ from easycat.validation._runner_support import (
     ensure_validation_source_checkout,
     pytest_command_prefix,
     redact_validation_artifacts,
+    run_subprocess,
 )
 
 
@@ -104,3 +105,17 @@ def test_artifact_redaction_rejects_existing_non_utf8_artifact(tmp_path: Path) -
     assert failures["samples"].name == "artifact_redaction.samples"
     assert failures["samples"].failure_class == "artifact_redaction_error"
     assert secret.encode() not in artifact.read_bytes()
+
+
+def test_run_subprocess_captures_missing_executable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing validation command must become a reportable failed result."""
+
+    def missing_command(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "missing-pytest")
+
+    monkeypatch.setattr("easycat.validation._runner_support.subprocess.run", missing_command)
+
+    result = run_subprocess(["missing-pytest"])
+
+    assert result.exit_code == 127
+    assert "missing-pytest" in result.stderr

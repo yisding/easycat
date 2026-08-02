@@ -547,6 +547,72 @@ class TestReconnectingWebSocket:
         assert new_conn._sent == ["frame"]
         assert old_conn._sent == []
 
+    async def test_send_waits_until_reconnect_callback_primes_socket(self):
+        """Ordinary writers cannot overtake a reconnect callback's primer."""
+        candidate = FakeWSConnection()
+        primer_sent = asyncio.Event()
+        release_primer = asyncio.Event()
+
+        async def prime_connection() -> None:
+            # The callback itself must still be able to send while the public
+            # connection-ready gate remains closed.
+            await ws.send("session.update")
+            primer_sent.set()
+            await release_primer.wait()
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            on_reconnect=prime_connection,
+        )
+        # This is a transparent reconnect, not the first connection: writers
+        # are therefore expected to wait for installation rather than
+        # fast-failing as they would before a socket has ever connected.
+        ws._ever_connected = True
+        install = asyncio.create_task(
+            ws._install_connection(candidate, attempt=0, notify_reconnect=True)
+        )
+        await primer_sent.wait()
+
+        ordinary_send = asyncio.create_task(ws.send("audio.append"))
+        try:
+            await asyncio.sleep(0)
+            assert candidate._sent == ["session.update"]
+            assert not ordinary_send.done()
+        finally:
+            release_primer.set()
+            await install
+        await ordinary_send
+
+        assert candidate._sent == ["session.update", "audio.append"]
+
+    async def test_spawned_callback_task_loses_bypass_after_installation(self):
+        candidate = FakeWSConnection()
+        release_child = asyncio.Event()
+        child_result: asyncio.Task[object] | None = None
+
+        async def inspect_after_callback() -> object:
+            await release_child.wait()
+            return ws._reconnect_callback_connection()
+
+        async def prime_connection() -> None:
+            nonlocal child_result
+            await ws.send("session.update")
+            child_result = asyncio.create_task(inspect_after_callback())
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            on_reconnect=prime_connection,
+        )
+        ws._ever_connected = True
+
+        await ws._install_connection(candidate, attempt=0, notify_reconnect=True)
+        assert child_result is not None
+        release_child.set()
+
+        assert await child_result is None
+
     async def test_send_times_out_if_reconnect_never_completes(self):
         ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
         ws._ws = FakeWSConnection()

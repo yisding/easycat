@@ -563,6 +563,29 @@ async def test_cancelled_detection_keeps_executor_slot_until_worker_finishes(
 
 
 @pytest.mark.asyncio
+async def test_executor_scheduling_failure_releases_detection_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed executor submission must not wedge later endpoint detection."""
+
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    loop = asyncio.get_running_loop()
+
+    def _reject_submission(*_args: Any, **_kwargs: Any) -> asyncio.Future[Any]:
+        raise RuntimeError("default executor is shut down")
+
+    monkeypatch.setattr(loop, "run_in_executor", _reject_submission)
+
+    with pytest.raises(RuntimeError, match="default executor is shut down"):
+        await provider.detect([])
+
+    # Use the public semaphore operation rather than its private value: it
+    # proves a following detection can acquire the single-flight slot.
+    await asyncio.wait_for(provider._detect_semaphore.acquire(), timeout=0.1)
+    provider._detect_semaphore.release()
+
+
+@pytest.mark.asyncio
 async def test_timed_out_worker_that_raises_is_not_logged_as_unretrieved(
     caplog,
     monkeypatch: pytest.MonkeyPatch,
