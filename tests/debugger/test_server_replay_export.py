@@ -322,6 +322,21 @@ async def test_replay_rejects_malformed_json(tmp_path):
         assert resp.status == 400
 
 
+async def test_replay_rejects_oversized_json_integer(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            data=b'{"from_sequence":' + b"9" * 5000 + b"}",
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+
+
 async def test_replay_rejects_non_object_json(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)
@@ -460,6 +475,46 @@ async def test_api_replay_rejects_unknown_stage(tmp_path):
         body = await resp.json()
         assert body["error_code"] == "BAD_REQUEST"
         assert "bogus_stage" in body["message"]
+
+
+async def test_api_replay_rejects_invalid_timing(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "timing": "not-a-timing-mode"},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error_code"] == "BAD_REQUEST"
+        assert "timing" in body["message"]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("fidelity", []), ("tool_policy", {})],
+)
+async def test_api_replay_rejects_unhashable_enum_controls(tmp_path, name, value):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={name: value},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error_code"] == "BAD_REQUEST"
+        assert name in body["message"]
 
 
 async def test_api_replay_returns_structured_version_mismatch(tmp_path):
