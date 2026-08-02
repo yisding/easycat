@@ -199,6 +199,31 @@ class TestPeriodicHealthChecker:
 
         assert len(errors) >= 1
 
+    async def test_error_subscriber_can_stop_checker_from_its_own_task(self):
+        event_bus = EventBus()
+        stopped = asyncio.Event()
+        checker: PeriodicHealthChecker
+
+        async def stop_from_error(_event: Error) -> None:
+            await checker.stop()
+            stopped.set()
+
+        event_bus.subscribe(Error, stop_from_error)
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            interval=0,
+            provider_name="self-stopping",
+            event_bus=event_bus,
+        )
+        checker.start()
+        task = checker._task
+        assert task is not None
+
+        await asyncio.wait_for(stopped.wait(), timeout=0.5)
+        await asyncio.wait_for(task, timeout=0.5)
+
+        assert checker.is_running is False
+
     async def test_periodic_loop_logs_strict_error_handler_failure(
         self,
         caplog: pytest.LogCaptureFixture,
