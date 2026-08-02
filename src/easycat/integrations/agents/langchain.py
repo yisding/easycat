@@ -48,6 +48,20 @@ from easycat.runtime.records import ErrorInfo
 logger = logging.getLogger(__name__)
 
 
+def _stream_event_object(event: Any) -> dict[str, Any] | None:
+    """Return a stream event object, dropping malformed provider items."""
+    if not isinstance(event, dict):
+        logger.warning("Ignoring malformed LangChain stream event: expected an object")
+        return None
+    parent_ids = event.get("parent_ids")
+    if parent_ids is not None and (
+        not isinstance(parent_ids, Sequence) or isinstance(parent_ids, (str, bytes, bytearray))
+    ):
+        logger.warning("Ignoring malformed LangChain stream event: parent_ids must be an array")
+        return None
+    return event
+
+
 # No default ``include_types`` filter — LangChain's ``astream_events``
 # filter drops ``on_custom_event`` (``dispatch_custom_event`` /
 # ``adispatch_custom_event``) when ``include_types`` is set, which would
@@ -338,13 +352,17 @@ class LangChainBridge:
                     acc.cancelled = True
                     break
 
-                event_type = event.get("event") if isinstance(event, dict) else None
-                if event_type == "on_chain_start" and not (event.get("parent_ids") or ()):
+                # ``astream_events`` is a third-party streaming boundary;
+                # lifecycle and translator helpers below expect an object.
+                if (event := _stream_event_object(event)) is None:
+                    continue
+
+                if event.get("event") == "on_chain_start" and not (event.get("parent_ids") or ()):
                     if acc.root_run_id is None:
                         rid = str(event.get("run_id") or "")
                         if rid:
                             acc.root_run_id = rid
-                if event_type == "on_chain_end":
+                if event.get("event") == "on_chain_end":
                     rid = str(event.get("run_id") or "")
                     if acc.root_run_id is not None and rid == acc.root_run_id:
                         raw_data = event.get("data")

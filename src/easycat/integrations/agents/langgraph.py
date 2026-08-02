@@ -84,6 +84,27 @@ _DEFAULT_STREAM_MODES: tuple[str, ...] = ("custom", "updates")
 logger = logging.getLogger(__name__)
 
 
+def _stream_event_object(event: Any) -> dict[str, Any] | None:
+    """Return a stream event object, dropping malformed provider items."""
+    if not isinstance(event, dict):
+        logger.warning("Ignoring malformed LangGraph stream event: expected an object")
+        return None
+    parent_ids = event.get("parent_ids")
+    if parent_ids is not None and (
+        not isinstance(parent_ids, Sequence) or isinstance(parent_ids, (str, bytes, bytearray))
+    ):
+        logger.warning("Ignoring malformed LangGraph stream event: parent_ids must be an array")
+        return None
+    metadata = event.get("metadata")
+    checkpoint_ns = metadata.get("langgraph_checkpoint_ns") if isinstance(metadata, dict) else None
+    if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
+        logger.warning(
+            "Ignoring malformed LangGraph stream event: langgraph_checkpoint_ns must be a string"
+        )
+        return None
+    return event
+
+
 # No default ``include_types`` filter.  LangChain's ``astream_events``
 # filter keys ``on_custom_event`` on the *custom event's name* (not a
 # runnable ``run_type``), so any non-``None`` ``include_types`` silently
@@ -631,8 +652,12 @@ class LangGraphBridge:
                         self._turn_produced_no_assistant = True
                     break
 
-                graph_chunk = self._extract_graph_stream_chunk(event)
-                if graph_chunk is not None:
+                # ``astream_events`` is a third-party streaming boundary;
+                # graph-chunk extraction and lifecycle helpers expect objects.
+                if (event := _stream_event_object(event)) is None:
+                    continue
+
+                if graph_chunk := self._extract_graph_stream_chunk(event):
                     mode_name, payload = graph_chunk
                     for bridge_event in self._handle_graph_stream_chunk(
                         mode_name, payload, recorder
