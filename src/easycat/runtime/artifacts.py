@@ -12,16 +12,20 @@ import os
 import stat
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from easycat._session_id import validate_persistent_session_id
+from easycat.runtime._journal_lock import path_file_claim
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "ArtifactStore",
+    "ArtifactWriteReceipt",
     "FilesystemArtifactStore",
     "InMemoryArtifactStore",
     "SnapshotArtifactStore",
@@ -122,6 +126,12 @@ class ArtifactStore(Protocol):
     their writes to a worker thread instead of running them inline on the
     live audio loop. Stores without the attribute are assumed in-memory,
     except ``FilesystemArtifactStore`` which is offloaded automatically.
+
+    Stores that want cancellation/revocation cleanup may additionally expose
+    ``put_with_cleanup_token`` and ``delete_if_cleanup_token``. The former
+    returns :class:`ArtifactWriteReceipt`; the latter must atomically delete
+    only while that receipt's token is still current. Unknown stores retain a
+    possible orphan instead of risking deletion of a concurrently claimed ref.
     """
 
     def put(
@@ -166,6 +176,19 @@ def _is_sha256_ref(ref: str) -> bool:
     return len(ref) == 64 and all(char in "0123456789abcdef" for char in ref)
 
 
+def _is_cleanup_token(token: str) -> bool:
+    return len(token) == 32 and all(char in "0123456789abcdef" for char in token)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactWriteReceipt:
+    """Atomic put result used for ownership-safe cancellation cleanup."""
+
+    ref: str
+    created: bool
+    cleanup_token: str | None
+
+
 # ── In-memory backend ────────────────────────────────────────────
 
 
@@ -182,6 +205,7 @@ class InMemoryArtifactStore:
     def __init__(self, *, max_bytes: int = 50 * 1024 * 1024) -> None:
         self._max_bytes = max_bytes
         self._store: dict[str, bytes] = {}
+        self._cleanup_tokens: dict[str, str] = {}
         self._current_bytes = 0
         self._cap_warned = False
         self._lock = threading.Lock()
@@ -192,17 +216,29 @@ class InMemoryArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
+        return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: ArtifactClass = "debug_verbose",
+    ) -> ArtifactWriteReceipt:
+        """Atomically put and replace the ref's conditional-cleanup token."""
+        del artifact_class
         ref = _sha256(payload)
         with self._lock:
             if ref in self._store:
-                return ref
+                token = uuid.uuid4().hex
+                self._cleanup_tokens[ref] = token
+                return ArtifactWriteReceipt(ref, created=False, cleanup_token=token)
             if len(payload) > self._max_bytes:
                 logger.warning(
                     "Artifact size %d exceeds max_bytes %d; skipping",
                     len(payload),
                     self._max_bytes,
                 )
-                return ""
+                return ArtifactWriteReceipt("", created=False, cleanup_token=None)
             if self._current_bytes + len(payload) > self._max_bytes:
                 if not self._cap_warned:
                     self._cap_warned = True
@@ -211,10 +247,12 @@ class InMemoryArtifactStore:
                         "artifacts (raise max_bytes or lower capture volume)",
                         self._max_bytes,
                     )
-                return ""
+                return ArtifactWriteReceipt("", created=False, cleanup_token=None)
             self._store[ref] = payload
             self._current_bytes += len(payload)
-        return ref
+            token = uuid.uuid4().hex
+            self._cleanup_tokens[ref] = token
+        return ArtifactWriteReceipt(ref, created=True, cleanup_token=token)
 
     def get(self, ref: str) -> bytes | None:
         with self._lock:
@@ -238,12 +276,28 @@ class InMemoryArtifactStore:
             return
         with self._lock:
             data = self._store.pop(ref, None)
+            self._cleanup_tokens.pop(ref, None)
             if data is not None:
                 self._current_bytes -= len(data)
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        """Delete *ref* only if no later successful put replaced its token."""
+        if not _is_sha256_ref(ref):
+            return False
+        with self._lock:
+            if self._cleanup_tokens.get(ref) != cleanup_token:
+                return False
+            data = self._store.pop(ref, None)
+            self._cleanup_tokens.pop(ref, None)
+            if data is not None:
+                self._current_bytes -= len(data)
+                return True
+            return False
 
     def close(self) -> None:
         with self._lock:
             self._store.clear()
+            self._cleanup_tokens.clear()
             self._current_bytes = 0
             self._cap_warned = False
 
@@ -326,71 +380,108 @@ class FilesystemArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
+        return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: ArtifactClass = "debug_verbose",
+    ) -> ArtifactWriteReceipt:
+        """Atomically put and persist a cross-process cleanup token."""
+        del artifact_class
         ref = _sha256(payload)
-        if self.has(ref):
-            return ref
-        with self._lock:
-            if self.has(ref):
-                return ref
-            if self._current_bytes + len(payload) > self._max_bytes:
-                # Refuse the new write rather than delete durable bytes that
-                # may already be referenced by a journal row.  Warn once so the
-                # cap is visible without spamming the log per frame.
-                if not self._cap_warned:
-                    self._cap_warned = True
-                    logger.warning(
-                        "FilesystemArtifactStore reached max_bytes %d; refusing new "
-                        "artifacts (set a larger max_bytes or lower capture volume)",
-                        self._max_bytes,
-                    )
-                return ""
+        cleanup_token = uuid.uuid4().hex
+        try:
+            with self._write_claim(ref):
+                created = not self.has(ref)
+                if created and not self._can_store_new_payload(len(payload)):
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                if created and not self._put_new_locked(ref, payload):
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                if not self._write_cleanup_token_locked(ref, cleanup_token):
+                    if created:
+                        self._delete_ref_locked(ref)
+                    return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                return ArtifactWriteReceipt(
+                    ref,
+                    created=created,
+                    cleanup_token=cleanup_token,
+                )
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact write claim failed for ref=%s", ref, exc_info=True)
+            return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+
+    def _can_store_new_payload(self, payload_size: int) -> bool:
+        if self._current_bytes + payload_size <= self._max_bytes:
+            return True
+        # Refuse the new write rather than delete durable bytes that may
+        # already be referenced by a journal row. Warn once so the cap is
+        # visible without spamming the log per frame.
+        if not self._cap_warned:
+            self._cap_warned = True
+            logger.warning(
+                "FilesystemArtifactStore reached max_bytes %d; refusing new "
+                "artifacts (set a larger max_bytes or lower capture volume)",
+                self._max_bytes,
+            )
+        return False
+
+    def _put_new_locked(self, ref: str, payload: bytes) -> bool:
+        try:
+            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                self._put_with_paths(ref, payload)
+            else:
+                self._put_new_with_descriptors(ref, payload)
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
+            return False
+        self._current_bytes += len(payload)
+        return True
+
+    def _put_new_with_descriptors(self, ref: str, payload: bytes) -> None:
+        session_fd = _open_directory_chain(self._dir, create=True)
+        try:
+            os.fchmod(session_fd, 0o700)
+            shard_fd = self._open_shard(session_fd, ref, create=True)
             try:
-                if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
-                    self._put_with_paths(ref, payload)
-                else:
-                    session_fd = _open_directory_chain(self._dir, create=True)
-                    try:
-                        os.fchmod(session_fd, 0o700)
-                        shard_fd = self._open_shard(session_fd, ref, create=True)
-                        try:
-                            tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
-                            tmp_fd = os.open(
-                                tmp_name,
-                                os.O_WRONLY
-                                | os.O_CREAT
-                                | os.O_EXCL
-                                | getattr(os, "O_CLOEXEC", 0)
-                                | getattr(os, "O_NOFOLLOW", 0),
-                                0o600,
-                                dir_fd=shard_fd,
-                            )
-                            try:
-                                try:
-                                    _write_all_fd(tmp_fd, payload)
-                                    os.fchmod(tmp_fd, 0o600)
-                                finally:
-                                    os.close(tmp_fd)
-                                os.replace(
-                                    tmp_name,
-                                    f"{ref}.bin",
-                                    src_dir_fd=shard_fd,
-                                    dst_dir_fd=shard_fd,
-                                )
-                            except BaseException:
-                                try:
-                                    os.unlink(tmp_name, dir_fd=shard_fd)
-                                except OSError:
-                                    pass
-                                raise
-                        finally:
-                            os.close(shard_fd)
-                    finally:
-                        os.close(session_fd)
-            except (NotImplementedError, OSError):
-                logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
-                return ""
-            self._current_bytes += len(payload)
-        return ref
+                self._replace_file_at(shard_fd, f"{ref}.bin", payload)
+            finally:
+                os.close(shard_fd)
+        finally:
+            os.close(session_fd)
+
+    @staticmethod
+    def _replace_file_at(directory_fd: int, name: str, payload: bytes) -> None:
+        tmp_name = f".{name}.{uuid.uuid4().hex}.tmp"
+        tmp_fd = os.open(
+            tmp_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        try:
+            try:
+                _write_all_fd(tmp_fd, payload)
+                os.fchmod(tmp_fd, 0o600)
+            finally:
+                os.close(tmp_fd)
+            os.replace(
+                tmp_name,
+                name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+        except BaseException:
+            try:
+                os.unlink(tmp_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+            raise
 
     def get(self, ref: str) -> bytes | None:
         try:
@@ -434,27 +525,138 @@ class FilesystemArtifactStore:
     def delete(self, ref: str) -> None:
         if not _is_sha256_ref(ref):
             return
+        try:
+            with self._write_claim(ref):
+                self._delete_ref_locked(ref)
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact delete claim failed for ref=%s", ref, exc_info=True)
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        """Delete *ref* iff its persisted token still belongs to this put."""
+        if not _is_sha256_ref(ref) or not _is_cleanup_token(cleanup_token):
+            return False
+        try:
+            with self._write_claim(ref):
+                if self._read_cleanup_token_locked(ref) != cleanup_token:
+                    return False
+                self._delete_ref_locked(ref)
+                return not self.has(ref)
+        except (NotImplementedError, OSError):
+            logger.warning(
+                "Conditional artifact delete failed for ref=%s",
+                ref,
+                exc_info=True,
+            )
+            return False
+
+    @contextmanager
+    def _write_claim(self, ref: str) -> Iterator[None]:
         with self._lock:
-            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
-                self._delete_with_paths(ref)
-                return
+            self._ensure_artifacts_dir()
+            with path_file_claim(
+                self._artifacts_dir / f"{self._dir.name}.{ref}",
+                blocking=True,
+                namespace="artifact",
+            ) as claimed:
+                if not claimed:
+                    raise OSError(f"Could not claim artifact store {self._dir}")
+                yield
+
+    def _ensure_artifacts_dir(self) -> None:
+        if _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            artifacts_fd = _open_directory_chain(self._artifacts_dir, create=True)
             try:
-                session_fd = _open_directory_chain(self._dir, create=False)
-            except (NotImplementedError, OSError):
-                return
+                os.fchmod(artifacts_fd, 0o700)
+            finally:
+                os.close(artifacts_fd)
+            return
+        if self._path_has_link_or_reparse(self._artifacts_dir):
+            raise OSError(f"Refusing symlinked artifact root: {self._artifacts_dir}")
+        self._artifacts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self._artifacts_dir, 0o700)
+
+    def _delete_ref_locked(self, ref: str) -> None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            self._delete_with_paths(ref)
+            self._delete_cleanup_token_with_paths(ref)
+            return
+        try:
+            session_fd = _open_directory_chain(self._dir, create=False)
+        except (NotImplementedError, OSError):
+            return
+        try:
             try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+            except OSError:
+                shard_fd = None
+            if shard_fd is not None:
                 try:
-                    shard_fd = self._open_shard(session_fd, ref, create=False)
-                except OSError:
-                    shard_fd = None
-                if shard_fd is not None:
+                    self._delete_name(shard_fd, f"{ref}.bin")
+                    self._unlink_name(shard_fd, f"{ref}.token")
+                finally:
+                    os.close(shard_fd)
+            self._delete_name(session_fd, f"{ref}.bin")
+            self._unlink_name(session_fd, f"{ref}.token")
+        finally:
+            os.close(session_fd)
+
+    def _write_cleanup_token_locked(self, ref: str, cleanup_token: str) -> bool:
+        try:
+            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                self._replace_file_with_paths(
+                    self._cleanup_token_path(ref),
+                    cleanup_token.encode("ascii"),
+                )
+            else:
+                session_fd = _open_directory_chain(self._dir, create=True)
+                try:
+                    shard_fd = self._open_shard(session_fd, ref, create=True)
                     try:
-                        self._delete_name(shard_fd, f"{ref}.bin")
+                        self._replace_file_at(
+                            shard_fd,
+                            f"{ref}.token",
+                            cleanup_token.encode("ascii"),
+                        )
                     finally:
                         os.close(shard_fd)
-                self._delete_name(session_fd, f"{ref}.bin")
+                finally:
+                    os.close(session_fd)
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact token write failed for ref=%s", ref, exc_info=True)
+            return False
+        return True
+
+    def _read_cleanup_token_locked(self, ref: str) -> str | None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._read_cleanup_token_with_paths(ref)
+        try:
+            session_fd = _open_directory_chain(self._dir, create=False)
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+                try:
+                    token_fd = _open_regular_at(shard_fd, f"{ref}.token")
+                finally:
+                    os.close(shard_fd)
             finally:
                 os.close(session_fd)
+        except (NotImplementedError, OSError):
+            return None
+        try:
+            if os.fstat(token_fd).st_size > 64:
+                return None
+            token = _read_all_fd(token_fd).decode("ascii")
+            return token if _is_cleanup_token(token) else None
+        except (OSError, UnicodeDecodeError):
+            return None
+        finally:
+            os.close(token_fd)
+
+    @staticmethod
+    def _unlink_name(directory_fd: int, name: str) -> None:
+        try:
+            os.unlink(name, dir_fd=directory_fd)
+        except OSError:
+            pass
 
     def close(self) -> None:
         pass
@@ -567,6 +769,9 @@ class FilesystemArtifactStore:
     def _legacy_ref_path(self, ref: str) -> Path:
         return self._dir / f"{ref}.bin"
 
+    def _cleanup_token_path(self, ref: str) -> Path:
+        return self._dir / ref[:2] / f"{ref}.token"
+
     @staticmethod
     def _path_has_link_or_reparse(path: Path) -> bool:
         absolute = path.absolute()
@@ -605,7 +810,14 @@ class FilesystemArtifactStore:
         os.chmod(path.parent, 0o700)
         if self._path_has_link_or_reparse(path):
             raise OSError(f"Refusing symlinked artifact path: {path}")
-        tmp = path.with_name(f".{ref}.{uuid.uuid4().hex}.tmp")
+        self._replace_file_with_paths(path, payload)
+
+    def _replace_file_with_paths(self, path: Path, payload: bytes) -> None:
+        if self._path_has_link_or_reparse(path):
+            raise OSError(f"Refusing symlinked artifact path: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             with tmp.open("xb") as stream:
                 if stream.write(payload) != len(payload):
@@ -618,6 +830,29 @@ class FilesystemArtifactStore:
             except OSError:
                 pass
             raise
+
+    def _read_cleanup_token_with_paths(self, ref: str) -> str | None:
+        path = self._cleanup_token_path(ref)
+        try:
+            if self._path_has_link_or_reparse(path) or not path.is_file():
+                return None
+            if path.stat().st_size > 64:
+                return None
+            token = path.read_text(encoding="ascii")
+        except (OSError, UnicodeDecodeError):
+            return None
+        return token if _is_cleanup_token(token) else None
+
+    def _delete_cleanup_token_with_paths(self, ref: str) -> None:
+        path = self._cleanup_token_path(ref)
+        try:
+            if self._path_has_link_or_reparse(path):
+                if _path_is_link_or_reparse(path):
+                    path.unlink()
+                return
+            path.unlink()
+        except OSError:
+            pass
 
     def _delete_with_paths(self, ref: str) -> None:
         for path in (self._ref_path(ref), self._legacy_ref_path(ref)):

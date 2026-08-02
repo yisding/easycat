@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
+from easycat.runtime.artifacts import ArtifactWriteReceipt
 from easycat.runtime.context import RunContext
 from easycat.stages.base import put_artifact_async
 
@@ -29,6 +33,64 @@ class _BlockingArtifactStore:
         self.delete_release = threading.Event()
         self.delete_calls: list[str] = []
         self._block_delete = block_delete
+        self._cleanup_token = uuid.uuid4().hex if preexisting else None
+        self._lock = threading.Lock()
+
+    def put(self, payload: bytes, *, artifact_class: str = "replay_critical") -> str:
+        return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: str = "replay_critical",
+    ) -> ArtifactWriteReceipt:
+        del payload, artifact_class
+        self._loop.call_soon_threadsafe(self.put_started.set)
+        if not self.put_release.wait(timeout=5):
+            raise AssertionError("timed out waiting to release artifact put")
+        with self._lock:
+            created = self.ref not in self.refs
+            self.refs.add(self.ref)
+            self._cleanup_token = uuid.uuid4().hex
+            return ArtifactWriteReceipt(
+                self.ref,
+                created=created,
+                cleanup_token=self._cleanup_token,
+            )
+
+    def has(self, ref: str) -> bool:
+        with self._lock:
+            return ref in self.refs
+
+    def delete(self, ref: str) -> None:
+        with self._lock:
+            self.refs.discard(ref)
+            self._cleanup_token = None
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        self.delete_calls.append(ref)
+        self._loop.call_soon_threadsafe(self.delete_started.set)
+        if self._block_delete and not self.delete_release.wait(timeout=5):
+            raise AssertionError("timed out waiting to release artifact delete")
+        with self._lock:
+            if self._cleanup_token != cleanup_token:
+                return False
+            self.refs.discard(ref)
+            self._cleanup_token = None
+            return True
+
+
+class _UntrackedBlockingArtifactStore:
+    writes_block = True
+
+    def __init__(self, payload: bytes) -> None:
+        self._loop = asyncio.get_running_loop()
+        self.ref = hashlib.sha256(payload).hexdigest()
+        self.refs: set[str] = set()
+        self.put_started = asyncio.Event()
+        self.put_release = threading.Event()
+        self.delete_calls: list[str] = []
 
     def put(self, payload: bytes, *, artifact_class: str = "replay_critical") -> str:
         del payload, artifact_class
@@ -43,13 +105,10 @@ class _BlockingArtifactStore:
 
     def delete(self, ref: str) -> None:
         self.delete_calls.append(ref)
-        self._loop.call_soon_threadsafe(self.delete_started.set)
-        if self._block_delete and not self.delete_release.wait(timeout=5):
-            raise AssertionError("timed out waiting to release artifact delete")
         self.refs.discard(ref)
 
 
-def _context(store: _BlockingArtifactStore) -> RunContext:
+def _context(store: Any) -> RunContext:
     return RunContext(
         run_id="run-1",
         session_id="session-1",
@@ -79,6 +138,129 @@ async def test_cancelled_blocking_put_remains_owned_until_new_ref_is_deleted() -
     finally:
         store.put_release.set()
         store.delete_release.set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_same_payload_writer_cannot_delete_successful_ref() -> None:
+    payload = b"concurrent artifact"
+    store = _BlockingArtifactStore(payload)
+    cancelled = asyncio.create_task(put_artifact_async(_context(store), payload))
+    try:
+        await asyncio.wait_for(store.put_started.wait(), timeout=5)
+        successful = asyncio.create_task(put_artifact_async(_context(store), payload))
+        cancelled.cancel()
+        store.put_release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        assert await successful == store.ref
+
+        assert store.refs == {store.ref}
+        assert store.delete_calls == [store.ref]
+    finally:
+        store.put_release.set()
+        store.delete_release.set()
+
+
+@pytest.mark.asyncio
+async def test_revoked_same_payload_writer_cannot_delete_successful_ref() -> None:
+    payload = b"concurrent revoked artifact"
+    store = _BlockingArtifactStore(payload)
+    capture_enabled = True
+    capture_epoch = 1
+    revoked_ctx = RunContext(
+        run_id="run-revoked",
+        session_id="session-revoked",
+        runtime_mode="chained_pipeline",
+        artifact_store=store,
+        audio_capture_enabled=lambda: capture_enabled,
+        audio_capture_epoch=lambda: capture_epoch,
+    )
+    revoked = asyncio.create_task(put_artifact_async(revoked_ctx, payload))
+    try:
+        await asyncio.wait_for(store.put_started.wait(), timeout=5)
+        successful = asyncio.create_task(put_artifact_async(_context(store), payload))
+        capture_enabled = False
+        capture_epoch += 1
+        store.put_release.set()
+
+        assert await revoked is None
+        assert await successful == store.ref
+
+        assert store.refs == {store.ref}
+        assert store.delete_calls == [store.ref]
+    finally:
+        store.put_release.set()
+        store.delete_release.set()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cannot_starve_behind_competing_default_executor_put() -> None:
+    payload = b"one-worker artifact"
+    store = _BlockingArtifactStore(payload)
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    cancelled = asyncio.create_task(put_artifact_async(_context(store), payload))
+    try:
+        await asyncio.wait_for(store.put_started.wait(), timeout=5)
+        successful = asyncio.create_task(put_artifact_async(_context(store), payload))
+        cancelled.cancel()
+        store.put_release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=5)
+        assert await asyncio.wait_for(successful, timeout=5) == store.ref
+        assert store.refs == {store.ref}
+    finally:
+        store.put_release.set()
+        store.delete_release.set()
+
+
+@pytest.mark.asyncio
+async def test_sync_same_payload_writer_cannot_block_receipt_settlement() -> None:
+    payload = b"sync producer artifact"
+    store = _BlockingArtifactStore(payload)
+    cancelled = asyncio.create_task(put_artifact_async(_context(store), payload))
+    direct_results: list[str] = []
+    direct_done = asyncio.Event()
+
+    def direct_put() -> None:
+        direct_results.append(store.put(payload))
+        direct_done.set()
+
+    try:
+        await asyncio.wait_for(store.put_started.wait(), timeout=5)
+        cancelled.cancel()
+        asyncio.get_running_loop().call_soon(direct_put)
+        store.put_release.set()
+
+        await asyncio.wait_for(direct_done.wait(), timeout=5)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=5)
+        assert direct_results == [store.ref]
+        assert store.refs == {store.ref}
+    finally:
+        store.put_release.set()
+        store.delete_release.set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_untracked_custom_store_retains_possible_orphan() -> None:
+    payload = b"custom-store artifact"
+    store = _UntrackedBlockingArtifactStore(payload)
+    task = asyncio.create_task(put_artifact_async(_context(store), payload))
+    try:
+        await asyncio.wait_for(store.put_started.wait(), timeout=5)
+        task.cancel()
+        store.put_release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert store.refs == {store.ref}
+        assert store.delete_calls == []
+    finally:
+        store.put_release.set()
 
 
 @pytest.mark.asyncio

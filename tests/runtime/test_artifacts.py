@@ -5,6 +5,8 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -43,6 +45,16 @@ class TestInMemoryArtifactStore:
         store.delete(ref)
         assert not store.has(ref)
         assert store.get(ref) is None
+
+    def test_conditional_cleanup_token_is_invalidated_by_later_put(self):
+        store = InMemoryArtifactStore()
+        receipt = store.put_with_cleanup_token(b"shared")
+        assert receipt.created is True
+        assert receipt.cleanup_token is not None
+
+        assert store.put(b"shared") == receipt.ref
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert store.has(receipt.ref)
 
     def test_refuses_new_writes_past_cap(self):
         """Once the byte cap is reached, new artifacts are refused (return "")
@@ -145,6 +157,41 @@ class TestFilesystemArtifactStore:
         expected = hashlib.sha256(b"hello fs").hexdigest()
         assert ref == expected
         assert store.get(ref) == b"hello fs"
+
+    def test_cleanup_token_is_invalidated_by_cross_process_put(self, tmp_path):
+        payload = b"cross-process token"
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(payload)
+        assert receipt.created is True
+        assert receipt.cleanup_token is not None
+
+        script = """
+import sys
+from easycat.runtime.artifacts import FilesystemArtifactStore
+
+store = FilesystemArtifactStore("sess", data_dir=sys.argv[1])
+print(store.put(b"cross-process token"), flush=True)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == receipt.ref
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert store.get(receipt.ref) == payload
+
+    def test_cleanup_token_deletes_when_no_later_put_exists(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"owned")
+        assert receipt.cleanup_token is not None
+
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
+        assert not store.has(receipt.ref)
 
     def test_path_fallback_remains_usable_without_descriptor_relative_io(
         self,
