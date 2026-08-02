@@ -38,6 +38,11 @@ class TestWebTransportConnectionTransport:
         with pytest.raises(ValueError, match="max_concurrent_sessions"):
             WebTransportTransportConfig(max_concurrent_sessions=value)  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("value", [True, -0.1, float("nan"), float("inf"), 10**1000])
+    def test_force_shutdown_timeout_must_be_nonnegative_and_finite(self, value: object) -> None:
+        with pytest.raises(ValueError, match="force_shutdown_timeout_s"):
+            WebTransportTransportConfig(force_shutdown_timeout_s=value)  # type: ignore[arg-type]
+
     @pytest.mark.parametrize(
         "audio_format",
         [

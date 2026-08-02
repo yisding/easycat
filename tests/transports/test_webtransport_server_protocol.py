@@ -53,6 +53,7 @@ class TestWebTransportServerWiring:
             "allow_query_token",
             "unsafe_allow_no_auth",
             "max_pending_bytes",
+            "force_shutdown_timeout_s",
         ]
 
     def test_server_keeps_auth_token_out_of_per_session_config(self) -> None:
@@ -558,6 +559,103 @@ class TestWebTransportServerWiring:
         await server.stop()
         assert server._server is None  # noqa: SLF001
         assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_stop_bounds_cancellation_resistant_handler_until_retry(self) -> None:
+        handler_started = asyncio.Event()
+        release_handler = asyncio.Event()
+
+        async def ignores_cancellation() -> None:
+            handler_started.set()
+            while not release_handler.is_set():
+                try:
+                    await release_handler.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                certfile="cert.pem",
+                keyfile="key.pem",
+                force_shutdown_timeout_s=0.01,
+            ),
+            lambda _transport: asyncio.sleep(0),
+        )
+        bound = SimpleNamespace(close=Mock(), wait_closed=AsyncMock())
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+        handler = asyncio.create_task(ignores_cancellation())
+        server._handler_tasks.add(handler)  # noqa: SLF001
+        await handler_started.wait()
+
+        with pytest.raises(RuntimeError, match="session handler.*did not stop"):
+            await asyncio.wait_for(server.stop(), timeout=1)
+
+        assert handler in server._handler_tasks  # noqa: SLF001
+        assert server._server is None  # noqa: SLF001
+        assert server._cleanup_error is not None  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
+            await server.start()
+
+        release_handler.set()
+        await handler
+        await server.stop()
+
+        assert server._handler_tasks == set()  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_stop_bounds_cancellation_resistant_listener_until_retry(self) -> None:
+        wait_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+
+        async def ignores_cancellation() -> None:
+            wait_entered.set()
+            while not release_wait_closed.is_set():
+                try:
+                    await release_wait_closed.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                certfile="cert.pem",
+                keyfile="key.pem",
+                force_shutdown_timeout_s=0.01,
+            ),
+            lambda _transport: asyncio.sleep(0),
+        )
+        bound = SimpleNamespace(
+            close=Mock(),
+            wait_closed=AsyncMock(side_effect=ignores_cancellation),
+        )
+        server._server = bound  # noqa: SLF001
+        server._started = True  # noqa: SLF001
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+        with pytest.raises(RuntimeError, match="listener did not close"):
+            await asyncio.wait_for(stopping, timeout=1)
+
+        assert server._server is bound  # noqa: SLF001
+        assert server._cleanup_error is not None  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="previous cleanup is incomplete"):
+            await server.start()
+
+        # A retry while the first cancellation-resistant waiter is still live
+        # must re-await it, not invoke ``wait_closed()`` a second time against
+        # the same aioquic server.
+        with pytest.raises(RuntimeError, match="listener did not close"):
+            await asyncio.wait_for(server.stop(), timeout=1)
+        assert bound.wait_closed.await_count == 1
+
+        release_wait_closed.set()
+        await asyncio.sleep(0)
+        await server.stop()
+
+        assert server._server is None  # noqa: SLF001
+        assert server._cleanup_error is None  # noqa: SLF001
+        assert bound.wait_closed.await_count == 1
 
     @pytest.mark.asyncio
     async def test_stop_safe_when_called_from_within_handler(self) -> None:

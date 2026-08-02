@@ -44,6 +44,9 @@ from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _has_live_pid,
     _process_birth_identity,
+    discard_crash_dump,
+    reserve_crash_dump_paths,
+    snapshot_crash_dump_artifacts,
     sweep_crashed_journals,
 )
 from easycat.runtime.journal import _validate_read_limit
@@ -570,21 +573,24 @@ class SqliteJournal(_SqlJournalBase):
             "SELECT session_id FROM journal ORDER BY sequence DESC LIMIT 1"
         ).fetchone()
         self._original_session_id = prior_session_row[0] if prior_session_row else session_id
-        crash_dir = self._root / "crash-dumps"
-        crash_path = crash_dir / f"{session_id}.sqlite"
 
         # Copy rather than move so we can keep writing to the current path.
         # Hold the lock across the close→copy→reopen sequence so no
         # concurrent append() can use the connection while it's closed.
         with self._lock:
             try:
-                mkdir_private(crash_dir)
+                crash_path, artifact_root = reserve_crash_dump_paths(self._root, session_id)
                 # Close our live connection so the shared file-level promoter
                 # can checkpoint+copy the on-disk database (the same core the
                 # orphan sweep uses), then reopen.  Checkpointing folds any
                 # WAL-only pages into the main DB before the byte copy.
                 self._conn.close()
-                _copy_journal_to_crash_dump(self._db_path, crash_path)
+                try:
+                    _copy_journal_to_crash_dump(self._db_path, crash_path)
+                    snapshot_crash_dump_artifacts(self._root, self._db_path, artifact_root)
+                except (OSError, sqlite3.Error):
+                    discard_crash_dump(crash_path, artifact_root)
+                    raise
                 self._conn = self._open_connection()
                 # The prior session's records are now safely preserved
                 # in the crash dump.  Truncate the live journal so the

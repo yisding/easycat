@@ -134,6 +134,9 @@ When the SQLite backend detects an unclean shutdown (journal file
 exists without a `clean_close` marker):
 
 1. The prior journal is copied to `.easycat/crash-dumps/<session_id>.sqlite`
+   with a dump-owned `<session_id>.artifacts/` snapshot alongside it. Repeated
+   crashes for a reused session id receive a numeric suffix rather than
+   overwriting an earlier post-mortem.
 2. A `RecoveredSessionMarker` record is emitted at `sequence=0`
 3. The new session starts fresh at `sequence=1`
 4. The crash dump is loadable offline for post-mortem analysis
@@ -168,6 +171,7 @@ crash-recovery semantics are required.
         <sha256>.bin               # content-addressable artifacts (0600)
   crash-dumps/
     <session_id>.sqlite            # promoted from journals/ on unclean shutdown
+    <session_id>.artifacts/        # immutable snapshot for that crash dump
   archive/
     <session_id>.tar.gz            # retention-archived sessions
 ```

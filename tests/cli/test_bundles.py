@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.cli.debug._common import _crash_dump_artifact_root
 from easycat.cli.debug.bundles import _format_size
 from easycat.cli.debug.follow import (
     _follow_with_retry,
@@ -1939,6 +1940,30 @@ def test_bundles_show_sqlite_crash_dump(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["command"] == "bundles_show"
     assert payload["session_id"] == "sess-crash"
     assert payload["turn_count"] == 1
+
+
+def test_crash_dump_prefers_its_owned_artifact_snapshot(tmp_path: Path) -> None:
+    """A later same-id session cannot supply blobs for an earlier crash dump."""
+    crash = tmp_path / "crash-dumps" / "sess.sqlite"
+    crash.parent.mkdir()
+    owned = crash.parent / "sess.artifacts"
+    ref = hashlib.sha256(b"prior crash artifact").hexdigest()
+    (owned / ref[:2]).mkdir(parents=True)
+    (owned / ref[:2] / f"{ref}.bin").write_bytes(b"prior crash artifact")
+
+    legacy = tmp_path / "artifacts" / "sess"
+    legacy.mkdir(parents=True)
+    assert _crash_dump_artifact_root(crash) == owned
+
+
+def test_empty_owned_crash_artifact_snapshot_suppresses_legacy_lookup(tmp_path: Path) -> None:
+    """A known-empty snapshot must not fall back to a reused session's blobs."""
+    crash = tmp_path / "crash-dumps" / "sess.sqlite"
+    crash.parent.mkdir()
+    (crash.parent / "sess.artifacts").mkdir()
+    (tmp_path / "artifacts" / "sess").mkdir(parents=True)
+
+    assert _crash_dump_artifact_root(crash) is None
 
 
 def test_inspect_locked_sqlite_journal_message(

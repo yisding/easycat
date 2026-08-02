@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -28,6 +29,8 @@ from easycat.runtime._private_files import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ARTIFACT_REF = re.compile(r"[0-9a-f]{64}")
 
 
 def _boot_id() -> str | None:
@@ -123,6 +126,123 @@ def _copy_journal_to_crash_dump(db_path: Path, crash_path: Path) -> None:
             crash_sidecar = Path(str(crash_path) + suffix)
             shutil.copy2(str(sidecar), str(crash_sidecar))
             chmod_private_file(crash_sidecar)
+
+
+def crash_dump_artifact_root(crash_path: Path) -> Path:
+    """Return the dump-owned artifact snapshot path for *crash_path*."""
+    return crash_path.with_name(f"{crash_path.stem}.artifacts")
+
+
+def reserve_crash_dump_paths(root: Path, session_id: str) -> tuple[Path, Path]:
+    """Reserve collision-free paths for one crash dump and its artifacts.
+
+    Keep the historic ``<session_id>.sqlite`` name for the first dump.  A
+    repeated crash for a reused session id gets a numeric suffix rather than
+    overwriting the previous post-mortem.  Creating the artifact directory
+    acts as an exclusive reservation, so another promoter cannot pick the
+    same name between its existence check and copy.
+    """
+    crash_dir = root / "crash-dumps"
+    mkdir_private(crash_dir)
+    suffix = 0
+    while True:
+        suffix_text = "" if suffix == 0 else f"-{suffix}"
+        crash_path = crash_dir / f"{session_id}{suffix_text}.sqlite"
+        artifact_root = crash_dump_artifact_root(crash_path)
+        if crash_path.exists():
+            suffix += 1
+            continue
+        try:
+            artifact_root.mkdir(mode=0o700)
+        except FileExistsError:
+            suffix += 1
+            continue
+        os.chmod(artifact_root, 0o700)
+        return crash_path, artifact_root
+
+
+def snapshot_crash_dump_artifacts(
+    root: Path,
+    db_path: Path,
+    artifact_root: Path,
+) -> None:
+    """Copy the artifacts referenced by *db_path* into a reserved snapshot.
+
+    The snapshot is deliberately all-or-nothing.  If a referenced blob is
+    already missing, leave the reserved directory empty so callers can still
+    inspect journal metadata without accidentally resolving blobs from a later
+    session that reused the same id.
+    """
+    refs = _referenced_artifact_refs(db_path)
+    if not refs:
+        return
+
+    source_root = root / "artifacts" / db_path.stem
+    if not source_root.is_dir():
+        return
+
+    sources: list[tuple[str, Path]] = []
+    for ref in refs:
+        source = _artifact_source_path(source_root, ref)
+        if source is None:
+            logger.warning(
+                "Crash journal %s references unavailable artifacts; "
+                "keeping it without an artifact snapshot",
+                db_path,
+            )
+            return
+        sources.append((ref, source))
+
+    for ref, source in sources:
+        target_dir = artifact_root / ref[:2]
+        mkdir_private(target_dir)
+        target = target_dir / f"{ref}.bin"
+        shutil.copy2(str(source), str(target))
+        chmod_private_file(target)
+
+
+def discard_crash_dump(crash_path: Path, artifact_root: Path) -> None:
+    """Best-effort cleanup for a failed dump copy and its reservation."""
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            Path(str(crash_path) + suffix).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.debug("Failed to remove incomplete crash dump %s", crash_path, exc_info=True)
+    shutil.rmtree(str(artifact_root), ignore_errors=True)
+
+
+def _referenced_artifact_refs(db_path: Path) -> set[str]:
+    """Read validated artifact refs from a journal without mutating it."""
+    try:
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
+    except sqlite3.DatabaseError:
+        return set()
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(journal)")}
+        if not {"input_ref", "output_ref"} & columns:
+            return set()
+        select_columns = [column for column in ("input_ref", "output_ref") if column in columns]
+        refs: set[str] = set()
+        query = f"SELECT {', '.join(select_columns)} FROM journal"
+        for row in conn.execute(query):
+            for ref in row:
+                if isinstance(ref, str) and _ARTIFACT_REF.fullmatch(ref):
+                    refs.add(ref)
+        return refs
+    except sqlite3.DatabaseError:
+        return set()
+    finally:
+        conn.close()
+
+
+def _artifact_source_path(source_root: Path, ref: str) -> Path | None:
+    """Find one non-symlink artifact in sharded or legacy-flat storage."""
+    for path in (source_root / ref[:2] / f"{ref}.bin", source_root / f"{ref}.bin"):
+        if path.is_file() and not path.is_symlink():
+            return path
+    return None
 
 
 def _crashed_state(db_path: Path) -> str:
@@ -343,17 +463,28 @@ def _is_skipped(db_path: Path, skip_resolved: Path | None) -> bool:
 
 def _promote_one(root: Path, db_path: Path) -> bool:
     """Copy one crashed journal to ``crash-dumps/`` and remove it; True on success."""
-    crash_dir = root / "crash-dumps"
-    crash_path = crash_dir / f"{db_path.stem}.sqlite"
+    crash_path: Path | None = None
+    artifact_root: Path | None = None
     try:
-        mkdir_private(crash_dir)
+        crash_path, artifact_root = reserve_crash_dump_paths(root, db_path.stem)
         _copy_journal_to_crash_dump(db_path, crash_path)
-    except OSError:
+        snapshot_crash_dump_artifacts(root, db_path, artifact_root)
+    except (OSError, sqlite3.DatabaseError):
+        if crash_path is not None and artifact_root is not None:
+            discard_crash_dump(crash_path, artifact_root)
         logger.warning("Failed to promote crashed journal %s", db_path, exc_info=True)
         return False
     if _remove_journal(db_path):
         logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
         return True
+    # If the source database itself remains, this promotion is only a duplicate
+    # snapshot. Keeping it would make every later startup reserve another
+    # numeric suffix for the same unremovable journal and grow disk usage
+    # without bound. If the main DB was removed and only sidecar cleanup failed,
+    # retain the dump because it is now the sole copy of the journal.
+    if db_path.exists():
+        assert crash_path is not None and artifact_root is not None
+        discard_crash_dump(crash_path, artifact_root)
     return False
 
 

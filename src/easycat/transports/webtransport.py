@@ -108,6 +108,7 @@ from urllib.parse import urlsplit
 from easycat._audio_utils import PCM16StreamResampler
 from easycat._extras import require_module
 from easycat._net import normalize_auth_token
+from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
@@ -131,6 +132,56 @@ if TYPE_CHECKING:
     from easycat.server.auth import AuthPolicy
 
 logger = logging.getLogger(__name__)
+
+
+_BACKGROUND_CLEANUP_TASKS: set[asyncio.Future[object]] = set()
+
+
+def _track_background_cleanup(future: asyncio.Future[object]) -> None:
+    """Keep a timed-out teardown reachable and consume its eventual result."""
+    _BACKGROUND_CLEANUP_TASKS.add(future)
+
+    def finish(done: asyncio.Future[object]) -> None:
+        _BACKGROUND_CLEANUP_TASKS.discard(done)
+        if not done.cancelled():
+            try:
+                done.exception()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
+
+    future.add_done_callback(finish)
+
+
+async def _await_with_hard_timeout(
+    awaitable: Awaitable[object],
+    *,
+    timeout_s: float,
+) -> bool:
+    """Await cleanup without waiting for cancellation-resistant work.
+
+    ``asyncio.wait_for`` requests cancellation at its deadline but then waits
+    for cancellation cleanup. A user session handler is allowed to catch
+    ``CancelledError``, so use ``asyncio.wait`` and retain any survivor in a
+    background ledger instead. The owner still retains its primary resource
+    reference and refuses restart until a later ``stop()`` completes cleanup.
+    """
+    future = asyncio.ensure_future(awaitable)
+    try:
+        done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
+    except asyncio.CancelledError:
+        future.cancel()
+        _track_background_cleanup(future)
+        raise
+    if future in done:
+        await future
+        return True
+    future.cancel()
+    _track_background_cleanup(future)
+    # Give cooperative cleanup one event-loop turn without waiting for a
+    # coroutine that intentionally ignores cancellation.
+    await asyncio.sleep(0)
+    return False
+
 
 # Stream-purpose tags written as the first byte on each client-opened stream.
 _TAG_AUDIO = 0x01
@@ -316,7 +367,7 @@ class WebTransportTransportConfig:
     max_concurrent_sessions: int = 64
     # Bearer auth is enforced on the HTTP/3 CONNECT request before any session
     # transport or provider-backed EasyCat session is created. These auth fields
-    # stay last to preserve the existing positional config parameter order.
+    # stay after the original positional config fields for compatibility.
     auth_token: str | None = None
     # Browser WebTransport cannot set arbitrary CONNECT headers. Query-token
     # auth therefore exists as an explicit opt-in and remains off by default.
@@ -324,6 +375,11 @@ class WebTransportTransportConfig:
     # The only way to bind a non-loopback interface without ``auth_token``.
     unsafe_allow_no_auth: bool = False
     max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
+    # Hard bound for server-side handler/listener teardown. A user-provided
+    # session handler can suppress cancellation, and aioquic's listener can
+    # retain one such handler while waiting to close; neither may wedge
+    # ``WebTransportServer.stop()`` indefinitely.
+    force_shutdown_timeout_s: float = 10.0
 
     def __post_init__(self) -> None:
         if (
@@ -338,6 +394,11 @@ class WebTransportTransportConfig:
             or self.max_concurrent_sessions < 1
         ):
             raise ValueError("max_concurrent_sessions must be an integer >= 1")
+        if (
+            not is_finite_number(self.force_shutdown_timeout_s)
+            or self.force_shutdown_timeout_s < 0
+        ):
+            raise ValueError("force_shutdown_timeout_s must be a finite number >= 0")
         if (
             self.audio_format.encoding != "pcm"
             or self.audio_format.sample_width != 2
@@ -1686,6 +1747,10 @@ class WebTransportServer:
         self._config = config
         self._session_handler = session_handler
         self._server: QuicServer | None = None
+        # A cancellation-resistant ``wait_closed()`` must remain owned by this
+        # exact bound-server generation. Retrying it through a fresh call can
+        # overlap two listener waiters against the same aioquic server.
+        self._server_wait_closed_task: asyncio.Future[object] | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
         # A handler task can finish after its transport's disconnect fails.
         # Keep the exact transport reachable so stop() can retry that owned
@@ -1781,7 +1846,12 @@ class WebTransportServer:
             ) from self._cleanup_error
         if self._started:
             return
-        if self._server is not None or self._handler_tasks or self._pending_transport_cleanup:
+        if (
+            self._server is not None
+            or self._server_wait_closed_task is not None
+            or self._handler_tasks
+            or self._pending_transport_cleanup
+        ):
             raise RuntimeError(
                 "WebTransportServer cannot start while previous resources "
                 "remain; call stop() again to retry cleanup"
@@ -1904,6 +1974,66 @@ class WebTransportServer:
                 self._pending_transport_cleanup.discard(transport)
         return cleanup_errors
 
+    async def _cancel_and_reap_handler_tasks(self) -> list[Exception]:
+        """Cancel handlers without letting an uncooperative one wedge ``stop``.
+
+        Keep a task that outlives the hard shutdown budget in
+        ``_handler_tasks``. That ownership blocks restart and lets a later
+        ``stop()`` retry cancellation after the user handler becomes
+        cooperative.
+        """
+        current = asyncio.current_task()
+        tasks = [task for task in self._handler_tasks if task is not current]
+        for task in tasks:
+            task.cancel()
+        if not tasks:
+            return []
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=max(self._config.force_shutdown_timeout_s, 0.0),
+        )
+        if done:
+            # Reap completed tasks so an exception that races teardown does
+            # not become an unobserved task exception.
+            await asyncio.gather(*done, return_exceptions=True)
+            self._handler_tasks.difference_update(done)
+        if not pending:
+            return []
+        _track_background_cleanup(asyncio.gather(*pending, return_exceptions=True))
+        timeout_error = RuntimeError(
+            "WebTransport session handler(s) did not stop within "
+            f"force_shutdown_timeout_s={self._config.force_shutdown_timeout_s}s"
+        )
+        logger.warning("WebTransport server: %s", timeout_error)
+        return [timeout_error]
+
+    async def _wait_for_server_close(self, wait_closed: Callable[[], Awaitable[object]]) -> bool:
+        """Await one listener-close task at a time across ``stop()`` retries."""
+        task = self._server_wait_closed_task
+        if task is not None and task.done():
+            self._server_wait_closed_task = None
+            if not task.cancelled():
+                try:
+                    task.result()
+                except Exception:
+                    # The preceding stop already surfaced this listener
+                    # failure. It is now safe to make one fresh retry because
+                    # the old waiter is complete, not concurrent.
+                    pass
+                else:
+                    return True
+            task = None
+        if task is None:
+            task = asyncio.ensure_future(wait_closed())
+            self._server_wait_closed_task = task
+        closed = await _await_with_hard_timeout(
+            task,
+            timeout_s=self._config.force_shutdown_timeout_s,
+        )
+        if closed:
+            self._server_wait_closed_task = None
+        return closed
+
     async def _stop_unlocked(self) -> None:
         """Stop while the caller owns ``_lifecycle_lock``."""
         # Close admission before inspecting/snapshotting handlers. Protocol
@@ -1913,6 +2043,7 @@ class WebTransportServer:
         if (
             not self._started
             and self._server is None
+            and self._server_wait_closed_task is None
             and not self._handler_tasks
             and not self._pending_transport_cleanup
             and self._cleanup_error is None
@@ -1920,19 +2051,11 @@ class WebTransportServer:
             return
         self._started = False
         # Tear down in-flight handlers, but never await the current task
-        # (which can happen if a handler calls back into ``stop()``).
-        current = asyncio.current_task()
-        others = [t for t in self._handler_tasks if t is not current]
-        for task in others:
-            task.cancel()
-        if others:
-            await asyncio.gather(*others, return_exceptions=True)
-        # ``current`` is removed from the set via its own done-callback when
-        # it eventually exits; don't clear() blindly or we'd lose that
-        # bookkeeping.
-        self._handler_tasks.difference_update(others)
-
-        cleanup_errors = await self._retry_pending_transport_cleanup()
+        # (which can happen if a handler calls back into ``stop()``). A
+        # user handler can catch cancellation, so retain a survivor rather
+        # than waiting forever or losing its cleanup ownership.
+        cleanup_errors = await self._cancel_and_reap_handler_tasks()
+        cleanup_errors.extend(await self._retry_pending_transport_cleanup())
         server = self._server
         server_cleanup_errors: list[Exception] = []
         if server is not None:
@@ -1944,10 +2067,19 @@ class WebTransportServer:
             wait_closed = getattr(server, "wait_closed", None)
             if wait_closed is not None:
                 try:
-                    await wait_closed()
+                    closed = await self._wait_for_server_close(wait_closed)
                 except Exception as exc:
                     logger.exception("WebTransport server wait_closed failed", exc_info=exc)
                     server_cleanup_errors.append(exc)
+                else:
+                    if not closed:
+                        timeout_error = RuntimeError(
+                            "WebTransport listener did not close within "
+                            "force_shutdown_timeout_s="
+                            f"{self._config.force_shutdown_timeout_s}s"
+                        )
+                        logger.warning("WebTransport server: %s", timeout_error)
+                        server_cleanup_errors.append(timeout_error)
             if not server_cleanup_errors and self._server is server:
                 self._server = None
         cleanup_errors.extend(server_cleanup_errors)

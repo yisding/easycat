@@ -142,6 +142,13 @@ class VoiceServer:
         # close.  A later ``stop`` retries them; ``start`` must not overwrite
         # those references with a fresh listener stack in the meantime.
         self._lifecycle_cleanup_error: Exception | None = None
+        # Listener cleanup itself can resist cancellation (for example, a
+        # transport implementation stuck in ``site.stop()``). Keep one task per
+        # listener stage so a bounded stop can continue draining sessions while
+        # retaining the original cleanup ownership for a later retry. Reissuing
+        # ``site.stop()`` concurrently with the first invocation is not a safe
+        # retry strategy.
+        self._listener_cleanup_tasks: dict[str, asyncio.Future[Any]] = {}
 
         # The mounted WebRTC route unit (M7). WebRTC ``/offer`` reserve through
         # the SAME shared ``_gate`` and register into the SAME
@@ -316,18 +323,21 @@ class VoiceServer:
             site = web.TCPSite(runner, self.config.host, self.config.port)
             await site.start()
         except BaseException as startup_error:
-            self._webrtc_routes = None
+            # A site can fail after it has partially started. Publish both
+            # listener references before rolling back so the regular bounded
+            # drain owner closes every resource and retains any unfinished
+            # cleanup for retry.
+            self._runner = runner
+            self._site = site
             try:
-                await runner.cleanup()
+                await self._stop_unlocked(force=True)
             except BaseException as cleanup_error:
-                self._runner = runner
-                self._site = site
-                retained_error = (
-                    cleanup_error
-                    if isinstance(cleanup_error, Exception)
-                    else RuntimeError("VoiceServer startup rollback was interrupted")
-                )
-                self._finalize_stop_cleanup([retained_error])
+                if isinstance(cleanup_error, asyncio.CancelledError):
+                    # This direct unlocked rollback does not pass through
+                    # ``stop()``'s cancellation epilogue.
+                    self._finalize_stop_cleanup(
+                        [RuntimeError("VoiceServer startup rollback was interrupted")]
+                    )
                 raise startup_error from cleanup_error
             raise
         return runner, site
@@ -604,16 +614,25 @@ class VoiceServer:
 
     def _finalize_stop_cleanup(self, cleanup_errors: list[Exception]) -> None:
         """Publish truthful stopped state while retaining failed cleanup ownership."""
-        if not cleanup_errors:
-            self._active_session_objs.clear()
-        self._reset_gate_bookkeeping()
         self._await_natural_end_drain = False
+        self._started = False
+        self._lifecycle_cleanup_error = cleanup_errors[0] if cleanup_errors else None
+        if cleanup_errors:
+            # A retained listener can still accept work until its original
+            # cleanup finishes. Keep the gate draining (and its reservations
+            # intact) so that work is rejected rather than admitted into a
+            # server which cannot be restarted yet. ``stop()`` retries the
+            # retained resources; only a fully successful teardown clears this
+            # fence for a future start.
+            self._emit_connections_active()
+            return
+
+        self._active_session_objs.clear()
+        self._reset_gate_bookkeeping()
         # Clear the active-connections gauge on both server_state series so the
         # post-drain reading is 0, not a stale non-zero value (M8 fix).
         self._emit_connections_active_cleared()
-        self._started = False
         self._emit_draining(False)
-        self._lifecycle_cleanup_error = cleanup_errors[0] if cleanup_errors else None
 
     @staticmethod
     def _record_cleanup_error(
@@ -636,6 +655,112 @@ class VoiceServer:
         except Exception as exc:
             self._record_cleanup_error(stage, exc, cleanup_errors)
             return False, None
+
+    async def _attempt_bounded_listener_cleanup(
+        self,
+        stage: str,
+        cleanup: Callable[[], Awaitable[Any]],
+        cleanup_errors: list[Exception],
+    ) -> bool:
+        """Run one listener cleanup stage under the force-shutdown deadline.
+
+        Unlike ``asyncio.wait_for``, this keeps a cancellation-resistant
+        cleanup coroutine owned after the deadline. A later ``stop()`` awaits
+        that same task instead of concurrently invoking the listener cleanup a
+        second time. The surrounding drain can therefore still force-stop
+        sessions promptly while the gate remains fenced as ``draining``.
+        """
+        task, previously_completed = self._prepare_listener_cleanup_task(
+            stage,
+            cleanup,
+            cleanup_errors,
+        )
+        if previously_completed:
+            return True
+        if task is None:
+            return False
+        if not await self._wait_for_listener_cleanup_task(task):
+            timeout_error = RuntimeError(
+                f"{stage} did not finish within "
+                f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
+            )
+            logger.warning("VoiceServer: %s", timeout_error)
+            cleanup_errors.append(timeout_error)
+            return False
+        return await self._finish_listener_cleanup_task(stage, task, cleanup_errors)
+
+    def _prepare_listener_cleanup_task(
+        self,
+        stage: str,
+        cleanup: Callable[[], Awaitable[Any]],
+        cleanup_errors: list[Exception],
+    ) -> tuple[asyncio.Future[Any] | None, bool]:
+        """Return a pending listener cleanup task or a completed retry result."""
+        task = self._listener_cleanup_tasks.get(stage)
+        if task is not None:
+            if not task.done():
+                return task, False
+            self._listener_cleanup_tasks.pop(stage, None)
+            if not task.cancelled():
+                try:
+                    task.result()
+                except Exception:
+                    pass
+                else:
+                    return None, True
+
+        try:
+            task = asyncio.ensure_future(cleanup())
+        except Exception as exc:
+            self._record_cleanup_error(stage, exc, cleanup_errors)
+            return None, False
+        self._listener_cleanup_tasks[stage] = task
+        return task, False
+
+    async def _wait_for_listener_cleanup_task(self, task: asyncio.Future[Any]) -> bool:
+        """Wait one bounded slice while preserving a listener cleanup task's ownership."""
+        try:
+            done, _ = await asyncio.wait(
+                {task},
+                timeout=max(self.config.force_shutdown_timeout_s, 0.0),
+            )
+        except asyncio.CancelledError:
+            # Let a cooperative listener cleanup terminate with its owning
+            # stop call. A cancellation-resistant task stays retained in the
+            # mapping and a later stop waits that same task rather than racing
+            # a second cleanup invocation.
+            if not task.done():
+                task.cancel()
+            raise
+        return task in done
+
+    async def _finish_listener_cleanup_task(
+        self,
+        stage: str,
+        task: asyncio.Future[Any],
+        cleanup_errors: list[Exception],
+    ) -> bool:
+        """Reap a completed listener cleanup task and preserve caller cancellation."""
+        self._listener_cleanup_tasks.pop(stage, None)
+        current_task = asyncio.current_task()
+        cancellation_requests = current_task.cancelling() if current_task is not None else 0
+        try:
+            await task
+        except asyncio.CancelledError:
+            # This is the listener task's own cancellation, not a cancellation
+            # of ``stop()``. The latter can arrive just after ``asyncio.wait``
+            # returns, so preserve it rather than converting it to a cleanup
+            # failure.
+            if current_task is not None and current_task.cancelling() > cancellation_requests:
+                raise
+            cancelled_error = RuntimeError(f"{stage} was cancelled before it completed")
+            logger.warning("VoiceServer: %s", cancelled_error)
+            cleanup_errors.append(cancelled_error)
+            return False
+        except Exception as exc:
+            self._record_cleanup_error(stage, exc, cleanup_errors)
+            return False
+        return True
 
     async def _drain_sessions_for_stop(
         self,
@@ -677,18 +802,20 @@ class VoiceServer:
                 )
         if self._site is not None:
             site = self._site
-            succeeded, _ = await self._attempt_cleanup(
+            succeeded = await self._attempt_bounded_listener_cleanup(
                 "HTTP site stop",
-                site.stop(),
+                site.stop,
                 cleanup_errors,
             )
             if succeeded and self._site is site:
                 self._site = None
-        if self._runner is not None:
+        site_cleanup = self._listener_cleanup_tasks.get("HTTP site stop")
+        site_cleanup_pending = site_cleanup is not None and not site_cleanup.done()
+        if self._runner is not None and not site_cleanup_pending:
             runner = self._runner
-            succeeded, _ = await self._attempt_cleanup(
+            succeeded = await self._attempt_bounded_listener_cleanup(
                 "HTTP runner cleanup",
-                runner.cleanup(),
+                runner.cleanup,
                 cleanup_errors,
             )
             if succeeded and self._runner is runner:

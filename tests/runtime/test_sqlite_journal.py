@@ -29,7 +29,8 @@ from easycat.runtime import (
     run_retention,
 )
 from easycat.runtime import journal_sql as journal_sql_module
-from easycat.runtime.crash_sweep import is_journal_live
+from easycat.runtime.artifacts import FilesystemArtifactStore
+from easycat.runtime.crash_sweep import crash_dump_artifact_root, is_journal_live
 from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.records import (
     ErrorInfo,
@@ -812,6 +813,47 @@ class TestCrashRecovery:
 
         crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
         assert crash_dump.exists()
+
+    def test_reused_session_crashes_preserve_each_dump_artifact_snapshot(self, tmp_path):
+        """Recovery snapshots only the crashed epoch's referenced artifacts."""
+        session_id = "sess"
+        artifacts = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+        first_ref = artifacts.put(b"first crash audio")
+        first = SqliteJournal(session_id, data_dir=tmp_path)
+        first.append(
+            kind=JournalRecordKind.EVENT,
+            name="first",
+            session_id=session_id,
+            input_ref=first_ref,
+        )
+        _simulate_crash_after_flush(first)
+
+        second = SqliteJournal(session_id, data_dir=tmp_path)
+        first_dump = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
+        first_snapshot = crash_dump_artifact_root(first_dump)
+        first_artifact = first_snapshot / first_ref[:2] / f"{first_ref}.bin"
+        assert first_artifact.read_bytes() == b"first crash audio"
+
+        second_ref = artifacts.put(b"second crash audio")
+        second.append(
+            kind=JournalRecordKind.EVENT,
+            name="second",
+            session_id=session_id,
+            input_ref=second_ref,
+        )
+        _simulate_crash_after_flush(second)
+
+        third = SqliteJournal(session_id, data_dir=tmp_path)
+        try:
+            second_dump = tmp_path / "crash-dumps" / f"{session_id}-1.sqlite"
+            second_snapshot = crash_dump_artifact_root(second_dump)
+            assert first_dump.exists()
+            assert second_dump.exists()
+            assert (first_snapshot / first_ref[:2] / f"{first_ref}.bin").exists()
+            assert not (first_snapshot / second_ref[:2] / f"{second_ref}.bin").exists()
+            assert (second_snapshot / second_ref[:2] / f"{second_ref}.bin").exists()
+        finally:
+            third.close()
 
     def test_open_sweeps_orphaned_foreign_crash(self, tmp_path):
         # A *different* session id whose owning process is gone is promoted
