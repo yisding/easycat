@@ -463,10 +463,14 @@ class TestMultiContextWSManager:
         ws = FakeMultiContextWS(fail_send_at={1})
         mgr = MultiContextWSManager(_make_adapter(ws))
         ctx = await mgr.open_context()
+        sibling = await mgr.open_context()
         await mgr.cancel_context(ctx)
 
         assert ws.closed
         assert mgr._ws is None
+        assert sibling.done.is_set()
+        with pytest.raises(ConnectionError, match="context cancellation failed"):
+            await anext(sibling.frames())
         # Next open_context reconnects a fresh socket.
         ws2 = FakeMultiContextWS()
         mgr._adapter = _make_adapter(ws2)

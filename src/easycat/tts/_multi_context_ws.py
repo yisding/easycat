@@ -702,9 +702,21 @@ class MultiContextWSManager:
                 self._closing = True
                 await self._retry_pending_socket_close()
                 ws = self._ws
+                # This fallback abandons the shared connection because one
+                # context's cancel frame could not be sent. The cancelled
+                # context ends quietly, but every sibling was interrupted and
+                # must see a terminal error rather than wait forever.
+                terminal_error = ConnectionError(
+                    "TTS WebSocket closed after context cancellation failed"
+                )
+                for ctx in list(self._contexts.values()):
+                    if not ctx.cancelled:
+                        ctx.error = terminal_error
                 # The reader's deliberate cancellation must not surface a
                 # spurious connection-death error on live contexts.
                 await self._cancel_background_tasks()
+                for ctx in list(self._contexts.values()):
+                    self._finish_context(ctx)
                 self._ws = None
                 if ws is not None:
                     # The cancel-frame timeout may have been caused by a send
