@@ -591,6 +591,16 @@ class TestTwilioStreamTokenValidation:
         assert not transport.is_connected
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("timeout_s", [float("nan"), float("inf")])
+    async def test_connection_transport_preflight_rejects_nonfinite_timeout(
+        self, timeout_s: float
+    ) -> None:
+        transport = TwilioConnectionTransport(_ScriptedTwilioWebSocket())
+
+        with pytest.raises(ValueError, match="timeout_s must be positive"):
+            await transport.wait_for_start(timeout_s=timeout_s)
+
+    @pytest.mark.asyncio
     async def test_preflight_deadline_is_not_reset_by_malformed_trickle(self) -> None:
         ws = _MalformedTrickleWebSocket()
         transport = TwilioConnectionTransport(ws)

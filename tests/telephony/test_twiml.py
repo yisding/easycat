@@ -163,6 +163,13 @@ def test_twilio_app_settings_can_require_auth_and_validate_session_limit() -> No
                     environ={name: value},
                 )
 
+    for value in ("-0.1", "later", "nan", "inf"):
+        with pytest.raises(RuntimeError, match="TWILIO_START_TIMEOUT_S"):
+            twilio_app_settings_from_env(
+                stream_url="wss://voice.example.com/stream",
+                environ={"TWILIO_START_TIMEOUT_S": value},
+            )
+
 
 @pytest.mark.asyncio
 async def test_twilio_call_session_index_tracks_and_unsubscribes() -> None:
