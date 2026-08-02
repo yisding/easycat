@@ -579,13 +579,24 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     (the same idiom as
     :mod:`easycat.runtime.scope` and :mod:`easycat.config._telephony_wiring`).
     """
+    future = asyncio.ensure_future(awaitable)
     current_task = asyncio.current_task()
+    # Deliver a cancellation already pending at helper entry before recording
+    # the stale-request baseline. A previously caught request leaves
+    # cancelling() non-zero but does not raise at this checkpoint.
+    if current_task is not None and current_task.cancelling():
+        try:
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            future.cancel()
+            await asyncio.gather(future, return_exceptions=True)
+            raise
     cancellation_requests = current_task.cancelling() if current_task is not None else 0
     try:
         if timeout_s is not None:
-            await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+            await _await_with_hard_timeout(future, timeout_s=timeout_s)
         else:
-            await awaitable
+            await future
     except asyncio.CancelledError:
         if current_task is not None and current_task.cancelling() > cancellation_requests:
             raise
