@@ -21,6 +21,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import has_usable_credential
 from easycat._session_id import validate_session_id
 from easycat.echo_cancellation import (
@@ -126,16 +127,28 @@ _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
 
 
-def _require_positive(name: str, value: float) -> None:
-    """Raise ``ValueError`` if ``value`` is not strictly positive."""
-    if value <= 0:
-        raise ValueError(f"{name} must be positive")
+def _require_positive(name: str, value: object) -> None:
+    """Require a finite built-in number greater than zero."""
+    if not is_finite_number(value) or value <= 0:
+        raise ValueError(f"{name} must be positive and finite")
 
 
-def _require_non_negative(name: str, value: float) -> None:
-    """Raise ``ValueError`` if ``value`` is negative."""
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
+def _require_non_negative(name: str, value: object) -> None:
+    """Require a finite built-in number greater than or equal to zero."""
+    if not is_finite_number(value) or value < 0:
+        raise ValueError(f"{name} must be non-negative and finite")
+
+
+def _require_positive_integer(name: str, value: object) -> None:
+    """Require a positive integer suitable for a counter or timer."""
+    if not is_finite_number(value) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be positive and a finite integer")
+
+
+def _require_non_negative_integer(name: str, value: object) -> None:
+    """Require a non-negative integer suitable for a provider parameter."""
+    if not is_finite_number(value) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be non-negative and a finite integer")
 
 
 def _validate_on_agent_failure(
@@ -417,10 +430,10 @@ class VoicemailDetectionConfig:
         # state machine with no runtime guard, so a non-positive value either
         # raises an uncaught ``ValueError`` (negative) or instantly
         # misclassifies the call (zero) — fail fast at construction instead.
-        _require_positive("detection_timeout_s", self.detection_timeout_s)
-        _require_non_negative("speech_threshold_ms", self.speech_threshold_ms)
-        _require_non_negative("speech_end_threshold_ms", self.speech_end_threshold_ms)
-        _require_non_negative("silence_timeout_ms", self.silence_timeout_ms)
+        _require_positive_integer("detection_timeout_s", self.detection_timeout_s)
+        _require_non_negative_integer("speech_threshold_ms", self.speech_threshold_ms)
+        _require_non_negative_integer("speech_end_threshold_ms", self.speech_end_threshold_ms)
+        _require_non_negative_integer("silence_timeout_ms", self.silence_timeout_ms)
 
     def to_twilio_params(self) -> dict[str, Any]:
         """Render as the kwargs :class:`OutboundCallManager` expects today."""
@@ -480,7 +493,7 @@ class OutboundCallConfig:
     def __post_init__(self) -> None:
         _require_positive("classification_gate_timeout_s", self.classification_gate_timeout_s)
         _require_positive("max_call_duration_s", self.max_call_duration_s)
-        _require_positive("max_screening_turns", self.max_screening_turns)
+        _require_positive_integer("max_screening_turns", self.max_screening_turns)
         # The late/pickup windows are ``> 0``-guarded in the state machine
         # (a non-positive value simply disables the window), but reject
         # negatives for clarity since they are never meaningful.

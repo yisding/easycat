@@ -40,20 +40,28 @@ class TestVoicemailDetectionConfig:
         cfg = VoicemailDetectionConfig(mode="detect")
         assert cfg.to_twilio_params()["amd_mode"] == "Enable"
 
-    @pytest.mark.parametrize("bad", [0, -1])
-    def test_non_positive_detection_timeout_rejected(self, bad: int) -> None:
+    @pytest.mark.parametrize("bad", [0, -1, 1.5, True, float("nan"), float("inf")])
+    def test_invalid_detection_timeout_rejected(self, bad: object) -> None:
         # detection_timeout_s flows into asyncio.sleep with no runtime guard,
         # so non-positive values must fail fast at construction.
         with pytest.raises(ValueError, match="detection_timeout_s must be positive"):
             VoicemailDetectionConfig(detection_timeout_s=bad)
 
     @pytest.mark.parametrize(
-        "field_name",
-        ["speech_threshold_ms", "speech_end_threshold_ms", "silence_timeout_ms"],
+        ("field_name", "bad"),
+        [
+            (field_name, bad)
+            for field_name in (
+                "speech_threshold_ms",
+                "speech_end_threshold_ms",
+                "silence_timeout_ms",
+            )
+            for bad in (-1, 1.5, True, float("nan"), float("inf"))
+        ],
     )
-    def test_negative_threshold_rejected(self, field_name: str) -> None:
+    def test_invalid_threshold_rejected(self, field_name: str, bad: object) -> None:
         with pytest.raises(ValueError, match=f"{field_name} must be non-negative"):
-            VoicemailDetectionConfig(**{field_name: -1})
+            VoicemailDetectionConfig(**{field_name: bad})
 
     def test_zero_thresholds_allowed(self) -> None:
         cfg = VoicemailDetectionConfig(
@@ -160,28 +168,30 @@ class TestOutboundCallConfig:
         cfg = OutboundCallConfig(from_number="+1555", callee_language="es")
         assert cfg.callee_language == "es"
 
-    @pytest.mark.parametrize("bad", [0, -1])
-    def test_non_positive_classification_gate_timeout_rejected(self, bad: float) -> None:
+    @pytest.mark.parametrize("bad", [0, -1, True, float("nan"), float("inf")])
+    def test_invalid_classification_gate_timeout_rejected(self, bad: object) -> None:
         with pytest.raises(ValueError, match="classification_gate_timeout_s must be positive"):
             OutboundCallConfig(from_number="+1555", classification_gate_timeout_s=bad)
 
-    @pytest.mark.parametrize("bad", [0, -1])
-    def test_non_positive_max_call_duration_rejected(self, bad: int) -> None:
+    @pytest.mark.parametrize("bad", [0, -1, True, float("nan"), float("inf")])
+    def test_invalid_max_call_duration_rejected(self, bad: object) -> None:
         with pytest.raises(ValueError, match="max_call_duration_s must be positive"):
             OutboundCallConfig(from_number="+1555", max_call_duration_s=bad)
 
-    @pytest.mark.parametrize("bad", [0, -1])
-    def test_non_positive_max_screening_turns_rejected(self, bad: int) -> None:
+    @pytest.mark.parametrize("bad", [0, -1, 1.5, True, float("nan"), float("inf")])
+    def test_invalid_max_screening_turns_rejected(self, bad: object) -> None:
         with pytest.raises(ValueError, match="max_screening_turns must be positive"):
             OutboundCallConfig(from_number="+1555", max_screening_turns=bad)
 
-    def test_negative_late_voicemail_window_rejected(self) -> None:
+    @pytest.mark.parametrize("bad", [-1.0, True, float("nan"), float("inf")])
+    def test_invalid_late_voicemail_window_rejected(self, bad: object) -> None:
         with pytest.raises(ValueError, match="late_voicemail_window_s must be non-negative"):
-            OutboundCallConfig(from_number="+1555", late_voicemail_window_s=-1.0)
+            OutboundCallConfig(from_number="+1555", late_voicemail_window_s=bad)
 
-    def test_negative_voicemail_pickup_window_rejected(self) -> None:
+    @pytest.mark.parametrize("bad", [-1.0, True, float("nan"), float("inf")])
+    def test_invalid_voicemail_pickup_window_rejected(self, bad: object) -> None:
         with pytest.raises(ValueError, match="voicemail_pickup_window_s must be non-negative"):
-            OutboundCallConfig(from_number="+1555", voicemail_pickup_window_s=-1.0)
+            OutboundCallConfig(from_number="+1555", voicemail_pickup_window_s=bad)
 
     def test_zero_windows_allowed(self) -> None:
         # Zero disables the window in the state machine; it is valid config.
