@@ -388,6 +388,7 @@ class Session:
             artifact_store=self._artifact_store,
             journal_sink=self._journal_sink,
         )
+        self._commit_event_bus_ownership()
 
     @classmethod
     def from_providers(
@@ -742,21 +743,9 @@ class Session:
     ) -> EventSubscription:
         """Subscribe one Session-owned handler with correlation isolation."""
 
-        existing_owners = {
-            owner
-            for candidate in self.event_bus.subscribers(event_type)
-            if (owner := getattr(candidate, "_easycat_event_owner", None)) is not None
-        }
-        if any(owner is not self._event_subscription_owner for owner in existing_owners):
-            # Once two live Sessions have shared this bus, a later bare event
-            # is never safe to attribute by process of elimination. A stopped
-            # peer can still have a delayed transport/provider callback in
-            # flight, so this marker is deliberately monotonic.
-            cast(Any, self.event_bus)._easycat_was_shared_by_sessions = True
-
         @wraps(handler)
         def _scoped_handler(event: Any) -> Any:
-            if not self._accept_owned_event(event_type, event):
+            if not self._accept_owned_event(event):
                 return None
             return handler(event)
 
@@ -768,7 +757,26 @@ class Session:
         self._event_subscriptions.append(subscription)
         return subscription
 
-    def _accept_owned_event(self, event_type: type, event: Any) -> bool:
+    def _commit_event_bus_ownership(self) -> None:
+        """Mark a bus shared only after this Session constructed successfully."""
+        if getattr(self.event_bus, "_easycat_was_shared_by_sessions", False):
+            return
+        for subscription in self._event_subscriptions:
+            event_type = subscription.event_type
+            if event_type is None:
+                continue
+            for candidate in self.event_bus.subscribers(event_type):
+                owner = getattr(candidate, "_easycat_event_owner", None)
+                if owner is not None and owner is not self._event_subscription_owner:
+                    # Once two live Sessions have shared this bus, a later bare
+                    # event is never safe to attribute by process of
+                    # elimination. A stopped peer can still have a delayed
+                    # transport/provider callback in flight, so this marker is
+                    # deliberately monotonic.
+                    cast(Any, self.event_bus)._easycat_was_shared_by_sessions = True
+                    return
+
+    def _accept_owned_event(self, event: Any) -> bool:
         """Return whether an event can safely drive this Session's internals."""
         event_session_id = getattr(event, "session_id", None)
         if event_session_id is not None:

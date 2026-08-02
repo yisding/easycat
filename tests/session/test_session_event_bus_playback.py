@@ -17,6 +17,8 @@ from easycat.events import (
     Error,
     ErrorStage,
     EventBus,
+    EventHandler,
+    EventSubscription,
     Interruption,
     PlaybackMarkAck,
     STTFinal,
@@ -213,6 +215,35 @@ async def test_shared_event_bus_stays_ambiguous_after_peer_stops() -> None:
         await bus.emit(TurnStarted(turn_id="late-peer-turn"))
 
         assert survivor.current_turn is None
+    finally:
+        await survivor.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_failed_second_session_does_not_poison_private_bus_compatibility() -> None:
+    class FailNextSubscriptionBus(EventBus):
+        fail_next_subscription = False
+
+        def subscribe(self, event_type: type, handler: EventHandler) -> EventSubscription:
+            if self.fail_next_subscription:
+                self.fail_next_subscription = False
+                raise RuntimeError("subscribe failed")
+            return super().subscribe(event_type, handler)
+
+    bus = FailNextSubscriptionBus(handler_error_policy="raise")
+    survivor = Session(_full_config(event_bus=bus, session_id="survivor-session"))
+    survivor._is_running = True
+    bus.fail_next_subscription = True
+
+    with pytest.raises(RuntimeError, match="subscribe failed"):
+        Session(_full_config(event_bus=bus, session_id="failed-session"))
+
+    try:
+        await bus.emit(TurnStarted(turn_id="private-bus-turn"))
+
+        assert survivor.current_turn is not None
+        assert survivor.current_turn.id == "private-bus-turn"
+        assert not getattr(bus, "_easycat_was_shared_by_sessions", False)
     finally:
         await survivor.stop(force=True)
 
