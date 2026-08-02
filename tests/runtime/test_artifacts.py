@@ -56,7 +56,10 @@ class TestInMemoryArtifactStore:
         assert receipt.created is True
         assert receipt.cleanup_token is not None
 
-        assert store.put(b"shared") == receipt.ref
+        duplicate = store.put_with_cleanup_token(b"shared")
+        assert duplicate.ref == receipt.ref
+        assert duplicate.created is False
+        assert duplicate.cleanup_token is None
         assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
         assert store.has(receipt.ref)
 
@@ -267,6 +270,227 @@ print(store.put(b"cross-process token"), flush=True)
 
         assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
         assert not store.has(receipt.ref)
+
+    def test_duplicate_put_revokes_cleanup_ownership(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        first = store.put_with_cleanup_token(b"shared")
+        assert first.cleanup_token is not None
+        token_path = store._cleanup_token_path(first.ref)
+        assert token_path.exists()
+
+        second = store.put_with_cleanup_token(b"shared")
+
+        assert second.ref == first.ref
+        assert second.created is False
+        assert second.cleanup_token is None
+        assert not token_path.exists()
+        assert store.delete_if_cleanup_token(first.ref, first.cleanup_token) is False
+        assert store.get(first.ref) == b"shared"
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_duplicate_put_fails_when_cleanup_ownership_cannot_be_revoked(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        first = store.put_with_cleanup_token(b"shared")
+        assert first.cleanup_token is not None
+        token_path = store._cleanup_token_path(first.ref)
+        original_unlink = artifacts_module.os.unlink
+
+        def deny_token_unlink(path, *args, **kwargs):
+            if str(path).endswith(".token"):
+                raise PermissionError(str(path))
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(artifacts_module.os, "unlink", deny_token_unlink)
+
+        failed = store.put_with_cleanup_token(b"shared")
+
+        assert failed.ref == ""
+        assert failed.created is False
+        assert failed.cleanup_token is None
+        assert token_path.read_text(encoding="ascii") == first.cleanup_token
+        assert store.get(first.ref) == b"shared"
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_cleanup_token_creation_does_not_use_temp_rename(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        destinations: list[object] = []
+        original_replace = artifacts_module.os.replace
+
+        def track_replace(source, destination, *args, **kwargs):
+            destinations.append(destination)
+            return original_replace(source, destination, *args, **kwargs)
+
+        monkeypatch.setattr(artifacts_module.os, "replace", track_replace)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        receipt = store.put_with_cleanup_token(b"direct token creation")
+
+        assert receipt.ref
+        assert receipt.created is True
+        assert receipt.cleanup_token is not None
+        assert not any(str(destination).endswith(".token") for destination in destinations)
+        token_path = store._cleanup_token_path(receipt.ref)
+        assert token_path.read_text(encoding="ascii") == receipt.cleanup_token
+        assert token_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_new_blob_replaces_stale_cleanup_capability(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        first = store.put_with_cleanup_token(b"recreated")
+        assert first.cleanup_token is not None
+        store._ref_path(first.ref).unlink()
+
+        second = store.put_with_cleanup_token(b"recreated")
+
+        assert second.ref == first.ref
+        assert second.created is True
+        assert second.cleanup_token is not None
+        assert second.cleanup_token != first.cleanup_token
+        assert store.delete_if_cleanup_token(first.ref, first.cleanup_token) is False
+        assert store.delete_if_cleanup_token(second.ref, second.cleanup_token) is True
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_partial_cleanup_token_creation_fails_closed(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        original_write_all = artifacts_module._write_all_fd
+
+        def fail_after_partial_write(fd: int, payload: bytes) -> None:
+            if len(payload) != 32:
+                original_write_all(fd, payload)
+                return
+            os.write(fd, payload[: len(payload) // 2])
+            raise OSError(errno.ENOSPC, "partial token write")
+
+        monkeypatch.setattr(artifacts_module, "_write_all_fd", fail_after_partial_write)
+
+        failed = store.put_with_cleanup_token(b"new artifact")
+
+        assert failed.ref == ""
+        ref = hashlib.sha256(b"new artifact").hexdigest()
+        assert store.has(ref) is False
+        assert store._cleanup_token_path(ref).exists() is False
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_duplicate_revokes_hardlinked_token_without_modifying_external_link(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        first = store.put_with_cleanup_token(b"shared")
+        assert first.cleanup_token is not None
+        token_path = store._cleanup_token_path(first.ref)
+        external = tmp_path / "outside-token"
+        try:
+            os.link(token_path, external)
+        except OSError:
+            pytest.skip("hard links are unavailable in this test environment")
+        original = external.read_bytes()
+        assert store.delete_if_cleanup_token(first.ref, first.cleanup_token) is False
+
+        second = store.put_with_cleanup_token(b"shared")
+
+        assert second.ref == first.ref
+        assert second.created is False
+        assert second.cleanup_token is None
+        assert token_path.exists() is False
+        assert external.read_bytes() == original
+        assert store.delete_if_cleanup_token(first.ref, first.cleanup_token) is False
+        assert store.get(first.ref) == b"shared"
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_duplicate_revokes_symlinked_token_without_touching_target(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        first = store.put_with_cleanup_token(b"shared")
+        assert first.cleanup_token is not None
+        token_path = store._cleanup_token_path(first.ref)
+        token_path.unlink()
+        target = tmp_path / "outside-token-target"
+        target.write_bytes(b"do not modify")
+        try:
+            token_path.symlink_to(target)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        second = store.put_with_cleanup_token(b"shared")
+
+        assert second.ref == first.ref
+        assert second.created is False
+        assert second.cleanup_token is None
+        assert token_path.exists() is False
+        assert token_path.is_symlink() is False
+        assert target.read_bytes() == b"do not modify"
+        assert store.delete_if_cleanup_token(first.ref, first.cleanup_token) is False
+        assert store.get(first.ref) == b"shared"
+
+    def test_legacy_raw_cleanup_token_remains_readable(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"legacy")
+        assert receipt.cleanup_token is not None
+        store._cleanup_token_path(receipt.ref).write_text(
+            receipt.cleanup_token,
+            encoding="ascii",
+        )
+
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
+
+    def test_unknown_cleanup_token_format_fails_closed(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"unknown token")
+        assert receipt.cleanup_token is not None
+        store._cleanup_token_path(receipt.ref).write_bytes(b'{"version":2}')
+
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert store.get(receipt.ref) == b"unknown token"
 
     def test_path_fallback_remains_usable_without_descriptor_relative_io(
         self,

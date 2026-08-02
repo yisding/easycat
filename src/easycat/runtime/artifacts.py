@@ -45,6 +45,14 @@ _FILE_OPEN_FLAGS = (
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_NONBLOCK", 0)
 )
+_FILE_CREATE_FLAGS = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_BINARY", 0)
+)
 _DIR_FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_dir_fd", set())
 _FD_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_fd", set())
 _NOFOLLOW_FUNCTIONS: set[Callable[..., object]] = getattr(os, "supports_follow_symlinks", set())
@@ -117,6 +125,23 @@ def _write_all_fd(fd: int, payload: bytes) -> None:
         view = view[written:]
 
 
+def _create_exclusive_file(
+    path: str | Path,
+    payload: bytes,
+    *,
+    dir_fd: int | None = None,
+) -> None:
+    fd = os.open(path, _FILE_CREATE_FLAGS, 0o600, dir_fd=dir_fd)
+    try:
+        _write_all_fd(fd, payload)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    if not hasattr(os, "fchmod"):
+        os.chmod(path, 0o600)
+
+
 @runtime_checkable
 class ArtifactStore(Protocol):
     """Content-addressable store for large payloads.
@@ -182,7 +207,7 @@ def _is_cleanup_token(token: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactWriteReceipt:
-    """Atomic put result used for ownership-safe cancellation cleanup."""
+    """Atomic put result; only a newly created ref carries cleanup ownership."""
 
     ref: str
     created: bool
@@ -224,14 +249,13 @@ class InMemoryArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> ArtifactWriteReceipt:
-        """Atomically put and replace the ref's conditional-cleanup token."""
+        """Put *payload*, issuing cleanup ownership only when it creates the ref."""
         del artifact_class
         ref = _sha256(payload)
         with self._lock:
             if ref in self._store:
-                token = uuid.uuid4().hex
-                self._cleanup_tokens[ref] = token
-                return ArtifactWriteReceipt(ref, created=False, cleanup_token=token)
+                self._cleanup_tokens.pop(ref, None)
+                return ArtifactWriteReceipt(ref, created=False, cleanup_token=None)
             if len(payload) > self._max_bytes:
                 logger.warning(
                     "Artifact size %d exceeds max_bytes %d; skipping",
@@ -388,10 +412,9 @@ class FilesystemArtifactStore:
         *,
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> ArtifactWriteReceipt:
-        """Atomically put and persist a cross-process cleanup token."""
+        """Put *payload*, issuing cleanup ownership only when it creates the ref."""
         del artifact_class
         ref = _sha256(payload)
-        cleanup_token = uuid.uuid4().hex
         try:
             with self._write_claim(ref):
                 created = not self.has(ref)
@@ -399,13 +422,17 @@ class FilesystemArtifactStore:
                     return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                 if created and not self._put_new_locked(ref, payload):
                     return ArtifactWriteReceipt("", created=False, cleanup_token=None)
-                if not self._write_cleanup_token_locked(ref, cleanup_token):
-                    if created:
-                        self._delete_ref_locked(ref)
+                if not created:
+                    if not self._revoke_cleanup_token_locked(ref):
+                        return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                    return ArtifactWriteReceipt(ref, created=False, cleanup_token=None)
+                cleanup_token = uuid.uuid4().hex
+                if not self._create_cleanup_token_locked(ref, cleanup_token):
+                    self._delete_ref_locked(ref)
                     return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                 return ArtifactWriteReceipt(
                     ref,
-                    created=created,
+                    created=True,
                     cleanup_token=cleanup_token,
                 )
         except (NotImplementedError, OSError):
@@ -600,23 +627,25 @@ class FilesystemArtifactStore:
         finally:
             os.close(session_fd)
 
-    def _write_cleanup_token_locked(self, ref: str, cleanup_token: str) -> bool:
+    def _create_cleanup_token_locked(self, ref: str, cleanup_token: str) -> bool:
+        payload = cleanup_token.encode("ascii")
         try:
             if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
-                self._replace_file_with_paths(
-                    self._cleanup_token_path(ref),
-                    cleanup_token.encode("ascii"),
-                )
+                self._create_cleanup_token_with_paths(ref, payload)
             else:
                 session_fd = _open_directory_chain(self._dir, create=True)
                 try:
                     shard_fd = self._open_shard(session_fd, ref, create=True)
                     try:
-                        self._replace_file_at(
-                            shard_fd,
-                            f"{ref}.token",
-                            cleanup_token.encode("ascii"),
-                        )
+                        name = f"{ref}.token"
+                        try:
+                            _create_exclusive_file(name, payload, dir_fd=shard_fd)
+                        except FileExistsError:
+                            if not self._unlink_name(shard_fd, name):
+                                raise OSError(
+                                    "Could not revoke stale artifact cleanup token"
+                                ) from None
+                            _create_exclusive_file(name, payload, dir_fd=shard_fd)
                     finally:
                         os.close(shard_fd)
                 finally:
@@ -625,6 +654,29 @@ class FilesystemArtifactStore:
             logger.warning("Artifact token write failed for ref=%s", ref, exc_info=True)
             return False
         return True
+
+    def _revoke_cleanup_token_locked(self, ref: str) -> bool:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._delete_cleanup_token_with_paths(ref)
+        try:
+            session_fd = _open_directory_chain(self._dir, create=False)
+        except FileNotFoundError:
+            return True
+        except (NotImplementedError, OSError):
+            return False
+        try:
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+            except FileNotFoundError:
+                return True
+            except OSError:
+                return False
+            try:
+                return self._unlink_name(shard_fd, f"{ref}.token")
+            finally:
+                os.close(shard_fd)
+        finally:
+            os.close(session_fd)
 
     def _read_cleanup_token_locked(self, ref: str) -> str | None:
         if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
@@ -642,7 +694,8 @@ class FilesystemArtifactStore:
         except (NotImplementedError, OSError):
             return None
         try:
-            if os.fstat(token_fd).st_size > 64:
+            metadata = os.fstat(token_fd)
+            if metadata.st_nlink != 1 or metadata.st_size > 64:
                 return None
             token = _read_all_fd(token_fd).decode("ascii")
             return token if _is_cleanup_token(token) else None
@@ -652,11 +705,14 @@ class FilesystemArtifactStore:
             os.close(token_fd)
 
     @staticmethod
-    def _unlink_name(directory_fd: int, name: str) -> None:
+    def _unlink_name(directory_fd: int, name: str) -> bool:
         try:
             os.unlink(name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            return True
         except OSError:
-            pass
+            return False
+        return True
 
     def close(self) -> None:
         pass
@@ -836,23 +892,42 @@ class FilesystemArtifactStore:
         try:
             if self._path_has_link_or_reparse(path) or not path.is_file():
                 return None
-            if path.stat().st_size > 64:
+            metadata = path.stat()
+            if metadata.st_nlink != 1 or metadata.st_size > 64:
                 return None
             token = path.read_text(encoding="ascii")
         except (OSError, UnicodeDecodeError):
             return None
         return token if _is_cleanup_token(token) else None
 
-    def _delete_cleanup_token_with_paths(self, ref: str) -> None:
+    def _create_cleanup_token_with_paths(self, ref: str, payload: bytes) -> None:
+        path = self._cleanup_token_path(ref)
+        if self._path_has_link_or_reparse(path):
+            if not self._delete_cleanup_token_with_paths(ref):
+                raise OSError(f"Refusing symlinked artifact cleanup token: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        try:
+            _create_exclusive_file(path, payload)
+        except FileExistsError:
+            if not self._delete_cleanup_token_with_paths(ref):
+                raise OSError(f"Could not revoke stale artifact cleanup token: {path}") from None
+            _create_exclusive_file(path, payload)
+
+    def _delete_cleanup_token_with_paths(self, ref: str) -> bool:
         path = self._cleanup_token_path(ref)
         try:
             if self._path_has_link_or_reparse(path):
                 if _path_is_link_or_reparse(path):
                     path.unlink()
-                return
+                    return True
+                return False
             path.unlink()
+        except FileNotFoundError:
+            return True
         except OSError:
-            pass
+            return False
+        return True
 
     def _delete_with_paths(self, ref: str) -> None:
         for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
