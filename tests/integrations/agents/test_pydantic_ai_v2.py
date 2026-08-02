@@ -17,13 +17,15 @@ class TextPartDelta:
 
 
 class ToolCallPartDelta:
-    def __init__(self, args_delta: Any) -> None:
+    def __init__(self, args_delta: Any, tool_call_id: str | None = None) -> None:
         self.args_delta = args_delta
+        self.tool_call_id = tool_call_id
 
 
 class PartDeltaEvent:
-    def __init__(self, delta: Any) -> None:
+    def __init__(self, delta: Any, *, index: int = 0) -> None:
         self.delta = delta
+        self.index = index
 
 
 class _ToolCallPart:
@@ -321,6 +323,52 @@ def test_tool_call_delta_dict_is_serialized_as_text() -> None:
     assert event is not None
     assert event.kind == "tool_delta"
     assert event.text == '{"city": "Tokyo"}'
+    assert event.call_id == ""
+
+
+def test_tool_call_delta_preserves_call_id_in_event_and_recorder() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    recorder = _recorder(journal)
+
+    event = translate_event(
+        PartDeltaEvent(ToolCallPartDelta('{"city":', tool_call_id="tc-delta")),
+        recorder,
+    )
+
+    assert event is not None
+    assert event.kind == "tool_delta"
+    assert event.text == '{"city":'
+    assert event.call_id == "tc-delta"
+    [record] = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert (record["phase"], record["tool_name"], record["call_id"]) == (
+        "delta",
+        "",
+        "tc-delta",
+    )
+
+
+def test_tool_call_delta_reuses_call_id_for_argument_continuations() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    recorder = _recorder(journal)
+    tool_call_ids: dict[int, str] = {}
+
+    initial = translate_event(
+        PartDeltaEvent(ToolCallPartDelta("", tool_call_id="tc-split"), index=4),
+        recorder,
+        tool_call_ids=tool_call_ids,
+    )
+    continuation = translate_event(
+        PartDeltaEvent(ToolCallPartDelta('{"city":'), index=4),
+        recorder,
+        tool_call_ids=tool_call_ids,
+    )
+
+    assert initial is None
+    assert continuation is not None
+    assert continuation.kind == "tool_delta"
+    assert continuation.call_id == "tc-split"
+    [record] = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert record["call_id"] == "tc-split"
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,11 @@ from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 _EventTranslator = Callable[[Any, AgentRecorder | None], AgentBridgeEvent | None]
 
 
-def _translate_delta(event: Any, recorder: AgentRecorder | None) -> AgentBridgeEvent | None:
+def _translate_delta(
+    event: Any,
+    recorder: AgentRecorder | None,
+    tool_call_ids: dict[int, str] | None,
+) -> AgentBridgeEvent | None:
     delta = getattr(event, "delta", None)
     delta_cls = type(delta).__name__
     if delta_cls == "TextPartDelta":
@@ -25,13 +29,21 @@ def _translate_delta(event: Any, recorder: AgentRecorder | None) -> AgentBridgeE
     if delta_cls != "ToolCallPartDelta":
         return None
 
+    call_id = getattr(delta, "tool_call_id", "") or ""
+    part_index = getattr(event, "index", None)
+    if tool_call_ids is not None and isinstance(part_index, int):
+        if call_id:
+            tool_call_ids[part_index] = call_id
+        else:
+            call_id = tool_call_ids.get(part_index, "")
+
     args = getattr(delta, "args_delta", "") or ""
     if not args:
         return None
     text = args if isinstance(args, str) else json.dumps(args, default=str)
     if recorder is not None:
-        recorder.record_tool_call(phase="delta", name="")
-    return AgentBridgeEvent(kind="tool_delta", text=text)
+        recorder.record_tool_call(phase="delta", name="", call_id=call_id)
+    return AgentBridgeEvent(kind="tool_delta", text=text, call_id=call_id)
 
 
 def _translate_tool_started(
@@ -95,13 +107,15 @@ _EVENT_TRANSLATORS: dict[str, _EventTranslator] = {
 def translate_event(
     event: Any,
     recorder: AgentRecorder | None = None,
+    *,
+    tool_call_ids: dict[int, str] | None = None,
 ) -> AgentBridgeEvent | None:
     """Map a PydanticAI streaming event to an ``AgentBridgeEvent``.
 
     Also records tool phases to the recorder when provided.  Uses duck
     typing so this works without importing PydanticAI types directly.
     """
-    translated_delta = _translate_delta(event, recorder)
+    translated_delta = _translate_delta(event, recorder, tool_call_ids)
     if translated_delta is not None:
         return translated_delta
 

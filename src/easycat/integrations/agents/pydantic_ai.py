@@ -522,6 +522,7 @@ class PydanticAIBridge:
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Stream using ``agent.iter()`` with full event capture."""
         agent = self._require_agent()
+        tool_call_ids: dict[int, str] = {}
         async with agent.iter(
             turn_input.text,
             **self._agent_run_kwargs(agent.iter, turn_input, history_key),
@@ -546,7 +547,11 @@ class PydanticAIBridge:
                                 interrupted = True
                                 if not is_tool_node:
                                     break
-                            mapped = translate_event(event, recorder)
+                            mapped = translate_event(
+                                event,
+                                recorder,
+                                tool_call_ids=tool_call_ids,
+                            )
                             if mapped is not None:
                                 if interrupted and mapped.kind == "text_delta":
                                     continue
@@ -904,6 +909,7 @@ class _GraphEventHandler:
         self._accumulated_text = ""
         self._was_called = False
         self._pending: list[AgentBridgeEvent] = []
+        self._tool_call_ids: dict[int, str] = {}
 
     @property
     def accumulated_text(self) -> str:
@@ -919,7 +925,11 @@ class _GraphEventHandler:
         return events
 
     async def _handle_event(self, event: Any) -> None:
-        mapped = translate_event(event, self._recorder)
+        mapped = translate_event(
+            event,
+            self._recorder,
+            tool_call_ids=self._tool_call_ids,
+        )
         if mapped is not None:
             if mapped.kind == "text_delta":
                 self._accumulated_text += mapped.text
