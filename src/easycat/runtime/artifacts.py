@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import stat
 import threading
+import uuid
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -25,6 +27,59 @@ __all__ = [
 ]
 
 ArtifactClass = Literal["replay_critical", "debug_verbose"]
+
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_FILE_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _open_directory_chain(path: Path, *, create: bool) -> int:
+    """Open an absolute directory path component-by-component without symlinks."""
+    absolute = path.absolute()
+    current = os.open(absolute.anchor or os.curdir, _DIRECTORY_OPEN_FLAGS)
+    try:
+        parts = absolute.parts[1:] if absolute.anchor else absolute.parts
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=current)
+                except FileExistsError:
+                    pass
+            child = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=current)
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def _open_regular_at(directory_fd: int, name: str) -> int:
+    fd = os.open(name, _FILE_OPEN_FLAGS, dir_fd=directory_fd)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"Refusing non-regular artifact path: {name}")
+    return fd
+
+
+def _read_all_fd(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while chunk := os.read(fd, 1024 * 1024):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _write_all_fd(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("Artifact write made no progress")
+        view = view[written:]
 
 
 @runtime_checkable
@@ -241,17 +296,10 @@ class FilesystemArtifactStore:
         artifact_class: ArtifactClass = "debug_verbose",
     ) -> str:
         ref = _sha256(payload)
-        existing = self._existing_ref_path(ref)
-        if existing is not None:
+        if self.has(ref):
             return ref
         with self._lock:
-            if self._directory_hierarchy_is_symlinked():
-                logger.warning(
-                    "Artifact write refused for ref=%s: artifact directory hierarchy is a symlink",
-                    ref,
-                )
-                return ""
-            if self._existing_ref_path(ref) is not None:
+            if self.has(ref):
                 return ref
             if self._current_bytes + len(payload) > self._max_bytes:
                 # Refuse the new write rather than delete durable bytes that
@@ -266,27 +314,44 @@ class FilesystemArtifactStore:
                     )
                 return ""
             try:
-                self._dir.mkdir(parents=True, exist_ok=True)
-                if self._directory_hierarchy_is_symlinked():
-                    logger.warning(
-                        "Artifact write refused for ref=%s: "
-                        "artifact directory hierarchy is a symlink",
-                        ref,
-                    )
-                    return ""
-                os.chmod(self._dir, 0o700)
-                path = self._ref_path(ref)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.parent.is_symlink():
-                    logger.warning(
-                        "Artifact write refused for ref=%s: shard directory is a symlink", ref
-                    )
-                    return ""
-                os.chmod(path.parent, 0o700)
-                tmp = path.with_suffix(".tmp")
-                tmp.write_bytes(payload)
-                os.chmod(tmp, 0o600)
-                tmp.rename(path)
+                session_fd = _open_directory_chain(self._dir, create=True)
+                try:
+                    os.fchmod(session_fd, 0o700)
+                    shard_fd = self._open_shard(session_fd, ref, create=True)
+                    try:
+                        tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
+                        tmp_fd = os.open(
+                            tmp_name,
+                            os.O_WRONLY
+                            | os.O_CREAT
+                            | os.O_EXCL
+                            | getattr(os, "O_CLOEXEC", 0)
+                            | getattr(os, "O_NOFOLLOW", 0),
+                            0o600,
+                            dir_fd=shard_fd,
+                        )
+                        try:
+                            _write_all_fd(tmp_fd, payload)
+                            os.fchmod(tmp_fd, 0o600)
+                        finally:
+                            os.close(tmp_fd)
+                        try:
+                            os.replace(
+                                tmp_name,
+                                f"{ref}.bin",
+                                src_dir_fd=shard_fd,
+                                dst_dir_fd=shard_fd,
+                            )
+                        except BaseException:
+                            try:
+                                os.unlink(tmp_name, dir_fd=shard_fd)
+                            except OSError:
+                                pass
+                            raise
+                    finally:
+                        os.close(shard_fd)
+                finally:
+                    os.close(session_fd)
             except OSError:
                 logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
                 return ""
@@ -294,94 +359,162 @@ class FilesystemArtifactStore:
         return ref
 
     def get(self, ref: str) -> bytes | None:
-        path = self._existing_ref_path(ref)
-        if path is None:
-            return None
         try:
-            return path.read_bytes()
+            fd = self._open_ref_fd(ref)
         except OSError:
             return None
+        try:
+            return _read_all_fd(fd)
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
 
     def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
         """Read a bounded head/tail window without materializing the whole file."""
-        path = self._existing_ref_path(ref)
-        if path is None:
+        try:
+            fd = self._open_ref_fd(ref)
+        except OSError:
             return None
         try:
-            size = path.stat().st_size
+            size = os.fstat(fd).st_size
             if byte_cap <= 0 or size <= 2 * byte_cap:
-                return path.read_bytes()
-            with path.open("rb") as fh:
-                head = fh.read(byte_cap)
-                fh.seek(-byte_cap, os.SEEK_END)
-                tail = fh.read(byte_cap)
+                return _read_all_fd(fd)
+            head = os.read(fd, byte_cap)
+            os.lseek(fd, -byte_cap, os.SEEK_END)
+            tail = os.read(fd, byte_cap)
             return head + tail
         except OSError:
             return None
+        finally:
+            os.close(fd)
 
     def has(self, ref: str) -> bool:
-        return self._existing_ref_path(ref) is not None
+        try:
+            fd = self._open_ref_fd(ref)
+        except OSError:
+            return False
+        os.close(fd)
+        return True
 
     def delete(self, ref: str) -> None:
         if not _is_sha256_ref(ref):
             return
-        if self._directory_hierarchy_is_symlinked():
-            return
         with self._lock:
-            for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
+            try:
+                session_fd = _open_directory_chain(self._dir, create=False)
+            except OSError:
+                return
+            try:
                 try:
-                    if path.parent.is_symlink():
-                        continue
-                    if path.is_symlink():
-                        path.unlink()
-                        continue
-                    size = path.stat().st_size
-                    path.unlink()
-                except FileNotFoundError:
-                    continue
+                    shard_fd = self._open_shard(session_fd, ref, create=False)
                 except OSError:
-                    continue
-                self._current_bytes = max(0, self._current_bytes - size)
+                    shard_fd = None
+                if shard_fd is not None:
+                    try:
+                        self._delete_name(shard_fd, f"{ref}.bin")
+                    finally:
+                        os.close(shard_fd)
+                self._delete_name(session_fd, f"{ref}.bin")
+            finally:
+                os.close(session_fd)
 
     def close(self) -> None:
         pass
 
-    def _ref_path(self, ref: str) -> Path:
-        return self._dir / ref[:2] / f"{ref}.bin"
+    @staticmethod
+    def _open_shard(session_fd: int, ref: str, *, create: bool) -> int:
+        if create:
+            try:
+                os.mkdir(ref[:2], mode=0o700, dir_fd=session_fd)
+            except FileExistsError:
+                pass
+        shard_fd = os.open(ref[:2], _DIRECTORY_OPEN_FLAGS, dir_fd=session_fd)
+        os.fchmod(shard_fd, 0o700)
+        return shard_fd
 
-    def _legacy_ref_path(self, ref: str) -> Path:
-        return self._dir / f"{ref}.bin"
-
-    def _existing_ref_path(self, ref: str) -> Path | None:
+    def _open_ref_fd(self, ref: str) -> int:
         if not _is_sha256_ref(ref):
-            return None
-        if self._directory_hierarchy_is_symlinked():
-            return None
-        sharded = self._ref_path(ref)
-        if not sharded.parent.is_symlink() and not sharded.is_symlink() and sharded.is_file():
-            return sharded
-        legacy = self._legacy_ref_path(ref)
-        return legacy if not legacy.is_symlink() and legacy.is_file() else None
+            raise FileNotFoundError(ref)
+        session_fd = _open_directory_chain(self._dir, create=False)
+        try:
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+            except OSError:
+                shard_fd = None
+            if shard_fd is not None:
+                try:
+                    return _open_regular_at(shard_fd, f"{ref}.bin")
+                except OSError:
+                    pass
+                finally:
+                    os.close(shard_fd)
+            return _open_regular_at(session_fd, f"{ref}.bin")
+        finally:
+            os.close(session_fd)
 
-    def _stored_bytes(self) -> int:
-        if self._directory_hierarchy_is_symlinked() or not self._dir.is_dir():
+    def _delete_name(self, directory_fd: int, name: str) -> None:
+        size = 0
+        try:
+            fd = _open_regular_at(directory_fd, name)
+        except OSError:
+            try:
+                named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError:
+                return
+            if not stat.S_ISLNK(named.st_mode):
+                return
+        else:
+            try:
+                size = os.fstat(fd).st_size
+            finally:
+                os.close(fd)
+        try:
+            os.unlink(name, dir_fd=directory_fd)
+        except OSError:
+            return
+        self._current_bytes = max(0, self._current_bytes - size)
+
+    def _stored_bytes(self) -> int:  # noqa: PLR0912 - no-follow traversal is intentionally explicit
+        try:
+            session_fd = _open_directory_chain(self._dir, create=False)
+        except OSError:
             return 0
         total = 0
         try:
-            paths = self._dir.rglob("*.bin")
-            for path in paths:
-                if path.is_symlink() or not path.is_file():
-                    continue
-                try:
-                    total += path.stat().st_size
-                except OSError:
-                    continue
+            with os.scandir(session_fd) as entries:
+                for entry in entries:
+                    if entry.name.endswith(".bin"):
+                        try:
+                            fd = _open_regular_at(session_fd, entry.name)
+                        except OSError:
+                            continue
+                        try:
+                            total += os.fstat(fd).st_size
+                        finally:
+                            os.close(fd)
+                        continue
+                    try:
+                        shard_fd = os.open(entry.name, _DIRECTORY_OPEN_FLAGS, dir_fd=session_fd)
+                    except OSError:
+                        continue
+                    try:
+                        with os.scandir(shard_fd) as shard_entries:
+                            for child in shard_entries:
+                                if not child.name.endswith(".bin"):
+                                    continue
+                                try:
+                                    fd = _open_regular_at(shard_fd, child.name)
+                                except OSError:
+                                    continue
+                                try:
+                                    total += os.fstat(fd).st_size
+                                finally:
+                                    os.close(fd)
+                    finally:
+                        os.close(shard_fd)
+            return total
         except OSError:
             return total
-        return total
-
-    def _directory_hierarchy_is_symlinked(self) -> bool:
-        try:
-            return self._artifacts_dir.is_symlink() or self._dir.is_symlink()
-        except OSError:
-            return True
+        finally:
+            os.close(session_fd)
