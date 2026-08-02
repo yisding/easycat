@@ -320,28 +320,32 @@ class LangChainBridge:
         cancellation/history ordering documented in the cancel-path
         comments below is load-bearing and unchanged.
         """
-        # Run ids whose ``_end`` event arrived while a sibling cursor was
-        # still on top of the recorder stack — closed in LIFO order once
-        # the obstructing sibling(s) also end, preserving the recorder's
-        # strict stack invariant for ``RunnableParallel`` / concurrent
-        # runs.
-        ended_runs: set[str] = set()
-        # Shared state for translator-side bookkeeping: tool-call dedup
-        # across the chat_model ``tool_call_chunks`` path and the
-        # ``on_tool_start`` / ``on_tool_end`` path, plus model/chain
-        # stream deduplication and parented non-chat LLM redaction guards.
-        tool_state: dict[str, Any] = {}
-
-        input_payload = self._build_input(turn_input.text, turn_input.context)
-        stream_kwargs: dict[str, Any] = {
-            "version": "v2",
-            "config": self._stream_config(recorder),
-        }
-        if self._include_types is not None:
-            stream_kwargs["include_types"] = self._include_types
-
         stream: AsyncIterator[dict[str, Any]] | None = None
         try:
+            # Run ids whose ``_end`` event arrived while a sibling cursor was
+            # still on top of the recorder stack — closed in LIFO order once
+            # the obstructing sibling(s) also end, preserving the recorder's
+            # strict stack invariant for ``RunnableParallel`` / concurrent
+            # runs.
+            ended_runs: set[str] = set()
+            # Shared state for translator-side bookkeeping: tool-call dedup
+            # across the chat_model ``tool_call_chunks`` path and the
+            # ``on_tool_start`` / ``on_tool_end`` path, plus model/chain
+            # stream deduplication and parented non-chat LLM redaction guards.
+            tool_state: dict[str, Any] = {}
+
+            # Input/config construction can fail before the runnable returns
+            # an iterator (for example, a malformed ``configurable`` value).
+            # Keep that setup under the same lifecycle guard as iteration so
+            # every agent ``unit_entered`` is paired with an error exit.
+            input_payload = self._build_input(turn_input.text, turn_input.context)
+            stream_kwargs: dict[str, Any] = {
+                "version": "v2",
+                "config": self._stream_config(recorder),
+            }
+            if self._include_types is not None:
+                stream_kwargs["include_types"] = self._include_types
+
             stream = self._runnable.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
                 if cancel_token and cancel_token.is_cancelled:

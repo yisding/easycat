@@ -79,6 +79,31 @@ class TestLangChainBridgeStreamConfig:
         assert config["tags"] == ["voice"]
 
     @pytest.mark.asyncio
+    async def test_malformed_configurable_records_error_exit_and_closes_cursor(self):
+        runnable = self._runnable()
+        bridge = LangChainBridge(
+            runnable,
+            config={"configurable": 1},  # type: ignore[dict-item]
+        )
+        journal = InMemoryRingBuffer(capacity=1000)
+        recorder = _recorder(journal)
+
+        with pytest.raises(TypeError):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("x"), recorder):
+                pass
+
+        records = journal.read()
+        assert [record.name for record in records] == [
+            "unit_entered",
+            "framework_error",
+            "unit_exited",
+        ]
+        assert records[1].error is not None
+        assert records[1].error.type == "TypeError"
+        assert records[2].data["exit_reason"] == "error"
+        assert recorder._open_cursors == []
+
+    @pytest.mark.asyncio
     async def test_fallback_session_id_stable_across_turns_without_journal(self):
         """Driven via NULL_RECORDER (session_id="") the bridge must still
         thread a *stable* id so a wrapped history runnable accumulates
