@@ -719,6 +719,43 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 
 @pytest.mark.asyncio
+async def test_cancel_turn_reclaims_late_context_for_captured_manager_turn():
+    class BlockingClearTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clear_entered = asyncio.Event()
+            self.release_clear = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.clear_entered.set()
+            await self.release_clear.wait()
+
+    transport = BlockingClearTransport()
+    session = Session(_full_config(transport=transport))
+    await session._turn_manager.start_turn()
+    manager_token = session._turn_manager.cancel_token
+    assert manager_token is not None
+    assert session._turn is None
+
+    cancel_task = asyncio.create_task(session.cancel_turn())
+    try:
+        await asyncio.wait_for(transport.clear_entered.wait(), timeout=1)
+        late_turn = TurnContext("late-turn", manager_token)
+        session._turn = late_turn
+        session._turn_generation = late_turn.generation
+
+        transport.release_clear.set()
+        await cancel_task
+
+        assert session._turn is None
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        transport.release_clear.set()
+        if not cancel_task.done():
+            await cancel_task
+
+
+@pytest.mark.asyncio
 async def test_stale_cancel_turn_cleanup_preserves_barge_in_successor():
     class BlockingFirstClearTransport(FakeTransport):
         def __init__(self) -> None:

@@ -1728,7 +1728,14 @@ class Session:
         still recognizing a manager-only turn whose Session pointer has not
         been installed yet.
         """
-        if self._turn is not turn:
+        active_turn = self._turn
+        manager_only_turn_was_installed = (
+            turn is None
+            and active_turn is not None
+            and manager_token is not None
+            and active_turn.cancel_token is manager_token
+        )
+        if active_turn is not turn and not manager_only_turn_was_installed:
             return False
         active_manager_token = self._turn_manager.cancel_token
         if active_manager_token is not None and active_manager_token is not manager_token:
