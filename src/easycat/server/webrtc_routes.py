@@ -424,7 +424,11 @@ class WebRTCRoutes:
         # drain began during Session.start(), remove the just-started session
         # before it can miss the drain's active-session snapshot.
         if self._gate.is_draining:
-            await self._manager.remove(key)
+            # This session was never published to the gate, so the bounded
+            # drain cannot see or escalate it. Force removal here rather than
+            # letting an unbounded graceful stop hold the offer handler (and
+            # aiohttp runner cleanup) past the server shutdown deadline.
+            await self._manager.remove(key, force=True)
             return False
         # ``manager.add`` already STARTED the session. ``handle_offer``'s except
         # only runs its unregister when ``session_started`` is True, and that flag

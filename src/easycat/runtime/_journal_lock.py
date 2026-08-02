@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+_LOCK_BUCKET_COUNT = 256
+
 
 def _lock_path(db_path: Path) -> Path:
-    """Return the persistent sibling lock path for one journal database."""
-    return db_path.with_name(db_path.name + ".lock")
+    """Return a stable lock bucket for one journal database path.
+
+    Lock files must persist to avoid splitting waiters across replaced lock
+    inodes. Hashing journal paths into a fixed namespace keeps that safety
+    property without leaking one inode for every historical session id.
+    """
+    digest = hashlib.sha256(os.fsencode(str(db_path.absolute()))).digest()
+    bucket = int.from_bytes(digest[:2], "big") % _LOCK_BUCKET_COUNT
+    return db_path.parent / f".easycat-journal-{bucket:03d}.lock"
 
 
 def _acquire_lock(fd: int, *, blocking: bool) -> None:
@@ -59,8 +69,8 @@ def journal_file_claim(db_path: Path, *, blocking: bool) -> Iterator[bool]:
     classified it as crashed but before the sweep removed it.
 
     Lock files deliberately persist after a claim ends: deleting a lock path
-    would race another opener and is unnecessary because the advisory lock is
-    released when its file descriptor closes.
+    would race another opener. The bounded bucket namespace limits their
+    count while the advisory lock is released when its descriptor closes.
     """
     lock_path = _lock_path(db_path)
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
