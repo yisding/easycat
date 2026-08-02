@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -23,6 +24,7 @@ class _BlockingArtifactStore:
         *,
         preexisting: bool = False,
         block_delete: bool = False,
+        order_puts: bool = False,
     ) -> None:
         self._loop = asyncio.get_running_loop()
         self.ref = hashlib.sha256(payload).hexdigest()
@@ -35,6 +37,7 @@ class _BlockingArtifactStore:
         self._block_delete = block_delete
         self._cleanup_token = uuid.uuid4().hex if preexisting else None
         self._lock = threading.Lock()
+        self._order_puts = order_puts
         self._put_order_lock = threading.Lock()
         self._next_put_index = 0
         self._first_put_committed = threading.Event()
@@ -49,13 +52,15 @@ class _BlockingArtifactStore:
         artifact_class: str = "replay_critical",
     ) -> ArtifactWriteReceipt:
         del payload, artifact_class
-        with self._put_order_lock:
-            put_index = self._next_put_index
-            self._next_put_index += 1
+        put_index: int | None = None
+        if self._order_puts:
+            with self._put_order_lock:
+                put_index = self._next_put_index
+                self._next_put_index += 1
         self._loop.call_soon_threadsafe(self.put_started.set)
         if not self.put_release.wait(timeout=5):
             raise AssertionError("timed out waiting to release artifact put")
-        if put_index and not self._first_put_committed.wait(timeout=5):
+        if put_index not in (None, 0) and not self._first_put_committed.wait(timeout=5):
             raise AssertionError("timed out waiting for the first artifact put")
         with self._lock:
             created = self.ref not in self.refs
@@ -119,6 +124,46 @@ class _UntrackedBlockingArtifactStore:
         self.refs.discard(ref)
 
 
+class _InvalidReceiptArtifactStore:
+    writes_block = True
+
+    def put(self, payload: bytes, *, artifact_class: str = "replay_critical") -> str:
+        raise AssertionError("token-aware path should be used")
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: str = "replay_critical",
+    ) -> object:
+        del payload, artifact_class
+        return "not-a-receipt"
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        del ref, cleanup_token
+        return False
+
+
+class _RaisingBlockingArtifactStore:
+    writes_block = True
+
+    def put(self, payload: bytes, *, artifact_class: str = "replay_critical") -> str:
+        return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: str = "replay_critical",
+    ) -> ArtifactWriteReceipt:
+        del payload, artifact_class
+        raise RuntimeError("artifact backend failed")
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        del ref, cleanup_token
+        return False
+
+
 def _context(store: Any) -> RunContext:
     return RunContext(
         run_id="run-1",
@@ -154,7 +199,7 @@ async def test_cancelled_blocking_put_remains_owned_until_new_ref_is_deleted() -
 @pytest.mark.asyncio
 async def test_cancelled_same_payload_writer_cannot_delete_successful_ref() -> None:
     payload = b"concurrent artifact"
-    store = _BlockingArtifactStore(payload)
+    store = _BlockingArtifactStore(payload, order_puts=True)
     cancelled = asyncio.create_task(put_artifact_async(_context(store), payload))
     try:
         await asyncio.wait_for(store.put_started.wait(), timeout=5)
@@ -176,7 +221,7 @@ async def test_cancelled_same_payload_writer_cannot_delete_successful_ref() -> N
 @pytest.mark.asyncio
 async def test_revoked_same_payload_writer_cannot_delete_successful_ref() -> None:
     payload = b"concurrent revoked artifact"
-    store = _BlockingArtifactStore(payload)
+    store = _BlockingArtifactStore(payload, order_puts=True)
     capture_enabled = True
     capture_epoch = 1
     revoked_ctx = RunContext(
@@ -206,11 +251,24 @@ async def test_revoked_same_payload_writer_cannot_delete_successful_ref() -> Non
 
 
 @pytest.mark.asyncio
-async def test_cleanup_cannot_starve_behind_competing_default_executor_put() -> None:
+async def test_cleanup_cannot_starve_behind_competing_default_executor_put(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = b"one-worker artifact"
     store = _BlockingArtifactStore(payload)
     loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    executor = ThreadPoolExecutor(max_workers=1)
+    original_run_in_executor = loop.run_in_executor
+
+    def run_in_executor(
+        executor_arg: Any,
+        func: Callable[..., Any],
+        *args: Any,
+    ) -> asyncio.Future[Any]:
+        selected = executor if executor_arg is None else executor_arg
+        return original_run_in_executor(selected, func, *args)
+
+    monkeypatch.setattr(loop, "run_in_executor", run_in_executor)
     cancelled = asyncio.create_task(put_artifact_async(_context(store), payload))
     try:
         await asyncio.wait_for(store.put_started.wait(), timeout=5)
@@ -225,6 +283,7 @@ async def test_cleanup_cannot_starve_behind_competing_default_executor_put() -> 
     finally:
         store.put_release.set()
         store.delete_release.set()
+        executor.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
@@ -272,6 +331,30 @@ async def test_cancelled_untracked_custom_store_retains_possible_orphan() -> Non
         assert store.delete_calls == []
     finally:
         store.put_release.set()
+
+
+@pytest.mark.asyncio
+async def test_token_aware_store_must_return_artifact_write_receipt() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"^put_with_cleanup_token\(\) must return ArtifactWriteReceipt$",
+    ):
+        await put_artifact_async(
+            _context(_InvalidReceiptArtifactStore()),
+            b"invalid receipt",
+        )
+
+
+@pytest.mark.asyncio
+async def test_blocking_store_failure_degrades_to_missing_artifact(caplog) -> None:
+    with caplog.at_level("WARNING", logger="easycat.stages.base"):
+        ref = await put_artifact_async(
+            _context(_RaisingBlockingArtifactStore()),
+            b"failing artifact",
+        )
+
+    assert ref is None
+    assert "Artifact write failed" in caplog.text
 
 
 @pytest.mark.asyncio

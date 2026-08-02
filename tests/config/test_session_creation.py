@@ -90,7 +90,8 @@ class _BlockingArtifactStore:
     ) -> ArtifactWriteReceipt:
         del payload, artifact_class
         self.started.set()
-        self.release.wait()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("timed out waiting to release artifact put")
         with self._lock:
             created = "blocked-ref" not in self.refs
             self.refs.add("blocked-ref")

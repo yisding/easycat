@@ -551,15 +551,15 @@ class FilesystemArtifactStore:
 
     @contextmanager
     def _write_claim(self, ref: str) -> Iterator[None]:
-        with self._lock:
-            self._ensure_artifacts_dir()
-            with path_file_claim(
-                self._artifacts_dir / f"{self._dir.name}.{ref}",
-                blocking=True,
-                namespace="artifact",
-            ) as claimed:
-                if not claimed:
-                    raise OSError(f"Could not claim artifact store {self._dir}")
+        self._ensure_artifacts_dir()
+        with path_file_claim(
+            self._artifacts_dir / f"{self._dir.name}.{ref}",
+            blocking=True,
+            namespace="artifact",
+        ) as claimed:
+            if not claimed:
+                raise OSError(f"Could not claim artifact store {self._dir}")
+            with self._lock:
                 yield
 
     def _ensure_artifacts_dir(self) -> None:

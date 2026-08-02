@@ -319,7 +319,10 @@ async def _put_blocking_artifact(
     put_operation = asyncio.create_task(
         asyncio.to_thread(put, payload, artifact_class=artifact_class)
     )
-    result, cancellation = await _await_owned_artifact_io(put_operation)
+    result, cancellation = await _await_artifact_put(
+        put_operation,
+        token_aware=owns_cleanup,
+    )
     if owns_cleanup and not isinstance(result, ArtifactWriteReceipt):
         if cancellation is not None:
             raise cancellation
@@ -348,6 +351,24 @@ async def _put_blocking_artifact(
                 raise delete_cancellation
         return None
     return ref or None
+
+
+async def _await_artifact_put(
+    operation: asyncio.Task[Any],
+    *,
+    token_aware: bool,
+) -> tuple[Any, asyncio.CancelledError | None]:
+    """Settle a blocking put while preserving its non-raising contract."""
+    try:
+        return await _await_owned_artifact_io(operation)
+    except Exception:
+        # ArtifactStore.put is a non-raising boundary. Keep a custom blocking
+        # store that violates that contract from aborting the calling stage.
+        logger.warning("Artifact write failed", exc_info=True)
+        fallback = (
+            ArtifactWriteReceipt("", created=False, cleanup_token=None) if token_aware else ""
+        )
+        return fallback, None
 
 
 async def _await_owned_artifact_io(
