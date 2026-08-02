@@ -23,8 +23,9 @@ class ToolCallPartDelta:
 
 
 class PartDeltaEvent:
-    def __init__(self, delta: Any) -> None:
+    def __init__(self, delta: Any, *, index: int = 0) -> None:
         self.delta = delta
+        self.index = index
 
 
 class _ToolCallPart:
@@ -344,6 +345,30 @@ def test_tool_call_delta_preserves_call_id_in_event_and_recorder() -> None:
         "",
         "tc-delta",
     )
+
+
+def test_tool_call_delta_reuses_call_id_for_argument_continuations() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    recorder = _recorder(journal)
+    tool_call_ids: dict[int, str] = {}
+
+    initial = translate_event(
+        PartDeltaEvent(ToolCallPartDelta("", tool_call_id="tc-split"), index=4),
+        recorder,
+        tool_call_ids=tool_call_ids,
+    )
+    continuation = translate_event(
+        PartDeltaEvent(ToolCallPartDelta('{"city":'), index=4),
+        recorder,
+        tool_call_ids=tool_call_ids,
+    )
+
+    assert initial is None
+    assert continuation is not None
+    assert continuation.kind == "tool_delta"
+    assert continuation.call_id == "tc-split"
+    [record] = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert record["call_id"] == "tc-split"
 
 
 @pytest.mark.asyncio
