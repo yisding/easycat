@@ -787,6 +787,39 @@ class TestStageExecuteRecording:
         assert complete.data["response"] == ""
         assert stage._history == []
 
+    async def test_agent_stage_rechecks_cancellation_after_done_stream_drain(self):
+        class _CancelDuringDoneDrainBridge(_ContextRecordingBridge):
+            async def invoke(
+                self,
+                turn_input: AgentTurnInput,
+                recorder,
+                cancel_token: CancelToken | None = None,
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                _ = recorder
+                yield AgentBridgeEvent(kind="done", text=f"{self.response}:{turn_input.text}")
+                assert cancel_token is not None
+                cancel_token.cancel()
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stage = AgentStage(_CancelDuringDoneDrainBridge("unheard"), journal=journal)
+
+        events = [
+            event
+            async for event in stage.execute_streaming(
+                "hello",
+                ctx,
+                turn,
+                cancel_token=turn.cancel_token,
+            )
+        ]
+
+        assert [event.kind for event in events] == ["done"]
+        complete = next(record for record in journal.read() if record.name == "stage_complete")
+        assert complete.data["response"] == ""
+        assert stage._history == []
+
     async def test_tts_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)
         ctx = _make_ctx(journal=journal)
