@@ -1788,25 +1788,33 @@ class WebTransportServer:
         finally:
             try:
                 await transport.disconnect()
-            except BaseException as exc:
-                # A completed handler task is removed from _handler_tasks, so
-                # retain the exact transport separately until server stop can
-                # retry its cleanup obligation.
-                self._pending_transport_cleanup.add(transport)
-                cleanup_error = transport._disconnect_cleanup_error  # noqa: SLF001
-                if cleanup_error is None:
-                    cleanup_error = (
-                        exc
-                        if isinstance(exc, Exception)
-                        else RuntimeError(
-                            "WebTransport handler disconnect was interrupted by cancellation"
-                        )
-                    )
-                if self._cleanup_error is None:
-                    self._cleanup_error = cleanup_error
-                logger.debug("Error while disconnecting WebTransport session", exc_info=True)
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
+            except asyncio.CancelledError as exc:
+                self._record_handler_cleanup_failure(transport, exc)
+                raise
+            except Exception as exc:
+                self._record_handler_cleanup_failure(transport, exc)
+
+    def _record_handler_cleanup_failure(
+        self,
+        transport: WebTransportConnectionTransport,
+        exc: Exception | asyncio.CancelledError,
+    ) -> None:
+        """Retain retryable handler cleanup without swallowing process control."""
+        # A completed handler task is removed from _handler_tasks, so retain
+        # the exact transport separately until server stop can retry it.
+        self._pending_transport_cleanup.add(transport)
+        cleanup_error = transport._disconnect_cleanup_error  # noqa: SLF001
+        if cleanup_error is None:
+            cleanup_error = (
+                exc
+                if isinstance(exc, Exception)
+                else RuntimeError(
+                    "WebTransport handler disconnect was interrupted by cancellation"
+                )
+            )
+        if self._cleanup_error is None:
+            self._cleanup_error = cleanup_error
+        logger.debug("Error while disconnecting WebTransport session", exc_info=exc)
 
     async def stop(self) -> None:
         current = asyncio.current_task()

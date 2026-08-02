@@ -274,6 +274,33 @@ async def test_runtime_scope_cancel_and_drain_ignores_preexisting_cancellation_c
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_preserves_cancellation_pending_at_entry() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+
+    async def wait_forever() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    owned = scope.create_task("worker", wait_forever())
+    await started.wait()
+
+    async def cancel_before_drain() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await scope.cancel_and_drain("worker")
+
+    caller = asyncio.create_task(cancel_before_drain())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    await asyncio.gather(owned, return_exceptions=True)
+    await scope.cancel_and_drain("worker")
+    assert scope.empty
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_cancel_and_drain_propagates_new_cancellation_count() -> None:
     scope = RuntimeScope()
     started = asyncio.Event()

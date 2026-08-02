@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+async def _checkpoint_pending_cancellation(task: asyncio.Task[Any] | None) -> None:
+    """Deliver a pending request while ignoring a previously caught one."""
+    if task is not None and task.cancelling():
+        await asyncio.sleep(0)
+
+
 class BackgroundTaskScope:
     """Own self-pruning, fire-and-forget tasks for synchronous components.
 
@@ -289,6 +295,11 @@ class RuntimeScope:
         for task in tasks:
             if task is current:
                 continue
+            # Deliver a cancellation that was already pending when drain()
+            # was entered before sampling the stale-request baseline below.
+            # A previously caught request leaves cancelling() non-zero but
+            # does not raise at this checkpoint.
+            await _checkpoint_pending_cancellation(current)
             cancellation_requests = current.cancelling() if current is not None else 0
             try:
                 await asyncio.shield(task)
