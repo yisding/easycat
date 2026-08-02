@@ -447,6 +447,51 @@ class TestCartesiaPersistent:
                 await _cancel_tasks(first, second)
                 await provider.close()
 
+    async def test_cancelled_context_drops_resampler_tail_after_successor_starts(self):
+        """A successor must not re-enable delayed audio from a cancelled context."""
+
+        class BufferedTailWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if "transcript" not in msg:
+                    return
+                ctx_id = msg["context_id"]
+                await self._queue.put(
+                    json.dumps(
+                        {
+                            "type": "chunk",
+                            "context_id": ctx_id,
+                            "data": base64.b64encode(_pcm16_bytes(960)).decode("ascii"),
+                            "done": False,
+                        }
+                    )
+                )
+                await self._queue.put(
+                    json.dumps({"type": "done", "context_id": ctx_id, "done": True})
+                )
+
+        provider = self._make_provider(sample_rate=44_100)
+        fake = BufferedTailWS()
+        cancelled = provider.synthesize("cancelled")
+        successor = provider.synthesize("successor")
+        with patch.object(provider, "_build_ws", return_value=fake):
+            try:
+                first = await anext(cancelled)
+                assert first.type == TTSEventType.AUDIO
+
+                await provider.cancel()
+                replacement = await anext(successor)
+                assert replacement.type == TTSEventType.AUDIO
+                assert not provider.is_cancelled
+
+                with pytest.raises(StopAsyncIteration):
+                    await anext(cancelled)
+            finally:
+                await cancelled.aclose()
+                await successor.aclose()
+                await provider.close()
+
     async def test_early_consumer_close_cancels_remote_context(self):
         class UnfinishedPersistentWS(FakePersistentWS):
             async def send(self, message: str) -> None:

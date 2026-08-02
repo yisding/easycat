@@ -11,6 +11,12 @@ from pathlib import Path
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm")
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
 
 
 def _symlink_error(path: Path) -> OSError:
@@ -50,6 +56,72 @@ def _chmod_open_path(fd: int, mode: int) -> None:
         os.fchmod(fd, mode)
     finally:
         os.close(fd)
+
+
+def _open_directory_chain(path: Path) -> int:
+    """Open every directory component without following ancestor symlinks."""
+    absolute = path.absolute()
+    current = os.open(absolute.anchor or os.curdir, _DIRECTORY_FLAGS)
+    try:
+        parts = absolute.parts[1:] if absolute.anchor else absolute.parts
+        for part in parts:
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def copy_private_file(source: Path, target: Path) -> None:
+    """Copy one regular file exclusively without following any symlink component."""
+    source_dir = _open_directory_chain(source.parent)
+    target_dir = _open_directory_chain(target.parent)
+    source_fd: int | None = None
+    target_fd: int | None = None
+    target_created = False
+    try:
+        source_fd = os.open(
+            source.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=source_dir,
+        )
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            raise _symlink_error(source)
+        target_fd = os.open(
+            target.name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            PRIVATE_FILE_MODE,
+            dir_fd=target_dir,
+        )
+        target_created = True
+        while chunk := os.read(source_fd, 1024 * 1024):
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                if written <= 0:
+                    raise OSError("Private file copy made no progress")
+                view = view[written:]
+        os.fchmod(target_fd, PRIVATE_FILE_MODE)
+    except BaseException:
+        if target_created:
+            try:
+                os.unlink(target.name, dir_fd=target_dir)
+            except OSError:
+                pass
+        raise
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        if target_fd is not None:
+            os.close(target_fd)
+        os.close(source_dir)
+        os.close(target_dir)
 
 
 def mkdir_private(path: Path) -> None:
