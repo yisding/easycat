@@ -167,8 +167,10 @@ crash-recovery semantics are required.
     <session_id>.sqlite            # live journal (one per session)
   artifacts/
     <session_id>/
+      .easycat-artifact-epoch-v1.json # current live-journal ownership epoch
       <sha256[:2]>/
         <sha256>.bin               # content-addressable artifacts (0600)
+        <sha256>.owner             # durable live-journal epoch ownership
   crash-dumps/
     <session_id>.sqlite            # promoted from journals/ on unclean shutdown
     <session_id>.artifacts/        # immutable snapshot for that crash dump
@@ -177,8 +179,19 @@ crash-recovery semantics are required.
 ```
 
 - Root directory: configurable via `EASYCAT_DATA_DIR` env var
-- Directories: created lazily on first write
+- Directories: created lazily on first journal or artifact use
 - Permissions: files `0600`, directories `0700` (secret-adjacent data)
+
+The filesystem artifact store records ownership separately from cancellation
+tokens. On journal startup, after crash recovery or clean-reuse truncation has
+finished, it rotates the live ownership epoch. Artifacts still referenced by
+the surviving journal are adopted into the new epoch; managed artifacts from a
+prior epoch with no surviving journal reference are deleted with the same
+crash-recoverable accounting protocol used by explicit deletes. Artifacts
+written before the first journal exists are initially unbound and adopted by
+that first journal. Unknown or invalid ownership metadata is preserved rather
+than guessed at, and artifacts created before ownership metadata was introduced
+remain unmanaged for backward compatibility.
 
 ### Crashed-journal sweep
 

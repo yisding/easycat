@@ -276,6 +276,38 @@ print(store.put(b"cross-process token"), flush=True)
         assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
         assert not store.has(receipt.ref)
 
+    def test_first_journal_epoch_adopts_artifact_staged_before_journal(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"staged before journal")
+
+        assert store.begin_journal_epoch(set()) == 0
+        assert store.has(receipt.ref)
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
+
+    def test_bound_artifact_survives_duplicate_put_but_reclaims_next_epoch(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=32)
+        second = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=32)
+        first.begin_journal_epoch(set())
+        receipt = first.put_with_cleanup_token(b"managed duplicate")
+
+        assert second.put(b"managed duplicate") == receipt.ref
+        assert first.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert first.begin_journal_epoch(set()) == 1
+        assert first.has(receipt.ref) is False
+        assert first._current_bytes == 0
+
+    def test_committed_ref_is_adopted_and_revokes_cleanup_ownership(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        store.begin_journal_epoch(set())
+        receipt = store.put_with_cleanup_token(b"committed artifact")
+
+        assert store.begin_journal_epoch({receipt.ref}) == 0
+        assert store.has(receipt.ref)
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+
+        assert store.begin_journal_epoch(set()) == 1
+        assert store.has(receipt.ref) is False
+
     def test_duplicate_put_revokes_cleanup_ownership(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         first = store.put_with_cleanup_token(b"shared")

@@ -42,6 +42,7 @@ from easycat.runtime._private_files import (
     mkdir_private,
     touch_private_file,
 )
+from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _has_live_pid,
@@ -72,6 +73,30 @@ _CRASH_SWEEP_INTERVAL_SECONDS = 60.0
 _CRASH_SWEEP_RETRY_SECONDS = 1.0
 _CRASH_SWEEP_MAX_ROOTS = 128
 _CRASH_SWEEP_STATE_LOCK = threading.Lock()
+
+
+def _begin_filesystem_artifact_epoch(root: Path, session_id: str, conn: Any) -> None:
+    """Rotate managed artifact ownership after journal recovery completes."""
+    try:
+        rows = conn.execute(
+            "SELECT input_ref AS ref FROM journal WHERE input_ref IS NOT NULL "
+            "UNION SELECT output_ref AS ref FROM journal WHERE output_ref IS NOT NULL"
+        ).fetchall()
+        referenced_refs = {row[0] for row in rows if isinstance(row[0], str)}
+        store = FilesystemArtifactStore(session_id, data_dir=root)
+        try:
+            store.begin_journal_epoch(referenced_refs)
+        finally:
+            store.close()
+    except Exception:
+        # Artifact capture is best-effort and must not prevent the journal from
+        # starting. Managed markers remain conservative on failure, so a later
+        # epoch can retry without blanket deletion.
+        logger.warning(
+            "Artifact journal-epoch startup failed for session %s",
+            session_id,
+            exc_info=True,
+        )
 
 
 @dataclass
@@ -478,6 +503,7 @@ class SqliteJournal(_SqlJournalBase):
             self._claim_live_journal()
             try:
                 self._initialize_live_journal(session_id, existed=existed)
+                _begin_filesystem_artifact_epoch(root, session_id, self._conn)
             except BaseException:
                 self._release_live_journal()
                 self._conn.close()
@@ -1294,6 +1320,7 @@ class LibsqlJournal(_SqlJournalBase):
             harden_sqlite_files(self._db_path)
             try:
                 self._initialize_live_replica(session_id)
+                _begin_filesystem_artifact_epoch(root, session_id, self._conn)
             except BaseException:
                 self._release_live_journal()
                 self._conn.close()

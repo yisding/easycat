@@ -155,7 +155,11 @@ def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     ref = hashlib.sha256(payload).hexdigest()
     _crash_one(session_id, tmp_path, input_ref=ref)
     artifacts = tmp_path / "artifacts"
-    artifacts.mkdir()
+    artifacts.mkdir(exist_ok=True)
+    # Journal startup may create live artifact-epoch metadata even when no
+    # payload has been published. Replace that managed directory with the
+    # unsafe ancestor this regression is intended to exercise.
+    shutil.rmtree(artifacts / session_id)
     outside = tmp_path / "outside"
     shard = outside / ref[:2]
     shard.mkdir(parents=True)

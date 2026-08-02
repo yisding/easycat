@@ -39,6 +39,10 @@ ArtifactClass = Literal["replay_critical", "debug_verbose"]
 _ACCOUNTING_FILENAME = ".easycat-artifact-bytes-v1.json"
 _ACCOUNTING_VERSION = 1
 _MAX_ACCOUNTING_FILE_BYTES = 4096
+_ARTIFACT_EPOCH_FILENAME = ".easycat-artifact-epoch-v1.json"
+_ARTIFACT_EPOCH_VERSION = 1
+_MANAGED_ARTIFACT_SUFFIX = ".owner"
+_MAX_ARTIFACT_EPOCH_FILE_BYTES = 256
 
 _DIRECTORY_OPEN_FLAGS = (
     os.O_RDONLY
@@ -294,6 +298,34 @@ def _is_sha256_ref(ref: str) -> bool:
 
 def _is_cleanup_token(token: str) -> bool:
     return len(token) == 32 and all(char in "0123456789abcdef" for char in token)
+
+
+def _artifact_epoch_payload(epoch: str | None) -> bytes:
+    return (
+        json.dumps(
+            {"epoch": epoch, "version": _ARTIFACT_EPOCH_VERSION},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("ascii")
+
+
+def _artifact_epoch_from_bytes(payload: bytes) -> str | None:
+    if len(payload) > _MAX_ARTIFACT_EPOCH_FILE_BYTES:
+        raise ValueError("artifact epoch file is too large")
+    try:
+        value = json.loads(payload.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid artifact epoch JSON") from exc
+    if not isinstance(value, dict) or set(value) != {"epoch", "version"}:
+        raise ValueError("invalid artifact epoch shape")
+    if value["version"] != _ARTIFACT_EPOCH_VERSION:
+        raise ValueError("unsupported artifact epoch version")
+    epoch = value["epoch"]
+    if epoch is not None and (not isinstance(epoch, str) or not _is_cleanup_token(epoch)):
+        raise ValueError("invalid artifact epoch")
+    return epoch
 
 
 @dataclass(frozen=True, slots=True)
@@ -652,6 +684,9 @@ class FilesystemArtifactStore:
                     accounting = self._load_accounting_locked(persist_missing=False)
                     created = not self.has(ref)
                     if not created:
+                        epoch = self._read_artifact_epoch_locked()
+                        if not self._write_managed_artifact_epoch_locked(ref, epoch):
+                            return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                         if not self._revoke_cleanup_token_locked(ref):
                             return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                         return ArtifactWriteReceipt(ref, created=False, cleanup_token=None)
@@ -661,7 +696,11 @@ class FilesystemArtifactStore:
                     )
                     if reserved is None:
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
+                    epoch = self._read_artifact_epoch_locked()
+                    if not self._write_managed_artifact_epoch_locked(ref, epoch):
+                        return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                     if not self._put_new_locked(ref, payload):
+                        self._delete_ref_locked(ref)
                         return ArtifactWriteReceipt("", created=False, cleanup_token=None)
                     cleanup_token = uuid.uuid4().hex
                     if not self._create_cleanup_token_locked(ref, cleanup_token):
@@ -695,6 +734,59 @@ class FilesystemArtifactStore:
             logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
             return False
         return True
+
+    def begin_journal_epoch(self, referenced_refs: set[str]) -> int:
+        """Rotate journal ownership and reclaim artifacts from prior epochs.
+
+        Every managed blob carries the artifact epoch that was current when it
+        was published. Journal startup calls this only after it has preserved or
+        discarded the prior journal epoch. Bound blobs that no surviving row
+        references are then safe to remove. An unbound blob was staged before a
+        journal existed, so the first journal adopts it instead of guessing that
+        it is stale.
+
+        The artifact claim serializes rotation with puts and deletes in every
+        process. Existing cleanup tokens remain a separate cancellation
+        capability; committed refs revoke them when they are adopted here.
+        """
+        referenced = {ref for ref in referenced_refs if _is_sha256_ref(ref)}
+        new_epoch = uuid.uuid4().hex
+        removed = 0
+        try:
+            with self._write_claim():
+                with self._reuse_session_fd_locked(create=True):
+                    accounting = self._load_accounting_locked(persist_missing=False)
+                    managed = self._managed_artifact_epochs_locked()
+                    self._write_artifact_epoch_locked(new_epoch)
+                    for ref, prior_epoch in managed.items():
+                        if prior_epoch is None or ref in referenced:
+                            if not self.has(ref):
+                                self._delete_managed_artifact_epoch_locked(ref)
+                                continue
+                            if not self._write_managed_artifact_epoch_locked(ref, new_epoch):
+                                continue
+                            if ref in referenced:
+                                self._revoke_cleanup_token_locked(ref)
+                            continue
+
+                        before_bytes = self._ref_stored_bytes_locked(ref)
+                        if before_bytes > accounting.total_bytes:
+                            raise ValueError("artifact accounting baseline is inconsistent")
+                        pending = self._begin_pending_delete_locked(
+                            accounting,
+                            ref,
+                            before_bytes,
+                        )
+                        self._delete_ref_locked(ref)
+                        accounting = self._complete_pending_delete_locked(pending)
+                        removed += 1
+        except (NotImplementedError, OSError, ValueError):
+            logger.warning(
+                "Artifact journal-epoch rotation failed for %s",
+                self._dir,
+                exc_info=True,
+            )
+        return removed
 
     def _put_new_with_descriptors(self, ref: str, payload: bytes) -> None:
         session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
@@ -1277,6 +1369,7 @@ class FilesystemArtifactStore:
         if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
             self._delete_with_paths(ref)
             self._delete_cleanup_token_with_paths(ref)
+            self._delete_managed_artifact_epoch_with_paths(ref)
             return
         try:
             session_fd, owns_session_fd = self._active_or_open_session_fd(create=False)
@@ -1291,13 +1384,162 @@ class FilesystemArtifactStore:
                 try:
                     self._delete_name(shard_fd, f"{ref}.bin")
                     self._unlink_name(shard_fd, f"{ref}.token")
+                    self._unlink_name(shard_fd, f"{ref}{_MANAGED_ARTIFACT_SUFFIX}")
                 finally:
                     os.close(shard_fd)
             self._delete_name(session_fd, f"{ref}.bin")
             self._unlink_name(session_fd, f"{ref}.token")
+            self._unlink_name(session_fd, f"{ref}{_MANAGED_ARTIFACT_SUFFIX}")
         finally:
             if owns_session_fd:
                 os.close(session_fd)
+
+    def _read_artifact_epoch_locked(self) -> str | None:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            path = self._dir / _ARTIFACT_EPOCH_FILENAME
+            if self._path_has_link_or_reparse(path):
+                raise OSError(f"Refusing unsafe artifact epoch path: {path}")
+            try:
+                payload = path.read_bytes()
+            except FileNotFoundError:
+                return None
+            return _artifact_epoch_from_bytes(payload)
+        session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+        try:
+            try:
+                return self._read_artifact_epoch_at(session_fd, _ARTIFACT_EPOCH_FILENAME)
+            except FileNotFoundError:
+                return None
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _write_artifact_epoch_locked(self, epoch: str) -> None:
+        payload = _artifact_epoch_payload(epoch)
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            self._replace_file_with_paths(self._dir / _ARTIFACT_EPOCH_FILENAME, payload)
+            return
+        session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+        try:
+            self._replace_file_at(session_fd, _ARTIFACT_EPOCH_FILENAME, payload)
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _write_managed_artifact_epoch_locked(self, ref: str, epoch: str | None) -> bool:
+        payload = _artifact_epoch_payload(epoch)
+        try:
+            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                self._replace_file_with_paths(self._managed_artifact_epoch_path(ref), payload)
+                return True
+            session_fd, owns_session_fd = self._active_or_open_session_fd(create=True)
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=True)
+                try:
+                    self._replace_file_at(
+                        shard_fd,
+                        f"{ref}{_MANAGED_ARTIFACT_SUFFIX}",
+                        payload,
+                    )
+                finally:
+                    os.close(shard_fd)
+            finally:
+                if owns_session_fd:
+                    os.close(session_fd)
+        except (NotImplementedError, OSError):
+            logger.warning("Artifact ownership write failed for ref=%s", ref, exc_info=True)
+            return False
+        return True
+
+    def _delete_managed_artifact_epoch_locked(self, ref: str) -> bool:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._delete_managed_artifact_epoch_with_paths(ref)
+        try:
+            session_fd, owns_session_fd = self._active_or_open_session_fd(create=False)
+        except FileNotFoundError:
+            return True
+        try:
+            try:
+                shard_fd = self._open_shard(session_fd, ref, create=False)
+            except FileNotFoundError:
+                return True
+            try:
+                return self._unlink_name(shard_fd, f"{ref}{_MANAGED_ARTIFACT_SUFFIX}")
+            finally:
+                os.close(shard_fd)
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+
+    def _managed_artifact_epochs_locked(self) -> dict[str, str | None]:
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._managed_artifact_epochs_with_paths()
+        try:
+            session_fd, owns_session_fd = self._active_or_open_session_fd(create=False)
+        except FileNotFoundError:
+            return {}
+        managed: dict[str, str | None] = {}
+        try:
+            with os.scandir(session_fd) as entries:
+                for entry in entries:
+                    managed.update(self._managed_artifact_epochs_in_shard(session_fd, entry))
+        finally:
+            if owns_session_fd:
+                os.close(session_fd)
+        return managed
+
+    def _managed_artifact_epochs_in_shard(
+        self,
+        session_fd: int,
+        entry: os.DirEntry[str],
+    ) -> dict[str, str | None]:
+        if len(entry.name) != 2 or any(char not in "0123456789abcdef" for char in entry.name):
+            return {}
+        try:
+            metadata = entry.stat(follow_symlinks=False)
+        except OSError:
+            return {}
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            return {}
+        try:
+            shard_fd = os.open(
+                entry.name,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=session_fd,
+            )
+        except OSError:
+            return {}
+        managed: dict[str, str | None] = {}
+        try:
+            with os.scandir(shard_fd) as shard_entries:
+                for child in shard_entries:
+                    if not child.name.endswith(_MANAGED_ARTIFACT_SUFFIX):
+                        continue
+                    ref = child.name.removesuffix(_MANAGED_ARTIFACT_SUFFIX)
+                    if not _is_sha256_ref(ref) or ref[:2] != entry.name:
+                        continue
+                    try:
+                        managed[ref] = self._read_artifact_epoch_at(shard_fd, child.name)
+                    except (OSError, ValueError):
+                        logger.warning(
+                            "Artifact ownership metadata is invalid for ref=%s; preserving",
+                            ref,
+                            exc_info=True,
+                        )
+        finally:
+            os.close(shard_fd)
+        return managed
+
+    @staticmethod
+    def _read_artifact_epoch_at(directory_fd: int, name: str) -> str | None:
+        fd = _open_regular_at(directory_fd, name)
+        try:
+            metadata = os.fstat(fd)
+            if metadata.st_nlink != 1 or metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES:
+                raise ValueError("invalid artifact ownership metadata")
+            return _artifact_epoch_from_bytes(_read_all_fd(fd))
+        finally:
+            os.close(fd)
 
     def _create_cleanup_token_locked(self, ref: str, cleanup_token: str) -> bool:
         payload = cleanup_token.encode("ascii")
@@ -1510,6 +1752,9 @@ class FilesystemArtifactStore:
     def _cleanup_token_path(self, ref: str) -> Path:
         return self._dir / ref[:2] / f"{ref}.token"
 
+    def _managed_artifact_epoch_path(self, ref: str) -> Path:
+        return self._dir / ref[:2] / f"{ref}{_MANAGED_ARTIFACT_SUFFIX}"
+
     def _accounting_path(self) -> Path:
         return self._dir / _ACCOUNTING_FILENAME
 
@@ -1617,6 +1862,58 @@ class FilesystemArtifactStore:
         except OSError:
             return False
         return True
+
+    def _delete_managed_artifact_epoch_with_paths(self, ref: str) -> bool:
+        path = self._managed_artifact_epoch_path(ref)
+        try:
+            if self._path_has_link_or_reparse(path):
+                if _path_is_link_or_reparse(path):
+                    path.unlink()
+                    return True
+                return False
+            path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _managed_artifact_epochs_with_paths(self) -> dict[str, str | None]:
+        if self._path_has_link_or_reparse(self._dir):
+            raise OSError(f"Refusing unsafe artifact session path: {self._dir}")
+        try:
+            metadata = self._dir.lstat()
+        except FileNotFoundError:
+            return {}
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise OSError(f"Artifact session path is not a directory: {self._dir}")
+        managed: dict[str, str | None] = {}
+        try:
+            candidates = self._dir.glob(f"*/*{_MANAGED_ARTIFACT_SUFFIX}")
+            for path in candidates:
+                ref = path.name.removesuffix(_MANAGED_ARTIFACT_SUFFIX)
+                if not _is_sha256_ref(ref) or path.parent.name != ref[:2]:
+                    continue
+                try:
+                    if self._path_has_link_or_reparse(path):
+                        continue
+                    marker_metadata = path.stat()
+                    if (
+                        not stat.S_ISREG(marker_metadata.st_mode)
+                        or marker_metadata.st_nlink != 1
+                        or marker_metadata.st_size > _MAX_ARTIFACT_EPOCH_FILE_BYTES
+                    ):
+                        continue
+                    managed[ref] = _artifact_epoch_from_bytes(path.read_bytes())
+                except (OSError, ValueError):
+                    logger.warning(
+                        "Artifact ownership metadata is invalid for ref=%s; preserving",
+                        ref,
+                        exc_info=True,
+                    )
+        except OSError:
+            raise
+        return managed
 
     def _delete_with_paths(self, ref: str) -> None:
         for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
