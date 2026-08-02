@@ -314,6 +314,23 @@ async def test_failed_session_stop_releases_owned_event_handlers() -> None:
     assert bus.subscribers(TurnStarted) == [observe]
     assert session._event_subscriptions == []
 
+    replacement = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="replacement-session",
+        )
+    )
+    replacement._is_running = True
+    try:
+        late_event = TurnStarted(turn_id="late-failed-session-turn")
+        await bus.emit(late_event)
+
+        assert replacement.current_turn is None
+        assert observed == [late_event]
+        assert getattr(bus, "_easycat_was_shared_by_sessions", False)
+    finally:
+        await replacement.stop(force=True)
+
 
 def test_begin_turn_exposes_coherent_test_and_replay_seam() -> None:
     session = Session(_full_config())

@@ -1701,6 +1701,13 @@ class Session:
         finally:
             owns_stop = self._stop_task is current_task
             if owns_stop:
+                if not self._closed:
+                    # A failed/cancelled teardown can leave a custom provider
+                    # retaining this caller-owned bus after we release our
+                    # handlers. A replacement Session must not infer that a
+                    # later bare callback belongs to it merely because the
+                    # failed owner is no longer subscribed.
+                    cast(Any, self.event_bus)._easycat_was_shared_by_sessions = True
                 # Whether teardown completed or failed, this owner has made
                 # the Session unavailable for new work. Release its EventBus
                 # handlers so an abandoned failed stop cannot retain or keep
