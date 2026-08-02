@@ -17,7 +17,7 @@ __all__ = [
 import asyncio
 import logging
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -36,6 +36,7 @@ from easycat.events import (
 )
 
 logger = logging.getLogger(__name__)
+_CallBoundaryAcceptor = Callable[[str, str], bool]
 
 ScreeningPlatform = Literal["ios", "android", "carrier", "third_party"]
 
@@ -579,6 +580,7 @@ class CallScreeningDetector:
         max_screening_turns: int = 3,
         patterns: ScreeningPatternSet | None = None,
         track_filter: str | None = None,
+        call_boundary_acceptor: _CallBoundaryAcceptor | None = None,
     ) -> None:
         _validate_positive_number("agent_timeout_s", agent_timeout_s)
         _validate_positive_int("max_screening_turns", max_screening_turns)
@@ -592,6 +594,7 @@ class CallScreeningDetector:
         self._max_screening_turns = max_screening_turns
         self._patterns = patterns if patterns is not None else _DEFAULT_SCREENING_PATTERNS
         self._track_filter = track_filter
+        self._call_boundary_acceptor = call_boundary_acceptor
 
         self._state = ScreeningState.WAITING
         self._call_answered = False
@@ -646,8 +649,15 @@ class CallScreeningDetector:
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset screening state for a new outbound call."""
+        if not event.call_sid or event.call_sid == self._call_sid:
+            return
+        if self._call_boundary_acceptor is not None and not self._call_boundary_acceptor(
+            event.call_sid, self._call_sid
+        ):
+            return
         self._cancel_agent_timeout()
         self._reset_internal()
+        self._call_sid = event.call_sid
 
     def reset(self) -> None:
         self._cancel_agent_timeout()
@@ -695,6 +705,8 @@ class CallScreeningDetector:
         self._screening_turns += 1
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
         self._call_answered = True
         if event.call_sid:
             self._call_sid = event.call_sid
@@ -808,6 +820,8 @@ class CallScreeningDetector:
 
     async def _on_voicemail(self, event: VoicemailDetected) -> None:
         """Handle voicemail detection after screening."""
+        if event.call_sid and self._call_sid and event.call_sid != self._call_sid:
+            return
         if self._state == ScreeningState.WAITING:
             return
         if self._state in _TERMINAL_SCREENING_STATES:
@@ -818,6 +832,8 @@ class CallScreeningDetector:
 
     async def _on_call_ended(self, event: CallEnded) -> None:
         """Handle call ended during screening — callee declined."""
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
         if self._state == ScreeningState.WAITING:
             return
         if self._state in _TERMINAL_SCREENING_STATES:

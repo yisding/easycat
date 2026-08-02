@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from easycat.events import CallInitiated, CallScreening, CallStateChanged, EventBus
+from easycat.events import CallInitiated, CallStateChanged, EventBus
 from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
 from easycat.telephony.compliance import DNCStore
 from easycat.telephony.ivr import DTMFDelivery, IVRAction, IVRActionType, IVRNavigator
@@ -128,12 +128,13 @@ class _OutboundHelperBuilder:
         self._helpers: list[Any] = []
 
     def build(self) -> BuiltOutboundHelpers:
-        self._add_preclassification_helpers()
         patterns = self._screening_patterns()
-        state_machine = self._add_state_machine(patterns)
-        screening_detector = self._add_screening_detector(patterns)
+        state_machine = self._build_state_machine(patterns)
+        self._add_preclassification_helpers(state_machine)
+        self._helpers.append(state_machine)
+        screening_detector = self._add_screening_detector(patterns, state_machine)
         self._add_ivr(state_machine)
-        self._add_policy_helpers()
+        self._add_policy_helpers(state_machine)
         manager = self._add_manager()
         if manager is not None:
             state_machine.set_max_duration_hangup(manager.hangup_owned_call)
@@ -144,15 +145,23 @@ class _OutboundHelperBuilder:
             screening_detector=screening_detector,
         )
 
-    def _add_preclassification_helpers(self) -> None:
+    def _add_preclassification_helpers(self, state_machine: OutboundCallStateMachine) -> None:
         # Fusion must run before the state machine, and disposition tracking
         # must record a failure reason before the terminal ENDED transition.
-        self._helpers.append(STTAMDFusionClassifier(self._event_bus))
-        post_screening = PostScreeningVoicemailDetector(self._event_bus)
-        self._helpers.append(post_screening)
+        self._helpers.append(
+            STTAMDFusionClassifier(
+                self._event_bus,
+                call_boundary_acceptor=state_machine.accepts_call_initiation,
+            )
+        )
+        self._helpers.append(
+            PostScreeningVoicemailDetector(
+                self._event_bus,
+                call_boundary_acceptor=state_machine.accepts_call_initiation,
+            )
+        )
         if self._config.enable_disposition_tracker:
             self._helpers.append(CallDispositionTracker(self._event_bus))
-        self._event_bus.subscribe(CallScreening, lambda _event: post_screening.activate())
 
     def _screening_patterns(self) -> ScreeningPatternSet:
         languages = ["en"]
@@ -160,8 +169,8 @@ class _OutboundHelperBuilder:
             languages.append(self._config.callee_language)
         return screening_patterns_for_languages(languages)
 
-    def _add_state_machine(self, patterns: ScreeningPatternSet) -> OutboundCallStateMachine:
-        state_machine = OutboundCallStateMachine(
+    def _build_state_machine(self, patterns: ScreeningPatternSet) -> OutboundCallStateMachine:
+        return OutboundCallStateMachine(
             self._event_bus,
             classification_timeout_s=float(self._config.voicemail_detection.detection_timeout_s),
             max_call_duration_s=self._config.max_call_duration_s,
@@ -173,11 +182,11 @@ class _OutboundHelperBuilder:
             voicemail_pickup_window_s=self._config.voicemail_pickup_window_s,
             screening_patterns=patterns,
         )
-        self._helpers.append(state_machine)
-        return state_machine
 
     def _add_screening_detector(
-        self, patterns: ScreeningPatternSet
+        self,
+        patterns: ScreeningPatternSet,
+        state_machine: OutboundCallStateMachine,
     ) -> CallScreeningDetector | None:
         if not self._config.enable_screening_detection:
             return None
@@ -191,6 +200,7 @@ class _OutboundHelperBuilder:
             # The bot's own speech must not trigger a screening match when
             # the transport transcribes both call legs.
             track_filter="inbound",
+            call_boundary_acceptor=state_machine.accepts_call_initiation,
         )
         self._helpers.append(detector)
         return detector
@@ -214,8 +224,14 @@ class _OutboundHelperBuilder:
             )
         )
 
-    def _add_policy_helpers(self) -> None:
-        self._helpers.append(VoicemailPolicyHandler(self._event_bus, expect_fused=True))
+    def _add_policy_helpers(self, state_machine: OutboundCallStateMachine) -> None:
+        self._helpers.append(
+            VoicemailPolicyHandler(
+                self._event_bus,
+                expect_fused=True,
+                call_boundary_acceptor=state_machine.accepts_call_initiation,
+            )
+        )
         if self._config.enable_number_health:
             self._helpers.append(NumberHealthMonitor(self._event_bus))
 

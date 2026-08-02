@@ -7,7 +7,7 @@ import enum
 import logging
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -27,6 +27,7 @@ from easycat.runtime.scope import BackgroundTaskScope
 
 logger = logging.getLogger(__name__)
 _STT_AMD_TIMEOUT_TASK = "stt_amd_timeout"
+_CallBoundaryAcceptor = Callable[[str, str], bool]
 
 
 # ── Shared audio analysis helpers ────────────────────────────────
@@ -205,6 +206,7 @@ class VoicemailDetector:
         self._has_emitted = False
         self._started = False
         self._call_sid: str = ""
+        self._call_boundary_acceptor: _CallBoundaryAcceptor | None = None
 
         # Beep detection state — tracks cumulative tone duration in seconds
         self._tone_duration_s: float = 0.0
@@ -242,14 +244,25 @@ class VoicemailDetector:
         self._tone_duration_s = 0.0
         self._beep_detected = False
 
+    def set_call_boundary_acceptor(self, acceptor: _CallBoundaryAcceptor) -> None:
+        """Use the outbound state machine as the active-call authority."""
+        self._call_boundary_acceptor = acceptor
+
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset detection state for a new outbound call."""
+        if not event.call_sid or event.call_sid == self._call_sid:
+            return
+        if self._call_boundary_acceptor is not None and not self._call_boundary_acceptor(
+            event.call_sid, self._call_sid
+        ):
+            return
         self.reset()
-        if event.call_sid:
-            self._call_sid = event.call_sid
+        self._call_sid = event.call_sid
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
         """Track the active call_sid so emitted events can be stamped."""
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
         if event.call_sid:
             self._call_sid = event.call_sid
 
@@ -370,11 +383,14 @@ class VoicemailPolicyHandler:
         config: VoicemailPolicyConfig | None = None,
         *,
         expect_fused: bool = False,
+        call_boundary_acceptor: _CallBoundaryAcceptor | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._config = config or VoicemailPolicyConfig()
         self._expect_fused = expect_fused
+        self._call_boundary_acceptor = call_boundary_acceptor
         self._started = False
+        self._call_sid = ""
         self._action_taken = False
         self._last_action: dict[str, Any] | None = None
 
@@ -397,12 +413,20 @@ class VoicemailPolicyHandler:
             self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
             self._event_bus.unsubscribe(VoicemailDetected, self._on_voicemail_detected)
             self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
-            self._started = False
+        self._started = False
+        self._call_sid = ""
         self._action_taken = False
         self._last_action = None
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset policy state for a new outbound call."""
+        if not event.call_sid or event.call_sid == self._call_sid:
+            return
+        if self._call_boundary_acceptor is not None and not self._call_boundary_acceptor(
+            event.call_sid, self._call_sid
+        ):
+            return
+        self._call_sid = event.call_sid
         self._action_taken = False
         self._last_action = None
 
@@ -423,6 +447,8 @@ class VoicemailPolicyHandler:
     async def _on_voicemail_detected(self, event: VoicemailDetected) -> None:
         """Apply policy based on detection result."""
         if self._action_taken:
+            return
+        if event.call_sid and self._call_sid and event.call_sid != self._call_sid:
             return
 
         # When fusion is active, ignore raw AMD events.
@@ -703,9 +729,17 @@ class PostScreeningVoicemailDetector:
     if no decisive classification is made within ``timeout_s``.
     """
 
-    def __init__(self, event_bus: EventBus, *, timeout_s: float = 15.0) -> None:
+    def __init__(
+        self,
+        event_bus: EventBus,
+        *,
+        timeout_s: float = 15.0,
+        call_boundary_acceptor: _CallBoundaryAcceptor | None = None,
+    ) -> None:
         self._event_bus = event_bus
         self._timeout_s = timeout_s
+        self._call_boundary_acceptor = call_boundary_acceptor
+        self._call_sid = ""
         self._active = False
         self._started = False
         self._classified = False
@@ -718,14 +752,19 @@ class PostScreeningVoicemailDetector:
     def start(self) -> None:
         if self._started:
             return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
+        self._event_bus.subscribe(CallScreening, self._on_screening)
         self._event_bus.subscribe(STTFinal, self._on_stt_final)
         self._started = True
 
     def stop(self) -> None:
         if self._started:
+            self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
+            self._event_bus.unsubscribe(CallScreening, self._on_screening)
             self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
         self._cancel_timeout()
         self._started = False
+        self._call_sid = ""
         self._active = False
         self._classified = False
 
@@ -734,10 +773,30 @@ class PostScreeningVoicemailDetector:
             self._timeout_task.cancel()
         self._timeout_task = None
 
-    def activate(self) -> None:
+    async def _on_call_initiated(self, event: CallInitiated) -> None:
+        if not event.call_sid or event.call_sid == self._call_sid:
+            return
+        if self._call_boundary_acceptor is not None and not self._call_boundary_acceptor(
+            event.call_sid, self._call_sid
+        ):
+            return
+        self._cancel_timeout()
+        self._call_sid = event.call_sid
+        self._active = False
+        self._classified = False
+
+    async def _on_screening(self, event: CallScreening) -> None:
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
+        self.activate(call_sid=event.call_sid)
+
+    def activate(self, *, call_sid: str = "") -> None:
         """Start watching for post-screening greeting."""
+        if call_sid:
+            self._call_sid = call_sid
         self._active = True
         self._classified = False
+        self._cancel_timeout()
         self._start_timeout()
 
     def _start_timeout(self) -> None:
@@ -755,7 +814,13 @@ class PostScreeningVoicemailDetector:
                 self._classified = True
                 self._active = False
                 logger.info("PostScreeningVoicemailDetector timed out — emitting unknown")
-                await self._event_bus.emit(VoicemailDetected(result="unknown", source="fusion"))
+                await self._event_bus.emit(
+                    VoicemailDetected(
+                        result="unknown",
+                        source="fusion",
+                        call_sid=self._call_sid,
+                    )
+                )
         except asyncio.CancelledError:
             pass
 
@@ -777,7 +842,9 @@ class PostScreeningVoicemailDetector:
         # Emit with source="fusion" so downstream consumers that filter on
         # expect_fused (e.g. OutboundCallStateMachine, VoicemailPolicyHandler)
         # accept the event without waiting for the AMD fallback timer.
-        await self._event_bus.emit(VoicemailDetected(result=result, source="fusion"))
+        await self._event_bus.emit(
+            VoicemailDetected(result=result, source="fusion", call_sid=self._call_sid)
+        )
 
 
 # ── STT + AMD fusion classifier ──────────────────────────────────
@@ -798,10 +865,12 @@ class STTAMDFusionClassifier:
         *,
         prefer_stt: bool = True,
         stt_timeout_s: float = 5.0,
+        call_boundary_acceptor: _CallBoundaryAcceptor | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._prefer_stt = prefer_stt
         self._stt_timeout_s = stt_timeout_s
+        self._call_boundary_acceptor = call_boundary_acceptor
 
         self._amd_result: VoicemailResult | None = None
         self._stt_result: VoicemailResult | None = None
@@ -849,6 +918,12 @@ class STTAMDFusionClassifier:
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         """Reset classification state for a new outbound call."""
+        if not event.call_sid or event.call_sid == self._call_sid:
+            return
+        if self._call_boundary_acceptor is not None and not self._call_boundary_acceptor(
+            event.call_sid, self._call_sid
+        ):
+            return
         self._cancel_timeout(detach_current=True)
         self._amd_result = None
         self._stt_result = None
@@ -882,12 +957,16 @@ class STTAMDFusionClassifier:
             self._timeout_task = None
 
     async def _on_call_answered(self, event: CallAnswered) -> None:
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
         if event.call_sid:
             self._call_sid = event.call_sid
         self._call_answered = True
 
     async def _on_screening(self, event: CallScreening) -> None:
         """Cancel AMD-only fallback and stop STT classification when screening is detected."""
+        if self._call_sid and event.call_sid != self._call_sid:
+            return
         self._cancel_timeout()
         self._screening_active = True
 
