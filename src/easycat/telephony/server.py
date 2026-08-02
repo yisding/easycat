@@ -186,15 +186,42 @@ async def _start_twiml_http_listener(
     app = web.Application()
     app.router.add_post("/twiml", handle_twiml)
     runner = web.AppRunner(app)
+    started = False
     try:
         await runner.setup()
         site = web.TCPSite(runner, config.http_host, config.http_port)
         await site.start()
-    except BaseException:
-        media_server.close()
-        await media_server.wait_closed()
-        await runner.cleanup()
-        raise
+        started = True
+    finally:
+        if not started:
+            # HTTP setup can fail after the raw media listener was bound. Run
+            # every independent rollback stage even if one listener operation
+            # fails, while preserving the original startup exception (or task
+            # cancellation) as the outcome.
+            try:
+                media_server.close()
+            except Exception:
+                logger.warning(
+                    "Twilio media listener close failed during HTTP startup rollback",
+                    exc_info=True,
+                )
+            try:
+                await runner.cleanup()
+            except Exception:
+                logger.warning(
+                    "Twilio HTTP runner cleanup failed during startup rollback",
+                    exc_info=True,
+                )
+            finally:
+                # Cancellation while runner cleanup is suspended must not skip
+                # ownership of the already-closed raw media listener.
+                try:
+                    await media_server.wait_closed()
+                except Exception:
+                    logger.warning(
+                        "Twilio media listener wait failed during HTTP startup rollback",
+                        exc_info=True,
+                    )
     return runner, site
 
 
@@ -207,42 +234,56 @@ async def _shutdown_twilio_voice_app(  # noqa: C901 - independent cleanup stages
     config: TwilioVoiceServerConfig,
 ) -> None:
     """Drain media sessions even when the TwiML listener cleanup fails."""
-    runtime.start_draining(media_server)
     listener_error: Exception | None = None
     body_error: BaseException | None = None
 
-    def record_error(exc: BaseException) -> None:
-        nonlocal listener_error, body_error
-        if not isinstance(exc, Exception):
-            if body_error is None:
-                body_error = exc
-            return
+    def record_listener_error(stage: str, exc: Exception) -> None:
+        nonlocal listener_error
         if listener_error is None:
             listener_error = exc
         else:
-            logger.warning("Twilio listener cleanup also failed", exc_info=True)
+            logger.warning("Twilio %s also failed", stage, exc_info=True)
 
     try:
-        await site.stop()
+        # Set the drain fence before stopping the HTTP listener so accepted
+        # media connections cannot turn into new sessions during shutdown. A
+        # listener implementation can still reject ``close()``; that must not
+        # skip the independent HTTP cleanup or the runtime's session drain.
+        try:
+            runtime.start_draining(media_server)
+        except Exception as exc:
+            record_listener_error("media listener close", exc)
+        try:
+            await site.stop()
+        except Exception as exc:
+            record_listener_error("HTTP site stop", exc)
     except BaseException as exc:
-        record_error(exc)
-    try:
-        await runner.cleanup()
-    except BaseException as exc:
-        record_error(exc)
-    try:
-        await runtime.drain(
-            media_server,
-            drain_timeout_s=config.drain_timeout_s,
-            force_timeout_s=config.force_shutdown_timeout_s,
-        )
-    except BaseException as exc:
-        if body_error is None:
-            body_error = exc
-    if body_error is not None:
-        raise body_error
-    if listener_error is not None:
-        raise listener_error
+        # Cleanup below still owns the runner and live media sessions, but a
+        # cancellation (or another non-ordinary exception) from the shutdown
+        # body must remain the caller-visible outcome.
+        body_error = exc
+        raise
+    finally:
+        # Nest the remaining stages so a cancellation during either listener
+        # await still runs the session drain. ``CancelledError`` deliberately
+        # is not caught: once cleanup has been given its chance, it propagates
+        # to the caller with ordinary cancellation semantics.
+        try:
+            try:
+                await runner.cleanup()
+            except Exception as exc:
+                record_listener_error("HTTP runner cleanup", exc)
+        finally:
+            try:
+                await runtime.drain(
+                    media_server,
+                    drain_timeout_s=config.drain_timeout_s,
+                    force_timeout_s=config.force_shutdown_timeout_s,
+                )
+            except Exception as exc:
+                record_listener_error("media runtime drain", exc)
+        if body_error is None and listener_error is not None:
+            raise listener_error
 
 
 async def serve_twilio_voice_app(

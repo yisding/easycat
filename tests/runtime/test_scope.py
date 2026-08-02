@@ -197,6 +197,135 @@ def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:
     assert all(r["turn_id"] == "turn-1" for r in sink.records)
 
 
+def test_runtime_scope_closes_coroutine_when_task_creation_fails() -> None:
+    scope = RuntimeScope()
+
+    async def work() -> None:
+        pass
+
+    coro = work()
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        scope.create_task("worker", coro)
+
+    assert coro.cr_frame is None
+
+
+def test_journaled_runtime_scope_does_not_record_or_leak_when_task_creation_fails() -> None:
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.records: list[dict[str, object]] = []
+
+        def current_turn_id(self, turn_id: str | None = None) -> str | None:
+            return turn_id
+
+        def append_record(
+            self,
+            *,
+            name: str,
+            turn_id: str | None = None,
+            data: dict[str, object] | None = None,
+        ) -> None:
+            self.records.append({"name": name, "turn_id": turn_id, "data": data})
+
+    scope = RuntimeScope()
+    sink = RecordingSink()
+
+    async def work() -> None:
+        pass
+
+    coro = work()
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        scope.create_journaled_task(coro, name="worker", journal_sink=sink)
+
+    assert coro.cr_frame is None
+    assert sink.records == []
+
+
+@pytest.mark.asyncio
+async def test_journaled_runtime_scope_cancels_task_when_journaling_setup_fails() -> None:
+    class FailingSink:
+        def current_turn_id(self, turn_id: str | None = None) -> str | None:
+            return turn_id
+
+        def append_record(
+            self,
+            *,
+            name: str,
+            turn_id: str | None = None,
+            data: dict[str, object] | None = None,
+        ) -> None:
+            raise RuntimeError("journal unavailable")
+
+    scope = RuntimeScope()
+    started = asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+
+    coro = work()
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        scope.create_journaled_task(coro, name="worker", journal_sink=FailingSink())
+
+    await asyncio.sleep(0)
+    assert not started.is_set()
+    assert coro.cr_frame is None
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_rejects_empty_name_before_scheduling_coroutine() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+
+    coro = work()
+    with pytest.raises(ValueError, match="must be non-empty"):
+        scope.create_task("", coro)
+
+    await asyncio.sleep(0)
+    assert not started.is_set()
+    assert coro.cr_frame is None
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_journaled_runtime_task_rejects_empty_name_before_recording_or_scheduling() -> None:
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.records: list[dict[str, object]] = []
+
+        def current_turn_id(self, turn_id: str | None = None) -> str | None:
+            return turn_id
+
+        def append_record(
+            self,
+            *,
+            name: str,
+            turn_id: str | None = None,
+            data: dict[str, object] | None = None,
+        ) -> None:
+            self.records.append({"name": name, "turn_id": turn_id, "data": data})
+
+    scope = RuntimeScope()
+    sink = RecordingSink()
+    started = asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+
+    coro = work()
+    with pytest.raises(ValueError, match="must be non-empty"):
+        scope.create_journaled_task(coro, name="", journal_sink=sink)
+
+    await asyncio.sleep(0)
+    assert not started.is_set()
+    assert coro.cr_frame is None
+    assert sink.records == []
+    assert scope.empty
+
+
 @pytest.mark.asyncio
 async def test_runtime_scope_drains_completed_task() -> None:
     scope = RuntimeScope()

@@ -153,6 +153,29 @@ class TestLocalLlamaAgentsBridge:
         assert bridge.snapshot_state().fields["has_context"] is True
 
     @pytest.mark.asyncio
+    async def test_early_generator_close_tolerates_cancelled_handler_cleanup(
+        self, fake_workflows_modules
+    ):
+        """A handler's own cancellation must not turn a normal close into an error."""
+        workflow = _BlockingWorkflow()
+        handler = workflow.handler
+        bridge = LlamaAgentsBridge(workflow=workflow)
+
+        async def _cancel_run() -> None:
+            handler.cancelled = True
+            handler._never.set()
+            raise asyncio.CancelledError
+
+        handler.cancel_run = _cancel_run
+        agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+        first = await agen.__anext__()
+        assert first.kind == "text_delta" and first.text == "partial "
+
+        await asyncio.wait_for(agen.aclose(), timeout=2.0)
+
+        assert handler.cancelled is True
+
+    @pytest.mark.asyncio
     async def test_nonterminal_interruption_drops_ctx_and_records_loss(
         self, fake_workflows_modules
     ):

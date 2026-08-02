@@ -2349,6 +2349,33 @@ def test_promote_existing_out_without_force_exits_101(cli: CliRunner, tmp_path: 
     assert out.read_text() == "already here"
 
 
+def test_promote_does_not_overwrite_destination_created_during_validation(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-force promise holds even if another writer wins mid-command."""
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "raced.zip"
+
+    def write_competing_output(
+        _sliced: object, _tmp_path: Path, *, turn_id: str
+    ) -> tuple[int | None, str | None]:
+        assert turn_id == "t1"
+        out.write_text("written by another process")
+        return 0, None
+
+    monkeypatch.setattr(
+        "easycat.cli.debug.promote._validate_promoted_slice",
+        write_competing_output,
+    )
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out)])
+
+    assert result.exit_code == 101
+    assert out.read_text() == "written by another process"
+    assert set(tmp_path.glob("*.zip")) == {out, src}
+
+
 def test_promote_force_overwrites_existing_out(cli: CliRunner, tmp_path: Path) -> None:
     from easycat.debug.bundle import RunBundle
 
