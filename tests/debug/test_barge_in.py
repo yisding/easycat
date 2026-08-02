@@ -99,6 +99,21 @@ def test_waterfall_interruption_count_defaults_to_zero() -> None:
     assert turn["interruption_count"] == 0
 
 
+def test_waterfall_ignores_non_string_interrupt_signal_id() -> None:
+    records = [
+        _rec(
+            1,
+            "control_signal",
+            signal_kind="interrupt",
+            signal_id=["malformed"],
+        ),
+    ]
+
+    (turn,) = turn_waterfall(records)
+
+    assert turn["interruption_count"] == 1
+
+
 # ── slow_barge_in card ───────────────────────────────────────────
 
 
