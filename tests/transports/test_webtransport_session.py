@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+from unittest.mock import Mock
 
 import pytest
 
@@ -291,6 +292,28 @@ class TestWebTransportSession:
         assert session._control_codec.poisoned is True  # noqa: SLF001
         assert session._on_close.is_set()  # noqa: SLF001
         assert session._quic_protocol.close_calls == [(0, "control framing violation")]  # noqa: SLF001
+
+    def test_poisoned_control_codec_marks_closed_when_quic_close_raises(self) -> None:
+        session, _h3, _in_q, _out_q = _make_session()
+        session.close_connection = Mock(side_effect=RuntimeError("close failed"))  # type: ignore[method-assign]
+        oversized = struct.pack(">I", 1 << 30) + b"X"
+
+        with pytest.raises(RuntimeError, match="close failed"):
+            session.handle_stream_data(
+                stream_id=8, data=bytes([_TAG_CONTROL]) + oversized, ended=False
+            )
+
+        assert session._on_close.is_set()  # noqa: SLF001
+
+    def test_rejected_stream_flood_marks_closed_when_quic_close_raises(self) -> None:
+        session, _h3, _in_q, _out_q = _make_session()
+        session.close_connection = Mock(side_effect=RuntimeError("close failed"))  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="close failed"):
+            for stream_id in range(_MAX_REJECTED_STREAMS + 1):
+                session._reject_stream(stream_id)  # noqa: SLF001
+
+        assert session._on_close.is_set()  # noqa: SLF001
 
     def test_pending_tags_dict_is_capped(self) -> None:
         """A flood of untagged streams must not grow ``_pending_tags`` past the cap."""
