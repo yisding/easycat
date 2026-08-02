@@ -1056,6 +1056,21 @@ class TestWebRTCOutboundNormalization:
         with pytest.raises(ValueError, match="chunk.format must be PCM16"):
             await transport.send_audio(chunk)
 
+    @pytest.mark.asyncio
+    async def test_send_audio_rejects_partial_stereo_frames(self) -> None:
+        transport = WebRTCTransport()
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+        chunk = AudioChunk(
+            data=b"\x00\x01\x02\x03\x04\x05",
+            format=AudioFormat(sample_rate=48_000, channels=2, sample_width=2),
+        )
+
+        with pytest.raises(ValueError, match="complete PCM frames"):
+            await transport.send_audio(chunk)
+
+        assert transport._outbound._queue.empty()
+
 
 @pytest.mark.integration_socket
 @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")

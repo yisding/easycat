@@ -750,6 +750,11 @@ class WebRTCTransport(AudioQueueMixin):
         # phase. Keep this fallback conversion immediate; normal configured
         # sessions already perform stateful output alignment in TTSBase.
         validate_pcm16_format("chunk.format", chunk.format)
+        if len(chunk.data) % chunk.format.frame_size:
+            raise ValueError(
+                "chunk.data must contain complete PCM frames "
+                f"(got {len(chunk.data)} bytes for {chunk.format.frame_size}-byte frames)"
+            )
         pcm_data = chunk.data
         if chunk.format.channels != 1:
             pcm_data = to_mono(pcm_data, chunk.format.channels)
