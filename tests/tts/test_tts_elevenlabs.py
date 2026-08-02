@@ -947,6 +947,32 @@ class TestElevenLabsPersistent:
         assert events  # audio decoded and the turn completed without hanging
         await provider.close()
 
+    async def test_early_consumer_close_cancels_persistent_remote_context(self):
+        class UnfinishedPersistentWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") == "" and "context_id" in msg:
+                    audio = base64.b64encode(_pcm16_bytes(120)).decode()
+                    await self._queue.put(
+                        json.dumps({"audio": audio, "contextId": msg["context_id"]})
+                    )
+
+        provider = self._make_provider()
+        fake = UnfinishedPersistentWS()
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            stream = provider.synthesize("long text")
+            event = await anext(stream)
+            assert event.type == TTSEventType.AUDIO
+            await stream.aclose()
+
+            requests = [json.loads(message) for message in fake.sent]
+            request = next(message for message in requests if message.get("text") == "long text")
+            closes = [message for message in requests if message.get("close_context") is True]
+            assert closes == [{"context_id": request["context_id"], "close_context": True}]
+            assert not fake.closed
+        await provider.close()
+
     async def test_warmup_failure_is_retried_by_synthesis(self):
         provider = self._make_provider()
 

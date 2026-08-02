@@ -791,6 +791,38 @@ class _BlockingWebSocket:
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_reconnect_releases_waiting_commit_with_partial_fallback():
+    """A reconnect cannot leave an end-of-turn commit waiting for a lost final."""
+    stt = ElevenLabsSTT(
+        ElevenLabsSTTConfig(
+            api_key="k",
+            mode="realtime",
+            final_transcript_timeout_s=10.0,
+        )
+    )
+    stt._ws = MockWebSocket([])
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "best available transcript"
+
+    commit_task = asyncio.create_task(stt._send_commit(wait_for_final=True))
+    try:
+        await asyncio.sleep(0)
+        assert len(stt._pending_manual_commits) == 1
+
+        await stt._on_reconnect()
+
+        assert await asyncio.wait_for(commit_task, timeout=0.1) is True
+        event = stt._event_queue.get_nowait()
+        assert event.type is STTEventType.FINAL
+        assert event.text == "best available transcript"
+    finally:
+        if not commit_task.done():
+            commit_task.cancel()
+        await asyncio.gather(commit_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_promotes_partial_on_commit_timeout(monkeypatch):
     # Server sends only a partial and never the committed transcript, so
     # the end-of-turn commit times out and the latest partial must be

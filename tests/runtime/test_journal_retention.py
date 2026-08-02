@@ -20,6 +20,7 @@ import time
 import pytest
 
 from easycat.runtime import SqliteJournal, run_retention
+from easycat.runtime import journal_retention as retention_module
 from easycat.runtime.records import JournalRecordKind
 
 
@@ -89,6 +90,60 @@ def test_age_window_archives_stale_journal_keeps_fresh(tmp_path):
     assert fresh.exists()
     archives = list((tmp_path / "archive").glob("*.tar.gz"))
     assert [p.name for p in archives] == ["stale-sess.tar.gz"]
+
+
+def test_failed_source_removal_does_not_accumulate_duplicate_archives(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _seed_journal(tmp_path, "stuck")
+    monkeypatch.setattr(retention_module, "_remove_session", lambda _root, _path: False)
+
+    for _ in range(2):
+        assert (
+            run_retention(
+                tmp_path,
+                max_sessions=0,
+                max_age_days=10**9,
+                mode="archive",
+            )
+            == 0
+        )
+
+    assert source.exists()
+    assert list((tmp_path / "archive").iterdir()) == []
+
+
+def test_archive_retention_preserves_prior_archive_for_reused_session_id(tmp_path):
+    """A later reuse of an id must not overwrite its earlier archive."""
+    _seed_journal(tmp_path, "reused-sess")
+    assert (
+        run_retention(
+            tmp_path,
+            max_sessions=0,
+            max_age_days=10**9,
+            mode="archive",
+        )
+        == 1
+    )
+
+    archive_dir = tmp_path / "archive"
+    first_archive = archive_dir / "reused-sess.tar.gz"
+    first_bytes = first_archive.read_bytes()
+
+    _seed_journal(tmp_path, "reused-sess")
+    assert (
+        run_retention(
+            tmp_path,
+            max_sessions=0,
+            max_age_days=10**9,
+            mode="archive",
+        )
+        == 1
+    )
+
+    assert first_archive.read_bytes() == first_bytes
+    assert (archive_dir / "reused-sess-1.tar.gz").exists()
 
 
 def test_age_window_delete_mode_removes_stale_without_archive(tmp_path):

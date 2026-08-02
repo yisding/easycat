@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import enum
 import json
 import logging
@@ -251,6 +252,15 @@ class ElevenLabsTTS(_WSTTSBase):
         """
         text = coerce_tts_input(payload).text
         if self._config.stream_mode == ElevenLabsStreamMode.WEBSOCKET:
+            if self._persistent_enabled():
+                # An ``async for`` over a delegated async generator does not
+                # close that generator when this public stream is abandoned.
+                # Own the persistent generator so its finally closes the
+                # remote context instead of leaving billed audio unroutable.
+                async with contextlib.aclosing(self._synthesize_ws_persistent(text)) as stream:
+                    async for event in stream:
+                        yield event
+                return
             async for event in self._synthesize_ws(text):
                 yield event
         else:

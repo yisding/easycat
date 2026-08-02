@@ -215,7 +215,16 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         force_timeout_s: float,
     ) -> None:
         """Drain sessions, then close surviving sockets and reap handlers."""
-        self.start_draining(server)
+        listener_error: Exception | None = None
+        try:
+            self.start_draining(server)
+        except Exception as exc:
+            # A raw WebSocket listener close is synchronous, but it can still
+            # fail (for example from an event-loop/server implementation
+            # error). Its established connections and sessions remain our
+            # responsibility, so preserve the error until every downstream
+            # drain stage has had a chance to run.
+            listener_error = exc
         force_deadline = await self.gate.drain(
             self._active_session_pairs,
             drain_timeout_s=max(drain_timeout_s, 0.0),
@@ -241,8 +250,13 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             timeout_s=_remaining_timeout(force_deadline),
             label="WebSocket sessions",
         )
+        # Preserve these ownership ledgers when cancellation or an unexpected
+        # cleanup error aborts the sequence. A later drain can then still close
+        # the established sockets and reap their handlers.
         self._sessions.clear()
         self._connections.clear()
+        if listener_error is not None:
+            raise listener_error
 
     def _active_session_pairs(self) -> list[tuple[int, SessionT]]:
         return [
