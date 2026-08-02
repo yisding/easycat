@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from easycat._turn_context import TurnContext
@@ -600,6 +602,50 @@ def test_journal_sink_stores_artifact_refs_before_record() -> None:
     assert record.output_ref is not None
     assert artifact_store.has(record.input_ref)
     assert artifact_store.has(record.output_ref)
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_skips_artifact_puts_when_journal_is_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    journal._degraded = True
+    sink = SessionJournalSink(
+        event_bus=EventBus(),
+        journal=journal,
+        artifact_store=artifact_store,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    put_calls: list[bytes] = []
+
+    def unexpected_put(
+        payload: bytes,
+        *,
+        artifact_class: str = "debug_verbose",
+    ) -> str:
+        del artifact_class
+        put_calls.append(payload)
+        return "unexpected"
+
+    monkeypatch.setattr(artifact_store, "put", unexpected_put)
+
+    payloads = (b"sync-input", b"sync-output", b"async-input", b"async-output")
+    sequence = sink.append_record(
+        name="artifact_record",
+        input_bytes=payloads[0],
+        output_bytes=payloads[1],
+    )
+    await sink.append_record_async(
+        name="artifact_record",
+        input_bytes=payloads[2],
+        output_bytes=payloads[3],
+    )
+
+    assert sequence == -1
+    assert put_calls == []
+    assert all(not artifact_store.has(hashlib.sha256(payload).hexdigest()) for payload in payloads)
 
 
 def test_session_markdown_strip_delegates_to_journal_sink() -> None:

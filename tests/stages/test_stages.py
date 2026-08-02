@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import struct
 from collections.abc import AsyncIterator
 
@@ -39,7 +40,7 @@ from easycat.stages import (
     TurnStage,
     VADStage,
 )
-from easycat.stages.base import journal_append_event
+from easycat.stages.base import journal_append_event, put_artifact, put_artifact_async
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -63,6 +64,34 @@ def _make_ctx(
 
 def _make_turn() -> TurnContext:
     return TurnContext(turn_id="turn-1", cancel_token=CancelToken())
+
+
+@pytest.mark.asyncio
+async def test_stage_capture_skips_artifact_puts_when_journal_is_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_store = InMemoryArtifactStore()
+    journal = InMemoryRingBuffer(artifact_store=artifact_store)
+    journal._degraded = True
+    ctx = _make_ctx(journal=journal, artifact_store=artifact_store)
+    put_calls: list[bytes] = []
+
+    def unexpected_put(
+        payload: bytes,
+        *,
+        artifact_class: str = "debug_verbose",
+    ) -> str:
+        del artifact_class
+        put_calls.append(payload)
+        return "unexpected"
+
+    monkeypatch.setattr(artifact_store, "put", unexpected_put)
+
+    payloads = (b"sync-stage-audio", b"async-stage-audio")
+    assert put_artifact(ctx, payloads[0]) is None
+    assert await put_artifact_async(ctx, payloads[1]) is None
+    assert put_calls == []
+    assert all(not artifact_store.has(hashlib.sha256(payload).hexdigest()) for payload in payloads)
 
 
 # ── Stub providers ───────────────────────────────────────────────

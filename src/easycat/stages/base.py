@@ -218,13 +218,15 @@ def put_artifact(
 ) -> str | None:
     """Store ``payload`` in ``ctx.artifact_store`` and return its ref.
 
-    Returns ``None`` when there is no store, the payload is empty, or
-    the store silently rejects the write (over size cap).  Callers
-    should treat the ref as optional and fall back to inline ``data``.
+    Returns ``None`` when there is no store, the payload is empty, the
+    journal is already degraded, or the store silently rejects the write
+    (over size cap). Callers should treat the ref as optional and fall back
+    to inline ``data``.
     """
     if (
         ctx.artifact_store is None
         or not payload
+        or _journal_is_degraded(ctx)
         or not _capture_is_enabled(
             ctx,
             capture_allowed,
@@ -269,6 +271,7 @@ async def put_artifact_async(
     if (
         ctx.artifact_store is None
         or not payload
+        or _journal_is_degraded(ctx)
         or not _capture_is_enabled(
             ctx,
             capture_allowed,
@@ -291,6 +294,11 @@ async def put_artifact_async(
             store.delete(ref)
         return None
     return ref or None
+
+
+def _journal_is_degraded(ctx: RunContext) -> bool:
+    """Whether stage artifacts can no longer receive a journal reference."""
+    return ctx.journal is not None and bool(ctx.journal.degraded)
 
 
 def _capture_is_enabled(ctx: RunContext, capture_allowed: bool | None) -> bool:
