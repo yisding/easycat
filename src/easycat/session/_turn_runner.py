@@ -572,6 +572,12 @@ class TurnRunner:
 
     async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            # Checkpoint before mutating ownership. Otherwise a cancellation
+            # requested immediately before entry is included in the baseline
+            # below and mistaken for the speculative task's cancellation.
+            await asyncio.sleep(0)
         task = self._preemptive_task
         self._preemptive_task = None
         self._preemptive_transcript = ""
@@ -584,7 +590,6 @@ class TurnRunner:
             # teardown close the surrounding session.
             self._runtime_scope.discard(cast(asyncio.Task[Any], task))
             return
-        current_task = asyncio.current_task()
         cancellation_requests = current_task.cancelling() if current_task is not None else 0
         if not task.done():
             task.cancel()
