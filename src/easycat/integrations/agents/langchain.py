@@ -50,10 +50,16 @@ logger = logging.getLogger(__name__)
 
 def _stream_event_object(event: Any) -> dict[str, Any] | None:
     """Return a stream event object, dropping malformed provider items."""
-    if isinstance(event, dict):
-        return event
-    logger.warning("Ignoring malformed LangChain stream event: expected an object")
-    return None
+    if not isinstance(event, dict):
+        logger.warning("Ignoring malformed LangChain stream event: expected an object")
+        return None
+    parent_ids = event.get("parent_ids")
+    if parent_ids is not None and (
+        not isinstance(parent_ids, Sequence) or isinstance(parent_ids, (str, bytes, bytearray))
+    ):
+        logger.warning("Ignoring malformed LangChain stream event: parent_ids must be an array")
+        return None
+    return event
 
 
 # No default ``include_types`` filter — LangChain's ``astream_events``

@@ -409,6 +409,8 @@ class MultiContextWSManager:
             # Lock order is always connect -> send. This joins an admitted
             # frame write before contexts or the exact socket are released.
             async with self._send_lock:
+                # Snapshot the handle before cancelling the reader, whose
+                # ``finally`` nulls ``self._ws``.
                 ws = self._pending_socket_close
                 if ws is None:
                     ws = self._ws
@@ -422,8 +424,6 @@ class MultiContextWSManager:
                             self._send_frames_unlocked(close_frames, allow_closing=True),
                             timeout=_SOCKET_CLOSE_SEND_TIMEOUT,
                         )
-                # Snapshot the handle before cancelling the reader, whose
-                # ``finally`` nulls ``self._ws``.
                 await self._cancel_background_tasks()
                 self._ws = None
                 try:
@@ -449,6 +449,11 @@ class MultiContextWSManager:
     async def _await_close_task(self, close_task: asyncio.Task[None]) -> None:
         """Join a close transaction without misclassifying child cancellation."""
         waiter = asyncio.current_task()
+        # Preserve a cancellation already pending at helper entry. A
+        # previously caught request keeps cancelling() non-zero but does not
+        # raise at this checkpoint.
+        if waiter is not None and waiter.cancelling():
+            await asyncio.sleep(0)
         cancellation_requests = waiter.cancelling() if waiter is not None else 0
         try:
             await asyncio.shield(close_task)
@@ -681,35 +686,42 @@ class MultiContextWSManager:
         reconnects a fresh socket.
         """
         self._fallback_close_waiters += 1
-        self._closing = True
         try:
             async with self._connect_lock:
                 # Permanent close owns every remaining resource once admission
                 # is closed. Do not retry or double-close its exact socket.
                 if self._closed:
                     return
-                # Preserve the global connect -> send lock order.
+                # Mark deliberate teardown only after this caller owns the
+                # transition. Setting it while waiting for a slow connect
+                # would mask a genuine reader failure as clean completion.
+                self._closing = True
+                await self._retry_pending_socket_close()
+                ws = self._ws
+                # This fallback abandons the shared connection because one
+                # context's cancel frame could not be sent. The cancelled
+                # context ends quietly, but every sibling was interrupted and
+                # must see a terminal error rather than wait forever.
+                terminal_error = ConnectionError(
+                    "TTS WebSocket closed after context cancellation failed"
+                )
+                for ctx in list(self._contexts.values()):
+                    if not ctx.cancelled:
+                        ctx.error = terminal_error
+                # The reader's deliberate cancellation must not surface a
+                # spurious connection-death error on live contexts.
+                await self._cancel_background_tasks()
+                for ctx in list(self._contexts.values()):
+                    self._finish_context(ctx)
+                self._ws = None
+                if ws is not None:
+                    # The cancel-frame timeout may have been caused by a send
+                    # wedged while owning _send_lock. Close first so the socket
+                    # can unblock it, then join the admitted send before
+                    # clearing the closing admission flag.
+                    await self._close_owned_socket(ws)
                 async with self._send_lock:
-                    await self._retry_pending_socket_close()
-                    ws = self._ws
-                    # This fallback abandons the shared connection because one
-                    # context's cancel frame could not be sent. The cancelled
-                    # context ends quietly, but every sibling was interrupted
-                    # and must see a terminal error rather than wait forever
-                    # for a reader task that may have been cancelled before it
-                    # ever started running its cleanup ``finally`` block.
-                    terminal_error = ConnectionError(
-                        "TTS WebSocket closed after context cancellation failed"
-                    )
-                    for ctx in list(self._contexts.values()):
-                        if not ctx.cancelled:
-                            ctx.error = terminal_error
-                    await self._cancel_background_tasks()
-                    for ctx in list(self._contexts.values()):
-                        self._finish_context(ctx)
-                    self._ws = None
-                    if ws is not None:
-                        await self._close_owned_socket(ws)
+                    pass
         finally:
             self._fallback_close_waiters -= 1
             if self._fallback_close_waiters == 0 and not self._closed:
