@@ -158,9 +158,24 @@ class _RetentionSweep:
         if not oldest.exists():
             self._total_bytes -= fsize
             return False
-        if self._mode == "archive" and not _archive_session(self._root, oldest):
-            return False
+        archive_path: Path | None = None
+        if self._mode == "archive":
+            archive_path = _archive_session(self._root, oldest)
+            if archive_path is None:
+                return False
         if not _remove_session(self._root, oldest):
+            # If the source DB itself remains, the archive is only a duplicate.
+            # Remove it so every later retention pass cannot allocate another
+            # numeric suffix for the same permanently unremovable session.
+            # When the main DB is already gone, retain the archive because it
+            # is the sole durable copy and only sidecar cleanup failed.
+            if archive_path is not None and oldest.exists():
+                try:
+                    archive_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "Failed to remove duplicate archive %s", archive_path, exc_info=True
+                    )
             return False
 
         self._total_bytes -= fsize
@@ -207,8 +222,8 @@ def _session_bytes(root: Path, db_path: Path) -> int | None:
     return size
 
 
-def _archive_session(root: Path, oldest: Path) -> bool:
-    """Tar the journal (plus artifacts) into ``archive/``; False on failure."""
+def _archive_session(root: Path, oldest: Path) -> Path | None:
+    """Tar the journal and artifacts; return its path or ``None`` on failure."""
     archive_dir = root / "archive"
     archive_path: Path | None = None
     try:
@@ -250,8 +265,8 @@ def _archive_session(root: Path, oldest: Path) -> bool:
             except OSError:
                 logger.debug("Failed to remove incomplete archive %s", archive_path, exc_info=True)
         logger.warning("Failed to archive %s", oldest, exc_info=True)
-        return False
-    return True
+        return None
+    return archive_path
 
 
 def _reserve_archive_path(archive_dir: Path, session_id: str) -> Path:
