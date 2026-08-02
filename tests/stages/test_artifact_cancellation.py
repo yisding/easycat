@@ -35,6 +35,9 @@ class _BlockingArtifactStore:
         self._block_delete = block_delete
         self._cleanup_token = uuid.uuid4().hex if preexisting else None
         self._lock = threading.Lock()
+        self._put_order_lock = threading.Lock()
+        self._next_put_index = 0
+        self._first_put_committed = threading.Event()
 
     def put(self, payload: bytes, *, artifact_class: str = "replay_critical") -> str:
         return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
@@ -46,18 +49,26 @@ class _BlockingArtifactStore:
         artifact_class: str = "replay_critical",
     ) -> ArtifactWriteReceipt:
         del payload, artifact_class
+        with self._put_order_lock:
+            put_index = self._next_put_index
+            self._next_put_index += 1
         self._loop.call_soon_threadsafe(self.put_started.set)
         if not self.put_release.wait(timeout=5):
             raise AssertionError("timed out waiting to release artifact put")
+        if put_index and not self._first_put_committed.wait(timeout=5):
+            raise AssertionError("timed out waiting for the first artifact put")
         with self._lock:
             created = self.ref not in self.refs
             self.refs.add(self.ref)
             self._cleanup_token = uuid.uuid4().hex
-            return ArtifactWriteReceipt(
+            receipt = ArtifactWriteReceipt(
                 self.ref,
                 created=created,
                 cleanup_token=self._cleanup_token,
             )
+        if put_index == 0:
+            self._first_put_committed.set()
+        return receipt
 
     def has(self, ref: str) -> bool:
         with self._lock:
