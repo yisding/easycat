@@ -660,6 +660,12 @@ def test_openai_realtime_config_final_timeout_default() -> None:
     assert config.persistent_ws is True
 
 
+@pytest.mark.parametrize("timeout", [True, 0, -1, float("nan"), float("inf")])
+def test_openai_realtime_config_rejects_invalid_final_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="final_transcript_timeout_s"):
+        OpenAIRealtimeSTTConfig(api_key="sk-test", final_transcript_timeout_s=timeout)
+
+
 def test_openai_realtime_config_preserves_legacy_positional_field_order() -> None:
     factory = _MockWSFactory()
     event_bus = object()

@@ -492,6 +492,12 @@ def test_elevenlabs_config_final_timeout_default():
     assert config.final_transcript_timeout_s == pytest.approx(5.0)
 
 
+@pytest.mark.parametrize("timeout", [True, 0, -1, float("nan"), float("inf")])
+def test_elevenlabs_config_rejects_invalid_final_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="final_transcript_timeout_s"):
+        ElevenLabsSTTConfig(api_key="k", final_transcript_timeout_s=timeout)
+
+
 @pytest.mark.asyncio
 async def test_elevenlabs_empty_committed_transcript_acknowledges_without_final():
     """A silence-only commit releases its waiter without emitting empty text."""
