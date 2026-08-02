@@ -893,6 +893,36 @@ class FakePersistentWS:
         await self._queue.put(None)
 
 
+class InterleavedPersistentWS(FakePersistentWS):
+    """Persistent socket that waits for the test to supply interleaved audio."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts_ready = asyncio.Event()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+        msg = json.loads(message)
+        end_count = sum(json.loads(frame).get("text") == "" for frame in self.sent)
+        if msg.get("text") == "" and end_count == 2:
+            self.contexts_ready.set()
+
+
+async def _collect_persistent_audio(provider: ElevenLabsTTS, text: str) -> bytes:
+    chunks = []
+    async for event in provider.synthesize(text):
+        if event.type == TTSEventType.AUDIO and event.audio is not None:
+            chunks.append(bytes(event.audio.data))
+    return b"".join(chunks)
+
+
+async def _cancel_tasks(*tasks) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class TestElevenLabsPersistent:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
         config = ElevenLabsTTSConfig(
@@ -1007,6 +1037,76 @@ class TestElevenLabsPersistent:
             assert closes == [{"context_id": request["context_id"], "close_context": True}]
             assert not fake.closed
         await provider.close()
+
+    async def test_concurrent_contexts_keep_audio_alignment_isolated(self):
+        """Interleaved persistent frames cannot share half-samples between contexts."""
+
+        provider = self._make_provider()
+        fake = InterleavedPersistentWS()
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            first = asyncio.create_task(_collect_persistent_audio(provider, "first"))
+            second = asyncio.create_task(_collect_persistent_audio(provider, "second"))
+            try:
+                await asyncio.wait_for(fake.contexts_ready.wait(), timeout=1)
+                contexts = {
+                    request["text"]: request["context_id"]
+                    for request in (json.loads(message) for message in fake.sent)
+                    if request.get("text") in {"first", "second"}
+                }
+                first_context = contexts["first"]
+                second_context = contexts["second"]
+
+                for message in (
+                    {"audio": "AQ==", "contextId": first_context},
+                    {"audio": "AgA=", "contextId": second_context},
+                    {"audio": "AA==", "contextId": first_context},
+                    {"is_final": True, "contextId": first_context},
+                    {"is_final": True, "contextId": second_context},
+                ):
+                    await fake._queue.put(json.dumps(message))
+
+                first_audio, second_audio = await asyncio.gather(first, second)
+                assert first_audio == b"\x01\x00"
+                assert second_audio == b"\x02\x00"
+                assert provider._persistent_audio_states == {}
+            finally:
+                await _cancel_tasks(first, second)
+                await provider.close()
+
+    async def test_cancelled_context_drops_resampler_tail_after_successor_starts(self):
+        """A successor must not re-enable delayed audio from a cancelled context."""
+
+        class BufferedTailWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") != "" or "context_id" not in msg:
+                    return
+                ctx_id = msg["context_id"]
+                audio = base64.b64encode(_pcm16_bytes(960)).decode()
+                await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
+                await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
+
+        provider = self._make_provider(output_format="pcm_44100")
+        fake = BufferedTailWS()
+        cancelled = provider.synthesize("cancelled")
+        successor = provider.synthesize("successor")
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            try:
+                first = await anext(cancelled)
+                assert first.type == TTSEventType.AUDIO
+
+                await provider.cancel()
+                replacement = await anext(successor)
+                assert replacement.type == TTSEventType.AUDIO
+                assert not provider.is_cancelled
+
+                with pytest.raises(StopAsyncIteration):
+                    await anext(cancelled)
+            finally:
+                await cancelled.aclose()
+                await successor.aclose()
+                await provider.close()
 
     async def test_warmup_failure_is_retried_by_synthesis(self):
         provider = self._make_provider()

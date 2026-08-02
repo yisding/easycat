@@ -286,6 +286,56 @@ class TestTTSBase:
         base._make_audio_event(b"\xdd", PCM16_MONO_16K)
         assert base._sample_carry == b""
 
+    def test_isolated_audio_states_do_not_share_carry_or_resampler(self):
+        """Interleaved streams must match their separately rendered PCM."""
+        base = TTSBase(output_format=PCM16_MONO_16K)
+        source_format = PCM16_MONO_24K
+        first_stream = _make_pcm16_data(2400, value=100)
+        second_stream = _make_pcm16_data(2400, value=-200)
+
+        def render(parts: list[bytes]) -> bytes:
+            state = base._new_audio_conversion_state()
+            events = [base._make_audio_event(part, source_format, state=state) for part in parts]
+            events.append(base._finish_audio_event(state=state))
+            return b"".join(
+                event.audio.data
+                for event in events
+                if event is not None and event.audio is not None
+            )
+
+        split_at = 2401  # Deliberately split inside one 16-bit source sample.
+        expected_first = render([first_stream[:split_at], first_stream[split_at:]])
+        expected_second = render([second_stream])
+
+        first_state = base._new_audio_conversion_state()
+        second_state = base._new_audio_conversion_state()
+        first_events = [
+            base._make_audio_event(first_stream[:split_at], source_format, state=first_state),
+        ]
+        second_events = [
+            base._make_audio_event(second_stream, source_format, state=second_state),
+        ]
+        first_events.extend(
+            [
+                base._make_audio_event(first_stream[split_at:], source_format, state=first_state),
+                base._finish_audio_event(state=first_state),
+            ]
+        )
+        second_events.append(base._finish_audio_event(state=second_state))
+        actual_first = b"".join(
+            event.audio.data
+            for event in first_events
+            if event is not None and event.audio is not None
+        )
+        actual_second = b"".join(
+            event.audio.data
+            for event in second_events
+            if event is not None and event.audio is not None
+        )
+
+        assert actual_first == expected_first
+        assert actual_second == expected_second
+
     def test_end_synthesis_drops_subsample_carry(self):
         """A leftover sub-sample byte that no frame completed is intentionally
         dropped (not emitted) when synthesis ends, and cleared so it cannot
