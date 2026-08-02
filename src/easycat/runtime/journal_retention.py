@@ -177,14 +177,36 @@ class _RetentionSweep:
             if unavailable:
                 self._total_bytes -= fsize
                 return False
-            if self._mode == "archive" and not _archive_session(self._root, oldest):
-                return False
-            if not _remove_session(self._root, oldest):
+            if not self._archive_and_remove(oldest):
                 return False
 
         self._total_bytes -= fsize
         self.removed += 1
         return True
+
+    def _archive_and_remove(self, oldest: Path) -> bool:
+        """Archive if configured, then remove without retaining duplicate copies."""
+        archive_path: Path | None = None
+        if self._mode == "archive":
+            archive_path = _archive_session(self._root, oldest)
+            if archive_path is None:
+                return False
+        if _remove_session(self._root, oldest):
+            return True
+
+        # If the source DB remains, the archive is only a duplicate. Remove it
+        # so repeated sweeps cannot reserve unbounded suffixes. Retain it when
+        # only sidecar cleanup failed: it is then the sole durable DB copy.
+        if archive_path is not None and oldest.exists():
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Failed to remove duplicate archive %s",
+                    archive_path,
+                    exc_info=True,
+                )
+        return False
 
 
 def _journal_files_oldest_first(journals_dir: Path) -> list[Path]:
@@ -230,8 +252,8 @@ def _session_bytes(root: Path, db_path: Path) -> int | None:
     return size
 
 
-def _archive_session(root: Path, oldest: Path) -> bool:
-    """Tar the journal (plus artifacts) into ``archive/``; False on failure."""
+def _archive_session(root: Path, oldest: Path) -> Path | None:
+    """Tar the journal and artifacts; return its path or ``None`` on failure."""
     archive_dir = root / "archive"
     archive_path: Path | None = None
     try:
@@ -275,8 +297,8 @@ def _archive_session(root: Path, oldest: Path) -> bool:
             except OSError:
                 logger.debug("Failed to remove incomplete archive %s", archive_path, exc_info=True)
         logger.warning("Failed to archive %s", oldest, exc_info=True)
-        return False
-    return True
+        return None
+    return archive_path
 
 
 def _reserve_archive_path(archive_dir: Path, session_id: str) -> Path:

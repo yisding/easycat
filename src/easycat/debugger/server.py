@@ -896,14 +896,14 @@ class _DebuggerRoutes:
         unknown = set(payload) - self._ALLOWED_REPLAY_KEYS
         if unknown:
             return web.json_response({"error": f"unknown keys: {sorted(unknown)}"}, status=400)
-        fidelity = payload.get("fidelity", "artifact")
-        tool_policy = payload.get("tool_policy", "deny")
         try:
             validated = _validated_replay_kwargs(payload)
         except ValueError as exc:
             return web.json_response(
                 {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
             )
+        fidelity = validated.get("fidelity", "artifact")
+        tool_policy = validated.get("tool_policy", "deny")
         force = validated.get("force", False)
         confirm = payload.pop("confirm", False) is True
         # ARTIFACT/SIMULATED with DENY/STUB are always safe; LIVE
