@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat.tts import _multi_context_ws as multi_context_ws_module
 from easycat.tts._multi_context_ws import (
     MultiContextAdapter,
     MultiContextWSManager,
@@ -625,6 +626,83 @@ class TestMultiContextWSManager:
         assert ws.closed
         assert ws.close.await_count == 1
 
+    async def test_close_wait_preserves_cancellation_pending_at_entry(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        owned = asyncio.create_task(asyncio.Event().wait())
+
+        async def cancel_before_await() -> None:
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+            await mgr._await_close_task(owned)
+
+        caller = asyncio.create_task(cancel_before_await())
+
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert not owned.done()
+        owned.cancel()
+        await asyncio.gather(owned, return_exceptions=True)
+
+    async def test_cancel_fallback_closes_before_joining_wedged_sender(self, monkeypatch):
+        monkeypatch.setattr(multi_context_ws_module, "_CANCEL_SEND_TIMEOUT", 0.01)
+        ws = FakeMultiContextWS()
+        send_entered = asyncio.Event()
+        release_send = asyncio.Event()
+
+        async def blocked_send(_frame: str) -> None:
+            send_entered.set()
+            await release_send.wait()
+
+        async def close_and_unblock_send() -> None:
+            ws.closed = True
+            ws._gate.set()
+            release_send.set()
+
+        ws.send = AsyncMock(side_effect=blocked_send)  # type: ignore[method-assign]
+        ws.close = AsyncMock(side_effect=close_and_unblock_send)  # type: ignore[method-assign]
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+
+        sending = asyncio.create_task(mgr.send(ctx, ["request"]))
+        await send_entered.wait()
+        cancelling = asyncio.create_task(mgr.cancel_context(ctx))
+
+        await asyncio.wait_for(cancelling, timeout=1)
+        with pytest.raises(RuntimeError, match="is closing"):
+            await asyncio.wait_for(sending, timeout=1)
+
+        assert ws.closed
+        assert ws.close.await_count == 1
+        assert ctx.done.is_set()
+
+    async def test_cancel_fallback_does_not_mask_reader_failure_while_waiting_for_connect(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        lock_held = asyncio.Event()
+        release_lock = asyncio.Event()
+
+        async def hold_connect_lock() -> None:
+            async with mgr._connect_lock:
+                lock_held.set()
+                await release_lock.wait()
+
+        holder = asyncio.create_task(hold_connect_lock())
+        await lock_held.wait()
+        closing = asyncio.create_task(mgr._close_socket_only())
+        await asyncio.sleep(0)
+
+        assert mgr._closing is False
+        ws._gate.set()
+        assert mgr._reader_task is not None
+        await mgr._reader_task
+        assert isinstance(ctx.error, ConnectionError)
+
+        release_lock.set()
+        await asyncio.wait_for(asyncio.gather(holder, closing), timeout=1)
+
     async def test_cancel_fallback_and_aclose_do_not_double_close_socket(self):
         ws = FakeMultiContextWS(fail_send_at={1})
         close_entered = asyncio.Event()
@@ -737,8 +815,8 @@ class TestMultiContextWSManager:
 
         release_send.set()
         with pytest.raises(RuntimeError, match="is closing"):
-            await sending
-        await closing
+            await asyncio.wait_for(sending, timeout=1)
+        await asyncio.wait_for(closing, timeout=1)
 
         assert ws.closed
         assert ctx.done.is_set()
@@ -771,8 +849,11 @@ class TestMultiContextWSManager:
         assert not closing.done()
 
         release_first_send.set()
-        outcomes = await asyncio.gather(admitted, queued, return_exceptions=True)
-        await closing
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(admitted, queued, return_exceptions=True),
+            timeout=1,
+        )
+        await asyncio.wait_for(closing, timeout=1)
 
         assert all(isinstance(outcome, RuntimeError) for outcome in outcomes)
         assert all("is closing" in str(outcome) for outcome in outcomes)
