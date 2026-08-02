@@ -29,6 +29,7 @@ from easycat.runtime import (
     run_retention,
 )
 from easycat.runtime import journal_sql as journal_sql_module
+from easycat.runtime.crash_sweep import is_journal_live
 from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.records import (
     ErrorInfo,
@@ -1016,6 +1017,24 @@ class TestCrashRecovery:
         crash_conn.close()
         assert dumped == ["before_finalize", "after_finalize"]
         j2.close()
+
+    def test_committed_append_after_finalize_restores_live_owner_marker(self, tmp_path):
+        journal = SqliteJournal("sess", data_dir=tmp_path)
+        try:
+            journal.append(kind=JournalRecordKind.EVENT, name="before", session_id="sess")
+            journal.finalize()
+
+            journal.append(kind=JournalRecordKind.EVENT, name="after", session_id="sess")
+            journal.flush()
+
+            db_path = tmp_path / "journals" / "sess.sqlite"
+            marker = journal._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            assert marker == (str(os.getpid()),)
+            assert is_journal_live(db_path) is True
+        finally:
+            journal.close()
 
     def test_uncommitted_append_after_finalize_keeps_clean_marker(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)

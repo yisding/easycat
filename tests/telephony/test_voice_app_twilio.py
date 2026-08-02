@@ -531,6 +531,86 @@ def test_media_listener_bounds_messages_and_disables_compression(
     assert callable(harness.serve_kwargs.get("process_request"))
 
 
+def test_twilio_drains_media_sessions_after_http_listener_stop_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _ServerHarness(monkeypatch)
+    drained = False
+
+    async def fail_site_stop(_self: Any) -> None:
+        raise RuntimeError("HTTP listener stop failed")
+
+    async def record_drain(
+        _self: Any,
+        _media_server: Any,
+        *,
+        drain_timeout_s: float,
+        force_timeout_s: float,
+    ) -> None:
+        nonlocal drained
+        assert drain_timeout_s >= 0
+        assert force_timeout_s >= 0
+        drained = True
+
+    monkeypatch.setattr(harness.web.TCPSite, "stop", fail_site_stop)
+    monkeypatch.setattr(server_module.WebSocketSessionRuntime, "drain", record_drain)
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config)
+        )
+        await harness._started.wait()
+        harness._shutdown.set()
+        with pytest.raises(RuntimeError, match="HTTP listener stop failed"):
+            await task
+
+    asyncio.run(run())
+
+    assert drained is True
+    assert harness.web.runner_cleaned is True
+
+
+def test_twilio_shutdown_preserves_drain_cancellation_after_listener_error() -> None:
+    async def run() -> None:
+        class _Runtime:
+            def start_draining(self, _server: object) -> None:
+                pass
+
+            async def drain(self, *_args: object, **_kwargs: object) -> None:
+                raise asyncio.CancelledError
+
+        site = type(
+            "_Site",
+            (),
+            {"stop": lambda _self: _raise_async(RuntimeError("listener failed"))},
+        )()
+        runner = type("_Runner", (), {"cleanup": lambda _self: _return_async()})()
+
+        with pytest.raises(asyncio.CancelledError):
+            await server_module._shutdown_twilio_voice_app(
+                runtime=_Runtime(),
+                media_server=object(),
+                site=site,
+                runner=runner,
+                config=TwilioVoiceServerConfig(
+                    stream_url="wss://example/media",
+                    unsafe_allow_unsigned_webhooks=True,
+                ),
+            )
+
+    async def _raise_async(exc: BaseException) -> None:
+        raise exc
+
+    async def _return_async() -> None:
+        return None
+
+    asyncio.run(run())
+
+
 # ── session('twilio') still raises ────────────────────────────────────
 
 

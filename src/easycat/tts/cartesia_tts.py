@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import math
@@ -297,8 +298,12 @@ class CartesiaTTS(_WSTTSBase):
         # The default input policy makes the scheduler deliver plain text here.
         text = coerce_tts_input(payload).text
         if self._persistent_enabled():
-            async for event in self._synthesize_persistent(text):
-                yield event
+            # ``async for`` alone does not close a delegated async generator
+            # when our caller stops early. Own it so its finally sends the
+            # context-scoped remote cancel rather than leaving synthesis live.
+            async with contextlib.aclosing(self._synthesize_persistent(text)) as stream:
+                async for event in stream:
+                    yield event
             return
 
         async for event in self._synthesize_oneshot(text):
@@ -383,6 +388,7 @@ class CartesiaTTS(_WSTTSBase):
         # still emit the provider error and run _end_synthesis() (clearing
         # is_active), exactly like the one-shot path.
         ctx: _Context | None = None
+        terminal_received = False
         try:
             ctx = await mgr.open_context()
             await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
@@ -401,6 +407,7 @@ class CartesiaTTS(_WSTTSBase):
                 for event in events:
                     yield event
                 if terminal:
+                    terminal_received = True
                     break
             tail = self._finish_audio_event()
             if tail is not None:
@@ -413,8 +420,23 @@ class CartesiaTTS(_WSTTSBase):
                 raise
         finally:
             if ctx is not None:
-                mgr.finish_context(ctx)
+                await self._finish_persistent_context(mgr, ctx, terminal_received)
             self._end_synthesis()
+
+    async def _finish_persistent_context(
+        self,
+        mgr: MultiContextWSManager,
+        ctx: _Context,
+        terminal_received: bool,
+    ) -> None:
+        """Release a completed context or cancel an abandoned remote stream."""
+        if terminal_received or ctx.cancelled or ctx.done.is_set():
+            mgr.finish_context(ctx)
+            return
+        # The consumer can stop early (for example after the first audio chunk).
+        # Tell Cartesia to stop that remote context before unregistering it
+        # locally, or it keeps producing billed audio as unroutable late frames.
+        await mgr.cancel_context(ctx)
 
     async def stop(self) -> None:
         if self._persistent_enabled():

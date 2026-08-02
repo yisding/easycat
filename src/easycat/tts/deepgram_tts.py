@@ -108,6 +108,9 @@ class DeepgramTTS(_WSTTSBase):
         super().__init__(output_format=config.output_format)
         self._config = config
         self._stream_lock = asyncio.Lock()
+        # Serializes every outbound control frame on the context-free persistent
+        # socket. In particular, Clear must never overtake an admitted Speak.
+        self._send_lock = asyncio.Lock()
         self._synthesis_owner: asyncio.Task[Any] | None = None
         self._cycle_done: asyncio.Event | None = None
         self._flush_times: deque[float] = deque()
@@ -213,9 +216,7 @@ class DeepgramTTS(_WSTTSBase):
         # its own right, so drop any sub-sample byte held from before the drop
         # to avoid shifting every replayed sample by one byte.
         self._reset_audio_alignment()
-        await ws.send(json.dumps({"type": "Speak", "text": text}))
-        await ws.send(json.dumps({"type": "Flush"}))
-        self._record_flush()
+        await self._send_speak_and_flush(ws, text)
 
     def _handle_control(self, message: str) -> str | None:
         """Handle one Deepgram control frame and return its type."""
@@ -317,12 +318,7 @@ class DeepgramTTS(_WSTTSBase):
         try:
             ws = await self._ensure_flush_capacity()
 
-            # Send the text payload
-            await ws.send(json.dumps({"type": "Speak", "text": text}))
-
-            # Send flush to signal end of text input
-            await ws.send(json.dumps({"type": "Flush"}))
-            self._record_flush()
+            await self._send_speak_and_flush(ws, text)
 
             # Request is now live on a connected stream: arm replay so a
             # *mid-stream* reconnect re-sends these frames and restarts the
@@ -363,6 +359,24 @@ class DeepgramTTS(_WSTTSBase):
                 raise
         finally:
             await self._finish_cycle(cycle_done, completed=cycle_completed)
+
+    async def _send_speak_and_flush(self, ws: ReconnectingWebSocket, text: str) -> None:
+        """Send one utterance atomically with respect to Clear and replay.
+
+        A cancellation that arrives while ``Speak`` is suspended closes the
+        socket rather than allowing ``Clear`` to overtake it. Recheck after
+        Speak so the old cycle can never append Flush after that containment.
+        """
+        async with self._send_lock:
+            if self._cancelled or self._ws is not ws:
+                if self._ws is ws:
+                    await self._close_ws()
+                return
+            await ws.send(json.dumps({"type": "Speak", "text": text}))
+            if self._cancelled or self._ws is not ws:
+                return
+            await ws.send(json.dumps({"type": "Flush"}))
+            self._record_flush()
 
     async def _finish_cycle(self, cycle_done: asyncio.Event, *, completed: bool) -> None:
         """Publish cycle completion after protocol or socket cleanup finishes."""
@@ -405,8 +419,18 @@ class DeepgramTTS(_WSTTSBase):
                 return
             owner = self._synthesis_owner
             cycle_done = self._cycle_done
+            # A Speak/Flush or reconnect replay is already in flight. Sending
+            # Clear concurrently can make it overtake Speak, leaving old audio
+            # queued for the next unscoped cycle. Discard this exact socket
+            # instead; the next synthesis opens a fresh, unambiguous stream.
+            if self._send_lock.locked():
+                await self._close_ws()
+                return
             try:
-                await ws.send(json.dumps({"type": "Clear"}))
+                async with self._send_lock:
+                    if self._ws is not ws:
+                        return
+                    await ws.send(json.dumps({"type": "Clear"}))
             except Exception:
                 logger.debug("Error sending Deepgram Clear; closing socket", exc_info=True)
             else:

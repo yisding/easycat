@@ -505,18 +505,7 @@ class SqliteJournal(_SqlJournalBase):
         # orphan sweep cannot tell "live but idle" from "crashed" by lock
         # alone. The birth identity distinguishes this process from a later
         # process that reuses its PID, even after a reboot.
-        self._conn.execute(
-            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
-            (str(os.getpid()),),
-        )
-        process_birth = _process_birth_identity(os.getpid())
-        if process_birth is not None:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
-                (process_birth,),
-            )
-        else:
-            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
+        self._restore_live_owner_marker()
         self._conn.commit()
 
         # Recover sequence counter from any existing records.  Both the
@@ -949,6 +938,26 @@ class SqliteJournal(_SqlJournalBase):
 
     def _clear_clean_close_marker_before_write(self) -> None:
         self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+        # finalize() removes the durable owner marker. A successful
+        # post-finalize append reopens the journal, so restore the marker in
+        # the same savepoint as the marker deletion and record insert. If the
+        # append fails, rolling the savepoint back retains clean-close state.
+        self._restore_live_owner_marker()
+
+    def _restore_live_owner_marker(self) -> None:
+        """Mark this connection's process as the durable journal owner."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(os.getpid()),),
+        )
+        process_birth = _process_birth_identity(os.getpid())
+        if process_birth is not None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+                (process_birth,),
+            )
+        else:
+            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
 
     def _enter_degraded(self, session_id: str, exc: Exception) -> None:
         self._degraded = True

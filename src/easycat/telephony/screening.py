@@ -622,7 +622,7 @@ class CallScreeningDetector:
         return self._screening_response
 
     def start(self) -> None:
-        if not self._enabled:
+        if not self._enabled or self._started:
             return
         self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)

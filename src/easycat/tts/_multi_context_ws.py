@@ -343,7 +343,8 @@ class MultiContextWSManager:
             # replay responses can be read. Running the callback here would
             # mutate consumer-owned decoder state while buffered old-connection
             # frames are still waiting under backpressure.
-            await ctx.queue.put(_REPLAY_BOUNDARY)
+            if not await self._put_context_item(ctx, _REPLAY_BOUNDARY):
+                continue
             pending_frames = ctx.pending_frames
             if (
                 ctx.cancelled
@@ -591,12 +592,46 @@ class MultiContextWSManager:
         # stalls THIS reader, which stops draining recv_iter and lets TCP
         # backpressure flow to the server — mirroring the one-shot path. Never
         # silently drop a frame (e.g. the terminal done/isFinal).
-        # finish_context() drains the queue to release a reader blocked here on
-        # cancel/teardown, and cancelling the reader task unblocks it too.
+        # finish_context() marks the context done before draining. Race the
+        # bounded put with that marker so a late frame cannot re-fill the queue
+        # after teardown and leave this shared reader stuck forever.
         # (EasyCat drives one active context at a time, so head-of-line blocking
         # across contexts is not a concern here.) The PARSED object is queued so
         # the consumer never re-parses the frame.
-        await ctx.queue.put(parsed)
+        await self._put_context_item(ctx, parsed)
+
+    async def _put_context_item(self, ctx: _Context, item: Any) -> bool:
+        """Queue *item* unless context teardown wins a full-queue race.
+
+        A normal full queue deliberately applies backpressure.  Once a context
+        is finished, however, its queue is drained and a terminal sentinel is
+        installed; a previously blocked ``queue.put()`` must be cancelled
+        instead of waiting behind that sentinel forever.
+        """
+        if ctx.done.is_set():
+            return False
+        try:
+            ctx.queue.put_nowait(item)
+            return True
+        except asyncio.QueueFull:
+            pass
+
+        put_task = asyncio.create_task(ctx.queue.put(item))
+        done_task = asyncio.create_task(ctx.done.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (put_task, done_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if put_task in done:
+                await put_task
+                return True
+            return False
+        finally:
+            for task in (put_task, done_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(put_task, done_task, return_exceptions=True)
 
     def _finalize_reader(self, err: BaseException | None) -> None:
         """Tear down after the reader loop exits (clean or error).
