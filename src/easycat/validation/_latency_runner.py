@@ -321,7 +321,7 @@ def _load_evidence(
             if "samples" not in excluded and paths.samples.exists()
             else []
         )
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, RecursionError) as exc:
         samples = []
         sample_load_failure = ValidationFailure(
             name="latency.samples",
@@ -687,7 +687,7 @@ def _compare_against_baseline(
 ) -> tuple[dict[str, Any] | None, ValidationFailure | None]:
     try:
         raw = baseline_path.read_text()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return None, ValidationFailure(
             name="latency.baseline",
             message=f"could not read latency baseline {baseline_path}: {exc}",
@@ -695,7 +695,7 @@ def _compare_against_baseline(
         )
     try:
         baseline_payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         return None, ValidationFailure(
             name="latency.baseline",
             message=f"invalid latency baseline JSON {baseline_path}: {exc}",

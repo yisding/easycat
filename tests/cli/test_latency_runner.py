@@ -301,6 +301,25 @@ def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Pat
     assert (tmp_path / "latency" / "sweep-latest.json").exists()
 
 
+def test_latency_runner_reports_deeply_nested_samples_without_crashing(tmp_path: Path) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text("[" * 10_000 + "0" + "]" * 10_000)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SWEEP,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"] == {"artifact_redaction": 1, "pytest": 0}
+    assert report["failures"][0]["name"] == "artifact_redaction.samples"
+    assert report["failures"][0]["failure_class"] == "artifact_redaction_error"
+
+
 @pytest.mark.parametrize("non_finite", ["NaN", "Infinity", "-Infinity"])
 def test_latency_runner_rejects_non_finite_sample_measurements(
     tmp_path: Path,
@@ -499,3 +518,32 @@ def test_latency_runner_reports_malformed_reliability_samples_without_crashing(
         for failure in checks_by_name["reliability.samples"]["details"]["failures"]
     )
     assert report["latency"]["samples"][0]["sample_id"] == "sample-1"
+
+
+def test_latency_runner_reports_deeply_nested_reliability_samples_without_crashing(
+    tmp_path: Path,
+) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        sample = LatencySample(
+            sample_id="sample-1",
+            condition_id="baseline",
+            warmup=False,
+            timestamp_source="event_monotonic",
+            stages=LatencyStageDurations(total_ms=750.0),
+        )
+        Path(env["EASYCAT_LATENCY_SAMPLES_PATH"]).write_text(json.dumps([sample.to_dict()]))
+        Path(env["EASYCAT_RELIABILITY_SAMPLES_PATH"]).write_text("[" * 10_000 + "0" + "]" * 10_000)
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"] == {"artifact_redaction": 1, "pytest": 0}
+    assert report["failures"][0]["name"] == "artifact_redaction.reliability"
+    assert report["failures"][0]["failure_class"] == "artifact_redaction_error"
