@@ -17,8 +17,10 @@ from easycat.events import (
     EventBus,
     IVRAction,
     IVRActionType,
+    STTFinal,
 )
 from easycat.telephony.call_state import OutboundCallState
+from easycat.telephony.ivr import IVRNavigator
 from easycat.telephony.outbound import OutboundCallManager
 
 
@@ -79,7 +81,7 @@ async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
         navigator,  # type: ignore[arg-type]
         delivery,  # type: ignore[arg-type]
     )
-    coordinator.connect()
+    coordinator.start()
 
     await bus.emit(CallInitiated(call_sid="CA123", to="+15550000001", from_="+15550000002"))
     await bus.emit(CallStateChanged(old=OutboundCallState.CLASSIFYING, new=OutboundCallState.IVR))
@@ -89,6 +91,7 @@ async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
     await bus.emit(CallStateChanged(old=OutboundCallState.IVR, new=OutboundCallState.HUMAN))
 
     assert delivery.call_sid == "CA123"
+    navigator.reset_for_call.assert_called_once_with()
     navigator.activate.assert_called_once_with()
     navigator.deactivate.assert_called_once_with()
     assert state_machine.transition.await_args_list == [
@@ -96,3 +99,63 @@ async def test_ivr_callback_coordinator_owns_event_transitions() -> None:
         call(OutboundCallState.ENDED),
     ]
     delivery.send_speech.assert_awaited_once_with("one moment")
+
+    coordinator.stop()
+    await bus.emit(CallInitiated(call_sid="CA456", to="+15550000003", from_="+15550000002"))
+    navigator.reset_for_call.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_ivr_call_boundary_resets_navigation_without_dtmf_delivery() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    contexts: list[dict[str, object]] = []
+
+    async def agent(context: dict[str, object]) -> dict[str, str]:
+        contexts.append(context)
+        return {"action": "dtmf", "digits": "1"}
+
+    built = build_outbound_helpers(
+        bus,
+        OutboundCallConfig(
+            from_number="+15550000002",
+            ivr_agent_callback=agent,
+            ivr_dtmf_delivery=None,
+        ),
+        manager_cls=OutboundCallManager,
+    )
+    navigator = next(helper for helper in built.helpers if isinstance(helper, IVRNavigator))
+    coordinator = next(
+        helper for helper in built.helpers if isinstance(helper, _IVRCallbackCoordinator)
+    )
+    navigator.start()
+    coordinator.start()
+    try:
+        await bus.emit(CallInitiated(call_sid="CA1", to="+15550000001", from_="+15550000002"))
+        navigator.activate()
+        await bus.emit(STTFinal(text="Press 1 for sales"))
+        navigator.notify_silence(11.0)
+
+        assert navigator.menu_depth == 1
+        assert len(navigator.history) == 1
+        assert navigator.in_hold is True
+
+        # Repeated activation within one call must retain its traversal state.
+        navigator.activate()
+        assert navigator.menu_depth == 1
+        assert len(navigator.history) == 1
+        assert navigator.in_hold is True
+
+        navigator.deactivate()
+        await bus.emit(CallInitiated(call_sid="CA2", to="+15550000003", from_="+15550000002"))
+
+        assert navigator.menu_depth == 0
+        assert navigator.history == []
+        assert navigator.in_hold is False
+
+        navigator.activate()
+        await bus.emit(STTFinal(text="Press 1 for support"))
+        assert contexts[1]["menu_depth"] == 0
+        assert contexts[1]["history"] == []
+    finally:
+        coordinator.stop()
+        navigator.stop()

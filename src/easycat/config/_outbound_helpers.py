@@ -57,17 +57,28 @@ class _IVRCallbackCoordinator:
         self._state_machine = state_machine
         self._navigator = navigator
         self._delivery = delivery
+        self._started = False
 
-    def connect(self) -> None:
-        if self._delivery is not None:
-            self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
+    def start(self) -> None:
+        if self._started:
+            return
+        self._event_bus.subscribe(CallInitiated, self._on_call_initiated)
         self._event_bus.subscribe(CallStateChanged, self._on_state_changed)
         self._event_bus.subscribe(IVRAction, self._on_action)
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._event_bus.unsubscribe(CallInitiated, self._on_call_initiated)
+        self._event_bus.unsubscribe(CallStateChanged, self._on_state_changed)
+        self._event_bus.unsubscribe(IVRAction, self._on_action)
+        self._started = False
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
-        delivery = self._delivery
-        assert delivery is not None
-        delivery.call_sid = event.call_sid
+        self._navigator.reset_for_call()
+        if self._delivery is not None:
+            self._delivery.call_sid = event.call_sid
 
     def _on_state_changed(self, event: CallStateChanged) -> None:
         if event.new == OutboundCallState.IVR:
@@ -182,12 +193,14 @@ class _OutboundHelperBuilder:
             dtmf_delivery=self._config.ivr_dtmf_delivery,
         )
         self._helpers.append(navigator)
-        _IVRCallbackCoordinator(
-            self._event_bus,
-            state_machine,
-            navigator,
-            self._config.ivr_dtmf_delivery,
-        ).connect()
+        self._helpers.append(
+            _IVRCallbackCoordinator(
+                self._event_bus,
+                state_machine,
+                navigator,
+                self._config.ivr_dtmf_delivery,
+            )
+        )
 
     def _add_policy_helpers(self) -> None:
         self._helpers.append(VoicemailPolicyHandler(self._event_bus, expect_fused=True))
