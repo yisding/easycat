@@ -22,7 +22,7 @@ from easycat import (
     SessionConfig,
     TwilioConnectionTransport,
 )
-from easycat.events import CallAnswered, CallEnded, EventBus
+from easycat.events import CallAnswered, CallEnded, EventBus, ScreeningResponse
 from easycat.stubs import NoopAgent
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
@@ -114,6 +114,56 @@ async def test_helpers_subscribe_before_transport_emits_deferred_answered() -> N
         assert helper.call_sid == "CA-preflight"
     finally:
         await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_session_stop_cancels_outbound_hold_audio_helper() -> None:
+    from easycat.config._telephony_wiring import (
+        TelephonyHelpers,
+        wire_outbound_pipeline,
+    )
+
+    class FakeGate:
+        def set_hold_audio_callback(self, callback: Any) -> None:
+            self.hold_callback = callback
+
+    class FakeStateMachine:
+        def __init__(self) -> None:
+            self.gate = FakeGate()
+
+        def set_gate_flush_callback(self, callback: Any) -> None:
+            self.flush_callback = callback
+
+    bus = EventBus()
+    session = Session(_full_config(event_bus=bus))
+    hold_started = asyncio.Event()
+
+    async def blocking_hold(_text: str) -> None:
+        hold_started.set()
+        await asyncio.Event().wait()
+
+    session.synthesize_bypass = AsyncMock(side_effect=blocking_hold)  # type: ignore[method-assign]
+    wiring = wire_outbound_pipeline(
+        session,
+        TelephonyHelpers(state_machine=FakeStateMachine()),
+        bus,
+    )
+
+    assert wiring in session.telephony.helpers
+    assert wiring._on_screening_response not in bus.subscribers(ScreeningResponse)
+    await session.start()
+    assert wiring._on_screening_response in bus.subscribers(ScreeningResponse)
+    wiring.play_hold_audio("please hold")
+    await hold_started.wait()
+    hold_task = wiring._hold_audio_task
+    assert hold_task is not None
+
+    await session.stop(force=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await hold_task
+    assert hold_task.cancelled()
+    assert wiring._on_screening_response not in bus.subscribers(ScreeningResponse)
 
 
 def test_transport_kind_local() -> None:
@@ -261,7 +311,7 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
     session.synthesize_bypass = AsyncMock()  # type: ignore[method-assign]
     detector = FakeScreeningDetector()
 
-    wire_outbound_pipeline(
+    wiring = wire_outbound_pipeline(
         session,
         TelephonyHelpers(
             state_machine=FakeStateMachine(),
@@ -269,8 +319,11 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
         ),
         session.event_bus,
     )
-
-    await session.event_bus.emit(ScreeningResponse(text="", mode="agent"))
+    wiring.start()
+    try:
+        await session.event_bus.emit(ScreeningResponse(text="", mode="agent"))
+    finally:
+        wiring.stop()
 
     assert len(agent.prompts) == 1
     assert agent.prompts[0].role == "system"

@@ -12,7 +12,7 @@ from easycat.config import (
     VoicemailDetectionConfig,
     _create_telephony_helpers,
 )
-from easycat.events import CallAnswered, CallFailed, EventBus
+from easycat.events import CallAnswered, CallFailed, EventBus, ScreeningResponse
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.compliance import DNCList
 from easycat.telephony.number_health import CallDispositionTracker
@@ -392,6 +392,44 @@ class TestTelephonyConfigExtension:
 
 class TestOutboundPipelineWiring:
     @pytest.mark.asyncio
+    async def test_stop_cancels_hold_audio_and_unsubscribes_screening(self) -> None:
+        from easycat.config._telephony_wiring import _OutboundPipelineWiring
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.hold_started = asyncio.Event()
+                self.hold_cancelled = asyncio.Event()
+
+            async def synthesize_bypass(self, _text: str) -> None:
+                self.hold_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.hold_cancelled.set()
+
+        bus = EventBus()
+        session = FakeSession()
+        wiring = _OutboundPipelineWiring(session, bus)  # type: ignore[arg-type]
+        wiring.start()
+
+        assert wiring._on_screening_response in bus.subscribers(ScreeningResponse)
+        wiring.play_hold_audio("please hold")
+        await session.hold_started.wait()
+        hold_task = wiring._hold_audio_task
+        assert hold_task is not None
+
+        wiring.stop()
+
+        with pytest.raises(asyncio.CancelledError):
+            await hold_task
+        assert session.hold_cancelled.is_set()
+        assert wiring._on_screening_response not in bus.subscribers(ScreeningResponse)
+        assert wiring._hold_audio_task is None
+        wiring.play_hold_audio("late hold")
+        await asyncio.sleep(0)
+        assert wiring._hold_audio_task is None
+
+    @pytest.mark.asyncio
     async def test_flush_gated_audio_propagates_caller_cancellation(self) -> None:
         """A discarded classification timeout must not replay opener audio.
 
@@ -425,7 +463,8 @@ class TestOutboundPipelineWiring:
                 self.replayed.append(events)
 
         session = FakeSession()
-        wiring = _OutboundPipelineWiring(session)  # type: ignore[arg-type]
+        wiring = _OutboundPipelineWiring(session, EventBus())  # type: ignore[arg-type]
+        wiring.start()
         wiring.play_hold_audio("please hold")
         await session.hold_started.wait()
 
@@ -444,3 +483,4 @@ class TestOutboundPipelineWiring:
             await flush_task
 
         assert session.replayed == []
+        wiring.stop()
