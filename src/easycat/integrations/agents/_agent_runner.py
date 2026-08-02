@@ -276,6 +276,9 @@ class AgentRunner:
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Run one turn, yielding bridge events as they occur."""
+        if cancel_token and cancel_token.is_cancelled:
+            return
+
         stream = (
             self._invoke_bridge(turn_input, recorder, cancel_token)
             if self._is_bridge

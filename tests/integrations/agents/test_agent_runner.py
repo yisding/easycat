@@ -405,6 +405,14 @@ class _FakeBridge:
         self.reset_called = True
 
 
+class _CancelAwareBridge(_FakeBridge):
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        self.invoke_called = True
+        if cancel_token and cancel_token.is_cancelled:
+            return
+        yield AgentBridgeEvent(kind="done", text="bridged")
+
+
 @pytest.mark.asyncio
 async def test_agent_runner_wrapping_a_bridge_delegates_invoke():
     inner = _FakeBridge()
@@ -413,6 +421,20 @@ async def test_agent_runner_wrapping_a_bridge_delegates_invoke():
     events = await _drain(runner, "hello")
     assert inner.invoke_called
     assert [e.kind for e in events] == ["text_delta", "done"]
+
+
+@pytest.mark.asyncio
+async def test_wrapped_bridge_skips_already_cancelled_turn():
+    inner = _CancelAwareBridge()
+    runner = AgentRunner(inner)
+    token = CancelToken()
+    token.cancel()
+
+    events = await _drain(runner, "hello", token)
+
+    assert events == []
+    assert inner.invoke_called is False
+    assert runner.history == []
 
 
 def test_agent_runner_wrapping_a_bridge_delegates_history_ops():
