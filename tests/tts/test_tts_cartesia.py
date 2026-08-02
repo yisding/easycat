@@ -183,6 +183,26 @@ class TestCartesiaPersistent:
         assert all(len(c) >= 32 for c in sent_ctx)
         await provider.close()
 
+    async def test_provider_close_propagates_and_retries_persistent_socket_failure(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        close_error = RuntimeError("persistent socket close failed")
+        fake.close = AsyncMock(side_effect=[close_error, None])  # type: ignore[method-assign]
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            async for _ in provider.synthesize("hi"):
+                pass
+
+        with pytest.raises(RuntimeError, match="persistent socket close failed"):
+            await provider.close()
+
+        assert provider._mgr is not None
+        assert provider._mgr._pending_socket_close is fake
+
+        await provider.close()
+        assert provider._mgr._pending_socket_close is None
+        assert fake.close.await_count == 2
+
     async def test_warmup_connects_once_and_first_synthesis_reuses_socket(self):
         provider = self._make_provider()
         fake = FakePersistentWS()
@@ -440,6 +460,15 @@ class TestCartesiaTTSConfig:
         with pytest.raises(ValueError, match="warmup_timeout_s"):
             CartesiaTTSConfig(api_key="k", warmup_timeout_s=timeout)
 
+    @pytest.mark.parametrize("maxsize", [0, -1, True, 1.5])
+    def test_rejects_invalid_context_queue_maxsize(self, maxsize):
+        with pytest.raises(ValueError, match="context_queue_maxsize"):
+            CartesiaTTSConfig(api_key="k", context_queue_maxsize=maxsize)
+
+    def test_accepts_minimum_context_queue_maxsize(self):
+        config = CartesiaTTSConfig(api_key="k", context_queue_maxsize=1)
+        assert config.context_queue_maxsize == 1
+
     def test_generation_config_omitted_when_unset(self):
         provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
         request = provider._build_request("hi", "ctx-1")
@@ -482,6 +511,64 @@ class TestCartesiaTTS:
         assert len(audio_events) == 2
         chunks = extract_audio_chunks(audio_events)
         assert verify_pcm16_audio(chunks)
+
+    async def test_synthesize_does_not_overwrite_retained_failed_socket(self):
+        class _RetainedWS:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            async def close(self) -> None:
+                self.close_calls += 1
+                raise RuntimeError("retained socket close failed")
+
+        provider = self._make_provider()
+        retained = _RetainedWS()
+        factory = MagicMock()
+        provider._ws = retained  # type: ignore[assignment]
+
+        with (
+            patch.object(provider, "_create_ws", factory),
+            pytest.raises(RuntimeError, match="retained socket close failed"),
+        ):
+            await anext(provider.synthesize("Hello"))
+
+        factory.assert_not_called()
+        assert provider._ws is retained
+        assert retained.close_calls == 1
+        assert not provider.is_active
+
+    async def test_synthesize_close_failure_still_clears_logical_state(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[_done_msg()])
+        fake_ws.close = AsyncMock(side_effect=RuntimeError("socket close failed"))  # type: ignore[method-assign]
+
+        with (
+            patch.object(provider, "_create_ws", return_value=fake_ws),
+            pytest.raises(RuntimeError, match="socket close failed"),
+        ):
+            async for _ in provider.synthesize("Hello"):
+                pass
+
+        assert provider._ws is fake_ws
+        assert provider._context_id is None
+        assert provider._pending_request is None
+        assert not provider.is_active
+
+    async def test_synthesize_raises_when_stream_ends_before_terminal_response(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[_chunk_msg(_pcm16_bytes(100))])
+        events = []
+
+        with (
+            patch.object(provider, "_create_ws", return_value=fake_ws),
+            pytest.raises(ConnectionError, match="before a terminal done/error"),
+        ):
+            async for event in provider.synthesize("truncated"):
+                events.append(event)
+
+        assert len(events) == 1
+        assert fake_ws._closed
+        assert not provider.is_active
 
     async def test_synthesize_sends_expected_request(self):
         provider = self._make_provider(model_id="sonic-turbo", voice_id="voice-abc")

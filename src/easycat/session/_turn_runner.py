@@ -29,7 +29,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -558,6 +558,13 @@ class TurnRunner:
         self._preemptive_task = None
         self._preemptive_transcript = ""
         if task is None:
+            return
+        if task is asyncio.current_task():
+            # A provider callback may request Session.stop() from inside
+            # speculative generation. The callback owns the current stack, so
+            # it cannot cancel/await itself; detach it and let the caller's
+            # teardown close the surrounding session.
+            self._runtime_scope.discard(cast(asyncio.Task[Any], task))
             return
         if not task.done():
             task.cancel()

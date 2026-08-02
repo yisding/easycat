@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import struct
 from collections.abc import AsyncIterator
 
-from easycat._audio_utils import PCM16StreamResampler, to_mono
+from easycat._audio_utils import PCM16StreamResampler, to_mono, validate_pcm16_format
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import TTSEvent, TTSEventType
 from easycat.tts.input import TTSInput, TTSInputPolicy
@@ -24,16 +25,31 @@ class TTSBase:
     """
 
     def __init__(self, output_format: AudioFormat = PCM16_MONO_24K) -> None:
+        self._validate_pcm16_format("output_format", output_format)
         self._output_format = output_format
         self._cancelled = False
         self._active = False
-        # Leftover sub-sample bytes carried across _make_audio_event calls so
-        # every emitted AudioChunk is sample-aligned, even when no resample
-        # happens (e.g. a WS frame whose length is not a multiple of the
-        # sample width). _make_audio_event aligns the buffer here before any
-        # downmix/resample, so _normalize_audio always receives whole samples.
+        # Leftover sub-frame bytes carried across _make_audio_event calls so
+        # every emitted AudioChunk is frame-aligned, even when a streaming
+        # transport splits an interleaved multichannel frame. The format is
+        # retained with the carry so bytes from one source format can never be
+        # prepended to a different format after an upstream transition.
         self._sample_carry = b""
+        self._sample_carry_format: AudioFormat | None = None
         self._resampler = PCM16StreamResampler(self._output_format.sample_rate)
+
+    @staticmethod
+    def _validate_pcm16_format(name: str, fmt: AudioFormat) -> None:
+        validate_pcm16_format(name, fmt)
+
+    def _upmix_to_output_channels(self, data: bytes) -> bytes:
+        channels = self._output_format.channels
+        if channels == 1 or not data:
+            return data
+        sample_count = len(data) // 2
+        samples = struct.unpack(f"<{sample_count}h", data)
+        interleaved = tuple(sample for sample in samples for _ in range(channels))
+        return struct.pack(f"<{len(interleaved)}h", *interleaved)
 
     @property
     def is_cancelled(self) -> bool:
@@ -48,23 +64,25 @@ class TTSBase:
         self._cancelled = False
         self._active = True
         self._sample_carry = b""
+        self._sample_carry_format = None
         self._resampler.reset()
 
     def _end_synthesis(self) -> None:
         """Mark synthesis as complete and discard unfinished conversion state.
 
-        Any non-empty ``_sample_carry`` here is a sub-sample remainder (at
-        most ``sample_width - 1`` bytes, i.e. less than one whole 16-bit
-        sample) that no following frame ever completed. It is intentionally
-        dropped rather than zero-padded and emitted: a fabricated partial
-        sample would inject a click far more audible than the at-most
-        half-sample of silence lost, and emitting from here would force a
-        return-value contract onto every subclass's synthesis loop. Successful
+        Any non-empty ``_sample_carry`` here is a sub-frame remainder (less
+        than one complete sample across all source channels) that no following
+        frame ever completed. It is intentionally dropped rather than
+        zero-padded and emitted: a fabricated partial frame would inject a
+        click far more audible than the sub-frame silence lost, and emitting
+        from here would force a return-value contract onto every subclass's
+        synthesis loop. Successful
         synthesis paths call :meth:`_finish_audio_event` before this teardown;
         error, cancellation, and early-generator-close paths intentionally
         discard any delayed resampler output here.
         """
         self._sample_carry = b""
+        self._sample_carry_format = None
         self._resampler.reset()
         self._active = False
 
@@ -82,32 +100,39 @@ class TTSBase:
         ``_start_synthesis``/``_end_synthesis`` perform around a synthesis run.
         """
         self._sample_carry = b""
+        self._sample_carry_format = None
         self._resampler.reset()
 
     def _make_audio_event(self, data: bytes, fmt: AudioFormat | None = None) -> TTSEvent | None:
         """Create a non-empty TTSEvent with AUDIO type.
 
         Streaming sources (WebSocket / chunked HTTP) can split a single
-        16-bit PCM sample across two frames, so an individual ``data``
-        buffer may not be a whole number of samples. A 1-byte remainder
-        is carried across calls so every emitted :class:`AudioChunk` is
-        sample-aligned, regardless of whether ``fmt`` triggers a resample.
+        interleaved PCM frame across two messages, so an individual ``data``
+        buffer may not be a whole number of frames. A sub-frame remainder is
+        carried across calls so every emitted :class:`AudioChunk` is aligned,
+        but is discarded if the source format changes before it is completed.
 
         If `fmt` differs from the target output format, the data is
         resampled and/or downmixed to match `self._output_format`.
         """
         source_format = fmt if fmt is not None else self._output_format
-        sample_width = source_format.sample_width * source_format.channels
-        if sample_width > 1:
+        self._validate_pcm16_format("source_format", source_format)
+        if self._sample_carry_format != source_format:
+            self._sample_carry = b""
+            self._sample_carry_format = None
+
+        frame_size = source_format.frame_size
+        if frame_size > 1:
             data = self._sample_carry + data
-            remainder = len(data) % sample_width
+            remainder = len(data) % frame_size
             if remainder:
                 self._sample_carry = data[-remainder:]
+                self._sample_carry_format = source_format
                 data = data[:-remainder]
             else:
                 self._sample_carry = b""
-        if fmt is not None:
-            data = self._normalize_audio(data, fmt)
+                self._sample_carry_format = None
+        data = self._normalize_audio(data, source_format)
         # Quality streaming resamplers can retain an initial filter window.
         # Do not let that implementation detail masquerade as first audio to
         # timeout, observability, or playback accounting downstream.
@@ -119,10 +144,11 @@ class TTSBase:
     def _finish_audio_event(self, *, emit: bool = True) -> TTSEvent | None:
         """Flush delayed output after success, or discard it after cancellation."""
         self._sample_carry = b""
+        self._sample_carry_format = None
         if not emit or self._cancelled:
             self._resampler.reset()
             return None
-        data = self._resampler.finish()
+        data = self._upmix_to_output_channels(self._resampler.finish())
         if not data:
             return None
         chunk = AudioChunk(data=data, format=self._output_format)
@@ -142,19 +168,29 @@ class TTSBase:
     def _normalize_audio(self, data: bytes, source_format: AudioFormat) -> bytes:
         """Convert audio data to match the target output format.
 
-        Handles mono downmix and sample rate conversion.
+        Preserves exact-format PCM16 data unchanged. Other channel layouts are
+        downmixed before sample-rate conversion, then upmixed to the requested
+        output layout. The streaming resampler therefore receives mono PCM16
+        only and never interprets interleaved channels as a mono stream.
         Assumes PCM16 encoding throughout.
         """
+        self._validate_pcm16_format("source_format", source_format)
+        if source_format == self._output_format:
+            # A previous non-exact segment may still have delayed resampler
+            # output. Emit that tail before the first direct-format samples so
+            # a source-format transition cannot reorder audio.
+            return self._upmix_to_output_channels(self._resampler.finish()) + data
+
         if source_format.channels > 1:
             data = to_mono(data, source_format.channels)
 
-        # ``data`` is already sample-aligned: _make_audio_event held back any
-        # sub-sample remainder in _sample_carry before calling here. Route
-        # same-rate chunks through the stream converter too so a mid-stream
-        # source-rate change flushes the prior segment before pass-through.
+        # ``data`` is mono and sample-aligned: _make_audio_event held back any
+        # incomplete source frame before calling here. Route same-rate chunks
+        # through the stream converter too so a mid-stream source-rate change
+        # flushes the prior segment before pass-through.
         data = self._resampler.process(data, source_format.sample_rate)
 
-        return data
+        return self._upmix_to_output_channels(data)
 
     @property
     def input_policy(self) -> TTSInputPolicy:

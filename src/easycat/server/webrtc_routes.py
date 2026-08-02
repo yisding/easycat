@@ -373,10 +373,29 @@ class WebRTCRoutes:
             await self._register_session(key, transport)
             session_started = True
             return response
-        except Exception:
+        except BaseException:
+            # Request-handler cancellation is a normal aiohttp shutdown/client
+            # disconnect path, but ``CancelledError`` does not inherit from
+            # ``Exception``. Always unwind the peer and its reservation before
+            # propagating cancellation (or another base exception), otherwise
+            # one abandoned offer can permanently consume server capacity.
             if session_started:
-                await self._unregister_session(key)
-            await transport.disconnect()
+                try:
+                    await self._unregister_session(key)
+                except BaseException:
+                    # Cleanup is best-effort and must never replace the original
+                    # offer failure/cancellation that aiohttp is waiting for.
+                    logger.warning(
+                        "Failed to unregister WebRTC session after offer failure",
+                        exc_info=True,
+                    )
+            try:
+                await transport.disconnect()
+            except BaseException:
+                logger.warning(
+                    "Failed to disconnect WebRTC transport after offer failure",
+                    exc_info=True,
+                )
             self._gate.release()
             raise
 

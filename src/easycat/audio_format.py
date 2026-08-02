@@ -19,6 +19,12 @@ class AudioFormat:
     sample_width: int  # bytes per sample (2 = 16-bit)
     encoding: str = "pcm"
 
+    def __post_init__(self) -> None:
+        for name in ("sample_rate", "channels", "sample_width"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
     @property
     def frame_size(self) -> int:
         """Bytes per frame (one sample across all channels)."""

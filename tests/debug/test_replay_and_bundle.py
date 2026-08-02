@@ -229,7 +229,7 @@ class TestRunBundleFormat:
         assert records[0]["sequence"] == 1
         assert records[1]["data"]["stage"] == "agent"
 
-    def test_records_skips_non_object_json_lines(self, tmp_path):
+    def test_load_rejects_non_object_or_malformed_json_lines(self, tmp_path):
         journal_lines = [
             json.dumps(["not", "a", "record"]),
             json.dumps("not a record"),
@@ -237,9 +237,13 @@ class TestRunBundleFormat:
             json.dumps({"sequence": 1, "data": {"stage": "stt"}}),
         ]
         bundle_path = _make_bundle_zip(tmp_path, journal_lines=journal_lines)
-        loaded = RunBundle.load(bundle_path)
 
-        assert list(loaded.records()) == [{"sequence": 1, "data": {"stage": "stt"}}]
+        with pytest.raises(
+            BundleValidationError, match="line 1 must be a JSON object"
+        ) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
 
     def test_filter_by_stage(self, tmp_path):
         journal_lines = [
@@ -366,6 +370,27 @@ class TestRunBundleSave:
             bundle.save(out)
         assert not out.exists()
         assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_save_rejects_invalid_journal_before_writing(self, tmp_path):
+        bundle = RunBundle(journal_ndjson=b'{"sequence": 1}\nnot-json\n')
+        out = tmp_path / "invalid-journal.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            bundle.save(out)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+        assert not out.exists()
+
+    def test_save_rejects_dangling_artifact_reference_before_writing(self, tmp_path):
+        ref = "a" * 64
+        bundle = RunBundle(journal_ndjson=json.dumps({"sequence": 1, "output_ref": ref}).encode())
+        out = tmp_path / "dangling-artifact.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            bundle.save(out)
+
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+        assert not out.exists()
 
 
 # ── TestSliceBundleByTurn ────────────────────────────────────────
@@ -944,6 +969,31 @@ class TestBundleValidation:
             RunBundle.load(bundle_path)
         assert exc_info.value.reason_code == "INVALID_REF"
 
+    def test_dangling_journal_artifact_ref_is_rejected(self, tmp_path):
+        ref = "a" * 64
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            journal_lines=[json.dumps({"sequence": 1, "input_ref": ref})],
+        )
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+        assert ref in str(exc_info.value)
+
+    @pytest.mark.parametrize("ref", ["", "not-a-sha256-ref", 123])
+    def test_malformed_journal_artifact_ref_is_rejected(self, tmp_path, ref):
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            journal_lines=[json.dumps({"sequence": 1, "output_ref": ref})],
+        )
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_REF"
+
     def test_oversized_artifact(self, tmp_path):
         """Bundles exceeding the 500MB artifact cap should be rejected."""
         # We can't actually create a 500MB file in tests, so we monkey-patch
@@ -1080,6 +1130,280 @@ class TestBundlePartialJournal:
         assert len(records) == 2
         assert records[0]["sequence"] == 1
 
+    def test_from_partial_current_journal_preserves_cpu_and_full_error(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("diagnostic-session", data_dir=tmp_path)
+        error = ErrorInfo(
+            type="ExceptionGroup",
+            message="outer failure",
+            traceback="outer traceback",
+            notes="stage=agent",
+            children=(
+                ErrorInfo(
+                    type="ValueError",
+                    message="bad tool result",
+                    traceback="child traceback",
+                    notes="tool=lookup",
+                ),
+            ),
+        )
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="agent_failed",
+            session_id="diagnostic-session",
+            error=error,
+        )
+        original = journal.read(start=sequence, limit=1)[0]
+        journal.close()
+
+        bundle = RunBundle.from_partial_journal(
+            tmp_path / "journals" / "diagnostic-session.sqlite"
+        )
+        recovered = next(
+            record for record in bundle.records() if record.get("name") == "agent_failed"
+        )
+
+        assert recovered["cpu_ns"] == original.timing.cpu_ns
+        assert recovered["error"] == {
+            "type": "ExceptionGroup",
+            "message": "outer failure",
+            "traceback": "outer traceback",
+            "notes": "stage=agent",
+            "children": [
+                {
+                    "type": "ValueError",
+                    "message": "bad tool result",
+                    "traceback": "child traceback",
+                    "notes": "tool=lookup",
+                    "children": [],
+                }
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        ("error_children", "message"),
+        [
+            ("not-json", "error_children is not valid JSON"),
+            (json.dumps({"type": "ValueError"}), "error_children must be a JSON list"),
+            ("null", "error_children must be a JSON list"),
+        ],
+    )
+    def test_from_partial_current_journal_rejects_malformed_error_children(
+        self,
+        tmp_path,
+        error_children: str,
+        message: str,
+    ) -> None:
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("corrupt-errors", data_dir=tmp_path)
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="agent_failed",
+            session_id="corrupt-errors",
+            error=ErrorInfo(type="ExceptionGroup", message="outer failure"),
+        )
+        journal.close()
+        db_path = tmp_path / "journals" / "corrupt-errors.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE journal SET error_children = ? WHERE sequence = ?",
+            (error_children, sequence),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(BundleValidationError, match=message) as exc_info:
+            RunBundle.from_partial_journal(db_path)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+        assert f"sequence {sequence}" in str(exc_info.value)
+
+    def test_from_partial_current_journal_normalizes_deep_error_children(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.debug.bundle as bundle_module
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("deep-corrupt-errors", data_dir=tmp_path)
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="agent_failed",
+            session_id="deep-corrupt-errors",
+            error=ErrorInfo(type="ExceptionGroup", message="outer failure"),
+        )
+        journal.close()
+        db_path = tmp_path / "journals" / "deep-corrupt-errors.sqlite"
+        deeply_nested_json = "[[0]]"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE journal SET error_children = ? WHERE sequence = ?",
+            (deeply_nested_json, sequence),
+        )
+        conn.commit()
+        conn.close()
+
+        def raise_recursion_error(value: object) -> object:
+            assert value == deeply_nested_json
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(
+            bundle_module,
+            "json",
+            types.SimpleNamespace(loads=raise_recursion_error, dumps=json.dumps),
+        )
+        with pytest.raises(
+            BundleValidationError,
+            match="error_children is not valid JSON",
+        ) as exc_info:
+            RunBundle.from_partial_journal(db_path)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+        assert f"sequence {sequence}" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RecursionError)
+
+    @pytest.mark.parametrize(
+        ("corrupt_data", "expected"),
+        [
+            (sqlite3.Binary(b"\xff"), "b'\\xff'"),
+            ("1" * 5_000, "1" * 5_000),
+        ],
+    )
+    def test_from_partial_current_journal_preserves_unparseable_data_as_raw_evidence(
+        self,
+        tmp_path,
+        corrupt_data: object,
+        expected: str,
+    ) -> None:
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("corrupt-data", data_dir=tmp_path)
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="partial_write",
+            session_id="corrupt-data",
+        )
+        journal.close()
+        db_path = tmp_path / "journals" / "corrupt-data.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE journal SET data = ? WHERE sequence = ?",
+            (corrupt_data, sequence),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())
+
+        assert recovered[0]["sequence"] == sequence
+        assert recovered[0]["data"] == expected
+
+    def test_from_partial_current_journal_ignores_non_string_tags(
+        self,
+        tmp_path,
+    ) -> None:
+        from easycat.runtime import SqliteJournal
+
+        journal = SqliteJournal("corrupt-tags", data_dir=tmp_path)
+        sequence = journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="partial_write",
+            session_id="corrupt-tags",
+        )
+        journal.close()
+        db_path = tmp_path / "journals" / "corrupt-tags.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE journal SET tags = ? WHERE sequence = ?",
+            (sqlite3.Binary(b"legacy"), sequence),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())[0]
+
+        assert "tags" not in recovered
+
+    def test_from_partial_legacy_journal_table_without_optional_columns(self, tmp_path):
+        db_path = tmp_path / "legacy.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE journal ("
+            "sequence INTEGER PRIMARY KEY, session_id TEXT, kind TEXT, name TEXT, "
+            "wall_ns INTEGER, mono_ns INTEGER, turn_id TEXT, data TEXT, "
+            "error_type TEXT, error_msg TEXT, input_ref TEXT, output_ref TEXT, tags TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO journal VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                "legacy-session",
+                "event",
+                "legacy_failure",
+                10,
+                20,
+                None,
+                "{}",
+                "ValueError",
+                "bad",
+                None,
+                None,
+                "",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())[0]
+
+        assert recovered["cpu_ns"] == 0
+        assert recovered["error"] == {
+            "type": "ValueError",
+            "message": "bad",
+            "traceback": None,
+            "notes": None,
+            "children": [],
+        }
+
+    def test_from_partial_journal_rejects_malformed_legacy_record(self, tmp_path):
+        db_path = tmp_path / "malformed.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, "not-json"),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(BundleValidationError, match="line 1 is not valid JSON") as exc_info:
+            RunBundle.from_partial_journal(db_path)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+
+    def test_from_partial_journal_normalizes_unserializable_legacy_data(self, tmp_path):
+        db_path = tmp_path / "malformed-blob.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data BLOB)")
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (7, sqlite3.Binary(b"\xff")),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(
+            BundleValidationError,
+            match="Legacy journal sequence 7 data cannot be serialized",
+        ) as exc_info:
+            RunBundle.from_partial_journal(db_path)
+
+        assert exc_info.value.reason_code == "INVALID_JOURNAL"
+        assert isinstance(exc_info.value.__cause__, TypeError)
+
     def test_from_partial_journal_with_artifacts(self, tmp_path):
         """Legacy flat artifacts from the filesystem should be indexed."""
         db_path = tmp_path / "test.sqlite"
@@ -1102,6 +1426,41 @@ class TestBundlePartialJournal:
         assert ref in bundle.artifact_index
         assert bundle.artifact_index[ref].ref == ref
         assert bundle.artifact_index[ref].size_bytes == len(data)
+
+    def test_from_partial_journal_rejects_dangling_artifact_reference(self, tmp_path):
+        db_path = tmp_path / "dangling.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        ref = "a" * 64
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, json.dumps({"sequence": 1, "output_ref": ref})),
+        )
+        conn.commit()
+        conn.close()
+        artifact_root = tmp_path / "artifacts"
+        artifact_root.mkdir()
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.from_partial_journal(db_path, artifact_root=artifact_root)
+
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+
+    def test_from_partial_journal_allows_unresolved_refs_without_artifact_root(self, tmp_path):
+        db_path = tmp_path / "dangling.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        ref = "a" * 64
+        conn.execute(
+            "INSERT INTO records (sequence, data) VALUES (?, ?)",
+            (1, json.dumps({"sequence": 1, "output_ref": ref})),
+        )
+        conn.commit()
+        conn.close()
+
+        recovered = list(RunBundle.from_partial_journal(db_path).records())
+
+        assert recovered[0]["output_ref"] == ref
 
     def test_from_partial_journal_with_sharded_artifacts(self, tmp_path):
         db_path = tmp_path / "test.sqlite"

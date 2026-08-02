@@ -147,6 +147,15 @@ class TestElevenLabsTTSConfig:
         with pytest.raises(ValueError, match="warmup_timeout_s"):
             ElevenLabsTTSConfig(api_key="key", warmup_timeout_s=timeout)
 
+    @pytest.mark.parametrize("maxsize", [0, -1, True, 1.5])
+    def test_rejects_invalid_context_queue_maxsize(self, maxsize):
+        with pytest.raises(ValueError, match="context_queue_maxsize"):
+            ElevenLabsTTSConfig(api_key="key", context_queue_maxsize=maxsize)
+
+    def test_accepts_minimum_context_queue_maxsize(self):
+        config = ElevenLabsTTSConfig(api_key="key", context_queue_maxsize=1)
+        assert config.context_queue_maxsize == 1
+
     def test_websocket_mode(self):
         config = ElevenLabsTTSConfig(
             api_key="key",
@@ -161,6 +170,31 @@ class TestElevenLabsTTSConfig:
             stream_mode=ElevenLabsStreamMode.HTTP,
         )
         assert config.persistent_ws is False
+
+    @pytest.mark.parametrize(
+        ("raw_mode", "expected_mode", "expected_persistent"),
+        [
+            ("http", ElevenLabsStreamMode.HTTP, False),
+            (" HTTP ", ElevenLabsStreamMode.HTTP, False),
+            ("websocket", ElevenLabsStreamMode.WEBSOCKET, True),
+            (" WebSocket ", ElevenLabsStreamMode.WEBSOCKET, True),
+        ],
+    )
+    def test_normalizes_string_stream_mode(
+        self,
+        raw_mode,
+        expected_mode,
+        expected_persistent,
+    ):
+        config = ElevenLabsTTSConfig(api_key="key", stream_mode=raw_mode)
+
+        assert config.stream_mode is expected_mode
+        assert config.persistent_ws is expected_persistent
+
+    @pytest.mark.parametrize("stream_mode", ["", "bogus", 1, True, None])
+    def test_rejects_invalid_stream_mode(self, stream_mode):
+        with pytest.raises(ValueError, match="stream_mode must be 'http' or 'websocket'"):
+            ElevenLabsTTSConfig(api_key="key", stream_mode=stream_mode)
 
     def test_websocket_one_shot_can_be_requested_explicitly(self):
         config = ElevenLabsTTSConfig(
@@ -492,6 +526,66 @@ class TestElevenLabsTTSWebSocket:
         assert len(audio_events) == 2
         chunks = extract_audio_chunks(audio_events)
         assert verify_pcm16_audio(chunks)
+
+    async def test_synthesize_ws_does_not_overwrite_retained_failed_socket(self):
+        class _RetainedWS:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            async def close(self) -> None:
+                self.close_calls += 1
+                raise RuntimeError("retained socket close failed")
+
+        provider = self._make_provider()
+        retained = _RetainedWS()
+        factory = MagicMock()
+        provider._ws = retained  # type: ignore[assignment]
+
+        with (
+            patch.object(provider, "_make_ws", factory),
+            pytest.raises(RuntimeError, match="retained socket close failed"),
+        ):
+            await anext(provider.synthesize("Hello"))
+
+        factory.assert_not_called()
+        assert provider._ws is retained
+        assert retained.close_calls == 1
+        assert not provider.is_active
+
+    async def test_synthesize_ws_close_failure_still_clears_logical_state(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[self._final_message()])
+        fake_ws.close = AsyncMock(side_effect=RuntimeError("socket close failed"))  # type: ignore[method-assign]
+
+        with (
+            patch.object(provider, "_make_ws", return_value=fake_ws),
+            pytest.raises(RuntimeError, match="socket close failed"),
+        ):
+            async for _ in provider.synthesize("Hello"):
+                pass
+
+        assert provider._ws is fake_ws
+        assert provider._pending_messages is None
+        assert not provider.is_active
+
+    async def test_synthesize_ws_raises_when_stream_ends_before_terminal_response(self):
+        provider = self._make_provider()
+        fake_ws = FakeReconnectingWS(messages=[self._audio_message(100)])
+        events = []
+
+        with (
+            patch(
+                "easycat.tts.elevenlabs_tts.ReconnectingWebSocket",
+                return_value=fake_ws,
+            ),
+            pytest.raises(ConnectionError, match="before a terminal isFinal/error"),
+        ):
+            async for event in provider.synthesize("truncated"):
+                events.append(event)
+
+        assert len(events) == 1
+        assert fake_ws._closed
+        assert not provider.is_active
 
     async def test_synthesize_ws_url_includes_text_normalization(self):
         provider = self._make_provider(apply_text_normalization="on")

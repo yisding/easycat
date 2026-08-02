@@ -50,6 +50,16 @@ class SessionManager(Generic[TKey]):
     def get(self, key: TKey) -> Session | None:
         return self._sessions.get(key)
 
+    def active_keys(self) -> tuple[TKey, ...]:
+        """Return a snapshot of session keys that still require teardown.
+
+        A key remains present until its owned stop task completes successfully.
+        Server lifecycle owners use this after :meth:`stop_all` to distinguish
+        a genuinely clean sweep from one whose per-session failures were
+        intentionally gathered so every session received a stop attempt.
+        """
+        return tuple(self._sessions)
+
     async def add(self, key: TKey, session: Session) -> Session:
         async with self._lock:
             if key in self._sessions:

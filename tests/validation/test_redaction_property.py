@@ -10,7 +10,9 @@ output), and any explicit runtime secret passed to
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 
 import pytest
 from hypothesis import example, given
@@ -23,6 +25,7 @@ from easycat.validation.redaction import (
     contains_unredacted_sensitive_text,
     redact_command,
     redact_runtime_secrets,
+    redact_runtime_secrets_in_file,
     redact_text,
     redact_value,
 )
@@ -201,6 +204,48 @@ def test_redact_runtime_secrets_without_secrets_matches_redact_text(
 ) -> None:
     # With no explicit secrets, it reduces to the base regex redaction.
     assert redact_runtime_secrets(value, None) == redact_text(value)
+
+
+@pytest.mark.parametrize("artifact_format", ["json", "jsonl"])
+def test_malformed_structured_artifact_scrubs_raw_and_json_escaped_secrets(
+    tmp_path: Path,
+    artifact_format: str,
+) -> None:
+    secret = 'plain-"runtime\\token-value'
+    escaped_secret = json.dumps(secret)[1:-1]
+    path = tmp_path / f"malformed.{artifact_format}"
+    path.write_text(
+        f'raw={secret}\n{{"credential_echo": "{escaped_secret}" trailing\n',
+        encoding="utf-8",
+    )
+
+    assert redact_runtime_secrets_in_file(
+        path,
+        (secret,),
+        artifact_format=artifact_format,  # type: ignore[arg-type]
+    )
+
+    redacted = path.read_text(encoding="utf-8")
+    assert secret not in redacted
+    assert escaped_secret not in redacted
+    assert redacted.count(REDACTED_SECRET) == 2
+
+
+def test_non_utf8_artifact_scrubs_raw_and_json_escaped_secret_bytes(
+    tmp_path: Path,
+) -> None:
+    secret = 'plain-"runtime\\token-value'
+    raw_secret = secret.encode("utf-8")
+    escaped_secret = json.dumps(secret)[1:-1].encode("utf-8")
+    path = tmp_path / "malformed.jsonl"
+    path.write_bytes(b"\xffraw=" + raw_secret + b"\nescaped=" + escaped_secret)
+
+    assert not redact_runtime_secrets_in_file(path, (secret,), artifact_format="jsonl")
+
+    redacted = path.read_bytes()
+    assert raw_secret not in redacted
+    assert escaped_secret not in redacted
+    assert redacted.count(REDACTED_SECRET.encode("utf-8")) == 2
 
 
 def test_key_based_redaction_catches_short_secret_values() -> None:

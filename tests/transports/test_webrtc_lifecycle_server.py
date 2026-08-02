@@ -199,6 +199,263 @@ class TestWebRTCIngressQueueOwnership:
         assert offer_task.done()
 
     @pytest.mark.asyncio
+    async def test_disconnect_cleanup_failures_are_best_effort_and_retryable(self):
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        pc = SimpleNamespace(
+            close=AsyncMock(side_effect=[RuntimeError("peer close failed"), None])
+        )
+        site = SimpleNamespace(
+            stop=AsyncMock(side_effect=[RuntimeError("site stop failed"), None])
+        )
+        runner = SimpleNamespace(cleanup=AsyncMock())
+        transport._pc = pc
+        transport._site = site
+        transport._runner = runner
+        transport._outbound_track = object()
+
+        with pytest.raises(RuntimeError, match="peer close failed"):
+            await transport.disconnect()
+
+        # The first error wins, but later cleanup stages still run. Only the
+        # resources whose cleanup failed remain reachable for a retry.
+        pc.close.assert_awaited_once()
+        site.stop.assert_awaited_once()
+        runner.cleanup.assert_awaited_once()
+        assert transport._pc is pc
+        assert transport._site is site
+        assert transport._runner is None
+        assert transport._connected is False
+        assert transport._outbound_track is None
+        assert transport._peer_closed.is_set()
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        await transport.disconnect()
+
+        assert pc.close.await_count == 2
+        assert site.stop.await_count == 2
+        runner.cleanup.assert_awaited_once()
+        assert transport._pc is None
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_connect_rolls_back_partial_signaling_stack(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        start_entered = asyncio.Event()
+
+        async def block_start() -> None:
+            start_entered.set()
+            await asyncio.Event().wait()
+
+        router = SimpleNamespace(
+            add_post=Mock(),
+            add_get=Mock(),
+            add_options=Mock(),
+            add_static=Mock(),
+        )
+        app = SimpleNamespace(router=router)
+        runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+        site = SimpleNamespace(
+            start=AsyncMock(side_effect=block_start),
+            stop=AsyncMock(),
+        )
+        web = SimpleNamespace(
+            Application=Mock(return_value=app),
+            AppRunner=Mock(return_value=runner),
+            TCPSite=Mock(return_value=site),
+        )
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        connecting = asyncio.create_task(transport.connect())
+        await start_entered.wait()
+        connecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await connecting
+
+        site.stop.assert_awaited_once()
+        runner.cleanup.assert_awaited_once()
+        assert transport._connected is False
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_connect_rollback_preserves_new_caller_cancellation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        startup_error = RuntimeError("setup failed")
+        cleanup_entered = asyncio.Event()
+        release_cleanup = asyncio.Event()
+
+        async def block_cleanup() -> None:
+            cleanup_entered.set()
+            await release_cleanup.wait()
+
+        router = SimpleNamespace(
+            add_post=Mock(),
+            add_get=Mock(),
+            add_options=Mock(),
+            add_static=Mock(),
+        )
+        app = SimpleNamespace(router=router)
+        runner = SimpleNamespace(
+            setup=AsyncMock(side_effect=startup_error),
+            cleanup=AsyncMock(side_effect=block_cleanup),
+        )
+        web = SimpleNamespace(
+            Application=Mock(return_value=app),
+            AppRunner=Mock(return_value=runner),
+            TCPSite=Mock(),
+        )
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        connecting = asyncio.create_task(transport.connect())
+        await cleanup_entered.wait()
+        connecting.cancel()
+        release_cleanup.set()
+
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await connecting
+
+        assert exc_info.value.__cause__ is startup_error
+        runner.cleanup.assert_awaited_once()
+        assert transport._runner is None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_connects_publish_one_signaling_stack(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        setup_entered = asyncio.Event()
+        release_setup = asyncio.Event()
+
+        async def block_setup() -> None:
+            setup_entered.set()
+            await release_setup.wait()
+
+        router = SimpleNamespace(
+            add_post=Mock(),
+            add_get=Mock(),
+            add_options=Mock(),
+            add_static=Mock(),
+        )
+        app = SimpleNamespace(router=router)
+        runner = SimpleNamespace(
+            setup=AsyncMock(side_effect=block_setup),
+            cleanup=AsyncMock(),
+        )
+        site = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        web = SimpleNamespace(
+            Application=Mock(return_value=app),
+            AppRunner=Mock(return_value=runner),
+            TCPSite=Mock(return_value=site),
+        )
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        first = asyncio.create_task(transport.connect())
+        await setup_entered.wait()
+        second = asyncio.create_task(transport.connect())
+        await asyncio.sleep(0)
+        web.AppRunner.assert_called_once()
+
+        release_setup.set()
+        await asyncio.gather(first, second)
+
+        web.AppRunner.assert_called_once()
+        web.TCPSite.assert_called_once()
+        runner.setup.assert_awaited_once()
+        site.start.assert_awaited_once()
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_disconnect_blocks_reconnect_until_cleanup_retry(
+        self,
+    ) -> None:
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+        stop_entered = asyncio.Event()
+
+        async def block_stop() -> None:
+            stop_entered.set()
+            await asyncio.Event().wait()
+
+        site = SimpleNamespace(
+            stop=AsyncMock(side_effect=block_stop),
+        )
+        runner = SimpleNamespace(cleanup=AsyncMock())
+        transport._connected = True
+        transport._site = site
+        transport._runner = runner
+
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await stop_entered.wait()
+        disconnecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await disconnecting
+
+        assert transport._site is site
+        assert transport._runner is runner
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        site.stop = AsyncMock()
+        await transport.disconnect()
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_preserves_caller_cancellation_while_reaping_consumer(
+        self,
+    ) -> None:
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+        child_cancelled = asyncio.Event()
+        release_child = asyncio.Event()
+
+        async def cancellation_resistant_consumer() -> None:
+            while not release_child.is_set():
+                try:
+                    await release_child.wait()
+                except asyncio.CancelledError:
+                    child_cancelled.set()
+
+        transport._connected = True
+        transport._consume_task = asyncio.create_task(cancellation_resistant_consumer())
+
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await child_cancelled.wait()
+        disconnecting.cancel()
+        release_child.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await disconnecting
+
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        assert transport._consume_task is None
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        await transport.disconnect()
+
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
     async def test_failed_replacement_offer_keeps_existing_peer_and_receiver(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
@@ -235,6 +492,119 @@ class TestWebRTCIngressQueueOwnership:
         received = await asyncio.wait_for(pending, timeout=1.0)
         assert received is new_chunk
         await audio_iter.aclose()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_offer_closes_unpublished_candidate_peer(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+        remote_description_started = asyncio.Event()
+
+        async def block_remote_description(
+            self: _FakeRTCPeerConnection,
+            _offer: _FakeSessionDescription,
+        ) -> None:
+            remote_description_started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(
+            _FakeRTCPeerConnection,
+            "setRemoteDescription",
+            block_remote_description,
+        )
+        handling = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await remote_description_started.wait()
+        handling.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+
+        assert len(_FakeRTCPeerConnection.instances) == 1
+        assert _FakeRTCPeerConnection.instances[0].closed is True
+        assert transport._pc is None
+        assert transport._peer_generation == 0
+
+    @pytest.mark.asyncio
+    async def test_cancelled_replacement_retirement_closes_candidate_and_is_retryable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        first_generation = transport._peer_generation
+        old_outbound = transport._outbound
+        original_aclose = old_outbound.aclose
+        retirement_started = asyncio.Event()
+
+        async def blocking_aclose() -> None:
+            retirement_started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(old_outbound, "aclose", blocking_aclose)
+        handling = asyncio.create_task(transport._handle_offer(_FakeOfferRequest()))
+        await retirement_started.wait()
+        candidate = _FakeRTCPeerConnection.instances[-1]
+        handling.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+
+        assert candidate.closed is True
+        assert transport._peer_generation == first_generation
+        assert transport._pc is None
+        assert transport._connected is False
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+
+        monkeypatch.setattr(old_outbound, "aclose", original_aclose)
+        await transport.disconnect()
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_failed_replacement_retirement_closes_candidate_and_blocks_offers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
+        first_generation = transport._peer_generation
+        old_outbound = transport._outbound
+        original_aclose = old_outbound.aclose
+        close_calls = 0
+
+        async def fail_once() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                raise RuntimeError("old outbound cleanup failed")
+            await original_aclose()
+
+        monkeypatch.setattr(old_outbound, "aclose", fail_once)
+
+        with pytest.raises(RuntimeError, match="old outbound cleanup failed"):
+            await transport._handle_offer(_FakeOfferRequest())
+
+        candidate = _FakeRTCPeerConnection.instances[-1]
+        assert candidate.closed is True
+        assert transport._peer_generation == first_generation
+        assert transport._connected is False
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 503
+
+        await transport.disconnect()
+        assert close_calls == 2
+        assert transport._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
     async def test_track_event_during_set_remote_description_starts_consumer(self, monkeypatch):

@@ -272,14 +272,17 @@ def _vad_baseline_start_count(records: list[dict[str, Any]], turn_id: str) -> in
     return count
 
 
-def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
-    """Return the turn's raw VAD ``stage_start`` input PCM blobs, in order.
+def _vad_whatif_frames(
+    source: DebuggerSource,
+    turn_id: str,
+) -> list[tuple[bytes, dict[str, Any]]]:
+    """Return ordered raw VAD input blobs with their recorded PCM metadata.
 
     These are the pre-mono mic frames captured before the VAD provider ran, so
-    the what-if re-drives a fresh provider against the same input the live run
-    saw.
+    the caller must retain their recorded geometry and mirror the live VAD
+    stage's mono conversion before re-driving a fresh provider.
     """
-    frames: list[tuple[int, bytes]] = []
+    frames: list[tuple[int, bytes, dict[str, Any]]] = []
     for record in source.records():
         if record.get("turn_id") != turn_id or record.get("name") != "stage_start":
             continue
@@ -295,6 +298,6 @@ def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
         seq = _record_sequence(record)
         if seq is None:
             continue
-        frames.append((seq, blob))
+        frames.append((seq, blob, data))
     frames.sort(key=lambda item: item[0])
-    return [blob for _seq, blob in frames]
+    return [(blob, data) for _seq, blob, data in frames]

@@ -2026,6 +2026,59 @@ def test_bundles_show_missing_journal(cli: CliRunner, tmp_path: Path) -> None:
     assert "corrupt or unreadable" in result.stderr
 
 
+@pytest.mark.parametrize("command", [["bundles", "show"], ["replay"]])
+def test_bundle_commands_reject_malformed_journal(
+    cli: CliRunner,
+    tmp_path: Path,
+    command: list[str],
+) -> None:
+    corrupt = tmp_path / "malformed-journal.zip"
+    with zipfile.ZipFile(corrupt, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        zf.writestr(
+            "journal.ndjson",
+            '{"sequence": 1, "name": "start"}\nnot-json\n',
+        )
+
+    result = cli.invoke(app, [*command, str(corrupt), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "line 2 is not valid JSON" in payload["message"]
+
+
+@pytest.mark.parametrize("command", [["bundles", "show"], ["replay"]])
+@pytest.mark.parametrize(
+    ("journal_payload", "message"),
+    [
+        ('{"sequence": "1", "name": "bad"}\n', "sequence must be a non-negative integer"),
+        (
+            json.dumps({"sequence": 1, "output_ref": "a" * 64}) + "\n",
+            "references missing artifact",
+        ),
+    ],
+)
+def test_bundle_commands_reject_corrupt_journal_integrity(
+    cli: CliRunner,
+    tmp_path: Path,
+    command: list[str],
+    journal_payload: str,
+    message: str,
+) -> None:
+    corrupt = tmp_path / "corrupt-integrity.zip"
+    with zipfile.ZipFile(corrupt, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        zf.writestr("journal.ndjson", journal_payload)
+
+    result = cli.invoke(app, [*command, str(corrupt), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert message in payload["message"]
+
+
 def test_bundles_show_newer_version(cli: CliRunner, tmp_path: Path) -> None:
     """A forward-version bundle gets an 'upgrade easycat' message, not 'corrupt'."""
     newer = tmp_path / "from-the-future.zip"

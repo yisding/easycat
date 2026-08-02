@@ -1153,3 +1153,17 @@ def test_config_rejects_negative_values(field):
     """Negative timing values should fail at construction with a clear error."""
     with pytest.raises(ValueError, match=field):
         TurnManagerConfig(**{field: -1})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.1, 1.1, float("nan"), float("inf"), True, "0.5"],
+)
+def test_config_rejects_invalid_endpoint_threshold(value: object) -> None:
+    with pytest.raises(ValueError, match="endpoint_threshold"):
+        TurnManagerConfig(endpoint_threshold=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [0.0, 1.0])
+def test_config_accepts_endpoint_threshold_boundaries(value: float) -> None:
+    assert TurnManagerConfig(endpoint_threshold=value).endpoint_threshold == value

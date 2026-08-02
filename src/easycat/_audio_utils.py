@@ -8,6 +8,7 @@ import math
 import struct
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 from functools import lru_cache
 from typing import Any
 
@@ -35,6 +36,17 @@ def _require_positive_int(name: str, value: object) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def validate_pcm16_format(name: str, fmt: AudioFormat) -> None:
+    """Require PCM16 audio with a positive integer channel count."""
+    if fmt.encoding != "pcm" or fmt.sample_width != 2:
+        raise ValueError(
+            f"{name} must be PCM16 audio "
+            f"(got encoding={fmt.encoding!r}, sample_width={fmt.sample_width!r})"
+        )
+    if isinstance(fmt.channels, bool) or not isinstance(fmt.channels, int) or fmt.channels <= 0:
+        raise ValueError(f"{name}.channels must be a positive integer (got {fmt.channels!r})")
 
 
 def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
@@ -577,17 +589,57 @@ class PCM16StreamResampler:
 
 
 def resample_chunk(chunk: AudioChunk, to_rate: int) -> AudioChunk:
-    """Resample an AudioChunk to a different sample rate."""
+    """Resample PCM16 channels independently and restore their interleaving.
+
+    A trailing incomplete frame is discarded, matching :func:`resample`'s
+    treatment of an incomplete PCM16 sample without letting bytes from one
+    channel shift into another.
+    """
     if chunk.format.sample_rate == to_rate:
         return chunk
-    new_data = resample(chunk.data, chunk.format.sample_rate, to_rate)
+
+    fmt = chunk.format
+    validate_pcm16_format("chunk.format", fmt)
+    channels = fmt.channels
+    frame_size = channels * fmt.sample_width
+    frame_count = len(chunk.data) // frame_size
+    aligned_data = chunk.data[: frame_count * frame_size]
+
+    if channels == 1:
+        new_data = resample(aligned_data, fmt.sample_rate, to_rate)
+    else:
+        total_samples = frame_count * channels
+        samples = struct.unpack(f"<{total_samples}h", aligned_data)
+        resampled_channels = [
+            resample(
+                struct.pack(f"<{frame_count}h", *samples[channel_index::channels]),
+                fmt.sample_rate,
+                to_rate,
+            )
+            for channel_index in range(channels)
+        ]
+
+        output_lengths = {len(channel_data) for channel_data in resampled_channels}
+        if len(output_lengths) != 1:
+            raise RuntimeError("resampling produced different output lengths across channels")
+        channel_bytes = output_lengths.pop() if output_lengths else 0
+        output_frames = channel_bytes // fmt.sample_width
+        per_channel = [
+            struct.unpack(f"<{output_frames}h", channel[: output_frames * fmt.sample_width])
+            for channel in resampled_channels
+        ]
+        new_data = struct.pack(
+            f"<{output_frames * channels}h",
+            *(sample for frame in zip(*per_channel, strict=True) for sample in frame),
+        )
+
     new_format = AudioFormat(
         sample_rate=to_rate,
-        channels=chunk.format.channels,
-        sample_width=chunk.format.sample_width,
-        encoding=chunk.format.encoding,
+        channels=fmt.channels,
+        sample_width=fmt.sample_width,
+        encoding=fmt.encoding,
     )
-    return AudioChunk(data=new_data, format=new_format, timestamp=chunk.timestamp)
+    return replace(chunk, data=new_data, format=new_format)
 
 
 def to_mono(data: bytes, channels: int) -> bytes:
@@ -622,7 +674,7 @@ def to_mono_chunk(chunk: AudioChunk) -> AudioChunk:
         sample_width=chunk.format.sample_width,
         encoding=chunk.format.encoding,
     )
-    return AudioChunk(data=new_data, format=new_format, timestamp=chunk.timestamp)
+    return replace(chunk, data=new_data, format=new_format)
 
 
 def chunk_frames(

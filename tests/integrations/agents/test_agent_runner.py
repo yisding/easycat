@@ -684,3 +684,23 @@ async def test_bridge_delegation_forwards_runner_history_as_context():
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "reply-1"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_bridge_owned_history_capability_suppresses_runner_shadow_context():
+    class HistoryOwningBridge(_ContextCapturingBridge):
+        MANAGES_CONVERSATION_HISTORY = True
+
+    inner = HistoryOwningBridge()
+    runner = AgentRunner(inner)
+
+    await _drain(runner, "first")
+    await _drain(runner, "second")
+
+    assert inner.seen_contexts == [[], []]
+    assert runner.history == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "reply-1"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "reply-2"},
+    ]

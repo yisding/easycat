@@ -18,6 +18,8 @@ from typing import Any
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from easycat._numeric import is_finite_number
+
 logger = logging.getLogger(__name__)
 
 # Callback types for connection lifecycle hooks.
@@ -54,15 +56,19 @@ class ReconnectConfig:
         if self.backoff_factor < 1.0:
             raise ValueError("backoff_factor must be >= 1.0")
 
-        if isinstance(self.jitter_factor, bool) or not isinstance(self.jitter_factor, int | float):
+        if not isinstance(self.jitter_factor, int | float) or isinstance(self.jitter_factor, bool):
             raise ValueError("jitter_factor must be a number between 0.0 and 1.0")
+        if not is_finite_number(self.jitter_factor):
+            raise ValueError("jitter_factor must be a finite number between 0.0 and 1.0")
         if self.jitter_factor < 0.0 or self.jitter_factor > 1.0:
             raise ValueError("jitter_factor must be between 0.0 and 1.0")
 
 
 def _validate_positive_number(name: str, value: object) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
-        raise ValueError(f"{name} must be > 0")
+    if not is_finite_number(value):
+        raise ValueError(f"{name} must be a finite number > 0")
+    if value <= 0:
+        raise ValueError(f"{name} must be a finite number > 0")
 
 
 async def connect_until_stopped(
@@ -135,6 +141,12 @@ class ReconnectingWebSocket:
         self._on_give_up = on_give_up
         self._on_disconnect = on_disconnect
         self._ws: ClientConnection | None = None
+        # Every connection remains cleanup-owned until its close succeeds,
+        # whether it was committed, rolled back during installation, or
+        # arrived late from a cancellation-resistant connector.
+        self._pending_connection_closes: list[ClientConnection] = []
+        self._connection_cleanup_lock = asyncio.Lock()
+        self._connection_cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
         # Set when recv_iter ends because the reconnect budget was exhausted or a
         # reconnect ultimately failed (terminal mid-stream death), as opposed to a
@@ -202,6 +214,7 @@ class ReconnectingWebSocket:
 
     async def _connect_with_retry(self, *, notify_reconnect: bool = False) -> None:
         """Connect with exponential backoff and jitter retry."""
+        await self._retry_pending_connection_closes()
         delay = self._config.base_delay
         last_error: Exception | None = None
         max_attempts = self._max_attempts()
@@ -219,8 +232,6 @@ class ReconnectingWebSocket:
                         additional_headers=self._config.extra_headers,
                     )
                 )
-                await self._install_connection(candidate, attempt, notify_reconnect)
-                return
             except Exception as exc:
                 if self._closed:
                     raise ConnectionError("WebSocket closed during reconnect") from exc
@@ -237,6 +248,13 @@ class ReconnectingWebSocket:
                 )
                 await self._backoff_or_close(jittered_delay)
                 delay = min(delay * self._config.backoff_factor, self._config.max_delay)
+                continue
+
+            # The TCP/WebSocket attempt succeeded. Installation includes
+            # observer notification and is transactional; observer failures
+            # are application errors, not failed network attempts to retry.
+            await self._install_connection(candidate, attempt, notify_reconnect)
+            return
 
         self._last_connect_attempts = attempt
         if notify_reconnect:
@@ -253,21 +271,101 @@ class ReconnectingWebSocket:
         notify_reconnect: bool,
     ) -> None:
         if self._closed:
-            await candidate.close()
+            self._retain_connection_for_close(candidate)
+            try:
+                await self._close_retained_connection(candidate)
+            except BaseException as cleanup_error:
+                raise ConnectionError("WebSocket closed during reconnect") from cleanup_error
             raise ConnectionError("WebSocket closed during reconnect")
+        previous_ws = self._ws
+        was_connected = self._connected.is_set()
+        previous_state = (
+            self._ever_connected,
+            self._died_abnormally,
+            self._last_connect_attempts,
+            self._reconnect_attempts_exhausted,
+            self._reconnect_exhaustion_reason,
+        )
         self._ws = candidate
         logger.debug("WebSocket connected to %s (attempt %d)", self._url, attempt + 1)
         self._connected.set()
+        try:
+            await self._emit_reconnect_success()
+            if (notify_reconnect or attempt > 0) and self._on_reconnect:
+                await self._invoke_callback(self._on_reconnect)
+            if self._closed:
+                raise ConnectionError("WebSocket closed during reconnect")
+        except BaseException as install_error:
+            if not self._closed and self._ws is candidate:
+                self._ws = previous_ws
+                if was_connected:
+                    self._connected.set()
+                else:
+                    self._connected.clear()
+                (
+                    self._ever_connected,
+                    self._died_abnormally,
+                    self._last_connect_attempts,
+                    self._reconnect_attempts_exhausted,
+                    self._reconnect_exhaustion_reason,
+                ) = previous_state
+            else:
+                self._connected.clear()
+            self._retain_connection_for_close(candidate)
+            try:
+                await self._close_retained_connection(candidate)
+            except BaseException as close_error:
+                install_error.add_note(f"candidate rollback close failed: {close_error!r}")
+            raise
+
         self._ever_connected = True
         self._died_abnormally = False
         self._last_connect_attempts = 0
         self._reconnect_attempts_exhausted = None
         self._reconnect_exhaustion_reason = None
-        await self._emit_reconnect_success()
-        if (notify_reconnect or attempt > 0) and self._on_reconnect:
-            await self._invoke_callback(self._on_reconnect)
-        if self._closed:
-            raise ConnectionError("WebSocket closed during reconnect")
+
+    def _retain_connection_for_close(self, connection: ClientConnection) -> None:
+        """Record cleanup ownership once, comparing connections by identity."""
+        if not any(owned is connection for owned in self._pending_connection_closes):
+            self._pending_connection_closes.append(connection)
+
+    def _release_connection_after_close(self, connection: ClientConnection) -> None:
+        for index, owned in enumerate(self._pending_connection_closes):
+            if owned is connection:
+                del self._pending_connection_closes[index]
+                break
+
+    async def _close_retained_connection(self, connection: ClientConnection) -> None:
+        """Close one exact owned connection and release it only on success."""
+        async with self._connection_cleanup_lock:
+            if not any(owned is connection for owned in self._pending_connection_closes):
+                return
+            try:
+                await connection.close()
+            except BaseException:
+                raise
+            self._release_connection_after_close(connection)
+
+    async def _retry_pending_connection_closes(self) -> None:
+        """Finish all retained connection cleanup before reuse or final close."""
+        while self._pending_connection_closes:
+            connection = self._pending_connection_closes[0]
+            caller = asyncio.current_task()
+            cancellation_requests = caller.cancelling() if caller is not None else 0
+            try:
+                await self._close_retained_connection(connection)
+            except asyncio.CancelledError as close_error:
+                if caller is not None and caller.cancelling() > cancellation_requests:
+                    raise
+                raise RuntimeError(
+                    "Previous WebSocket connection cleanup is incomplete; "
+                    "retry close() or connect() after cleanup recovers"
+                ) from close_error
+            except BaseException as close_error:
+                raise RuntimeError(
+                    "Previous WebSocket connection cleanup is incomplete; "
+                    "retry close() or connect() after cleanup recovers"
+                ) from close_error
 
     async def _connect_attempt_or_close(
         self,
@@ -311,8 +409,7 @@ class ReconnectingWebSocket:
                     task.cancel()
             await asyncio.gather(sleep_task, close_task, return_exceptions=True)
 
-    @staticmethod
-    def _close_late_connection(task: asyncio.Future[ClientConnection]) -> None:
+    def _close_late_connection(self, task: asyncio.Future[ClientConnection]) -> None:
         """Close a connector result that arrived after its caller stopped waiting."""
         if task.cancelled():
             return
@@ -320,8 +417,22 @@ class ReconnectingWebSocket:
             connection = task.result()
         except Exception:
             return
-        close_task = asyncio.create_task(connection.close())
+        self._retain_connection_for_close(connection)
+        close_task = asyncio.create_task(
+            self._close_late_retained_connection(connection),
+            name="websocket_late_connection_cleanup",
+        )
+        self._connection_cleanup_tasks.add(close_task)
+        close_task.add_done_callback(self._connection_cleanup_tasks.discard)
         close_task.add_done_callback(ReconnectingWebSocket._consume_task_result)
+
+    async def _close_late_retained_connection(self, connection: ClientConnection) -> None:
+        """Best-effort immediate cleanup; failures remain retry-owned."""
+        try:
+            await self._close_retained_connection(connection)
+        except BaseException:
+            logger.debug("Error closing late WebSocket connection", exc_info=True)
+            raise
 
     @staticmethod
     def _consume_task_result(task: asyncio.Task[Any]) -> None:
@@ -524,11 +635,9 @@ class ReconnectingWebSocket:
         self._connected.set()
         ws, self._ws = self._ws, None
         if ws is not None:
-            try:
-                await ws.close()
-            except Exception:
-                logger.debug("Error closing WebSocket", exc_info=True)
+            self._retain_connection_for_close(ws)
         self._connected.clear()
+        await self._retry_pending_connection_closes()
 
     # ── Event emission helpers ────────────────────────────────────
 

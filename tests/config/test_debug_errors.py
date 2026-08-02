@@ -89,6 +89,34 @@ def test_missing_openai_key_with_no_stt_tts_raises_e203(monkeypatch: pytest.Monk
     assert excinfo.value.context == {"var": "OPENAI_API_KEY"}
 
 
+def test_whitespace_openai_env_key_is_treated_as_missing(monkeypatch: pytest.MonkeyPatch):
+    from easycat.errors import EasyCatError
+
+    monkeypatch.setenv("OPENAI_API_KEY", " \t ")
+    with pytest.raises(EasyCatError) as excinfo:
+        EasyConfig()
+    assert excinfo.value.code == "EASYCAT_E203"
+
+
+@pytest.mark.parametrize(
+    ("stt_key", "tts_key", "provider_name"),
+    [
+        (" \t ", "tts-key", "openai-realtime STT"),
+        ("stt-key", " \t ", "openai TTS"),
+    ],
+)
+def test_whitespace_concrete_provider_key_is_rejected(
+    stt_key: str,
+    tts_key: str,
+    provider_name: str,
+) -> None:
+    with pytest.raises(ValueError, match=rf"{provider_name} requires an API key"):
+        EasyConfig(
+            stt=OpenAIRealtimeSTTConfig(api_key=stt_key),
+            tts=OpenAITTSConfig(api_key=tts_key),
+        )
+
+
 def test_easyconfig_is_keyword_only(monkeypatch: pytest.MonkeyPatch):
     """Positional construction must fail loudly, never silently mis-bind.
 

@@ -467,6 +467,42 @@ class TestTwilioStreamTokenValidation:
         assert ws.closed_with is None
 
     @pytest.mark.asyncio
+    async def test_connection_transport_rejects_start_without_stream_sid(self) -> None:
+        ws = _DummyTwilioWebSocket()
+        validation_called = False
+
+        def validator(_token: str) -> bool:
+            nonlocal validation_called
+            validation_called = True
+            return True
+
+        message = json.loads(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+            )
+        )
+        message.pop("streamSid")
+        message["start"].pop("streamSid")
+        answered: list[CallAnswered] = []
+        bus = EventBus()
+        bus.subscribe(CallAnswered, answered.append)
+        transport = TwilioConnectionTransport(
+            ws,
+            event_bus=bus,
+            config=TwilioTransportConfig(stream_token_validator=validator),
+        )
+
+        await transport._handle_message(json.dumps(message))
+
+        assert not validation_called
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert answered == []
+        assert ws.closed_with == (4003, "Missing streamSid")
+
+    @pytest.mark.asyncio
     async def test_connection_transport_preflight_accepts_token_once(self) -> None:
         store = TwilioStreamTokenStore("secret")
         token = store.issue()
@@ -493,6 +529,39 @@ class TestTwilioStreamTokenValidation:
         assert transport.call_sid == "CALL1"
         assert ws.closed_with is None
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_preflight_rejects_start_without_stream_sid(
+        self,
+    ) -> None:
+        validation_called = False
+
+        def validator(_token: str) -> bool:
+            nonlocal validation_called
+            validation_called = True
+            return True
+
+        message = json.loads(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: "token-1"},
+            )
+        )
+        message.pop("streamSid")
+        message["start"].pop("streamSid")
+        ws = _ScriptedTwilioWebSocket(json.dumps(message))
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=validator),
+        )
+
+        assert not await transport.wait_for_start()
+
+        assert not validation_called
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert ws.closed_with == (4003, "Missing streamSid")
 
     @pytest.mark.asyncio
     async def test_connection_transport_preflight_rejects_invalid_token(self) -> None:
@@ -590,6 +659,211 @@ class TestTwilioStreamTokenValidation:
 
         assert not transport.is_connected
         assert transport._receive_task is None
+        assert ws.closed_with == ()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_preserves_caller_cancellation_while_reaping_receiver(
+        self,
+    ) -> None:
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        transport._connected = True
+        child_cancelled = asyncio.Event()
+        release_child = asyncio.Event()
+
+        async def cancellation_resistant_receiver() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                child_cancelled.set()
+                await release_child.wait()
+
+        transport._receive_task = asyncio.create_task(cancellation_resistant_receiver())
+        await asyncio.sleep(0)
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await child_cancelled.wait()
+        disconnecting.cancel()
+        release_child.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await disconnecting
+
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        assert transport._socket_close_pending is True
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        await transport.disconnect()
+        assert ws.closed_with == ()
+        assert transport._socket_close_pending is False
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_socket_close_is_retained_for_disconnect_retry(self) -> None:
+        close_started = asyncio.Event()
+
+        class _CancelOnceCloseWebSocket(_DummyTwilioWebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_calls = 0
+
+            async def close(self, *args: object) -> None:
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    close_started.set()
+                    await asyncio.Event().wait()
+                await super().close(*args)
+
+        ws = _CancelOnceCloseWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        transport._connected = True
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await close_started.wait()
+        disconnecting.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await disconnecting
+
+        assert transport._socket_close_pending is True
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+
+        await transport.disconnect()
+        assert ws.close_calls == 2
+        assert transport._socket_close_pending is False
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_failed_socket_close_is_retained_for_disconnect_retry(self) -> None:
+        class _FailOnceCloseWebSocket(_DummyTwilioWebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_calls = 0
+
+            async def close(self, *args: object) -> None:
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise RuntimeError("socket close failed")
+                await super().close(*args)
+
+        ws = _FailOnceCloseWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        transport._connected = True
+
+        with pytest.raises(RuntimeError, match="socket close failed"):
+            await transport.disconnect()
+
+        assert transport._socket_close_pending is True
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        await transport.disconnect()
+        assert ws.close_calls == 2
+        assert transport._socket_close_pending is False
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_connect_queued_behind_disconnect_cannot_republish_closed_socket(
+        self,
+    ) -> None:
+        class _BlockingCloseWebSocket(_DummyTwilioWebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_entered = asyncio.Event()
+                self.release_close = asyncio.Event()
+
+            async def close(self, *args: object) -> None:
+                self.close_entered.set()
+                await self.release_close.wait()
+                await super().close(*args)
+
+        ws = _BlockingCloseWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        transport._connected = True
+
+        disconnecting = asyncio.create_task(transport.disconnect())
+        await ws.close_entered.wait()
+        connecting = asyncio.create_task(transport.connect())
+        await asyncio.sleep(0)
+
+        assert not connecting.done()
+
+        ws.release_close.set()
+        await disconnecting
+        with pytest.raises(RuntimeError, match="accepted connection is already closed"):
+            await connecting
+
+        assert not transport.is_connected
+        assert transport._receive_task is None
+        assert transport._socket_close_pending is False
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_connect_waits_for_and_shares_tentative_start_failure(
+        self,
+    ) -> None:
+        class _DeferredFailureTransport(TwilioConnectionTransport):
+            def __init__(self, ws: _DummyTwilioWebSocket) -> None:
+                super().__init__(ws)
+                self.start_entered = asyncio.Event()
+                self.release_start = asyncio.Event()
+                self._pending_start_message = {"event": "start"}
+
+            async def _accept_start(
+                self,
+                *args: object,
+                **kwargs: object,
+            ) -> bool:
+                self.start_entered.set()
+                await self.release_start.wait()
+                raise RuntimeError("deferred start failed")
+
+        ws = _DummyTwilioWebSocket()
+        transport = _DeferredFailureTransport(ws)
+        first = asyncio.create_task(transport.connect())
+        await transport.start_entered.wait()
+        second = asyncio.create_task(transport.connect())
+        await asyncio.sleep(0)
+
+        assert not second.done()
+        assert transport._receive_task is None
+
+        transport.release_start.set()
+        with pytest.raises(RuntimeError, match="deferred start failed"):
+            await first
+        with pytest.raises(RuntimeError, match="deferred start failed"):
+            await second
+
+        assert not transport.is_connected
+        assert transport._receive_task is None
+        assert ws.closed_with == ()
+
+    @pytest.mark.asyncio
+    async def test_remote_eof_consumes_accepted_socket_until_disconnect_cleanup(
+        self,
+    ) -> None:
+        class _EOFWebSocket(_DummyTwilioWebSocket):
+            def __aiter__(self) -> _EOFWebSocket:
+                return self
+
+            async def __anext__(self) -> str:
+                raise StopAsyncIteration
+
+        ws = _EOFWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        await transport.connect()
+        receive_task = transport._receive_task
+        assert receive_task is not None
+        await receive_task
+
+        assert not transport.is_connected
+        assert transport._socket_close_pending is True
+        with pytest.raises(RuntimeError, match="has ended; call disconnect"):
+            await transport.connect()
+
+        assert transport._receive_task is receive_task
+        await transport.disconnect()
+        assert transport._socket_close_pending is False
         assert ws.closed_with == ()
 
     @pytest.mark.asyncio

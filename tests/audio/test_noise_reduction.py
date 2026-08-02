@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.noise_reduction import (
     KrispNoiseReducer,
     NoiseReducerConfig,
@@ -57,6 +57,133 @@ async def test_rnnoise_process_mocked():
     assert len(result.data) + len(tail.data) > 0
     # RNNoise should have been called
     assert mock_rnnoise.process_mono_frame.called
+
+
+async def test_rnnoise_downmixes_stereo_before_mono_filtering():
+    np = pytest.importorskip("numpy")
+    seen_frames: list = []
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_rnnoise.create.return_value = MagicMock()
+
+    def record_frame(_state, frame):
+        seen_frames.append(np.array(frame, copy=True))
+        return frame, 0.0
+
+    mock_rnnoise.process_mono_frame.side_effect = record_frame
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    stereo_format = AudioFormat(sample_rate=48_000, channels=2, sample_width=2)
+    # Ten milliseconds of stereo audio is 480 frames, not 960 mono samples.
+    data = struct.pack("<960h", *([1000, -1000] * 480))
+    source = AudioChunk(data=data, format=stereo_format)
+
+    result = await reducer.process(source)
+    tail = reducer.flush()
+
+    assert len(seen_frames) == 1
+    assert not seen_frames[0].any()
+    assert result.format == AudioFormat(sample_rate=48_000, channels=1, sample_width=2)
+    assert len(result.data) + len(tail.data) == 480 * 2
+    assert (len(result.data) + len(tail.data)) / result.format.bytes_per_second == pytest.approx(
+        source.duration_ms / 1000
+    )
+
+
+async def test_rnnoise_preserves_buffered_mono_audio_across_channel_transition():
+    pytest.importorskip("numpy")
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_rnnoise.create.return_value = MagicMock()
+    mock_rnnoise.process_mono_frame.side_effect = lambda _state, frame: (frame, 0.0)
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    mono_format = AudioFormat(sample_rate=48_000, channels=1, sample_width=2)
+    stereo_format = AudioFormat(sample_rate=48_000, channels=2, sample_width=2)
+    first = await reducer.process(
+        AudioChunk(data=struct.pack("<100h", *([100] * 100)), format=mono_format)
+    )
+    second = await reducer.process(
+        AudioChunk(
+            data=struct.pack("<760h", *([200, 200] * 380)),
+            format=stereo_format,
+        )
+    )
+    tail = reducer.flush()
+    output = struct.unpack("<480h", first.data + second.data + tail.data)
+
+    assert output[:100] == (100,) * 100
+    assert output[100:] == (200,) * 380
+    assert mock_rnnoise.process_mono_frame.call_count == 1
+
+
+async def test_rnnoise_carries_split_multichannel_frame_before_downmix():
+    pytest.importorskip("numpy")
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 1
+    mock_rnnoise.create.return_value = MagicMock()
+    mock_rnnoise.process_mono_frame.side_effect = lambda _state, frame: (frame, 0.0)
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    stereo_format = AudioFormat(sample_rate=48_000, channels=2, sample_width=2)
+    # Three continuous stereo frames split after the left sample of frame 2.
+    first = AudioChunk(data=struct.pack("<3h", 100, 300, 1000), format=stereo_format)
+    second = AudioChunk(data=struct.pack("<3h", 2000, 3000, 4000), format=stereo_format)
+
+    first_result = await reducer.process(first)
+    second_result = await reducer.process(second)
+    tail = reducer.flush()
+    output = first_result.data + second_result.data + tail.data
+
+    assert struct.unpack("<3h", output) == (200, 1500, 3500)
+    assert reducer._source_frame_carry == b""
+
+
+async def test_rnnoise_discards_partial_source_frame_on_format_change_and_flush():
+    pytest.importorskip("numpy")
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 1
+    mock_rnnoise.create.return_value = MagicMock()
+    mock_rnnoise.process_mono_frame.side_effect = lambda _state, frame: (frame, 0.0)
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    stereo_format = AudioFormat(sample_rate=48_000, channels=2, sample_width=2)
+    mono_format = AudioFormat(sample_rate=48_000, channels=1, sample_width=2)
+    orphan = await reducer.process(AudioChunk(data=struct.pack("<h", 1000), format=stereo_format))
+    assert orphan.data == b""
+    assert reducer._source_frame_carry == struct.pack("<h", 1000)
+
+    mono = await reducer.process(AudioChunk(data=struct.pack("<h", 2000), format=mono_format))
+    assert struct.unpack("<h", mono.data) == (2000,)
+    assert reducer._source_frame_carry == b""
+
+    await reducer.process(AudioChunk(data=b"\x01", format=mono_format))
+    assert reducer._source_frame_carry == b"\x01"
+    reducer.flush()
+    assert reducer._source_frame_carry == b""
+    assert reducer._source_format is None
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        AudioFormat(sample_rate=48_000, channels=1, sample_width=1, encoding="pcm"),
+        AudioFormat(sample_rate=48_000, channels=1, sample_width=2, encoding="mulaw"),
+    ],
+)
+async def test_rnnoise_rejects_non_pcm16_audio(fmt):
+    mock_rnnoise = MagicMock()
+    mock_rnnoise.FRAME_SIZE = 480
+    mock_rnnoise.create.return_value = MagicMock()
+    with patch("easycat.noise_reduction.require_module", return_value=mock_rnnoise):
+        reducer = RNNoiseReducer()
+
+    with pytest.raises(ValueError, match="PCM16"):
+        await reducer.process(AudioChunk(data=b"\x00" * 480, format=fmt))
 
 
 @pytest.mark.asyncio

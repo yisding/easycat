@@ -36,8 +36,14 @@ class _FakeServerWS:
 class _RemoteEOFWebSocket:
     """Minimal connection that reaches remote EOF without local teardown."""
 
-    def __init__(self, messages: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        messages: tuple[str, ...] = (),
+        *,
+        release_eof: asyncio.Event | None = None,
+    ) -> None:
         self._messages = iter(messages)
+        self._release_eof = release_eof
         self.close_calls = 0
 
     def __aiter__(self):
@@ -47,6 +53,8 @@ class _RemoteEOFWebSocket:
         try:
             return next(self._messages)
         except StopIteration:
+            if self._release_eof is not None:
+                await self._release_eof.wait()
             raise StopAsyncIteration from None
 
     async def send(self, _message: str | bytes) -> None:
@@ -124,7 +132,8 @@ class TestEmitTaskDrain:
 class TestRemoteFirstDisconnect:
     @pytest.mark.asyncio
     async def test_websocket_disconnect_releases_resources_after_remote_eof(self):
-        ws = _RemoteEOFWebSocket()
+        release_eof = asyncio.Event()
+        ws = _RemoteEOFWebSocket(release_eof=release_eof)
         bus = EventBus()
         degraded: list[TransportDegraded] = []
 
@@ -140,10 +149,13 @@ class TestRemoteFirstDisconnect:
         assert receive_task is not None
         forwarder = transport._browser_event_forwarder
         assert forwarder is not None
+        release_eof.set()
         await receive_task
         assert not transport.is_connected
         assert transport._browser_event_forwarder is None
         assert not forwarder._subscriptions
+        with pytest.raises(RuntimeError, match="accepted connection is already closed"):
+            await transport.connect()
         transport._emit_degraded("audit_remote_eof")
         assert transport._emit_tasks
 

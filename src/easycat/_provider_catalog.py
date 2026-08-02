@@ -12,6 +12,7 @@ from difflib import get_close_matches
 from typing import Any
 
 from easycat._provider_domains import register_sensitive_api_domains
+from easycat._provider_helpers import has_usable_credential
 
 logger = logging.getLogger("easycat")
 
@@ -50,6 +51,18 @@ class ProviderSpec:
     capability_resolver: ProviderCapabilityResolver | None = None
 
 
+def _same_alias_metadata(first: ProviderSpec, second: ProviderSpec) -> bool:
+    """Whether two names are interchangeable after construction loses the name."""
+    return (
+        first.env_var == second.env_var
+        and first.extra == second.extra
+        and first.api_domains == second.api_domains
+        and first.probe_module == second.probe_module
+        and first.capabilities == second.capabilities
+        and first.capability_resolver is second.capability_resolver
+    )
+
+
 @dataclass(frozen=True)
 class ProviderCatalog:
     """Open provider registry shared by audio-stage factories."""
@@ -75,6 +88,28 @@ class ProviderCatalog:
     )
 
     def __post_init__(self) -> None:
+        config_to_provider: dict[type, Callable[..., Any]] = {}
+        config_to_name: dict[type, str] = {}
+        for name, spec in self.specs.items():
+            existing_provider = config_to_provider.get(spec.config_cls)
+            if existing_provider is not None:
+                existing_name = config_to_name[spec.config_cls]
+                existing_spec = self.specs[existing_name]
+                if existing_provider is not spec.provider_cls:
+                    raise ValueError(
+                        f"{self.kind} config class {spec.config_cls.__name__!r} is already "
+                        f"registered for provider {existing_name!r}; it cannot also map to "
+                        f"provider {name!r} with a different implementation."
+                    )
+                if not _same_alias_metadata(existing_spec, spec):
+                    raise ValueError(
+                        f"{self.kind} provider alias {name!r} shares config class "
+                        f"{spec.config_cls.__name__!r} with {existing_name!r}, so both "
+                        "aliases must use identical metadata."
+                    )
+            config_to_provider[spec.config_cls] = spec.provider_cls
+            config_to_name.setdefault(spec.config_cls, name)
+
         register_sensitive_api_domains(
             domain for spec in self.specs.values() for domain in spec.api_domains
         )
@@ -109,7 +144,7 @@ class ProviderCatalog:
         object.__setattr__(
             self,
             "config_to_provider",
-            {config_cls: provider_cls for provider_cls, config_cls in providers.values()},
+            config_to_provider,
         )
 
     def register(
@@ -150,6 +185,45 @@ class ProviderCatalog:
                     f"{self.kind} provider {normalized!r} is already registered "
                     f"with a different provider/config/env_var."
                 )
+            existing_provider = self.config_to_provider.get(config_cls)
+            if existing_provider is not None:
+                existing_name = next(
+                    name
+                    for name, (candidate_provider, candidate_config) in self.providers.items()
+                    if candidate_config is config_cls and candidate_provider is existing_provider
+                )
+                if existing_provider is not provider_cls:
+                    raise ValueError(
+                        f"{self.kind} config class {config_cls.__name__!r} is already registered "
+                        f"for provider {existing_name!r}; it cannot also map to provider "
+                        f"{normalized!r} with a different implementation."
+                    )
+                alias_spec = ProviderSpec(
+                    provider_cls=provider_cls,
+                    config_cls=config_cls,
+                    env_var=env_var,
+                    extra=extra or "",
+                    api_domains=tuple(api_domains),
+                    probe_module=probe_module,
+                    capabilities=frozenset(capabilities),
+                    capability_resolver=capability_resolver,
+                )
+                existing_spec = ProviderSpec(
+                    provider_cls=provider_cls,
+                    config_cls=config_cls,
+                    env_var=self.env_vars[existing_name],
+                    extra=self.extras[existing_name],
+                    api_domains=self.api_domains[existing_name],
+                    probe_module=self.probe_modules[existing_name],
+                    capabilities=self.capabilities[existing_name],
+                    capability_resolver=self.capability_resolvers[existing_name],
+                )
+                if not _same_alias_metadata(existing_spec, alias_spec):
+                    raise ValueError(
+                        f"{self.kind} provider alias {normalized!r} shares config class "
+                        f"{config_cls.__name__!r} with {existing_name!r}, so both aliases "
+                        "must use identical metadata."
+                    )
             self.providers[normalized] = (provider_cls, config_cls)
             self.env_vars[normalized] = env_var
             self.extras[normalized] = extra or ""
@@ -274,13 +348,25 @@ class ProviderCatalog:
             raise ValueError(
                 f"Invalid params for {provider!r} {self.kind} provider: {exc}"
             ) from exc
-        if self.env_vars[name] is not None and not getattr(config, "api_key", None):
+        if self.env_vars[name] is not None and not has_usable_credential(
+            getattr(config, "api_key", None)
+        ):
             raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
         return provider_cls(inject_event_bus(config, event_bus))
 
     def create_from_config(self, config: Any, event_bus: Any) -> Any:
         """Build a provider, injecting an event bus when its config declares one."""
-        provider_cls = self.provider_for_config(type(config))
+        config_type = type(config)
+        provider_cls = self.provider_for_config(config_type)
+        provider_name = next(
+            name
+            for name, (candidate_provider, candidate_config) in self.providers.items()
+            if candidate_config is config_type and candidate_provider is provider_cls
+        )
+        if self.env_vars[provider_name] is not None and not has_usable_credential(
+            getattr(config, "api_key", None)
+        ):
+            raise ValueError(f"API key is required for {self.kind} provider {provider_name!r}")
         return provider_cls(inject_event_bus(config, event_bus))
 
     def validate_name(self, provider: object) -> str:
@@ -317,7 +403,7 @@ class ProviderCatalog:
                 api_key = api_key_overrides[env_var]
             else:
                 api_key = os.getenv(env_var, "")
-            if not api_key:
+            if not has_usable_credential(api_key):
                 raise EASYCAT_E203(var=env_var)
 
         _, config_cls = self.providers[provider]
