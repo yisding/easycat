@@ -8,7 +8,7 @@ import json
 import pytest
 import websockets
 
-from easycat.events import Error, ErrorStage, EventBus, STTEventType
+from easycat.events import Error, ErrorStage, EventBus, STTEvent, STTEventType
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -497,6 +497,42 @@ async def test_cartesia_reconnect_promotes_partial_before_replacement_final():
         ]
     finally:
         await stt.close()
+
+
+async def test_cartesia_reconnect_does_not_finalize_replacement_socket_send():
+    """Audio fenced behind reconnect belongs to the replacement epoch."""
+    stt = CartesiaSTT(CartesiaSTTConfig(api_key="k"))
+    emitted: list[STTEvent] = []
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+
+    async def blocked_send(_data: bytes) -> None:
+        send_started.set()
+        await release_send.wait()
+
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+    stt._send_ws = blocked_send  # type: ignore[method-assign]
+    stt._latest_partial = STTEvent(type=STTEventType.PARTIAL, text="dropped socket")
+
+    send_task = asyncio.create_task(stt._append_audio(b"replacement audio"))
+    try:
+        await asyncio.wait_for(send_started.wait(), timeout=0.5)
+        assert stt._audio_epoch == 0
+
+        await stt._on_reconnect()
+        assert stt._finalized_epoch == 0
+
+        release_send.set()
+        await asyncio.wait_for(send_task, timeout=0.5)
+        assert stt._audio_epoch == 1
+
+        stt._latest_partial = STTEvent(type=STTEventType.PARTIAL, text="replacement socket")
+        await stt._on_reconnect()
+
+        assert [event.text for event in emitted] == ["dropped socket", "replacement socket"]
+    finally:
+        release_send.set()
+        await asyncio.gather(send_task, return_exceptions=True)
 
 
 # ── Multiple streams ─────────────────────────────────────────────

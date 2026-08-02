@@ -150,7 +150,7 @@ class CartesiaSTT(WebSocketSTTBase):
     async def _on_reconnect(self) -> None:
         """Close the dropped socket's transcript boundary before resuming."""
         partial = self._latest_partial
-        if partial is not None and self._audio_epoch > self._finalized_epoch:
+        if partial is not None:
             self._emit_event(
                 STTEvent(
                     type=STTEventType.FINAL,
@@ -171,10 +171,12 @@ class CartesiaSTT(WebSocketSTTBase):
 
     async def _append_audio(self, data: bytes) -> None:
         if data:
-            # Count audio before awaiting the send so a receive-side reconnect
-            # that races this frame still closes the old transcript boundary.
-            self._audio_epoch += 1
             await self._send_ws(data)
+            # A send fenced behind reconnect belongs to the replacement
+            # socket, not the socket whose reconnect callback is currently
+            # closing its transcript boundary. Count it only after the send
+            # succeeds so that callback cannot finalize a future epoch.
+            self._audio_epoch += 1
 
     async def _flush_audio_resampler(self) -> None:
         await self._append_audio(self._audio_resampler.finish())
