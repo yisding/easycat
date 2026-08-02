@@ -703,7 +703,8 @@ class TestBundleExport:
         payload = b"streamed-artifact" * 100
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(payload)
-        artifact_path = store._ref_path(ref)
+        artifact_path = tmp_path / "artifacts" / "sess" / ref[:2] / f"{ref}.bin"
+        assert artifact_path.is_file()
         assert artifact_path.parent.name == ref[:2]
 
         original_read_bytes = Path.read_bytes
