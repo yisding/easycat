@@ -1044,6 +1044,23 @@ class TestWebRTCOutboundNormalization:
         assert queued.original_chunk is chunk
 
     @pytest.mark.asyncio
+    async def test_send_audio_resamples_mono_before_webrtc_enqueue(self) -> None:
+        transport = WebRTCTransport()
+        transport._pc = object()  # type: ignore[assignment]
+        transport._outbound_track = object()
+        source_format = AudioFormat(sample_rate=24_000, channels=1, sample_width=2)
+        chunk = AudioChunk(
+            data=struct.pack("<480h", *([1_000] * 480)),
+            format=source_format,
+        )
+
+        assert await transport.send_audio(chunk) is True
+
+        queued = transport._outbound._queue.get_nowait()
+        assert len(queued.transport_data) == 960 * 2
+        assert queued.original_chunk is chunk
+
+    @pytest.mark.asyncio
     async def test_send_audio_rejects_non_pcm16_input(self) -> None:
         transport = WebRTCTransport()
         transport._pc = object()  # type: ignore[assignment]
