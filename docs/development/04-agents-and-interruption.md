@@ -63,17 +63,21 @@ so LangGraph detection must happen first.
 ```mermaid
 flowchart TD
     INPUT["agent input"]
+    URL{"URL string?"}
     RUNNER{"AgentRunner?"}
     BRIDGE{"already ExternalAgentBridge?"}
     CUSTOM{"custom detector?"}
     BUILTIN{"ordered built-in adapter?"}
     PLAIN["plain async run(text)"]
     ERROR["reject unsupported/realtime shape"]
+    DONE["use bridge"]
 
-    INPUT --> RUNNER
+    INPUT --> URL
+    URL -->|yes| DONE
+    URL -->|no| RUNNER
     RUNNER -->|yes| INPUT
     RUNNER -->|no| BRIDGE
-    BRIDGE -->|yes| DONE["use bridge"]
+    BRIDGE -->|yes| DONE
     BRIDGE -->|no| CUSTOM
     CUSTOM -->|yes| DONE
     CUSTOM -->|no| BUILTIN
@@ -81,6 +85,11 @@ flowchart TD
     BUILTIN -->|explicitly unsupported| ERROR
     BUILTIN -->|no match| PLAIN
 ```
+
+The URL check runs before everything else, including registered custom
+detectors: a URL string resolves to `RemoteResponsesAPIBridge` immediately, so
+a detector predicate never sees URL-shaped input. Custom detectors take
+precedence over the built-in framework adapters only.
 
 Plain `async run(text) -> str` objects are wrapped by
 [`AgentRunner`](../../src/easycat/integrations/agents/_agent_runner.py), which

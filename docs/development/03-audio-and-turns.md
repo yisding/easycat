@@ -115,13 +115,16 @@ are executable in
 ## 3.4 TurnManager State Machine
 
 [`TurnManager`](../../src/easycat/turn_manager.py) consumes VAD events and
-processed audio. Its full internal state machine is:
+processed audio. Its internal state machine is:
 
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> USER_SPEAKING: confirmed speech / manual start
+    IDLE --> PROCESSING: application prompt turn
+    IDLE --> BOT_SPEAKING: greeting / say() while idle
     USER_SPEAKING --> USER_PAUSED: VAD silence
+    USER_SPEAKING --> PROCESSING: manual end_turn()
     USER_PAUSED --> USER_SPEAKING: speech resumes
     USER_PAUSED --> PROCESSING: endpoint accepted
     PROCESSING --> BOT_SPEAKING: playback begins
@@ -129,6 +132,8 @@ stateDiagram-v2
     PROCESSING --> USER_SPEAKING: barge-in / replacement turn
     BOT_SPEAKING --> USER_SPEAKING: barge-in
 ```
+
+(`reset()` additionally returns to `IDLE` from any state.)
 
 The public `TurnState` collapses both speaking and paused user states into
 `LISTENING`; the more detailed `TurnManagerState` remains the internal source
@@ -161,6 +166,7 @@ sequenceDiagram
     participant R as AudioRouter
     participant TM as TurnManager
     participant V as VAD
+    participant TR as TurnRunner
     participant C as STTCommitter
     participant P as STTProvider
 
@@ -170,14 +176,15 @@ sequenceDiagram
     end
     V->>TM: VADStartSpeaking
     TM->>TM: move pre-roll into turn audio
-    TM-->>C: TurnStarted
-    C->>P: start_stream()
-    C->>P: prime with turn audio snapshot
+    TM-->>TR: TurnStarted
+    TR->>P: start_stream()
+    TR->>P: prime with turn audio snapshot
+    TR->>C: start_event_loop(turn)
     R->>P: subsequent live frames
 ```
 
 The order is intentional: pre-roll moves into active turn audio before
-`TurnStarted` becomes observable. `turn_audio` returns a copy so the committer
+`TurnStarted` becomes observable. `turn_audio` returns a copy so the runner
 can await while priming without iterating a deque that another callback
 mutates.
 
@@ -225,11 +232,14 @@ associate delayed evidence with the state generation that requested it.
 
 ## 3.7 STT Commitment
 
+On turn start, [`TurnRunner.on_turn_started`](../../src/easycat/session/_turn_runner.py)
+begins the provider stream, primes pre-roll/turn audio through the STT stage,
+and then hands the open stream to the committer's event consumer.
 [`STTCommitter`](../../src/easycat/session/_stt_committer.py) owns the STT
-stream task and commit timing:
+event-consumer task, commit timing, and stream teardown:
 
-1. On turn start, begin the provider stream, start its event consumer, and
-   prime pre-roll/turn audio.
+1. On turn start, run the event consumer (`start_event_loop`) over the stream
+   that `TurnRunner` opened and primed.
 2. On pause, schedule or immediately request a segment commit.
 3. Map provider partial/final events to correlated session events.
 4. Append normalized final segments to the captured `TurnContext`.

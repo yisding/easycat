@@ -150,7 +150,16 @@ emitting the new public event themselves.
 Add one `ProviderSpec` in
 [`stt/factory.py`](../../src/easycat/stt/factory.py) or
 [`tts/factory.py`](../../src/easycat/tts/factory.py). Include credential env,
-extra, API domains, probe module, and capabilities.
+API domains, probe module, capabilities, and an install-extra name when the
+provider has optional dependencies. Two registration points live outside the
+catalog:
+
+- if the provider has optional dependencies, declare its install extra in
+  `pyproject.toml` `[project.optional-dependencies]` and wire those dependency
+  requirements into the `all` union; do not create empty marker extras; and
+- add a `ProviderSurfaceContract` row in
+  [`tests/contracts/provider_surface_matrix.py`](../../tests/contracts/provider_surface_matrix.py) —
+  the matrix tests fail if a registered provider has no row.
 
 ```mermaid
 flowchart LR
@@ -177,8 +186,11 @@ flowchart LR
 - session factory/event-bus/format wiring;
 - a separately marked live canary if supported.
 
-Follow [`docs/extending/stt.md`](../extending/stt.md) or
-[`docs/extending/tts.md`](../extending/tts.md), and run:
+Follow the in-tree checklist in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#adding-an-stt-or-tts-provider); the
+[`docs/extending/stt.md`](../extending/stt.md) and
+[`docs/extending/tts.md`](../extending/tts.md) guides cover out-of-tree
+(pip-installed) providers. Then run:
 
 ```bash
 just guard-contracts

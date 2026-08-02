@@ -31,7 +31,7 @@ uv sync --group dev --extra telephony
 ```
 
 Run `uv run easycat doctor` before credentialed examples. If keys are in a
-project `.env`, use:
+project `.env`, use (with `--json` for the parseable envelope):
 
 ```bash
 uv run easycat doctor --env-file .env
@@ -284,6 +284,9 @@ flowchart LR
     SCRIPT --> FULL
 ```
 
+The field contract for the JSON envelopes behind `easycat docs --json` is
+documented by `uv run easycat explain json-schema`.
+
 After editing the route map:
 
 ```bash
@@ -297,15 +300,20 @@ Local Markdown links and anchors are checked by
 blocks have one source and one regeneration script. Never patch generated
 outputs in isolation.
 
-The guard recipes are:
+The guard recipes are generated from the `justfile` by
+`uv run python scripts/regen_guard_commands.py`:
 
-- `just guard-docs`
-- `just guard-teaching`
-- `just guard-examples`
-- `just guard-contributing`
-- `just guard-validation`
-- `just guard-contracts`
-- `just guard-ops`
+<!-- BEGIN auto:guard-commands format=just-bash -->
+```bash
+just guard-docs          # root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors
+just guard-teaching      # teaching ladder chapters, generated README blocks, and learner route hints
+just guard-examples      # examples README, support files, script smoke checks, docs-route hints, and scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene
+just guard-contributing  # contributor guidance, agent guide contracts, validation state, and route hints
+just guard-validation    # validation workflow docs, validation reference docs, and validate CLI behavior
+just guard-contracts     # provider contract docs, offline contract suite, contract kit, and provider wiring matrix
+just guard-ops           # operator docs, deployment guide, observability docs, journal CLI, and durability
+```
+<!-- END auto:guard-commands -->
 
 Use the one that owns the changed surface, then run the appropriate product
 validation lane.
