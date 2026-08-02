@@ -153,6 +153,42 @@ class TestLangGraphBridgeInvoke:
         assert [event.kind for event in events][-1] == "done"
 
     @pytest.mark.asyncio
+    async def test_ignores_stream_events_with_invalid_nested_fields(self):
+        graph = _MockCompiledGraph(
+            [
+                {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "bad-parents",
+                    "parent_ids": 1,
+                    "data": {},
+                    "metadata": {},
+                },
+                {
+                    "event": "on_chain_start",
+                    "name": "research",
+                    "run_id": "bad-namespace",
+                    "parent_ids": [],
+                    "data": {},
+                    "metadata": {
+                        "langgraph_node": "research",
+                        "langgraph_checkpoint_ns": [],
+                    },
+                },
+                _model_stream("still works"),
+            ]
+        )
+        bridge = LangGraphBridge(graph)
+
+        events = []
+        async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder()):
+            events.append(event)
+
+        text = "".join(event.text for event in events if event.kind == "text_delta")
+        assert text == "still works"
+        assert [event.kind for event in events][-1] == "done"
+
+    @pytest.mark.asyncio
     async def test_agent_runner_timeout_closes_open_cursors(self):
         """The default ``AgentRunner`` enforces its timeout by
         cancelling the bridge's pending ``__anext__``
