@@ -407,6 +407,14 @@ def test_smart_turn_onnx_rejects_invalid_positive_durations(
         SmartTurnONNX(model_path="unused.onnx", **{field: value})  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("max_audio_seconds", [1e308, 5e-324])
+def test_smart_turn_onnx_rejects_unrepresentable_audio_windows(
+    max_audio_seconds: float,
+) -> None:
+    with pytest.raises(ValueError, match="max_audio_seconds"):
+        SmartTurnONNX(model_path="unused.onnx", max_audio_seconds=max_audio_seconds)
+
+
 def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
     """Only the trailing model window should be converted/concatenated."""
 
