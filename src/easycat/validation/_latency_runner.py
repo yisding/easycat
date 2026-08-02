@@ -695,7 +695,7 @@ def _compare_against_baseline(
         )
     try:
         baseline_payload = json.loads(raw)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         return None, ValidationFailure(
             name="latency.baseline",
             message=f"invalid latency baseline JSON {baseline_path}: {exc}",
