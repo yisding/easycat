@@ -19,7 +19,7 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 from easycat._numeric import is_finite_number
 from easycat._provider_helpers import has_usable_credential
@@ -29,7 +29,7 @@ from easycat.echo_cancellation import (
     is_echo_canceller_config,
     parse_echo_canceller_string,
 )
-from easycat.errors import EASYCAT_E203
+from easycat.errors import EASYCAT_E203, EasyCatError, EasyConfigError
 from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.noise_reduction import NoiseReducerConfig, parse_noise_reducer_string
@@ -42,9 +42,10 @@ from easycat.providers import (
     VADProvider,
 )
 from easycat.runtime.capabilities import default_echo_cancellation_enabled
+from easycat.session._types import _validate_caller_id_exposure
 from easycat.session.actions import SessionActionExecutor, SessionActions
 from easycat.smart_turn import SmartTurnConfig, _validate_probability_threshold
-from easycat.stt.factory import STTConfig, parse_stt_string
+from easycat.stt.factory import STTConfig, STTProviderConfig, parse_stt_string
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 
 # Lightweight, config-only dataclasses needed at *module* scope — for the
@@ -64,7 +65,7 @@ from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
-from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
+from easycat.tts.factory import TTSConfig, TTSProviderConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import VADConfig, parse_vad_string
@@ -115,69 +116,66 @@ def _resolve_easycat_log_level(*, default: int) -> int:
 # ── Validation helpers ───────────────────────────────────────────────
 
 
-class EasyConfigError(ValueError):
-    """Raised when app config validation fails."""
-
-
 _VALID_MCP_SCHEMES = ("stdio://", "sse://", "http://", "https://")
 _VALID_DEBUG = {"off", "light", "full"}
 _VALID_HANDLER_ERROR_POLICY = {"continue", "raise"}
 _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
+_VALID_VOICEMAIL_MODES = {"detect", "detect_end_of_greeting"}
 
 
 def _require_positive(name: str, value: object) -> None:
     """Require a finite built-in number greater than zero."""
     if not is_finite_number(value) or value <= 0:
-        raise ValueError(f"{name} must be positive and finite")
+        raise EasyConfigError(f"{name} must be positive and finite")
 
 
 def _require_non_negative(name: str, value: object) -> None:
     """Require a finite built-in number greater than or equal to zero."""
     if not is_finite_number(value) or value < 0:
-        raise ValueError(f"{name} must be non-negative and finite")
+        raise EasyConfigError(f"{name} must be non-negative and finite")
 
 
 def _require_positive_integer(name: str, value: object) -> None:
     """Require a positive integer suitable for a counter or timer."""
     if not is_finite_number(value) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be positive and a finite integer")
+        raise EasyConfigError(f"{name} must be positive and a finite integer")
 
 
 def _require_non_negative_integer(name: str, value: object) -> None:
     """Require a non-negative integer suitable for a provider parameter."""
     if not is_finite_number(value) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{name} must be non-negative and a finite integer")
+        raise EasyConfigError(f"{name} must be non-negative and a finite integer")
 
 
 def _validate_on_agent_failure(
     policy: str | Callable[[Exception], str] | None,
 ) -> None:
     if policy is not None and not (isinstance(policy, str) or callable(policy)):
-        raise ValueError("on_agent_failure must be text, a callable, or None")
+        raise EasyConfigError("on_agent_failure must be text, a callable, or None")
     if isinstance(policy, str) and not policy.strip():
-        raise ValueError("on_agent_failure text must not be empty")
+        raise EasyConfigError("on_agent_failure text must not be empty")
 
 
 def _validate_capture_audio(policy: bool | Callable[[], bool]) -> None:
     if not isinstance(policy, bool) and not callable(policy):
-        raise ValueError("capture_audio must be a bool or zero-argument callable")
+        raise EasyConfigError("capture_audio must be a bool or zero-argument callable")
     predicate_call = type(policy).__call__ if callable(policy) else None
     if callable(policy) and (
         inspect.iscoroutinefunction(policy) or inspect.iscoroutinefunction(predicate_call)
     ):
-        raise ValueError("capture_audio predicate must be synchronous")
+        raise EasyConfigError("capture_audio predicate must be synchronous")
 
 
 def _validate_journal_capacity(capacity: int) -> None:
     if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
-        raise ValueError("journal_capacity must be a positive integer")
+        raise EasyConfigError("journal_capacity must be a positive integer")
 
 
 def _validate_journal_redaction(policy: str) -> None:
-    if policy not in _VALID_JOURNAL_REDACTION:
-        raise ValueError(
+    if not isinstance(policy, str) or policy not in _VALID_JOURNAL_REDACTION:
+        raise EasyConfigError(
             f"Invalid journal_redaction={policy!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_REDACTION)}."
         )
@@ -193,9 +191,12 @@ def _validate_event_dispatch(
         or not math.isfinite(slow_handler_threshold_s)
         or slow_handler_threshold_s < 0
     ):
-        raise ValueError("slow_handler_threshold_s must be non-negative and finite")
-    if handler_error_policy not in _VALID_HANDLER_ERROR_POLICY:
-        raise ValueError(
+        raise EasyConfigError("slow_handler_threshold_s must be non-negative and finite")
+    if (
+        not isinstance(handler_error_policy, str)
+        or handler_error_policy not in _VALID_HANDLER_ERROR_POLICY
+    ):
+        raise EasyConfigError(
             f"Invalid handler_error_policy={handler_error_policy!r}. "
             f"Must be one of {sorted(_VALID_HANDLER_ERROR_POLICY)}."
         )
@@ -217,18 +218,18 @@ def _validate_common(
     capture_audio: bool | Callable[[], bool] = True,
 ) -> None:
     """Validate the shared fields used by both session factories."""
-    if debug not in _VALID_DEBUG:
-        raise ValueError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
+    if not isinstance(debug, str) or debug not in _VALID_DEBUG:
+        raise EasyConfigError(f"Invalid debug={debug!r}. Must be one of {sorted(_VALID_DEBUG)}.")
     _validate_event_dispatch(slow_handler_threshold_s, handler_error_policy)
-    if journal_backend not in _VALID_JOURNAL_BACKEND:
-        raise ValueError(
+    if not isinstance(journal_backend, str) or journal_backend not in _VALID_JOURNAL_BACKEND:
+        raise EasyConfigError(
             f"Invalid journal_backend={journal_backend!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_BACKEND)}."
         )
     _validate_journal_capacity(journal_capacity)
     _validate_journal_redaction(journal_redaction)
-    if journal_retention not in _VALID_JOURNAL_RETENTION:
-        raise ValueError(
+    if not isinstance(journal_retention, str) or journal_retention not in _VALID_JOURNAL_RETENTION:
+        raise EasyConfigError(
             f"Invalid journal_retention={journal_retention!r}. "
             f"Must be one of {sorted(_VALID_JOURNAL_RETENTION)}."
         )
@@ -303,7 +304,7 @@ def _normalize_smart_turn_config(
     """
     if isinstance(smart_turn, bool):
         if not smart_turn and sensitivity is not None:
-            raise ValueError("smart_turn_sensitivity requires smart_turn=True.")
+            raise EasyConfigError("smart_turn_sensitivity requires smart_turn=True.")
         config = SmartTurnConfig(enabled=smart_turn)
     elif smart_turn is None:
         enabled = sensitivity is not None or (
@@ -313,7 +314,7 @@ def _normalize_smart_turn_config(
     elif isinstance(smart_turn, SmartTurnConfig):
         config = smart_turn
     else:
-        raise ValueError("smart_turn must be a bool or SmartTurnConfig.")
+        raise EasyConfigError("smart_turn must be a bool or SmartTurnConfig.")
 
     if sensitivity is None:
         return config
@@ -379,6 +380,8 @@ def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
     for every registered provider. Falls back to the config class name
     when the config type isn't in the catalog (e.g. a custom config).
     """
+    if isinstance(cfg, STTProviderConfig | TTSProviderConfig):
+        return f"{cfg.provider} {kind}"
     if kind == "STT":
         from easycat.stt.factory import _CATALOG as catalog
     else:
@@ -389,6 +392,55 @@ def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
         if config_cls is cfg_type:
             return f"{provider_name} {kind}"
     return type(cfg).__name__.replace("Config", "")
+
+
+def _provider_requires_api_key(cfg: Any, kind: Literal["STT", "TTS"]) -> bool:
+    """Consult the open catalog instead of assuming every ``api_key`` field is required."""
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+
+    catalog.discover()
+    if isinstance(cfg, STTProviderConfig | TTSProviderConfig):
+        provider_name = catalog.validate_name(cfg.provider)
+        return catalog.env_vars[provider_name] is not None
+    cfg_type = type(cfg)
+    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
+        if config_cls is cfg_type:
+            return catalog.env_vars[provider_name] is not None
+    # Preserve the historical conservative behavior for unknown custom config
+    # objects while allowing registered keyless providers through.
+    return hasattr(cfg, "api_key")
+
+
+def _resolve_named_provider_config(
+    config: STTProviderConfig | TTSProviderConfig,
+    kind: Literal["STT", "TTS"],
+    api_key_overrides: dict[str, str] | None,
+) -> Any:
+    """Resolve a named wrapper to its concrete config without creating a client."""
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+    provider_name = catalog.validate_name(config.provider)
+    _provider_cls, config_cls = catalog.providers[provider_name]
+    kwargs = dict(config.params or {})
+    env_var = catalog.env_vars[provider_name]
+    resolved_key = config.api_key
+    if not has_usable_credential(resolved_key) and env_var is not None:
+        resolved_key = (api_key_overrides or {}).get(env_var) or os.getenv(env_var)
+    if has_usable_credential(resolved_key):
+        kwargs["api_key"] = resolved_key
+    try:
+        return config_cls(**kwargs)
+    except EasyCatError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise EasyConfigError(
+            f"Invalid params for {provider_name!r} {kind} provider: {exc}"
+        ) from exc
 
 
 # ── Telephony config dataclasses ─────────────────────────────────────
@@ -426,6 +478,15 @@ class VoicemailDetectionConfig:
     silence_timeout_ms: int = 5000
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate mutable answering-machine policy before provider dispatch."""
+        if not isinstance(self.mode, str) or self.mode not in _VALID_VOICEMAIL_MODES:
+            raise EasyConfigError(
+                f"Invalid voicemail_detection.mode={self.mode!r}. "
+                f"Must be one of {sorted(_VALID_VOICEMAIL_MODES)}."
+            )
         # ``detection_timeout_s`` flows into ``asyncio.sleep`` in the outbound
         # state machine with no runtime guard, so a non-positive value either
         # raises an uncaught ``ValueError`` (negative) or instantly
@@ -437,6 +498,10 @@ class VoicemailDetectionConfig:
 
     def to_twilio_params(self) -> dict[str, Any]:
         """Render as the kwargs :class:`OutboundCallManager` expects today."""
+        # The dataclass is intentionally mutable for back-compat. Revalidate at
+        # this external-policy boundary so a post-construction typo cannot fall
+        # through to Twilio's more aggressive ``Enable`` mode.
+        self.validate()
         twilio_mode = "DetectMessageEnd" if self.mode == "detect_end_of_greeting" else "Enable"
         return {
             "amd_mode": twilio_mode,
@@ -527,6 +592,72 @@ TransportConfig = (
 # ── Session config dataclasses ───────────────────────────────────────
 
 
+class _AgentSessionPresetKwargs(TypedDict, total=False):
+    """Typed keyword surface shared by the audio-session presets.
+
+    Keep this in field order with :class:`_AgentSessionConfig`. The mapping is
+    used only for static checking; preset implementations still forward the
+    original keyword dictionary into the dataclass constructor unchanged.
+    """
+
+    agent: Any
+    agent_model: str | None
+    remote_agent_api_key: str | None
+    agent_runner: AgentRunnerConfig | None
+    wrap_agent: bool
+    mcp_servers: list[str] | None
+    debug: Literal["off", "light", "full"]
+    slow_handler_threshold_s: float | None
+    handler_error_policy: Literal["continue", "raise"]
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"]
+    journal_capacity: int
+    journal_redaction: Literal["secrets", "pii"]
+    journal_retention: Literal["archive", "delete"]
+    warmup: bool
+    debugger_autolaunch: bool
+    capture_audio: bool | Callable[[], bool]
+    capture_aec_reference: bool
+    emergency_export: bool
+    data_dir: str | Path | None
+
+
+class _EasyConfigPresetKwargs(_AgentSessionPresetKwargs, total=False):
+    """Every keyword accepted by ``EasyConfig.mic/browser/phone``.
+
+    Provider-bearing fields deliberately remain ``Any``. Third-party provider
+    config classes are discovered at runtime and therefore cannot be represented
+    by EasyCat's closed built-in config unions. All finite policy and scalar
+    fields stay precise so editors can complete them and type checkers can catch
+    misspellings, invalid literals, and wrong value types before startup.
+    """
+
+    openai_api_key: str | None
+    stt: Any
+    tts: Any
+    vad: Any
+    noise_reduction: Any
+    echo_cancellation: Any
+    enable_noise_reduction: bool
+    enable_echo_cancellation: bool | None
+    smart_turn: SmartTurnConfig | bool | None
+    smart_turn_sensitivity: float | None
+    transport: TransportConfig
+    turn_taking: TurnManagerConfig
+    timeouts: TimeoutConfig
+    telephony: TelephonyConfig | None
+    strip_markdown: bool
+    auto_align_tts_output_to_transport: bool
+    output_processors: Sequence[LLMOutputProcessor]
+    session_actions: SessionActions | None
+    action_executors: Sequence[SessionActionExecutor]
+    greeting: str | None
+    dnc_list: DNCStore | None
+    caller_id_exposure: Literal["off", "system_message", "tools_only"]
+    on_agent_failure: str | Callable[[Exception], str] | None
+    session_id: str | None
+    record_to: str | Path | None
+
+
 @dataclass(kw_only=True)
 class _AgentSessionConfig:
     """Agent and journal fields shared by audio and text configs."""
@@ -558,6 +689,23 @@ class _AgentSessionConfig:
     emergency_export: bool = False
     data_dir: str | Path | None = None
 
+    def _validate_common_fields(self) -> None:
+        """Revalidate mutable fields at each public session-build boundary."""
+        _validate_common(
+            debug=self.debug,
+            slow_handler_threshold_s=self.slow_handler_threshold_s,
+            handler_error_policy=self.handler_error_policy,
+            journal_backend=self.journal_backend,
+            journal_capacity=self.journal_capacity,
+            journal_redaction=self.journal_redaction,
+            journal_retention=self.journal_retention,
+            mcp_servers=self.mcp_servers,
+            session_id=getattr(self, "session_id", None),
+            agent=self.agent,
+            agent_model=self.agent_model,
+            capture_audio=self.capture_audio,
+        )
+
 
 @dataclass(kw_only=True)
 class EasyConfig(_AgentSessionConfig):
@@ -566,10 +714,11 @@ class EasyConfig(_AgentSessionConfig):
     Fields:
         stt / tts: Speech provider selection. Accepts provider shortcut
             strings (for example ``"deepgram/nova-2"``), concrete provider
-            config dataclasses, or already-built provider instances that
-            implement EasyCat's provider Protocols. Leave both unset with
-            ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
-            OpenAI realtime STT + TTS chain.
+            config dataclasses, named ``STTProviderConfig`` /
+            ``TTSProviderConfig`` wrappers, or already-built provider instances
+            that implement EasyCat's provider Protocols. Leave both unset with
+            ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default OpenAI
+            realtime STT + TTS chain.
         vad: A built-in/registered shortcut string, ``VADConfig``, registered
             config, or live ``VADProvider``.
         noise_reduction: A built-in/registered shortcut string,
@@ -598,8 +747,8 @@ class EasyConfig(_AgentSessionConfig):
     """
 
     openai_api_key: str | None = field(default=None, repr=False)
-    stt: STTConfig | STTProvider | str | None = None
-    tts: TTSConfig | TTSProvider | str | None = None
+    stt: STTConfig | STTProviderConfig | STTProvider | str | None = None
+    tts: TTSConfig | TTSProviderConfig | TTSProvider | str | None = None
     vad: VADConfig | VADProvider | str = field(default_factory=VADConfig)
     noise_reduction: NoiseReducerConfig | NoiseReducer | str | None = None
     echo_cancellation: EchoCancellationConfig | EchoCanceller | str | None = None
@@ -629,20 +778,7 @@ class EasyConfig(_AgentSessionConfig):
     record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
-        _validate_common(
-            debug=self.debug,
-            slow_handler_threshold_s=self.slow_handler_threshold_s,
-            handler_error_policy=self.handler_error_policy,
-            journal_backend=self.journal_backend,
-            journal_capacity=self.journal_capacity,
-            journal_redaction=self.journal_redaction,
-            journal_retention=self.journal_retention,
-            mcp_servers=self.mcp_servers,
-            session_id=self.session_id,
-            agent=self.agent,
-            agent_model=self.agent_model,
-            capture_audio=self.capture_audio,
-        )
+        self._validate_common_fields()
         _validate_on_agent_failure(self.on_agent_failure)
 
         # Pick up OPENAI_API_KEY for the zero-config case so a bare
@@ -728,6 +864,25 @@ class EasyConfig(_AgentSessionConfig):
         self._warn_if_vad_pre_roll_is_too_short()
         self._validate()
 
+    def _validate_for_session(self) -> None:
+        """Validate mutable config immediately before allocating session resources."""
+        self._validate_common_fields()
+        _validate_on_agent_failure(self.on_agent_failure)
+        if self.agent is None:
+            raise EasyConfigError(
+                "agent is required for an audio session. Pass agent=... to EasyConfig."
+            )
+        api_key_overrides = (
+            {"OPENAI_API_KEY": self.openai_api_key}
+            if has_usable_credential(self.openai_api_key)
+            else None
+        )
+        self._resolve_provider_shortcuts(api_key_overrides)
+        self.turn_taking.validate()
+        if self.telephony is not None and self.telephony.outbound is not None:
+            self.telephony.outbound.voicemail_detection.validate()
+        self._validate()
+
     def _warn_if_vad_pre_roll_is_too_short(self) -> None:
         """Surface VAD/pre-roll combinations that can clip utterance onset."""
         if not isinstance(self.vad, VADConfig) or self.turn_taking.mode != TurnMode.VAD:
@@ -763,8 +918,20 @@ class EasyConfig(_AgentSessionConfig):
         """Resolve every named audio-stage provider before validation/planning."""
         if isinstance(self.stt, str):
             self.stt = parse_stt_string(self.stt, api_key_overrides=api_key_overrides)
+        elif isinstance(self.stt, STTProviderConfig):
+            self.stt = _resolve_named_provider_config(
+                self.stt,
+                "STT",
+                api_key_overrides,
+            )
         if isinstance(self.tts, str):
             self.tts = parse_tts_string(self.tts, api_key_overrides=api_key_overrides)
+        elif isinstance(self.tts, TTSProviderConfig):
+            self.tts = _resolve_named_provider_config(
+                self.tts,
+                "TTS",
+                api_key_overrides,
+            )
         if isinstance(self.vad, str):
             self.vad = parse_vad_string(self.vad)
         if isinstance(self.noise_reduction, str):
@@ -800,6 +967,10 @@ class EasyConfig(_AgentSessionConfig):
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
     def _validate(self) -> None:
+        try:
+            _validate_caller_id_exposure(self.caller_id_exposure)
+        except ValueError as exc:
+            raise EasyConfigError(str(exc)) from exc
         # The #1 first-run mistake: no key resolved and nothing
         # configured.  Route it through the error catalog so the user
         # sees the missing env var (and its fix) instead of a symptom
@@ -809,20 +980,22 @@ class EasyConfig(_AgentSessionConfig):
         ):
             raise EASYCAT_E203(var="OPENAI_API_KEY")
         if self.stt is None:
-            raise ValueError("STT configuration is required.")
+            raise EasyConfigError("STT configuration is required.")
         if self.tts is None:
-            raise ValueError("TTS configuration is required.")
+            raise EasyConfigError("TTS configuration is required.")
         provider_configs: tuple[tuple[Any, Literal["STT", "TTS"]], ...] = (
             (self.stt, "STT"),
             (self.tts, "TTS"),
         )
         for cfg, kind in provider_configs:
-            if hasattr(cfg, "api_key") and not has_usable_credential(cfg.api_key):
-                # Keep the per-provider display-name ValueError here —
+            if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
+                getattr(cfg, "api_key", None)
+            ):
+                # Keep the per-provider display-name config error here —
                 # there is no (cfg, kind) -> env-var helper today, and the
                 # None-branch fix above captures ~all of the leverage.
                 name = _provider_display_name(cfg, kind)
-                raise ValueError(f"{name} requires an API key.")
+                raise EasyConfigError(f"{name} requires an API key.")
 
     # ── Factory presets ──────────────────────────────────────────
     #
@@ -834,7 +1007,7 @@ class EasyConfig(_AgentSessionConfig):
     # Documented in ``peripheral-dx-onboarding.md``.
 
     @classmethod
-    def mic(cls, **kwargs: Any) -> EasyConfig:
+    def mic(cls, **kwargs: Unpack[_EasyConfigPresetKwargs]) -> EasyConfig:
         """Local-microphone preset — the default developer setup.
 
         Next: pass ``stt=``/``tts=`` to swap providers by shortcut string,
@@ -849,7 +1022,7 @@ class EasyConfig(_AgentSessionConfig):
         return cls(**kwargs)
 
     @classmethod
-    def browser(cls, **kwargs: Any) -> EasyConfig:
+    def browser(cls, **kwargs: Unpack[_EasyConfigPresetKwargs]) -> EasyConfig:
         """WebRTC-in-the-browser preset.
 
         Enables echo cancellation by default because browser clients
@@ -868,7 +1041,7 @@ class EasyConfig(_AgentSessionConfig):
         return cls(**kwargs)
 
     @classmethod
-    def phone(cls, **kwargs: Any) -> EasyConfig:
+    def phone(cls, **kwargs: Unpack[_EasyConfigPresetKwargs]) -> EasyConfig:
         """Inbound telephony preset.
 
         Uses the Twilio Media Streams transport and leaves echo-cancel
@@ -910,20 +1083,11 @@ class TextSessionConfig(_AgentSessionConfig):
     record_to: str | Path | None = None
 
     def __post_init__(self) -> None:
-        _validate_common(
-            debug=self.debug,
-            slow_handler_threshold_s=self.slow_handler_threshold_s,
-            handler_error_policy=self.handler_error_policy,
-            journal_backend=self.journal_backend,
-            journal_capacity=self.journal_capacity,
-            journal_redaction=self.journal_redaction,
-            journal_retention=self.journal_retention,
-            mcp_servers=self.mcp_servers,
-            session_id=self.session_id,
-            agent=self.agent,
-            agent_model=self.agent_model,
-            capture_audio=self.capture_audio,
-        )
+        self._validate_common_fields()
+
+    def _validate_for_session(self) -> None:
+        """Revalidate a possibly mutated config before allocating resources."""
+        self._validate_common_fields()
 
     @classmethod
     def from_kwargs(
@@ -955,7 +1119,7 @@ class TextSessionConfig(_AgentSessionConfig):
         :func:`create_text_session` accepts either a fully-built
         ``TextSessionConfig`` or the legacy loose keyword arguments. The two
         forms are mutually exclusive: passing a ``config`` together with any
-        non-default loose keyword raises :class:`ValueError`. Keeping the
+        non-default loose keyword raises :class:`EasyConfigError`. Keeping the
         default table here, next to the dataclass fields it must track, keeps
         the factory body declarative and the field list maintained in one
         place.
@@ -984,7 +1148,7 @@ class TextSessionConfig(_AgentSessionConfig):
             }
             supplied = [name for name, (value, default) in loose.items() if value != default]
             if supplied:
-                raise ValueError(
+                raise EasyConfigError(
                     "create_text_session() accepts either a TextSessionConfig or loose "
                     "keyword arguments, not both; remove the config argument or these "
                     f"keyword(s): {', '.join(sorted(supplied))}."

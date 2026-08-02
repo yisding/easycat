@@ -1,31 +1,31 @@
-# From EasyConfig to Session
+# From VoiceApp to EasyConfig to Session
 
-The quickstart front door is one call: `run(EasyConfig.mic(agent=...))`.
-This guide is the graduation path from that one-liner to the production
-`Session` API — the same object `run()` builds internally — so you can
-subscribe to events, drive turns from your own code, queue session
-actions from agent tools, and capture debug bundles you can replay.
+The beginner front door is `VoiceApp(agent=...).run("local")`. This guide is
+the graduation path from that product-level app to explicit `EasyConfig`, then
+to the production `Session` API that both entry points build internally. Move
+down only when you need to choose providers, subscribe to events, drive turns
+from your own code, queue session actions from tools, or capture replayable
+debug bundles.
 
 Each section below adds one capability. Stop at the first rung that
 covers your app; the later rungs exist for narrower needs.
 
-## 1. Where you start: the quickstart
+## 1. Where you start: VoiceApp
 
 ```python
 from agents import Agent
 
-from easycat import EasyConfig, run
+from easycat import VoiceApp
 
-run(
-    EasyConfig.mic(
-        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
-    )
-)
+app = VoiceApp(agent=Agent(name="assistant", instructions="You are a helpful voice assistant."))
+app.run("local")
 ```
 
-`run(...)` hides the asyncio entry point, signal handling, and teardown
-ceremony. `EasyConfig` auto-wires OpenAI STT/TTS from `OPENAI_API_KEY`.
-Graduate past this rung only when you need the session object itself.
+`VoiceApp` selects the local preset, hides the asyncio entry point, and owns
+signal handling and teardown. It auto-wires OpenAI STT/TTS from
+`OPENAI_API_KEY`. Graduate to `EasyConfig.mic(...)` when you need an explicit
+provider or runtime choice; graduate again to `Session` when you need the live
+object itself.
 
 ## 2. Get the session object: `create_session` and the lifecycle
 

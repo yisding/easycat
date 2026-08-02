@@ -16,6 +16,10 @@ EasyCat checkout (the default for repo/editable installs, or via
 `--easycat-source`), `pyproject.toml` also carries a `[tool.uv.sources]`
 block so `uv sync` resolves `easycat` from that checkout. Delete the
 block and re-run `uv sync` once you depend on the published package.
+For a portable project that will move to CI or another developer, scaffold
+with `--easycat-git URL --easycat-git-rev REV` instead. It writes a Git-backed
+source with no generator-machine path. Git and `--easycat-source` are mutually
+exclusive; keep credentials in a Git credential helper, never in the URL.
 
 ## Configure
 

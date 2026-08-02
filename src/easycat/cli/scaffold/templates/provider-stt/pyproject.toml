@@ -1,0 +1,45 @@
+[project]
+name = "$PYPROJECT_NAME"
+version = "0.1.0"
+description = "Custom EasyCat STT provider package with offline contracts."
+requires-python = ">=3.11"
+dependencies = [
+    "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
+]
+
+[project.entry-points."easycat.stt_providers"]
+scripted = "custom_stt:register"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["custom_stt"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = '-m "not integration_live"'
+strict_markers = true
+markers = [
+    "integration_live: tests requiring a real provider endpoint and credential",
+    "provider_custom: coverage for this package's custom provider",
+    "surface_stt: STT provider surface coverage",
+]
+
+[tool.easycat.scaffold]
+template = "$TEMPLATE"
+required_env = $REQUIRED_ENV
+optional_env = $OPTIONAL_ENV
+$EASYCAT_SOURCES_BLOCK

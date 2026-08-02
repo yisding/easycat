@@ -21,7 +21,11 @@ from __future__ import annotations
 
 import re
 
-from easycat.session._types import CallerIdExposure, CallIdentity
+from easycat.session._types import (
+    CallerIdExposure,
+    CallIdentity,
+    _validate_caller_id_exposure,
+)
 
 _SYSTEM_PHONE_RE = re.compile(r"^\+?[0-9]{3,15}$")
 # Disallow "." and "," (and cap the length) so an attacker-controlled
@@ -54,7 +58,10 @@ class CallerIdState:
         exposure: CallerIdExposure,
     ) -> None:
         self._identity = identity
-        self._exposure = exposure
+        # Start closed so even a constructor-time validation failure never leaves
+        # a partially initialized collaborator exposing caller PII.
+        self._exposure: CallerIdExposure = "off"
+        self.exposure = exposure
 
     # ── Public read/write (exposure-aware) ───────────────────────
 
@@ -79,7 +86,11 @@ class CallerIdState:
 
     @exposure.setter
     def exposure(self, value: CallerIdExposure) -> None:
-        self._exposure = value
+        # Validate before assignment so a failed live update is atomic. A
+        # constructor starts from ``off``; an existing session preserves the
+        # last explicitly valid policy rather than acquiring an invalid value.
+        exposure = _validate_caller_id_exposure(value)
+        self._exposure = exposure
 
     # ── Internal raw accessor (always the raw value) ─────────────
 

@@ -9,7 +9,7 @@ import sys
 from typing import TYPE_CHECKING, Literal
 
 from easycat._signals import create_shutdown_event as _create_shutdown_event
-from easycat._signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
+from easycat._signals import scoped_shutdown_signal_handlers as _shutdown_signal_handler_scope
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.session._session import Session
@@ -48,16 +48,17 @@ async def wait_for_shutdown_signal(session: Session) -> None:
     """
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    if not _install_shutdown_signal_handlers(loop, stop_event):
-        # No signal handler support: block until cancelled / KeyboardInterrupt.
-        try:
-            await asyncio.Event().wait()
-        finally:
-            await session.stop()
-        return
+    with _shutdown_signal_handler_scope(loop, stop_event) as installed:
+        if not installed:
+            # No signal handler support: block until cancelled / KeyboardInterrupt.
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await session.stop()
+            return
 
-    await stop_event.wait()
-    await session.stop()
+        await stop_event.wait()
+        await session.stop()
 
 
 def attach_runtime_feedback(session: Session) -> None:
@@ -117,17 +118,15 @@ def _enable_console_logging_from_env() -> None:
     enable_console_logging()
 
 
-def _run_session_until_shutdown(session: Session) -> None:
-    """Run a prebuilt session until it closes or receives SIGINT/SIGTERM."""
-
-    async def _run() -> None:
-        # ``async with`` is the one public teardown idiom: __aenter__
-        # starts the session and __aexit__ tears it down with
-        # ``stop(force=True)``.
-        async with session:
-            stop_event = asyncio.Event()
-            loop = asyncio.get_running_loop()
-            if _install_shutdown_signal_handlers(loop, stop_event):
+async def _await_session_until_shutdown(session: Session) -> None:
+    """Run a prebuilt session in the current loop until signal or self-stop."""
+    # ``async with`` is the one public teardown idiom: __aenter__ starts the
+    # session and __aexit__ tears it down with ``stop(force=True)``.
+    async with session:
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        with _shutdown_signal_handler_scope(loop, stop_event) as installed:
+            if installed:
                 waiters = {
                     asyncio.create_task(stop_event.wait()),
                     asyncio.create_task(session.wait_closed()),
@@ -146,11 +145,15 @@ def _run_session_until_shutdown(session: Session) -> None:
             else:
                 # No signal-handler support (e.g. Windows ProactorEventLoop).
                 # Session-driven shutdown still completes normally; Ctrl+C is
-                # propagated by asyncio.run and the context manager tears down.
+                # propagated by the synchronous wrapper when it owns the loop.
                 await session.wait_closed()
 
+
+def _run_session_until_shutdown(session: Session) -> None:
+    """Run a prebuilt session until it closes or receives SIGINT/SIGTERM."""
+
     try:
-        asyncio.run(_run())
+        asyncio.run(_await_session_until_shutdown(session))
     except KeyboardInterrupt:
         # Ctrl+C on the fallback (signal-handler-less) path: exit cleanly
         # instead of dumping a traceback. Teardown already ran via __aexit__.
@@ -175,6 +178,57 @@ def run_session(session: Session, *, feedback: FeedbackMode = "auto") -> None:
     _run_session_until_shutdown(session)
 
 
+def _prepare_configured_session(config: EasyConfig, *, feedback: FeedbackMode) -> Session:
+    """Build a session with the feedback/logging policy shared by run/arun."""
+    from easycat.config import create_session
+
+    feedback_on = _feedback_enabled(feedback)
+    _enable_console_logging_from_env()
+
+    session = create_session(config)
+    if feedback_on:
+        # Live transcript feedback (Listening.../You.../Assistant...) follows
+        # ``feedback``. The one-line "what got wired" banner is an extra on
+        # top, suppressed independently via EASYCAT_QUIET or the repo's
+        # standard NO_COLOR / CI conventions (see cli/_output.py) — so
+        # silencing the banner never costs you the transcripts.
+        banner_suppressed = bool(
+            os.getenv("EASYCAT_QUIET") or os.getenv("NO_COLOR") or os.getenv("CI") == "true"
+        )
+        if not banner_suppressed:
+            print(_wired_summary(config), file=sys.stderr)
+        attach_runtime_feedback(session)
+    return session
+
+
+def _require_sync_entry_point() -> None:
+    """Fail before side effects when ``run`` is called from an active loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    raise RuntimeError(
+        "easycat.run() cannot be called while an event loop is running; "
+        "use `await easycat.arun(config, feedback=...)` instead."
+    )
+
+
+async def arun(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
+    """Run a voice agent in the caller's existing asyncio event loop.
+
+    This is the behavioral peer of :func:`run`: it creates the same session,
+    applies the same logging and runtime-feedback policy, waits for an OS
+    shutdown signal or session-driven close, and tears down through
+    ``async with session:`` (which calls ``stop(force=True)`` on exit).
+
+    Use ``await arun(config)`` in notebooks, ASGI lifespan hooks, async test
+    harnesses, and any application that already owns its event loop. Use
+    :func:`run` only at a synchronous process entry point.
+    """
+    session = _prepare_configured_session(config, feedback=feedback)
+    await _await_session_until_shutdown(session)
+
+
 def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
     """Run a voice agent to completion from a synchronous entry point.
 
@@ -197,27 +251,12 @@ def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
 
     Advanced users who need custom orchestration should reach for
     :func:`easycat.create_session` directly and manage the lifecycle
-    themselves.
+    themselves. If an asyncio event loop is already running, use
+    ``await easycat.arun(config, feedback=...)`` instead; ``run`` fails before
+    creating a session so it never attempts a nested ``asyncio.run``.
     """
-    from easycat.config import create_session
-
-    feedback_on = _feedback_enabled(feedback)
-    _enable_console_logging_from_env()
-
-    session = create_session(config)
-    if feedback_on:
-        # Live transcript feedback (Listening.../You.../Assistant...) follows
-        # ``feedback``. The one-line "what got wired" banner is an extra on
-        # top, suppressed independently via EASYCAT_QUIET or the repo's
-        # standard NO_COLOR / CI conventions (see cli/_output.py) — so
-        # silencing the banner never costs you the transcripts.
-        banner_suppressed = bool(
-            os.getenv("EASYCAT_QUIET") or os.getenv("NO_COLOR") or os.getenv("CI") == "true"
-        )
-        if not banner_suppressed:
-            print(_wired_summary(config), file=sys.stderr)
-        attach_runtime_feedback(session)
-
+    _require_sync_entry_point()
+    session = _prepare_configured_session(config, feedback=feedback)
     _run_session_until_shutdown(session)
 
 

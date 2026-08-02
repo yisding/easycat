@@ -25,7 +25,8 @@ raw docs/onboarding guard commands, use the
 ```bash
 uv sync --group dev              # Install project + dev tools
 just                             # List every task
-just check                       # Format check + lint + full local tests
+just check                       # Pre-commit + mypy + credential-free tests
+just test-live                   # Explicit live-provider tests (may be billable)
 just test-one tests/stt/test_stt_openai.py  # Run one test file
 just validate-quick              # Deterministic local validation slice
 ```
@@ -53,7 +54,7 @@ uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_mat
 <!-- END auto:guard-commands -->
 
 ```bash
-uv run pytest                    # Run full test suite
+uv run pytest                    # Credential-free suite (live/external excluded)
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
 uv run pytest tests/install/test_install_guidance.py    # Verify onboarding/install guidance
@@ -112,7 +113,7 @@ test, decision, and pitfall tour.
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
-- **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from one `ProviderSpec` per backend. The catalog derives `_PROVIDER_TO_CONFIG`, credential, install-extra, and API-domain views used by doctor, scaffolding, validation, and redaction. To add a provider, add one spec and its config dataclass.
+- **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from one `ProviderSpec` per backend. The catalog derives `_PROVIDER_TO_CONFIG`, credential, install-extra, and API-domain views used by doctor, scaffolding, validation, and redaction. To add a built-in provider, add its config dataclass to the matching typing union and add one spec; do not edit the derived views directly.
 - **Event bus injection** — a provider config that declares optional `event_bus` receives the session bus when unset; no provider requires it. Injected STT/TTS/VAD/noise/AEC/transport instances that emit provider-scoped events expose synchronous `set_event_bus(bus)`; private attribute probes are compatibility-only.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 

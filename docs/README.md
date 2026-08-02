@@ -33,6 +33,8 @@ them. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat doctor` before the example; if provider keys are in a
   project `.env`, run `uv run easycat doctor --env-file .env`, then run the
   example with `uv run --env-file .env python examples/openai_agents_voice.py`.
+  Use the [installation and extras guide](install.md) when choosing a smaller
+  install, another transport/provider, or an application dependency source.
 - Learning voice pipelines from scratch: follow the
   [teaching ladder](teaching/), starting at
   [00-hello-audio](teaching/00-hello-audio/), and copy the generated
@@ -62,9 +64,10 @@ them. Multi-word audience filters accept hyphens or underscores, so
   copyable create/preflight/check/fix/docs/json-schema/run commands
   (`uv run easycat init --list-templates --json` emits the same template
   catalog and post-scaffold command previews), then use
-  the CLI commands documented in the [root README](../README.md#cli).
+  the compact CLI path in the [root README](../README.md#cli) and the
+  maintained [CLI reference](cli.md) for every command family.
 - Graduating from the quickstart to the production `Session` API: follow
-  [from EasyConfig to Session](from-easyconfig-to-session.md) for
+  [from VoiceApp to EasyConfig to Session](from-easyconfig-to-session.md) for
   `create_session`, the `async with session:` lifecycle, event
   subscriptions, `send_text` and session actions, and `debug="full"`
   bundles you can inspect with `uv run easycat replay PATH`.
@@ -142,8 +145,10 @@ them. Multi-word audience filters accept hyphens or underscores, so
 - Building a custom provider or transport: follow the
   [extending guides](extending/) for the duck-typed STT, TTS, VAD, transport,
   and agent-bridge surfaces, complete out-of-tree examples, and conformance
-  checks. Scaffold an external provider package with
-  `uv run easycat init my-provider --template provider`.
+  checks. Scaffold an external package with
+  `uv run easycat init my-stt --template provider-stt`,
+  `uv run easycat init my-tts --template provider-tts`, or
+  `uv run easycat init my-vad --template provider`.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,

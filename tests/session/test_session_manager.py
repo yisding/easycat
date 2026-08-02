@@ -6,7 +6,7 @@ import pytest
 
 from easycat import session_manager as session_manager_module
 from easycat.session import Session
-from easycat.session_manager import SessionManager
+from easycat.session_manager import SessionManager, SessionStopFailure, SessionStopReport
 from tests.session._session_core_helpers import FakeTransport, _full_config
 
 
@@ -270,12 +270,73 @@ async def test_session_manager_stop_all() -> None:
     await manager.add("a", a)  # type: ignore[arg-type]
     await manager.add("b", b)  # type: ignore[arg-type]
 
-    await manager.stop_all()
+    report = await manager.stop_all()
 
     assert manager.get("a") is None
     assert manager.get("b") is None
     assert a.stopped == 1
     assert b.stopped == 1
+    assert isinstance(report, SessionStopReport)
+    assert report.ok
+    assert report.attempted_keys == ("a", "b")
+    assert report.stopped_keys == ("a", "b")
+    assert report.failed_keys == ()
+    assert report.failures == ()
+
+
+@pytest.mark.asyncio
+async def test_session_manager_stop_all_reports_failures_without_short_circuiting() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    class RetryableFailure(_DummySession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.should_fail = True
+
+        async def stop(self) -> None:
+            self.stopped += 1
+            if self.should_fail:
+                raise RuntimeError("teardown failed")
+
+    failing = RetryableFailure()
+    healthy = _DummySession()
+    await manager.add("failing", failing)  # type: ignore[arg-type]
+    await manager.add("healthy", healthy)  # type: ignore[arg-type]
+
+    report = await manager.stop_all()
+
+    assert not report.ok
+    assert report.attempted_keys == ("failing", "healthy")
+    assert report.stopped_keys == ("healthy",)
+    assert report.failed_keys == ("failing",)
+    assert len(report.failures) == 1
+    failure = report.failures[0]
+    assert isinstance(failure, SessionStopFailure)
+    assert failure.key == "failing"
+    assert isinstance(failure.exception, RuntimeError)
+    assert str(failure.exception) == "teardown failed"
+    assert failing.stopped == 1
+    assert healthy.stopped == 1
+    assert manager.get("failing") is failing
+    assert manager.get("healthy") is None
+
+    failing.should_fail = False
+    retry = await manager.stop_all()
+
+    assert retry.ok
+    assert retry.attempted_keys == ("failing",)
+    assert retry.stopped_keys == ("failing",)
+    assert manager.active_keys() == ()
+
+
+@pytest.mark.asyncio
+async def test_session_manager_stop_all_empty_report_is_successful() -> None:
+    report = await SessionManager[str]().stop_all()
+
+    assert report.ok
+    assert report.attempted_keys == ()
+    assert report.stopped_keys == ()
+    assert report.failures == ()
 
 
 @pytest.mark.asyncio

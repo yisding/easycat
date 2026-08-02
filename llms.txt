@@ -16,7 +16,8 @@ Source: https://github.com/yisding/easycat
 
 - [Start here](https://github.com/yisding/easycat/blob/main/README.md#choose-your-path) — for all readers: Choose the right first route for quickstart, learning, examples, maintenance, or operations.
 - [Quickstart](https://github.com/yisding/easycat/blob/main/README.md#install) — for new users: Install EasyCat and run your first voice agent.
-- [CLI and scaffolds](https://github.com/yisding/easycat/blob/main/README.md#cli) — for app builders: Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
+- [Installation and extras](https://github.com/yisding/easycat/blob/main/docs/install.md) — for app builders: Choose a portable dependency source and the smallest provider, transport, agent-framework, or processing extras for an application.
+- [CLI and scaffolds](https://github.com/yisding/easycat/blob/main/docs/cli.md) — for app builders: Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
 - [Docs map](https://github.com/yisding/easycat/blob/main/docs/README.md) — for all readers: Choose the maintained guide for your current task.
 - [Teaching ladder](https://github.com/yisding/easycat/tree/main/docs/teaching) — for learners: Learn voice pipelines chapter by chapter.
 - [Progress worksheet](https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md) — for learners: Track evidence-backed completion across all 16 teaching chapters.

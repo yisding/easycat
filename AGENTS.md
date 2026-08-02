@@ -29,7 +29,11 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `uv sync --group dev`: install project + dev tools.
 - `uv sync --extra <name> --group dev`: install optional provider/transport extras while keeping dev tools (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).
 - `just`: list every developer task.
-- `just check`: run the pre-PR gauntlet (format check, lint, full local tests).
+- `just check`: run the core local pre-PR gauntlet (pre-commit, mypy,
+  credential-free local tests); CI additionally runs matrices, dependency
+  floors, validation artifacts, and build smoke.
+- `just test-live`: explicitly run live-provider tests serially; credentials
+  may make these tests billable.
 - `just validate-quick`: run the deterministic local validation slice.
 <!-- BEGIN auto:guard-commands format=bullets -->
 - `just guard-docs`: guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors.
@@ -47,8 +51,8 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - Raw fallback for `just guard-contracts`: `uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing`.
 - Raw fallback for `just guard-ops`: `uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py`.
 <!-- END auto:guard-commands -->
-- `uv run pytest`: run the full local test suite; `integration_external` tests
-  require explicit selection.
+- `uv run pytest`: run the credential-free local suite; `integration_live` and
+  `integration_external` tests require explicit `-m` selection.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc_config.py tests/transports/test_webrtc_lifecycle_server.py tests/transports/test_webrtc_stats_artifacts.py tests/transports/test_webrtc_outbound_audio.py tests/transports/test_webrtc_auth_browser_playground.py`: run focused WebRTC transport tests.
 - `uv run easycat docs`: show the compact route-label and audience index.
@@ -92,7 +96,9 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - Use 4-space indentation and keep lines within Ruff’s configured limit (`99`).
 - Naming: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
 - Keep provider implementations focused (one provider per file) and prefer small, composable modules.
-- When adding STT/TTS providers, update both config dataclasses and central factory registries.
+- When adding built-in STT/TTS providers, add the config dataclass to the
+  matching typing union and add one `ProviderSpec` to the central catalog;
+  do not edit derived provider maps directly.
 - Let Ruff manage import ordering and common style rules; run it before opening a PR.
 
 ## Testing Guidelines
@@ -106,7 +112,9 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - Test files use `test_*.py`; test functions use `test_*`.
 - Put tests near related domain folders (audio, session, turns, transports, providers, agents, websocket, telephony, VAD, validation, CLI, debugger).
 - For live API tests, use `@pytest.mark.integration_live`, pair it with provider
-  and surface markers, and skip when credentials are missing.
+  and surface markers, and skip when credentials are missing. Run them
+  explicitly with `just test-live` or `uv run pytest -m integration_live`;
+  ordinary pytest runs exclude them even when credentials are present.
 - For tests that need external local binaries, SDKs, or services without live
   provider API credentials, use `@pytest.mark.integration_external`.
 - No fixed coverage gate is enforced; add or update tests for every behavior change.

@@ -345,7 +345,7 @@ point the standard `OTEL_EXPORTER_OTLP_ENDPOINT` /
 `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_SERVICE_NAME` environment variables at
 your collector, which then bridges to a Prometheus scrape target or your
 backend of choice. See
-[observability.md](../observability.md#d-—-opentelemetry-facade) for the full
+[observability.md](../observability.md#d-opentelemetry-facade) for the full
 metric/attribute catalog and the PII-safety allow-list, and docker.md's
 ["Scraping metrics"](docker.md#scraping-metrics) for the container-specific
 walkthrough.

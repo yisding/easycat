@@ -73,6 +73,7 @@ __all__ = [
 ]
 
 AGENT_BRIDGE_EVENT_KINDS: frozenset[str] = frozenset(get_args(AgentEventKind))
+_REQUIRED_VERSION_INFO_KEYS = ("provider", "model", "api_version", "sdk_version")
 
 
 class ContractSuite:
@@ -154,7 +155,12 @@ def _fail_version_info_contract(message: str) -> None:
 
 
 class ProviderContractSuite(ContractSuite):
-    """Adds the cross-surface ``version_info()`` contract shared by all providers."""
+    """Adds the cross-surface ``version_info()`` contract shared by all providers.
+
+    Providers must report the stable four-field diagnostic shape documented by
+    :class:`easycat.providers.VersionedProvider`; use ``"unknown"`` when a
+    field does not apply rather than omitting it.
+    """
 
     async def test_version_info_is_a_redacted_string_mapping(self, provider: Any) -> None:
         """``version_info()`` returns str→str metadata free of secrets."""
@@ -169,6 +175,13 @@ class ProviderContractSuite(ContractSuite):
             del info
             _fail_version_info_contract("version_info() must carry a stable 'provider' name")
 
+        missing = [key for key in _REQUIRED_VERSION_INFO_KEYS if key not in info]
+        if missing:
+            del info
+            _fail_version_info_contract(
+                "version_info() is missing required keys: " + ", ".join(missing)
+            )
+
         for key, value in info.items():
             if not isinstance(key, str):
                 del info, key, value
@@ -177,6 +190,12 @@ class ProviderContractSuite(ContractSuite):
             if not isinstance(value, str):
                 del info, key, value
                 _fail_version_info_contract(f"version_info()[{key_label!r}] is not a str")
+            if key in _REQUIRED_VERSION_INFO_KEYS and not value.strip():
+                del info, key, value
+                _fail_version_info_contract(
+                    f"version_info()[{key_label!r}] must be a non-empty str; use 'unknown' "
+                    "when the field does not apply"
+                )
             if contains_unredacted_sensitive_text(value):
                 del info, key, value
                 _fail_version_info_contract(

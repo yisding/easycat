@@ -14,7 +14,7 @@ import inspect
 import logging
 import math
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -36,6 +36,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    Event,
     EventBus,
     EventHandler,
     EventSubscription,
@@ -115,6 +116,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
 _BARGE_IN_CUTOFF_TIMEOUT_S = 0.4
+_EventT = TypeVar("_EventT", bound=Event)
 
 
 def _recording_filename_session_id(session_id: str) -> str:
@@ -222,8 +224,8 @@ class Session:
     _data_dir: str | Path | None
     _emergency_export_unregister: Callable[[], None]
 
-    def __init__(self, config: SessionConfig | None = None) -> None:
-        cfg = config or SessionConfig()
+    def __init__(self, config: SessionConfig) -> None:
+        cfg = config
         self._config = cfg
 
         # ── Providers (fall back to no-op stubs) ─────────────────
@@ -732,9 +734,13 @@ class Session:
 
     # ── Properties ─────────────────────────────────────────────
 
-    def subscribe_event(self, event_type: type, handler: EventHandler) -> EventSubscription:
-        """Subscribe to a session event via the underlying EventBus."""
-        return self.event_bus.subscribe(event_type, handler)
+    def subscribe_event(
+        self,
+        event_type: type[_EventT],
+        handler: Callable[[_EventT], None | Awaitable[None]],
+    ) -> EventSubscription:
+        """Subscribe a typed handler and return its idempotent unsubscribe token."""
+        return self.event_bus.subscribe(event_type, cast(EventHandler, handler))
 
     def _subscribe_owned(
         self,
@@ -816,9 +822,13 @@ class Session:
         for subscription in subscriptions:
             subscription.unsubscribe()
 
-    def unsubscribe_event(self, event_type: type, handler: EventHandler) -> None:
+    def unsubscribe_event(
+        self,
+        event_type: type[_EventT],
+        handler: Callable[[_EventT], None | Awaitable[None]],
+    ) -> None:
         """Unsubscribe a handler previously attached with ``subscribe_event``."""
-        self.event_bus.unsubscribe(event_type, handler)
+        self.event_bus.unsubscribe(event_type, cast(EventHandler, handler))
 
     def subscribe_agent_events(
         self,

@@ -249,6 +249,11 @@ def test_voice_server_config_rejects_invalid_session_caps(max_sessions: object) 
         VoiceServerConfig(max_sessions=max_sessions)  # type: ignore[arg-type]
 
 
+def test_voice_server_config_rejects_invalid_drain_mode() -> None:
+    with pytest.raises(ValueError, match="drain_mode"):
+        VoiceServerConfig(drain_mode="natural")  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

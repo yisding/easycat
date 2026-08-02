@@ -50,10 +50,21 @@ class TestVoicemailDetectionConfig:
         cfg = VoicemailDetectionConfig(mode="detect")
         assert cfg.to_twilio_params()["amd_mode"] == "Enable"
 
+    def test_invalid_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match="voicemail_detection.mode"):
+            VoicemailDetectionConfig(mode="detect_end")  # type: ignore[arg-type]
+
+    def test_mutated_invalid_mode_rejected_before_twilio_mapping(self) -> None:
+        cfg = VoicemailDetectionConfig()
+        cfg.mode = "detect_end"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="voicemail_detection.mode"):
+            cfg.to_twilio_params()
+
     @pytest.mark.parametrize("bad", [0, -1, 1.5, True, float("nan"), float("inf")])
     def test_invalid_detection_timeout_rejected(self, bad: object) -> None:
         # detection_timeout_s flows into asyncio.sleep with no runtime guard,
-        # so non-positive values must fail fast at construction.
+        # so it must be a positive, finite built-in number at construction.
         with pytest.raises(ValueError, match="detection_timeout_s must be positive"):
             VoicemailDetectionConfig(detection_timeout_s=bad)
 

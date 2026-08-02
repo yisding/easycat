@@ -67,6 +67,21 @@ class EasyCatError(Exception):
             return entry.fix
 
 
+class EasyConfigError(ValueError, EasyCatError):
+    """Invalid application/session configuration.
+
+    This intentionally remains a :class:`ValueError` for compatibility while
+    also sharing :class:`EasyCatError`, the stable public boundary callers use
+    for provider, credential, and construction failures.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.code = "EASYCAT_E105"
+        self.message = message
+        self.context: dict[str, Any] = {"problem": message}
+        ValueError.__init__(self, message)
+
+
 def _attach_error_code(exc: Exception, coded: EasyCatError) -> None:
     """Tag an existing public exception type with a stable EasyCat code.
 
@@ -230,6 +245,21 @@ EASYCAT_E104 = register(
     related=["EASYCAT_E203"],
 )
 
+EASYCAT_E105 = register(
+    "EASYCAT_E105",
+    "Invalid application configuration: {problem}",
+    cause=(
+        "An EasyConfig, TextSessionConfig, or low-level SessionConfig value is "
+        "missing a mode-required collaborator or contains an unsupported policy value."
+    ),
+    fix=(
+        "Use EasyConfig plus create_session/run for descriptor-based setup, or provide "
+        "all live collaborators when constructing SessionConfig directly."
+    ),
+    example="run(EasyConfig.mic(agent=my_agent))",
+    related=["EASYCAT_E104", "EASYCAT_E203"],
+)
+
 
 # ══════════════════════════════════════════════════════════════════
 # E2xx — environment (doctor checks)
@@ -271,7 +301,8 @@ EASYCAT_E203 = register(
     "Missing API key: {var}",
     cause=(
         "The provider you selected needs an API key in an environment "
-        "variable, but the variable is unset or empty."
+        "variable, but the variable is unset, empty, or still contains an "
+        "obvious example placeholder."
     ),
     fix=(
         "Set the env var: `export {var}=...`. If the project uses a "
@@ -286,14 +317,14 @@ EASYCAT_E204 = register(
     "EASYCAT_E204",
     "Provider {provider!r} unreachable: {detail}",
     cause=(
-        "`easycat doctor` sent a 200ms HEAD probe to the provider's "
-        "API endpoint and it failed. The issue is either network, DNS, "
-        "a bad API key, or a regional outage."
+        "`easycat doctor` sent an unauthenticated HEAD probe to the provider's "
+        "API endpoint and received no response. This only checks network/DNS "
+        "liveness; it does not validate the configured credential."
     ),
     fix=(
-        "Check internet connectivity, verify the API key, and re-run. "
-        "If the key is correct but the host still fails, check the "
-        "provider's status page."
+        "Check internet connectivity and DNS, then re-run. If the host still "
+        "cannot be reached, check the provider's status page. Validate credentials "
+        "with an explicitly selected live/provider workflow."
     ),
     example="easycat doctor --provider openai",
     related=["EASYCAT_E203"],
@@ -373,6 +404,22 @@ EASYCAT_E209 = register(
     ),
     example="sudo apt-get install libportaudio2  # macOS: brew install portaudio",
     related=["EASYCAT_E202", "EASYCAT_E206"],
+)
+
+EASYCAT_E210 = register(
+    "EASYCAT_E210",
+    "Required project environment variable is missing or invalid: {var}",
+    cause=(
+        "The current EasyCat scaffold declares this environment variable as a "
+        "startup requirement, but doctor found it unset, still set to an example "
+        "placeholder, or invalid for its declared use."
+    ),
+    fix=(
+        "Copy `.env.example` to `.env`, replace every required placeholder with "
+        "the real project value, and rerun `easycat doctor --env-file .env`."
+    ),
+    example="easycat doctor --env-file .env",
+    related=["EASYCAT_E203"],
 )
 
 
@@ -635,6 +682,7 @@ EASYCAT_E605 = register(
 
 __all__ = [
     "EasyCatError",
+    "EasyConfigError",
     "ErrorEntry",
     "ErrorFactory",
     "REGISTRY",
@@ -646,6 +694,7 @@ __all__ = [
     "EASYCAT_E102",
     "EASYCAT_E103",
     "EASYCAT_E104",
+    "EASYCAT_E105",
     "EASYCAT_E201",
     "EASYCAT_E202",
     "EASYCAT_E203",
@@ -655,6 +704,7 @@ __all__ = [
     "EASYCAT_E207",
     "EASYCAT_E208",
     "EASYCAT_E209",
+    "EASYCAT_E210",
     "EASYCAT_E301",
     "EASYCAT_E302",
     "EASYCAT_E303",

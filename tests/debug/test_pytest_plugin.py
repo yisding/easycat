@@ -39,3 +39,31 @@ def test_bundle_loader_is_lazy(easycat_bundle):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_contract_marker_is_registered_for_external_strict_marker_projects(
+    tmp_path: Path,
+) -> None:
+    test_file = tmp_path / "test_provider_contract.py"
+    test_file.write_text(
+        """
+import pytest
+
+pytestmark = pytest.mark.contract
+
+
+def test_contract_marker_is_available():
+    pass
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--strict-markers", "-q", str(test_file)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

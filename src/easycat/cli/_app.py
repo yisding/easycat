@@ -73,20 +73,20 @@ class _CommandText(NamedTuple):
 
 _COMMAND_TEXT: dict[str, _CommandText] = {
     "console": _CommandText(
-        help="Try EasyCat in your terminal — no API keys required.",
-        journey="Try EasyCat in your terminal with no API keys",
+        help="Try the keyless offline console; use --live to opt into provider traffic.",
+        journey="Try the keyless offline console (--live explicitly enables a provider)",
     ),
     "init": _CommandText(
         help="Scaffold a new project from a template.",
         journey="Scaffold a new project from a template",
     ),
     "doctor": _CommandText(
-        help="Check API keys, optional extras, and provider reachability.",
-        journey="Check API keys, optional extras, and provider reachability",
+        help="Check local readiness, configured credentials, and provider network liveness.",
+        journey="Check local readiness, configured credentials, and provider network liveness",
     ),
     "serve": _CommandText(
-        help="Serve the browser voice playground on localhost.",
-        journey="Serve the browser voice playground on localhost",
+        help="Serve the browser playground or a manifest-backed VoiceServer.",
+        journey="Serve the browser playground or a manifest-backed VoiceServer",
     ),
     "plan": _CommandText(
         help="Show the provider/capability plan for a manifest profile.",
@@ -209,7 +209,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run --env-file .env python examples/openai_agents_voice.py",
-            "uv run easycat console",
+            "uv run easycat console --voice-demo",
             "uv run python examples/journal_demo.py",
             "uv run python docs/teaching/offline_spine.py --run --jobs 4",
             "uv run easycat init --list-templates",
@@ -228,7 +228,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
-            "uv sync --extra quickstart --extra webrtc --group dev",
+            "uv sync --group dev",
+            "uv run easycat console --voice-demo",
+            "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
             "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
@@ -238,8 +240,27 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Installation and extras",
+        "path": "docs/install.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Choose a portable dependency source and the smallest provider, transport, "
+            "agent-framework, or processing extras for an application."
+        ),
+        "commands": (
+            "uv sync --group dev",
+            "uv run easycat console --voice-demo",
+            "uv run easycat init my-agent --easycat-git "
+            "https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>",
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+        ),
+    },
+    {
         "label": "CLI and scaffolds",
-        "path": "README.md#cli",
+        "path": "docs/cli.md",
         "audience": "app builders",
         "diataxis": "how-to",
         "description": (
@@ -254,6 +275,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat init --list-templates",
             "easycat init --list-templates --json",
             "easycat init my-agent",
+            "easycat init my-agent --easycat-git URL --easycat-git-rev REV",
             "easycat doctor --json",
             "easycat doctor --env-file .env --json",
             "easycat docs",
@@ -837,7 +859,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv run easycat docs --audience provider-maintainers",
             "uv run easycat docs --audience provider-maintainers --json",
-            "uv run easycat init my-provider --template provider",
+            "uv run easycat init my-stt --template provider-stt",
+            "uv run easycat init my-tts --template provider-tts",
+            "uv run easycat init my-vad --template provider",
             "uv run python examples/custom_transport.py",
             "uv run pytest tests/test_public_api.py",
             "uv run pytest tests/contracts",

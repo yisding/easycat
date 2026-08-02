@@ -350,9 +350,9 @@ def _load_slim_example(
     framework: str | None = None,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Import a slim example that runs ``easycat.run(...)`` at module scope.
+    """Import a slim example that starts an EasyCat app at module scope.
 
-    Stubs ``easycat.run`` so importing doesn't block on a real session,
+    Stubs both ``easycat.run`` and ``VoiceApp.run`` so importing doesn't block,
     sets any env vars the example consumes at module scope (via
     ``require_env`` or EasyConfig string shortcuts), and evicts any cached
     copy so the fresh import sees the monkeypatched ``run``.
@@ -363,6 +363,7 @@ def _load_slim_example(
     import easycat
 
     monkeypatch.setattr(easycat, "run", lambda config: None)
+    monkeypatch.setattr(easycat.VoiceApp, "run", lambda self, *args, **kwargs: None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)

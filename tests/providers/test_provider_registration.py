@@ -16,12 +16,14 @@ shortcuts, ``available_*_providers()``, catalog-membership config checks,
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import get_args
 
 import pytest
 
 from easycat import register_stt_provider, register_tts_provider
 from easycat.stt.factory import _CATALOG as STT_CATALOG
 from easycat.stt.factory import (
+    STTConfig,
     STTProviderConfig,
     available_stt_providers,
     create_stt_provider,
@@ -30,6 +32,7 @@ from easycat.stt.factory import (
 )
 from easycat.tts.factory import _CATALOG as TTS_CATALOG
 from easycat.tts.factory import (
+    TTSConfig,
     available_tts_providers,
     is_tts_config,
 )
@@ -141,6 +144,12 @@ def _register_fake_tts() -> None:
 
 
 # ── Layer 1: direct registration ─────────────────────────────────
+
+
+def test_builtin_config_typing_unions_match_catalog_specs() -> None:
+    """Adding a built-in spec must also keep the public typing aliases current."""
+    assert set(get_args(STTConfig)) == {spec.config_cls for spec in STT_CATALOG.specs.values()}
+    assert set(get_args(TTSConfig)) == {spec.config_cls for spec in TTS_CATALOG.specs.values()}
 
 
 def test_registered_stt_provider_gets_string_shortcuts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,6 +276,39 @@ def test_registered_stt_capabilities_drive_endpointing_and_planner() -> None:
     assert _stt_uses_native_endpointing(config) is True
     selection = _select_catalog_role("stt", config, catalog=STT_CATALOG)
     assert selection.capabilities == frozenset({"native_endpointing", "word_timestamps"})
+
+
+def test_registered_stt_capability_resolver_can_vary_by_config_or_model() -> None:
+    from easycat.planning.provider_plan import _select_catalog_role
+
+    def resolve_capabilities(config: object, model: str | None) -> frozenset[str]:
+        selected_model = config.model if isinstance(config, FakeSTTConfig) else model
+        if selected_model and selected_model.endswith("-native"):
+            return frozenset({"native_endpointing"})
+        return frozenset()
+
+    register_stt_provider(
+        "fakestt",
+        FakeSTT,
+        FakeSTTConfig,
+        env_var="FAKESTT_API_KEY",
+        capabilities=frozenset({"word_timestamps"}),
+        capability_resolver=resolve_capabilities,
+    )
+
+    native = FakeSTTConfig(api_key="k", model="fake-native")
+    standard = FakeSTTConfig(api_key="k", model="fake-standard")
+
+    assert STT_CATALOG.capabilities_for_config(native) == frozenset(
+        {"native_endpointing", "word_timestamps"}
+    )
+    assert STT_CATALOG.capabilities_for_config(standard) == frozenset({"word_timestamps"})
+    assert STT_CATALOG.capabilities_for("fakestt", model="other-native") == frozenset(
+        {"native_endpointing", "word_timestamps"}
+    )
+    assert _select_catalog_role("stt", native, catalog=STT_CATALOG).capabilities == frozenset(
+        {"native_endpointing", "word_timestamps"}
+    )
 
 
 def test_registered_probe_module_overrides_non_importable_extra_name(

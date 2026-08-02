@@ -8,6 +8,8 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+import pytest
+
 import easycat
 from easycat._public_api import LAZY_EXPORTS
 from scripts._justfile import just_guard_recipes
@@ -18,6 +20,29 @@ PUBLIC_IMPORT_SURFACE_ROOTS = (
     Path("examples"),
     Path("src/easycat/cli/scaffold/templates"),
 )
+
+# Consumer fixtures intentionally run mypy without its incremental cache so
+# they prove a clean downstream install works. Keep the subprocess bounded,
+# while giving cold CI filesystems more room than pytest's general 60s limit.
+_MYPY_CONSUMER_TIMEOUT_S = 90
+
+
+def _run_mypy_consumers(*consumers: Path) -> subprocess.CompletedProcess[str]:
+    """Type-check downstream consumers together in one bounded cold mypy run."""
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--no-incremental",
+            *(str(consumer) for consumer in consumers),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_MYPY_CONSUMER_TIMEOUT_S,
+    )
+
 
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
@@ -42,6 +67,7 @@ PUBLIC_API_SNAPSHOT = (
     "DTMFAggregated",
     "EasyCatError",
     "EasyConfig",
+    "EasyConfigError",
     "EchoCanceller",
     "Error",
     "ErrorEntry",
@@ -117,6 +143,7 @@ PUBLIC_API_SNAPSHOT = (
     "WebTransportConnectionTransport",
     "WebTransportServer",
     "WebTransportTransportConfig",
+    "arun",
     "attach_runtime_feedback",
     "auto_adapt_agent",
     "available_stt_providers",
@@ -244,7 +271,7 @@ AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 120
+    assert len(easycat.__all__) <= 121
 
 
 def test_public_api_registry_tracks_snapshot() -> None:
@@ -296,6 +323,8 @@ def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     preferred = doc.split("## Preferred Imports", 1)[1].split("## Top-Level Allowlist", 1)[0]
 
+    assert "from easycat import VoiceApp" in preferred
+    assert 'VoiceApp(agent=agent).run("local")' in preferred
     assert "from easycat import EasyConfig, run" in preferred
     assert "from easycat import EasyConfig, STTFinal, create_session" in preferred
     assert "from easycat.helpers import run_session" in preferred
@@ -395,17 +424,14 @@ def test_agent_bridge_constructor_signatures_are_stable() -> None:
     assert actual == AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
 
 
+@pytest.mark.timeout(_MYPY_CONSUMER_TIMEOUT_S + 10)
 def test_shipped_agent_bridges_satisfy_static_consumer_contract() -> None:
     fixture = Path("tests/typecheck/agent_bridge_consumer.py")
-    result = subprocess.run(
-        [sys.executable, "-m", "mypy", "--no-incremental", str(fixture)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_mypy_consumers(fixture)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.timeout(_MYPY_CONSUMER_TIMEOUT_S + 10)
 def test_websocket_runtime_static_consumers_are_compatible(tmp_path: Path) -> None:
     from easycat.cli.scaffold._schema import InitConfig
     from easycat.cli.scaffold.init import _render_text, _substitutions
@@ -421,14 +447,8 @@ def test_websocket_runtime_static_consumers_are_compatible(tmp_path: Path) -> No
         Path("examples/twilio_app.py"),
         tmp_path / "server.py",
     )
-    for consumer in consumers:
-        result = subprocess.run(
-            [sys.executable, "-m", "mypy", "--no-incremental", str(consumer)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, f"{consumer}:\n{result.stdout}{result.stderr}"
+    result = _run_mypy_consumers(*consumers)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_server_package_owns_standalone_transport_orchestration() -> None:
@@ -471,12 +491,14 @@ def test_curated_public_api_lazy_imports() -> None:
         EasyConfig,
         MarkdownStripProcessor,
         SessionConfig,
+        arun,
         create_session,
     )
 
     assert EasyConfig.__name__ == "EasyConfig"
     assert SessionConfig.__name__ == "SessionConfig"
     assert MarkdownStripProcessor.__name__ == "MarkdownStripProcessor"
+    assert arun.__name__ == "arun"
     assert create_session.__name__ == "create_session"
 
 

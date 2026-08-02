@@ -34,6 +34,12 @@ subscription order and also invokes handlers registered for parent classes,
 so subscribing to `Event` receives everything (`subscribe_all` does the
 same).
 
+`Session.subscribe_event(EventType, handler)` links the event class to the
+handler parameter for type checkers. For example, an `STTFinal` subscription
+infers `event` as `STTFinal` in a lambda and rejects a callback annotated for an
+unrelated event type. Keep the returned subscription and call its idempotent
+`unsubscribe()` method when the listener's owner shuts down.
+
 ## Event Catalog
 
 ### Audio

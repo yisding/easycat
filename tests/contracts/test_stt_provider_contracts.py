@@ -58,7 +58,12 @@ class _ContractSTT:
             yield event
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "contract-stt"}
+        return {
+            "provider": "contract-stt",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _QueueWebSocket:

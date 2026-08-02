@@ -237,6 +237,73 @@ def test_validate_report_recipe_shell_quotes_report_argument() -> None:
     assert '"{{ REPORT }}"' not in command
 
 
+def test_justfile_parser_preserves_every_recipe_command_and_dependency(tmp_path: Path) -> None:
+    """Raw fallbacks must represent the complete recipe, in execution order."""
+    (tmp_path / "justfile").write_text(
+        """
+first:
+    uv run ruff check .
+    uv run lint-imports
+
+second: first
+    uv run mypy src/easycat
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    commands = just_recipe_commands(tmp_path)
+
+    assert commands["first"] == "uv run ruff check . && uv run lint-imports"
+    assert commands["second"] == (
+        "uv run ruff check . && uv run lint-imports && uv run mypy src/easycat"
+    )
+
+
+def test_justfile_parser_folds_continuations_and_strips_command_modifiers(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "justfile").write_text(
+        "\n".join(
+            (
+                "base:",
+                "    @uv run pytest \\",
+                "        tests/unit \\",
+                "        tests/runtime",
+                "    -uv run optional-check",
+                "    @-uv run quiet-optional-check",
+                "",
+                "dependent: base",
+                "    -@uv run mypy \\",
+                "        src/easycat",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    commands = just_recipe_commands(tmp_path)
+
+    assert commands["base"] == " && ".join(
+        (
+            "uv run pytest tests/unit tests/runtime",
+            "uv run optional-check",
+            "uv run quiet-optional-check",
+        )
+    )
+    assert commands["dependent"] == (f"{commands['base']} && uv run mypy src/easycat")
+
+
+def test_pre_pr_recipe_covers_the_core_local_ci_gates() -> None:
+    commands = just_recipe_commands(REPO_ROOT)
+
+    assert commands["check"] == " && ".join(
+        (commands["pre-commit"], commands["typecheck"], commands["test"])
+    )
+    for marker in ("integration_live", "integration_external"):
+        assert f"not {marker}" in commands["test"]
+    assert commands["test-live"] == "uv run pytest -m integration_live"
+
+
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
     recipes = just_recipe_commands(REPO_ROOT)
     missing: list[str] = []

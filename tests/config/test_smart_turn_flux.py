@@ -7,6 +7,7 @@ import pytest
 
 from easycat import (
     EasyConfig,
+    STTProviderConfig,
     create_session,
 )
 from easycat.config import TelephonyConfig
@@ -83,6 +84,42 @@ def test_create_session_disables_vad_for_deepgram_flux_string_shortcut(
         agent=_DummyAgent(),
     )
 
+    assert config.smart_turn.enabled is False
+
+    session = create_session(config)
+
+    assert session._enable_vad is False
+    assert session._auto_turn_from_stt_final is True
+
+
+def test_named_provider_config_preserves_flux_endpointing_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "easycat.config._factory.create_vad",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("create_vad should not be called")
+        ),
+    )
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr(
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+    config = EasyConfig(
+        stt=STTProviderConfig(
+            provider="deepgram",
+            api_key="test-key",
+            params={"model": "flux-general-en"},
+        ),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+    )
+
+    assert isinstance(config.stt, DeepgramSTTConfig)
     assert config.smart_turn.enabled is False
 
     session = create_session(config)

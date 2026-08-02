@@ -65,6 +65,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 16,
     "provider": 12,
+    "provider-stt": 12,
+    "provider-tts": 12,
     "pydantic-ai": 17,
     "pydantic-ai-workflow": 20,
     "text-chat": 17,
@@ -74,6 +76,8 @@ _LINE_BUDGETS: dict[str, int] = {
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
     "provider": ("custom_vad.py", "test_custom_vad.py"),
+    "provider-stt": ("custom_stt.py", "test_custom_stt.py"),
+    "provider-tts": ("custom_tts.py", "test_custom_tts.py"),
     "twilio-phone": ("server.py",),
 }
 
@@ -81,6 +85,8 @@ _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
 # conformance test, so it also pins pytest.
 _TEMPLATE_DEV_GROUPS: dict[str, list[str]] = {
     "provider": ["ruff>=0.9", "pytest>=8", "pytest-asyncio>=0.24"],
+    "provider-stt": ["ruff>=0.9", "pytest>=8", "pytest-asyncio>=0.24"],
+    "provider-tts": ["ruff>=0.9", "pytest>=8", "pytest-asyncio>=0.24"],
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -101,7 +107,6 @@ _README_SECTIONS: tuple[str, ...] = (
     "## Next steps",
 )
 _VOICE_TEMPLATE_PRESETS: dict[str, str] = {
-    "openai-agents": "mic",
     "pydantic-ai": "mic",
     "pydantic-ai-workflow": "mic",
     "webrtc-browser": "browser",
@@ -119,6 +124,8 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
     for required in (
         "openai-agents",
         "provider",
+        "provider-stt",
+        "provider-tts",
         "pydantic-ai",
         "pydantic-ai-workflow",
         "text-chat",
@@ -200,10 +207,11 @@ def test_template_specs_make_audio_capabilities_explicit() -> None:
         "twilio-phone": "twilio",
         "webrtc-browser": "webrtc",
     }
-    # The provider package has a voice demo but intentionally does not expose
-    # EasyConfig audio overrides through the scaffold command.
-    assert _TEMPLATE_SPECS["provider"].mode == "voice"
-    assert not _TEMPLATE_SPECS["provider"].supports_audio_config
+    # Provider-authoring packages have focused voice demos but intentionally
+    # do not accept app-level provider overrides through the scaffold command.
+    for name in ("provider", "provider-stt", "provider-tts"):
+        assert _TEMPLATE_SPECS[name].mode == "voice"
+        assert not _TEMPLATE_SPECS[name].supports_audio_config
 
 
 def test_template_env_var_collector_reads_twilio_server_code() -> None:
@@ -400,6 +408,56 @@ def test_provider_template_registers_and_selects_named_vad() -> None:
     assert 'vad="energy"' in agent
 
 
+@pytest.mark.parametrize(
+    ("template_name", "module_name", "entry_point_group", "provider_name", "role"),
+    [
+        ("provider-stt", "custom_stt", "easycat.stt_providers", "scripted", "stt"),
+        ("provider-tts", "custom_tts", "easycat.tts_providers", "tone", "tts"),
+    ],
+)
+def test_speech_provider_templates_ship_registration_and_authoring_contracts(
+    template_name: str,
+    module_name: str,
+    entry_point_group: str,
+    provider_name: str,
+    role: str,
+) -> None:
+    mapping = _substitutions(InitConfig(template=template_name), project_name="demo")
+    template = _template_dir(template_name)
+    pyproject = tomllib.loads(
+        _render_text((template / "pyproject.toml").read_text(encoding="utf-8"), mapping)
+    )
+    provider_source = (template / f"{module_name}.py").read_text(encoding="utf-8")
+    test_source = (template / f"test_{module_name}.py").read_text(encoding="utf-8")
+    readme = (template / "README.md").read_text(encoding="utf-8")
+
+    assert pyproject["project"]["entry-points"][entry_point_group] == {
+        provider_name: f"{module_name}:register"
+    }
+    assert pyproject["tool"]["setuptools"]["py-modules"] == [module_name]
+    assert f"register_{role}_provider(" in provider_source
+    assert 'capabilities=frozenset({"offline"})' in provider_source
+    assert '"provider"' in provider_source
+    assert '"model"' in provider_source
+    assert '"api_version"' in provider_source
+    assert '"sdk_version"' in provider_source
+    assert f'{role}="{provider_name}"' in (template / "agent.py").read_text(encoding="utf-8")
+    assert "ProviderContractSuite" in test_source
+    assert "integration_live" in test_source
+    assert "provider_custom" in test_source
+    assert f"surface_{role}" in test_source
+    assert "credential_env_var" in test_source
+    pytest_config = pyproject["tool"]["pytest"]["ini_options"]
+    assert pytest_config["addopts"] == '-m "not integration_live"'
+    assert pytest_config["strict_markers"] is True
+    assert any(marker.startswith("integration_live:") for marker in pytest_config["markers"])
+    assert any(marker.startswith("provider_custom:") for marker in pytest_config["markers"])
+    assert any(marker.startswith(f"surface_{role}:") for marker in pytest_config["markers"])
+    assert f'uv run pytest -m "integration_live and provider_custom and surface_{role}"' in readme
+    assert "LIVE TODO" in provider_source
+    assert "LIVE TODO" in readme
+
+
 def _template_dir(name: str) -> Path:
     return _templates_root() / name
 
@@ -530,6 +588,22 @@ def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
             return True
 
     return False
+
+
+def _uses_voice_app_local(source: str) -> bool:
+    tree = ast.parse(source)
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+        and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name)
+        and node.func.value.func.id == "VoiceApp"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "local"
+        for node in ast.walk(tree)
+    )
 
 
 def _uses_async_with_create_text_session(source: str) -> bool:
@@ -757,6 +831,26 @@ def test_voice_templates_use_canonical_preset_shape(name: str) -> None:
     assert f"EasyConfig.{preset}(" in readme or f"EasyConfig.{preset}(...)" in readme
 
 
+def test_default_openai_agents_template_uses_voice_app_golden_path() -> None:
+    agent = (_template_dir("openai-agents") / "agent.py").read_text(encoding="utf-8")
+    assert _uses_voice_app_local(agent)
+    assert "EasyConfig" not in agent
+
+    readme = (_template_dir("openai-agents") / "README.md").read_text(encoding="utf-8")
+    assert "VoiceApp(...)" in readme
+
+
+def test_openai_agents_debug_guidance_requires_record_to_for_bundles() -> None:
+    readme = (_template_dir("openai-agents") / "README.md").read_text(encoding="utf-8")
+    debug_section = readme.split("- **Debug a session:**", 1)[1].split(
+        "- **Graduate to EasyConfig", 1
+    )[0]
+
+    assert "does not create a timestamped `RunBundle` by itself" in debug_section
+    assert 'record_to=".easycat/runs"' in debug_section
+    assert 'debug="full"' in debug_section
+
+
 def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
     readme = (_template_dir("text-chat") / "README.md").read_text(encoding="utf-8")
     assert "EasyConfig.mic(agent=agent)" in readme
@@ -823,6 +917,10 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     assert parsed["dependency-groups"]["dev"] == _TEMPLATE_DEV_GROUPS.get(
         name, ["pytest>=8", "ruff>=0.9"]
     )
+    scaffold_metadata = parsed["tool"]["easycat"]["scaffold"]
+    assert scaffold_metadata["template"] == name
+    assert tuple(scaffold_metadata["required_env"]) == _TEMPLATE_SPECS[name].required_env
+    assert tuple(scaffold_metadata["optional_env"]) == _TEMPLATE_SPECS[name].optional_env
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject
@@ -864,6 +962,39 @@ def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: P
     assert parsed["OPENAI_API_KEY"] == "sk-your-key-here"
     assert parsed["DEEPGRAM_API_KEY"] == ""
     assert parsed["ELEVENLABS_API_KEY"] == ""
+
+
+def test_scaffold_metadata_includes_selected_provider_requirements() -> None:
+    cfg = InitConfig(
+        template="openai-agents",
+        stt="deepgram/flux",
+        tts="elevenlabs/eleven_flash_v2_5",
+    )
+    source = (_template_dir("openai-agents") / "pyproject.toml").read_text(encoding="utf-8")
+    rendered = _render_text(source, _substitutions(cfg, "demo"))
+    parsed = tomllib.loads(rendered)
+
+    assert parsed["tool"]["easycat"]["scaffold"] == {
+        "template": "openai-agents",
+        "required_env": ["OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"],
+        "optional_env": [],
+    }
+
+
+def test_scaffold_metadata_serializes_optional_env_requirements() -> None:
+    source = (_template_dir("webrtc-browser") / "pyproject.toml").read_text(encoding="utf-8")
+    rendered = _render_text(
+        source,
+        _substitutions(InitConfig(template="webrtc-browser"), "demo"),
+    )
+    metadata = tomllib.loads(rendered)["tool"]["easycat"]["scaffold"]
+
+    assert metadata["required_env"] == ["OPENAI_API_KEY"]
+    assert metadata["optional_env"] == [
+        "TURN_SERVER_URL",
+        "TURN_USERNAME",
+        "TURN_CREDENTIAL",
+    ]
 
 
 def test_pydantic_ai_readme_points_to_workflow_template() -> None:
@@ -1039,10 +1170,38 @@ def test_pyproject_renders_uv_sources_for_local_checkout(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", available_templates())
+def test_pyproject_renders_portable_pinned_git_source(name: str) -> None:
+    template_text = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+    git_url = "https://github.com/yisding/easycat.git"
+    git_rev = "0123456789abcdef0123456789abcdef01234567"
+
+    rendered = _render_text(
+        template_text,
+        _substitutions(
+            InitConfig(template=name),
+            "demo",
+            easycat_git=git_url,
+            easycat_git_rev=git_rev,
+        ),
+    )
+    parsed = tomllib.loads(rendered)
+
+    assert parsed["tool"]["uv"]["sources"]["easycat"] == {
+        "git": git_url,
+        "rev": git_rev,
+    }
+    assert str(REPO_ROOT) not in rendered
+
+
+@pytest.mark.parametrize("name", available_templates())
 def test_template_readme_explains_local_source_block(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     assert "[tool.uv.sources]" in readme
     assert "not on PyPI yet" in readme
+    assert "--easycat-source" in readme
+    assert "--easycat-git" in readme
+    assert "--easycat-git-rev" in readme
+    assert "portable" in readme.lower()
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

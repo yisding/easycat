@@ -1769,6 +1769,57 @@ async def test_serve_webrtc_config_sessions_drains_after_listener_stop_failure(
 
 
 @pytest.mark.asyncio
+async def test_standalone_shutdown_surfaces_failed_session_report_and_retains_ledger(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from easycat.server.webrtc_routes import _shutdown_standalone_webrtc
+    from easycat.session_manager import SessionStopFailure, SessionStopReport
+
+    class _Gate:
+        def start_draining(self) -> None:
+            pass
+
+        async def drain(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    failure = RuntimeError("webrtc session teardown failed")
+    report = SessionStopReport(
+        attempted_keys=(41,),
+        stopped_keys=(),
+        failures=(SessionStopFailure(key=41, exception=failure),),
+    )
+    manager = SimpleNamespace(stop_all=AsyncMock(return_value=report))
+    retained_session = object()
+    active_sessions = {41: retained_session}
+
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(
+            RuntimeError,
+            match="Standalone WebRTC shutdown retained 1 session",
+        ),
+    ):
+        await _shutdown_standalone_webrtc(
+            site=SimpleNamespace(stop=AsyncMock()),
+            runner=SimpleNamespace(cleanup=AsyncMock()),
+            gate=_Gate(),  # type: ignore[arg-type]
+            active_sessions=active_sessions,
+            routes=SimpleNamespace(
+                _stop_managed_session=AsyncMock(),
+                cancel_cleanup_tasks=AsyncMock(),
+            ),
+            manager=manager,
+            drain_timeout_s=0.0,
+            force_shutdown_timeout_s=0.1,
+        )
+
+    assert "Standalone WebRTC session shutdown failed to stop 1 of 1 session" in caplog.text
+    assert "webrtc session teardown failed" in caplog.text
+    assert active_sessions == {41: retained_session}
+    manager.stop_all.assert_awaited_once_with(force=True)
+
+
+@pytest.mark.asyncio
 async def test_standalone_shutdown_preserves_drain_cancellation_after_listener_error() -> None:
     from easycat.server.webrtc_routes import _shutdown_standalone_webrtc
 

@@ -17,27 +17,37 @@ sync:
 
 # Install the project, dev group, and one or more optional extras.
 # Usage: just sync-extra openai deepgram
+# Install one or more optional provider or transport extras.
 sync-extra *EXTRAS:
     uv sync --group dev {{ prepend('--extra ', EXTRAS) }}
 
-# Run the full local test suite. `loadscope` keeps each module on one worker;
-# live and external integrations stay in their explicit serial lanes.
+# `loadscope` keeps each module on one worker; live and external integrations
+# stay in their explicit serial lanes.
+# Run the full credential-free local test suite.
 test:
     uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"
+
+# This is intentionally serial and may make billable provider API calls.
+# Run every live-provider test explicitly (requires provider credentials).
+test-live:
+    uv run pytest -m integration_live
 
 # Run the safe slice in parallel. `loadscope` keeps each module's tests
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
 # `quick` validation slice marker expression (validation/runner.py).
+# Run the deterministic quick validation slice in parallel.
 test-fast:
     uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 
 # Run a single file or node id. Usage: just test-one tests/core/test_cancel_token.py
 # or: just test-one tests/core/test_cancel_token.py::TestCancelToken::test_cancel
+# Run one test file or node id.
 test-one TARGET:
     uv run pytest "{{ TARGET }}"
 
 # Lint with ruff (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006, T201).
-# Also runs the Import Linter layering contracts ([tool.importlinter] in pyproject).
+# Also runs the Import Linter contracts in pyproject.toml.
+# Run source lint and architectural import contracts.
 lint:
     uv run ruff check .
     uv run lint-imports
@@ -54,20 +64,20 @@ fmt:
 fmt-check:
     uv run ruff format --check .
 
-# Authoritative type gate: the whole package must stay at zero errors
-# (vendored vad/_funasr_runtime is excluded via a pyproject mypy override;
-# the core packages additionally run stricter checks — see the
-# [[tool.mypy.overrides]] tables).
+# The vendored VAD runtime is excluded via a mypy override; core packages use
+# the stricter overrides documented in pyproject.toml.
+# Run the authoritative whole-package mypy gate.
 typecheck:
     uv run mypy src/easycat
 
 # Fast local-only type feedback via Astral ty (beta; not a CI gate).
 # Runs on demand through uvx, so no dev-dependency install is needed.
+# Run the fast advisory type checker.
 typecheck-fast:
     uvx ty check src/easycat
 
-# Coverage over the safe slice (pytest --cov is xdist-safe; never use
-# `coverage run -m pytest -n auto`, which reports 0% under xdist).
+# Uses pytest-cov because `coverage run -m pytest -n auto` reports 0% under xdist.
+# Run coverage over the credential-free quick slice.
 cov:
     uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"
 
@@ -131,9 +141,10 @@ validate-release:
 validate-report REPORT=".easycat/validation/latest.json":
     uv run easycat validate report {{ quote(REPORT) }}
 
-# The pre-PR gauntlet: format check + lint + full local test suite.
-check: fmt-check lint test
-
 # Run all pre-commit hooks against the whole tree.
 pre-commit:
     uv run pre-commit run --all-files
+
+# CI additionally exercises version matrices, dependency floors, artifact lanes, and builds.
+# Run the core local pre-PR gauntlet: pre-commit, mypy, and credential-free tests.
+check: pre-commit typecheck test

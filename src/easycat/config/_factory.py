@@ -43,14 +43,22 @@ from easycat.session._types import Agent as _AgentProto
 from easycat.session._types import SessionConfig, SessionHelper
 from easycat.session.actions import SessionActionExecutor
 from easycat.smart_turn import SmartTurnConfig, create_smart_turn
-from easycat.stt.factory import create_stt_provider_from_config
+from easycat.stt.factory import (
+    STTProviderConfig,
+    create_stt_provider,
+    create_stt_provider_from_config,
+)
 from easycat.stubs import NoopAgent
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
-from easycat.tts.factory import create_tts_provider_from_config
+from easycat.tts.factory import (
+    TTSProviderConfig,
+    create_tts_provider,
+    create_tts_provider_from_config,
+)
 from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import create_vad
 
@@ -160,6 +168,8 @@ def _is_stt_provider_instance(value: Any) -> bool:
 def _create_stt(config: Any, event_bus: EventBus) -> Any:
     if _is_stt_provider_instance(config):
         return config
+    if isinstance(config, STTProviderConfig):
+        return create_stt_provider(config, event_bus)
     return create_stt_provider_from_config(config, event_bus)
 
 
@@ -172,6 +182,8 @@ def _is_tts_provider_instance(value: Any) -> bool:
 def _create_tts(config: Any, event_bus: EventBus) -> Any:
     if _is_tts_provider_instance(config):
         return config
+    if isinstance(config, TTSProviderConfig):
+        return create_tts_provider(config, event_bus)
     return create_tts_provider_from_config(config, event_bus)
 
 
@@ -292,6 +304,40 @@ def _safe_config_ns(config: EasyConfig) -> object:
         # retroactively change the snapshot.
         attrs[name] = copy.copy(val) if hasattr(val, "__dataclass_fields__") else val
     return SimpleNamespace(**attrs)
+
+
+def _audio_runtime_config(config: EasyConfig) -> EasyConfig:
+    """Copy the mutable user specification before build-time normalization.
+
+    ``EasyConfig`` remains mutable for backward compatibility, but session
+    construction treats the supplied object as a specification. The runtime
+    copy owns fields that validation may normalize and mutable collections that
+    a downstream collaborator could otherwise retain. Already-built provider,
+    transport, and agent instances remain shared intentionally: callers who
+    inject live objects own their lifecycle and concurrency contract.
+    """
+    runtime = copy.copy(config)
+    runtime.turn_taking = copy.copy(config.turn_taking)
+    runtime.mcp_servers = list(config.mcp_servers) if config.mcp_servers is not None else None
+    runtime.output_processors = tuple(config.output_processors)
+    runtime.action_executors = tuple(config.action_executors)
+    if config.telephony is not None:
+        runtime.telephony = copy.copy(config.telephony)
+        runtime.telephony.dtmf_aggregator = copy.copy(config.telephony.dtmf_aggregator)
+        runtime.telephony.voicemail_detector = copy.copy(config.telephony.voicemail_detector)
+        if config.telephony.outbound is not None:
+            runtime.telephony.outbound = copy.copy(config.telephony.outbound)
+            runtime.telephony.outbound.voicemail_detection = copy.copy(
+                config.telephony.outbound.voicemail_detection
+            )
+    return runtime
+
+
+def _text_runtime_config(config: TextSessionConfig) -> TextSessionConfig:
+    """Copy mutable text-session specification fields for one runtime."""
+    runtime = copy.copy(config)
+    runtime.mcp_servers = list(config.mcp_servers) if config.mcp_servers is not None else None
+    return runtime
 
 
 def _merge_twilio_identity(existing: Any, incoming: Any) -> Any:
@@ -807,17 +853,23 @@ def create_session(config: EasyConfig) -> Session:
     ``docs/reference/easyconfig.md`` for the field reference and
     ``docs/reference/session-lifecycle.md`` for start/stop semantics.
 
-    Raises ``EasyConfigError`` / ``ValueError`` for invalid configuration and
-    an :class:`easycat.errors.EasyCatError` subclass when a selected
+    Raises ``EasyConfigError`` for invalid app configuration and an
+    :class:`easycat.errors.EasyCatError` when a selected
     provider's credentials or optional extra are missing.
     """
-    session_id = config.session_id or f"session-{uuid4().hex[:12]}"
-    debug = _create_debug_resources(config, session_id)
+    # Config dataclasses are mutable for backward compatibility. Revalidate at
+    # the build boundary before journals, provider clients, or transports are
+    # allocated, and surface a high-level missing-agent error here rather than
+    # a low-level SessionConfig noop-provider failure after partial wiring.
+    runtime_config = _audio_runtime_config(config)
+    runtime_config._validate_for_session()
+    session_id = runtime_config.session_id or f"session-{uuid4().hex[:12]}"
+    debug = _create_debug_resources(runtime_config, session_id)
     with ExitStack() as rollback:
         _register_close(rollback, debug.artifact_store)
         _register_close(rollback, debug.journal)
-        built = _build_audio_session(config, session_id, debug, rollback)
-        _finalize_audio_session(config, built)
+        built = _build_audio_session(runtime_config, session_id, debug, rollback)
+        _finalize_audio_session(runtime_config, built)
         rollback.pop_all()
         return built.session
 
@@ -1007,7 +1059,7 @@ def create_text_session(
     shared with :func:`create_session`) or, for back-compat, the legacy
     loose keyword arguments. The two forms are mutually exclusive: passing
     a ``config`` together with any non-default loose keyword raises
-    :class:`ValueError`.
+    :class:`EasyConfigError`.
 
     The returned session supports :meth:`Session.send_text` for
     request/response agent interaction without STT, TTS, VAD, or
@@ -1043,6 +1095,8 @@ def create_text_session(
         data_dir=data_dir,
         emergency_export=emergency_export,
     )
+    config = _text_runtime_config(config)
+    config._validate_for_session()
 
     sid = config.session_id or f"session-{uuid4().hex[:12]}"
     debug_resources = _create_debug_resources(config, sid)

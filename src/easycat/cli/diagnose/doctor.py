@@ -15,16 +15,17 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import math
 import os
 import re
-import secrets
 import shlex
 import sys
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 import typer
 from rich.markup import escape
@@ -45,6 +46,7 @@ class CheckResult:
     name: str
     status: str  # "ok" | "fail" | "skip"
     detail: str = ""
+    requirement: Literal["required", "optional", "unused", "not_applicable"] = "required"
     code: str = ""  # EASYCAT_Exxx when status == "fail"
     fix: str = ""  # one-liner suggestion shown to TTY users
 
@@ -53,12 +55,40 @@ class CheckResult:
             "name": self.name,
             "status": self.status,
             "detail": self.detail,
+            "requirement": self.requirement,
         }
         if self.code:
             payload["code"] = self.code
         if self.fix:
             payload["fix"] = self.fix
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class ScaffoldRequirements:
+    """Readiness requirements embedded by ``easycat init`` in pyproject.toml."""
+
+    template: str
+    required_env: tuple[str, ...]
+    optional_env: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FixResult:
+    """One explicit mutation attempted by ``doctor --fix``."""
+
+    action: Literal["create_directory"]
+    target: str
+    status: Literal["applied", "failed"]
+    detail: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "action": self.action,
+            "target": self.target,
+            "status": self.status,
+            "detail": self.detail,
+        }
 
 
 # ── Individual checks ─────────────────────────────────────────────
@@ -131,6 +161,107 @@ def _provider_env() -> dict[str, str]:
 
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCAFFOLD_TABLE_HEADER = "[tool.easycat.scaffold]"
+
+
+def _load_scaffold_requirements(
+    path: Path = Path("pyproject.toml"),
+) -> ScaffoldRequirements | None:
+    """Load generated-project requirements, or return ``None`` outside a scaffold.
+
+    EasyCat-generated projects carry a small metadata table in ``pyproject.toml``.
+    Reading that table lets the ordinary README preflight command validate the
+    project's complete required environment, including non-provider settings such
+    as Twilio's public stream URL and auth token. Generic projects remain untouched.
+    """
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"could not read {path}: {exc}") from exc
+    if _SCAFFOLD_TABLE_HEADER not in text:
+        return None
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"{path} has invalid TOML: {exc}") from exc
+
+    scaffold = data.get("tool", {}).get("easycat", {}).get("scaffold")
+    if not isinstance(scaffold, dict):
+        raise ValueError(f"{path} {_SCAFFOLD_TABLE_HEADER} must be a table")
+    template = scaffold.get("template")
+    required_env = scaffold.get("required_env")
+    optional_env = scaffold.get("optional_env", [])
+    if not isinstance(template, str) or not template.strip():
+        raise ValueError(f"{path} scaffold template must be a non-empty string")
+    if not isinstance(required_env, list) or not all(
+        isinstance(name, str) and _ENV_NAME_RE.match(name) for name in required_env
+    ):
+        raise ValueError(f"{path} scaffold required_env must be an array of env-var names")
+    if not isinstance(optional_env, list) or not all(
+        isinstance(name, str) and _ENV_NAME_RE.match(name) for name in optional_env
+    ):
+        raise ValueError(f"{path} scaffold optional_env must be an array of env-var names")
+    required_names = tuple(dict.fromkeys(required_env))
+    optional_names = tuple(dict.fromkeys(optional_env))
+    overlap = sorted(set(required_names) & set(optional_names))
+    if overlap:
+        raise ValueError(
+            f"{path} scaffold env vars cannot be both required and optional: " + ", ".join(overlap)
+        )
+    return ScaffoldRequirements(
+        template=template,
+        required_env=required_names,
+        optional_env=optional_names,
+    )
+
+
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        "...",
+        "changeme",
+        "change-me",
+        "change_me",
+        "replace-me",
+        "replace_me",
+        "placeholder",
+        "todo",
+    }
+)
+_PLACEHOLDER_MARKERS = (
+    "your-key",
+    "your_key",
+    "your-api-key",
+    "your_api_key",
+    "your-auth-token",
+    "your_auth_token",
+    "your-twilio",
+    "your_twilio",
+    "://your-public-host",
+    "://example.",
+)
+
+
+def _looks_like_placeholder(value: str | None) -> bool:
+    """Return whether a non-empty env value is an obvious example sentinel."""
+    if not has_usable_credential(value):
+        return False
+    normalized = str(value).strip().casefold()
+    return (
+        normalized in _PLACEHOLDER_VALUES
+        or normalized.startswith(("your-", "your_", "<"))
+        or normalized.endswith(">")
+        or any(marker in normalized for marker in _PLACEHOLDER_MARKERS)
+    )
+
+
+def _env_value_state(value: str | None) -> str:
+    if not has_usable_credential(value):
+        return "missing"
+    if _looks_like_placeholder(value):
+        return "placeholder"
+    return "usable"
 
 
 def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
@@ -180,7 +311,172 @@ def _temporary_env(values: dict[str, str]) -> Iterator[None]:
                 os.environ[key] = value
 
 
-def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
+def _missing_provider_result(
+    provider: str,
+    var: str,
+    *,
+    state: str,
+    requirement: Literal["required", "optional"] = "required",
+) -> CheckResult:
+    detail = f"{var} looks like a placeholder" if state == "placeholder" else f"{var} is not set"
+    return CheckResult(
+        name=f"env_{provider}",
+        status="fail",
+        detail=detail,
+        requirement=requirement,
+        code="EASYCAT_E203",
+        fix=(
+            f"Set {var} to a real credential: `export {var}=...`, or fill it in "
+            "inside the project `.env` and rerun `easycat doctor --env-file .env`."
+        ),
+    )
+
+
+def _scaffold_env_value_error(var: str, value: str) -> str | None:
+    """Return the generated runtime's numeric validation error, if any."""
+    if var in {"TWILIO_WS_PORT", "TWILIO_MAX_SESSIONS"}:
+        try:
+            parsed_int = int(value)
+        except ValueError:
+            parsed_int = 0
+        if var == "TWILIO_WS_PORT" and not 1 <= parsed_int <= 65_535:
+            return "TWILIO_WS_PORT must be an integer from 1 to 65535"
+        if var == "TWILIO_MAX_SESSIONS" and parsed_int <= 0:
+            return "TWILIO_MAX_SESSIONS must be a positive integer"
+
+    if var in {
+        "TWILIO_START_TIMEOUT_S",
+        "TWILIO_DRAIN_TIMEOUT_S",
+        "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+    }:
+        try:
+            parsed_float = float(value)
+        except ValueError:
+            parsed_float = float("nan")
+        if var == "TWILIO_START_TIMEOUT_S":
+            valid = math.isfinite(parsed_float) and parsed_float > 0
+        else:
+            valid = math.isfinite(parsed_float) and parsed_float >= 0
+        if not valid:
+            if var == "TWILIO_START_TIMEOUT_S":
+                return f"{var} must be a finite number greater than zero"
+            return f"{var} must be a finite non-negative number"
+    return None
+
+
+def _check_scaffold_env_var(
+    var: str,
+    *,
+    requirement: Literal["required", "optional"],
+) -> CheckResult:
+    value = os.getenv(var)
+    state = _env_value_state(value)
+    detail: str | None = None
+    if state == "missing":
+        if requirement == "optional":
+            return CheckResult(
+                name=f"env_{var.casefold()}",
+                status="skip",
+                detail=f"{var} not set (optional)",
+                requirement="optional",
+            )
+        detail = f"{var} is not set"
+    elif state == "placeholder":
+        detail = f"{var} looks like a placeholder"
+    elif var == "TWILIO_STREAM_URL" and not str(value).casefold().startswith("wss://"):
+        detail = "TWILIO_STREAM_URL must use wss://"
+    else:
+        detail = _scaffold_env_value_error(var, str(value))
+
+    name = f"env_{var.casefold()}"
+    if detail is None:
+        return CheckResult(
+            name=name,
+            status="ok",
+            detail=f"{var} set",
+            requirement=requirement,
+        )
+    return CheckResult(
+        name=name,
+        status="fail",
+        detail=detail,
+        requirement=requirement,
+        code="EASYCAT_E210",
+        fix=f"Set {var} to the real project value in `.env`, then rerun doctor.",
+    )
+
+
+def _provider_env_result(
+    provider: str,
+    var: str,
+    *,
+    state: str,
+    required: bool,
+    optional: bool,
+    requirements_scoped: bool,
+) -> tuple[CheckResult, bool]:
+    """Classify one hosted-provider credential and whether it is active."""
+    if requirements_scoped and not required and not optional:
+        detail = (
+            f"{var} set but unused by this scaffold" if state == "usable" else f"{var} not set"
+        )
+        return (
+            CheckResult(
+                name=f"env_{provider}",
+                status="skip",
+                detail=detail,
+                requirement="unused",
+            ),
+            False,
+        )
+    if state == "usable":
+        return (
+            CheckResult(
+                name=f"env_{provider}",
+                status="ok",
+                detail=f"{var} set",
+                requirement="required" if required else "optional",
+            ),
+            True,
+        )
+    if state == "placeholder" or required:
+        return (
+            _missing_provider_result(
+                provider,
+                var,
+                state=state,
+                requirement="required" if required else "optional",
+            ),
+            False,
+        )
+    if optional:
+        return (
+            CheckResult(
+                name=f"env_{provider}",
+                status="skip",
+                detail=f"{var} not set (optional)",
+                requirement="optional",
+            ),
+            False,
+        )
+    return (
+        CheckResult(
+            name=f"env_{provider}",
+            status="skip",
+            detail=f"{var} not set",
+            requirement="unused",
+        ),
+        False,
+    )
+
+
+def check_env_vars(
+    only_provider: str | None = None,
+    *,
+    required_env_names: tuple[str, ...] = (),
+    optional_env_names: tuple[str, ...] = (),
+    requirements_scoped: bool = False,
+) -> list[CheckResult]:
     # Scoped mode: user asked to verify a specific provider.  A missing
     # key for *that* provider must fail — otherwise `doctor --provider X`
     # can false-green when a different provider happens to be configured.
@@ -189,51 +485,51 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
         var = provider_env.get(only_provider)
         if var is None:
             return []
-        if has_usable_credential(os.getenv(var, "")):
-            return [CheckResult(name=f"env_{only_provider}", status="ok", detail=f"{var} set")]
-        return [
-            CheckResult(
-                name=f"env_{only_provider}",
-                status="fail",
-                detail=f"{var} is not set",
-                code="EASYCAT_E203",
-                fix=(
-                    f"Set {var}: `export {var}=...`, or load a project `.env` "
-                    "with `easycat doctor --env-file .env`."
-                ),
-            )
-        ]
+        state = _env_value_state(os.getenv(var))
+        if state == "usable":
+            return [
+                CheckResult(
+                    name=f"env_{only_provider}",
+                    status="ok",
+                    detail=f"{var} set",
+                    requirement="required",
+                )
+            ]
+        return [_missing_provider_result(only_provider, var, state=state)]
 
     results: list[CheckResult] = []
     any_set = False
+    required = set(required_env_names)
+    optional = set(optional_env_names)
     for provider, var in provider_env.items():
-        value = os.getenv(var, "")
-        if has_usable_credential(value):
-            any_set = True
-            results.append(CheckResult(name=f"env_{provider}", status="ok", detail=f"{var} set"))
-        else:
-            results.append(
-                CheckResult(
-                    name=f"env_{provider}",
-                    status="skip",
-                    detail=f"{var} not set",
-                )
-            )
+        result, active = _provider_env_result(
+            provider,
+            var,
+            state=_env_value_state(os.getenv(var, "")),
+            required=var in required,
+            optional=var in optional,
+            requirements_scoped=requirements_scoped,
+        )
+        results.append(result)
+        any_set = any_set or active
+    provider_vars = set(provider_env.values())
+    for var in required_env_names:
+        if var not in provider_vars:
+            results.append(_check_scaffold_env_var(var, requirement="required"))
+    for var in optional_env_names:
+        if var not in provider_vars:
+            results.append(_check_scaffold_env_var(var, requirement="optional"))
+
     if not any_set:
-        # Overall env var check fails only if ZERO API keys are configured —
-        # per-provider "skip" rows already show which ones are missing.
+        # No hosted key is a valid generic state: local and custom providers can
+        # be keyless. A selected scaffold/provider requirement already has a
+        # dedicated failed row above, while this aggregate remains informational.
         results.append(
             CheckResult(
                 name="env_any",
-                status="fail",
-                detail="no provider API keys set",
-                code="EASYCAT_E203",
-                fix=(
-                    "Set at least one of "
-                    + ", ".join(sorted(set(provider_env.values())))
-                    + ". If your keys are in `.env`, run "
-                    "`easycat doctor --env-file .env`."
-                ),
+                status="skip",
+                detail="no hosted provider API keys set (valid for keyless/local/custom setups)",
+                requirement="not_applicable",
             )
         )
     return results
@@ -251,15 +547,24 @@ _PROVIDER_PROBE_URL: dict[str, str] = {
 
 
 def check_provider_reachability(
-    only_provider: str | None = None, timeout: float = 2.0
+    only_provider: str | None = None,
+    timeout: float = 2.0,
+    *,
+    required_env_names: tuple[str, ...] = (),
+    optional_env_names: tuple[str, ...] = (),
+    requirements_scoped: bool = False,
 ) -> list[CheckResult]:
     import httpx
 
     results: list[CheckResult] = []
+    required = set(required_env_names)
+    scoped = required | set(optional_env_names)
     for provider, var in _provider_env().items():
         if only_provider and only_provider != provider:
             continue
-        if not has_usable_credential(os.getenv(var)):
+        if requirements_scoped and var not in scoped:
+            continue
+        if _env_value_state(os.getenv(var)) != "usable":
             # Skip probes for unconfigured providers; we only care that
             # the configured ones are reachable.
             continue
@@ -275,7 +580,13 @@ def check_provider_reachability(
                 CheckResult(
                     name=f"reach_{provider}",
                     status="ok",
-                    detail=f"{provider} reachable ({r.status_code})",
+                    detail=(
+                        f"{provider} network reachable (HTTP {r.status_code}); "
+                        "credential validity not checked"
+                    ),
+                    requirement=(
+                        "required" if only_provider is not None or var in required else "optional"
+                    ),
                 )
             )
         except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
@@ -284,6 +595,9 @@ def check_provider_reachability(
                     name=f"reach_{provider}",
                     status="fail",
                     detail=f"{provider}: {type(exc).__name__}",
+                    requirement=(
+                        "required" if only_provider is not None or var in required else "optional"
+                    ),
                     code="EASYCAT_E204",
                     fix=(
                         f"Check network connectivity, DNS, and provider status. HEAD {url} failed."
@@ -296,6 +610,9 @@ def check_provider_reachability(
                     name=f"reach_{provider}",
                     status="fail",
                     detail=f"{provider}: {exc}",
+                    requirement=(
+                        "required" if only_provider is not None or var in required else "optional"
+                    ),
                     code="EASYCAT_E204",
                     fix="Unexpected probe error — check network connectivity.",
                 )
@@ -321,12 +638,14 @@ def check_microphone() -> CheckResult:
             name="microphone",
             status="skip",
             detail="sounddevice not installed (only required for local transport)",
+            requirement="optional",
         )
     except OSError as exc:
         return CheckResult(
             name="microphone",
             status="fail",
             detail=f"sounddevice could not load PortAudio: {exc}",
+            requirement="optional",
             code="EASYCAT_E209",
             fix=PORTAUDIO_INSTALL_FIX,
         )
@@ -342,6 +661,7 @@ def check_microphone() -> CheckResult:
                 name="microphone",
                 status="fail",
                 detail="no default input device",
+                requirement="optional",
                 code="EASYCAT_E206",
                 fix=(
                     "macOS: grant mic access to the terminal. "
@@ -354,7 +674,12 @@ def check_microphone() -> CheckResult:
             name = info.get("name", "unknown") if isinstance(info, dict) else "unknown"
         except Exception:  # noqa: BLE001
             name = "available"
-        return CheckResult(name="microphone", status="ok", detail=f"default input: {name}")
+        return CheckResult(
+            name="microphone",
+            status="ok",
+            detail=f"default input: {name}",
+            requirement="optional",
+        )
     except Exception as exc:  # noqa: BLE001
         # Unexpected sounddevice errors (portaudio missing, etc.) are
         # reported as a skip because they don't invalidate the rest of
@@ -364,6 +689,7 @@ def check_microphone() -> CheckResult:
             name="microphone",
             status="skip",
             detail=f"sounddevice probe failed: {type(exc).__name__}",
+            requirement="optional",
         )
 
 
@@ -376,65 +702,52 @@ def _journal_dir() -> Path:
     return Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat")) / "journals"
 
 
-def _probe_journal_writable(path: Path) -> None:
-    """Write a short probe file without following attacker-created symlinks."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-
-    probe: Path | None = None
-    fd: int | None = None
-    try:
-        for _ in range(16):
-            candidate = path / f".doctor-write-probe-{secrets.token_hex(16)}"
-            try:
-                fd = os.open(candidate, flags, 0o600)
-            except FileExistsError:
-                continue
-            probe = candidate
-            break
-        else:
-            raise FileExistsError("could not allocate a unique journal write probe")
-
-        with os.fdopen(fd, "wb") as handle:
-            fd = None
-            handle.write(b"ok")
-    finally:
-        if fd is not None:
-            os.close(fd)
-        if probe is not None:
-            try:
-                probe.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
 def check_journal_writable() -> CheckResult:
-    """Verify the journal directory exists and is writable.
+    """Verify an existing journal directory is writable without creating it.
 
     A silently read-only journal dir is the highest-pain failure mode
     because the session looks healthy but loses every record; catching
     this at ``doctor`` time is the whole point of having E207 in the
-    registry.
+    registry. A missing directory is reported as an unverified skip: the
+    read-only default never mutates the checkout, while ``doctor --fix``
+    explicitly creates it and re-runs this probe.
     """
     path = _journal_dir()
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
+    if not path.exists():
+        existing_parent = path.parent
+        while not existing_parent.exists() and existing_parent != existing_parent.parent:
+            existing_parent = existing_parent.parent
+        if not existing_parent.is_dir():
+            return CheckResult(
+                name="journal_writable",
+                status="fail",
+                detail=f"cannot create {path}: {existing_parent} is not a directory",
+                code="EASYCAT_E207",
+                fix=f"choose a directory for EASYCAT_DATA_DIR, then mkdir -p {path}",
+            )
         return CheckResult(
             name="journal_writable",
-            status="fail",
-            detail=f"cannot create {path}: {exc}",
+            status="skip",
+            detail=f"{path} does not exist; writable state was not probed",
             code="EASYCAT_E207",
-            fix=f"mkdir -p {path} && chmod u+w {path}",
+            fix=f"easycat doctor --fix  # creates {path}",
         )
-    try:
-        _probe_journal_writable(path)
-    except OSError as exc:
+    if not path.is_dir():
         return CheckResult(
             name="journal_writable",
             status="fail",
-            detail=f"{path} is not writable: {exc}",
+            detail=f"{path} exists but is not a directory",
+            code="EASYCAT_E207",
+            fix=f"set EASYCAT_DATA_DIR to a writable directory; refusing to replace {path}",
+        )
+    # Keep the default diagnostic observational: permission inspection can
+    # produce a useful readiness answer without creating and deleting a probe
+    # file in a user's journal. ``--fix`` remains the only mutating path.
+    if not os.access(path, os.W_OK | os.X_OK):
+        return CheckResult(
+            name="journal_writable",
+            status="fail",
+            detail=f"{path} is not writable by the current process",
             code="EASYCAT_E207",
             fix=f"chmod u+w {path}",
         )
@@ -495,8 +808,14 @@ def check_onnxruntime() -> CheckResult:
             name="onnxruntime",
             status="skip",
             detail="onnxruntime not installed (smart-turn extra is optional)",
+            requirement="optional",
         )
-    return CheckResult(name="onnxruntime", status="ok", detail="onnxruntime importable")
+    return CheckResult(
+        name="onnxruntime",
+        status="ok",
+        detail="onnxruntime importable",
+        requirement="optional",
+    )
 
 
 def check_resampling_backend() -> CheckResult:
@@ -510,43 +829,119 @@ def check_resampling_backend() -> CheckResult:
                 "filtered linear fallback; install an audio extra such as "
                 "easycat[quickstart] for SoXR"
             ),
+            requirement="optional",
         )
     return CheckResult(
         name="audio_resampling",
         status="ok",
         detail=f"{backend} high-quality backend",
+        requirement="optional",
     )
 
 
 # ── Orchestration ────────────────────────────────────────────────
 
 
-def _apply_safe_fixes(results: list[CheckResult]) -> int:
+def _apply_safe_fixes(results: list[CheckResult]) -> list[FixResult]:
     """Apply narrow auto-fixes for failures marked safe to remediate.
 
-    Returns the number of fixes actually applied.  Only touches the
+    Returns a result for every attempted mutation. Only touches the
     journal directory today (``EASYCAT_E207``) because mkdir is the
     one class of fix that has no ambiguity, no user-data side effect,
     and no security implication.  Future entries here must meet the
     same bar.
     """
-    applied = 0
-    for result in results:
-        if result.code == "EASYCAT_E207":
-            try:
-                _journal_dir().mkdir(parents=True, exist_ok=True)
-                applied += 1
-            except OSError:
-                continue
-    return applied
+    path = _journal_dir()
+    should_create = (
+        any(
+            result.name == "journal_writable" and result.code == "EASYCAT_E207"
+            for result in results
+        )
+        and not path.exists()
+    )
+    if not should_create:
+        return []
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return [
+            FixResult(
+                action="create_directory",
+                target=str(path),
+                status="failed",
+                detail=str(exc),
+            )
+        ]
+    return [
+        FixResult(
+            action="create_directory",
+            target=str(path),
+            status="applied",
+            detail="created journal directory",
+        )
+    ]
 
 
-def _run_all_checks(only_provider: str | None, environment: str = "dev") -> list[CheckResult]:
+def _apply_requested_fixes(
+    results: list[CheckResult],
+    *,
+    only_provider: str | None,
+    environment: str,
+    scaffold: ScaffoldRequirements | None,
+) -> tuple[list[CheckResult], list[FixResult]]:
+    """Apply, report, and verify explicit ``--fix`` mutations."""
+    fix_results = _apply_safe_fixes(results)
+    for result in fix_results:
+        target = escape(result.target)
+        detail = escape(result.detail)
+        stderr_console.print(f"[dim]--fix {result.status}: {result.action} {target} ({detail})[/]")
+    if any(result.status == "applied" for result in fix_results):
+        stderr_console.print("[dim]--fix: re-running checks after remediation.[/]")
+        results = _run_all_checks(
+            only_provider=only_provider,
+            environment=environment,
+            scaffold=scaffold,
+        )
+    elif not fix_results:
+        stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
+    return results, fix_results
+
+
+def _run_all_checks(
+    only_provider: str | None,
+    environment: str = "dev",
+    scaffold: ScaffoldRequirements | None = None,
+) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_python_version())
     results.append(check_easycat_version())
-    results.extend(check_env_vars(only_provider=only_provider))
-    results.extend(check_provider_reachability(only_provider=only_provider))
+    if scaffold is not None:
+        results.append(
+            CheckResult(
+                name="scaffold",
+                status="ok",
+                detail=(
+                    f"{scaffold.template} ({len(scaffold.required_env)} required, "
+                    f"{len(scaffold.optional_env)} optional env vars)"
+                ),
+            )
+        )
+    results.extend(
+        check_env_vars(
+            only_provider=only_provider,
+            required_env_names=scaffold.required_env if scaffold is not None else (),
+            optional_env_names=scaffold.optional_env if scaffold is not None else (),
+            requirements_scoped=scaffold is not None,
+        )
+    )
+    results.extend(
+        check_provider_reachability(
+            only_provider=only_provider,
+            required_env_names=scaffold.required_env if scaffold is not None else (),
+            optional_env_names=scaffold.optional_env if scaffold is not None else (),
+            requirements_scoped=scaffold is not None,
+        )
+    )
     results.append(check_onnxruntime())
     results.append(check_resampling_backend())
     # The local microphone is only meaningful for the dev profile's
@@ -567,7 +962,12 @@ def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
 _STATUS_GLYPH = {"ok": "[green]✓[/]", "fail": "[red]✗[/]", "skip": "[dim]~[/]"}
 
 
-def _render_report(results: list[CheckResult], profile: str) -> None:
+def _render_report(
+    results: list[CheckResult],
+    profile: str,
+    *,
+    failed_fixes: int = 0,
+) -> None:
     stderr_console.print(f"[bold]EasyCat doctor[/] — {profile} profile")
     stderr_console.print()
     table = Table(show_header=False, box=None, padding=(0, 1))
@@ -598,7 +998,13 @@ def _render_report(results: list[CheckResult], profile: str) -> None:
     failed = sum(1 for r in results if r.status == "fail")
     skipped = sum(1 for r in results if r.status == "skip")
     total = passed + failed + skipped
-    if failed:
+    if failed_fixes:
+        fix_label = "fix" if failed_fixes == 1 else "fixes"
+        stderr_console.print(
+            f"[red]{failed} checks failed[/], [red]{failed_fixes} {fix_label} failed[/], "
+            f"{passed} passed, {skipped} skipped (of {total})."
+        )
+    elif failed:
         stderr_console.print(
             f"[red]{failed} failed[/], {passed} passed, {skipped} skipped (of {total})."
         )
@@ -653,7 +1059,15 @@ def doctor(
         )
 
     try:
-        allowed_env_names = set(provider_env.values())
+        scaffold = _load_scaffold_requirements() if only_provider is None else None
+    except ValueError as exc:
+        _doctor_usage_error(f"Invalid scaffold metadata: {exc}", json_output=json_output)
+
+    allowed_env_names = set(provider_env.values())
+    if scaffold is not None:
+        allowed_env_names.update(scaffold.required_env)
+        allowed_env_names.update(scaffold.optional_env)
+    try:
         env_values = (
             _parse_env_file(env_file, allowed_names=allowed_env_names)
             if env_file is not None
@@ -663,36 +1077,38 @@ def doctor(
         _doctor_usage_error(f"Invalid --env-file: {exc}", json_output=json_output)
 
     with _temporary_env(env_values):
-        results = _run_all_checks(only_provider=only_provider, environment=environment)
+        results = _run_all_checks(
+            only_provider=only_provider,
+            environment=environment,
+            scaffold=scaffold,
+        )
+        fix_results: list[FixResult] = []
 
         if fix:
             # ``--fix`` handles the narrow, safe remediations: creating the
             # journal directory (E207).  API-key and mic-permission fixes
             # stay manual — no CLI should be writing to ``~/.bashrc`` or
             # flipping macOS privacy prompts on the user's behalf.
-            applied = _apply_safe_fixes(results)
-            if applied:
-                stderr_console.print(
-                    f"[dim]--fix applied {applied} remediation(s); re-running checks.[/]"
-                )
-                results = _run_all_checks(only_provider=only_provider, environment=environment)
-            else:
-                stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
-
-        if json_output:
-            failed = any(r.status == "fail" for r in results)
-            emit_json(
-                json_envelope(
-                    "doctor",
-                    status="error" if failed else "ok",
-                    environment=environment,
-                    checks=[r.as_dict() for r in results],
-                )
+            results, fix_results = _apply_requested_fixes(
+                results,
+                only_provider=only_provider,
+                environment=environment,
+                scaffold=scaffold,
             )
-        else:
-            _render_report(results, profile=environment)
 
-    failed = any(r.status == "fail" for r in results)
+        failed_fixes = sum(result.status == "failed" for result in fix_results)
+        failed = any(r.status == "fail" for r in results) or failed_fixes > 0
+        if json_output:
+            fields: dict[str, Any] = {
+                "environment": environment,
+                "checks": [r.as_dict() for r in results],
+            }
+            if fix:
+                fields["fixes"] = [result.as_dict() for result in fix_results]
+            emit_json(json_envelope("doctor", status="error" if failed else "ok", **fields))
+        else:
+            _render_report(results, profile=environment, failed_fixes=failed_fixes)
+
     raise typer.Exit(1 if failed else 0)
 
 

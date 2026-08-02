@@ -54,12 +54,33 @@ The source change from chapter 0 is the final line: instead of fixing
 
 ## Four modes, four boundaries
 
-| Mode | EasyCat owns | You connect with | Default listener |
-|---|---|---|---|
-| `local` | One mic/speaker session | The machine's audio devices | None |
-| `browser` | WebRTC signaling, Opus audio, and a bundled client | The printed browser URL | `127.0.0.1:8080` |
-| `websocket` | Per-client PCM/JSON sessions | Your own WebSocket client | `127.0.0.1:8765` |
-| `twilio` | TwiML HTTP and media-stream listeners | A configured Twilio number | HTTP `:8000`, media `:8766` |
+These are the defaults all wrappers resolve. An explicit `agent=`, `stt=`,
+`tts=`, or `vad=` has the same meaning in `VoiceApp`, an `EasyConfig` preset,
+and `create_session`; `run` only adds lifecycle ownership and terminal
+feedback. Network listeners and live provider calls never begin during config
+resolution.
+
+| Entry / mode | Agent | STT / TTS | VAD | Transport and session ownership | Credentials | Feedback and live effects |
+|---|---|---|---|---|---|---|
+| `VoiceApp(...).run("local")` / `EasyConfig.mic()` | Explicit `agent=` is required before session creation | Explicit specs win; otherwise OpenAI Realtime STT + OpenAI TTS | `VADConfig(backend="auto")`; Smart Turn defaults on unless STT has native endpointing | Local mic/speaker; one EasyCat-owned session | Default chain uses `OPENAI_API_KEY`; selected providers use their catalogued keys | TTY feedback is automatic; opens audio devices and live provider calls can be billable |
+| `VoiceApp(...).run("browser")` / `EasyConfig.browser()` | Same resolution | Same resolution | Same resolution | WebRTC listener and one fresh session per peer; echo cancellation defaults on | Provider keys plus a serve token for non-loopback binds | Prints the browser URL; live provider calls can be billable |
+| `VoiceApp(...).run("websocket")` / `EasyConfig(transport=WebSocketTransportConfig())` | Same resolution | Same resolution | Same resolution | PCM/JSON WebSocket listener and one fresh session per client | Provider keys plus a serve token for non-loopback binds | Headless server; live provider calls can be billable |
+| `VoiceApp(...).run("twilio")` / `EasyConfig.phone()` | Same resolution | Same resolution | Same resolution | TwiML + media listeners and one fresh session per call | Provider keys, `TWILIO_STREAM_URL`, and `TWILIO_AUTH_TOKEN` | Receives real calls; telephony and provider usage can be billable |
+| `create_session(config)` | Uses exactly the config's resolved agent | Uses exactly the config's resolved provider descriptors | Uses exactly the config's resolved VAD/turn policy | Returns one unstarted caller-owned session | Validates configuration; creates clients but does not start streaming | No automatic terminal feedback and no media flow until `start()` |
+| `easycat console` | Built-in offline echo unless `--live` is explicit | Not applicable in offline mode | Not applicable | Text REPL | No key offline; live mode requires its selected provider key | Offline by default; `--live` is the explicit network/billable boundary |
+
+Inspect the common path before startup:
+
+```python
+preview = app.resolve_config("browser")
+print(type(preview.stt).__name__, type(preview.tts).__name__)
+print(type(preview.vad).__name__, type(preview.transport).__name__)
+```
+
+`resolve_config()` performs descriptor/default/credential validation but creates
+no session, provider client, audio device, or listener. A custom
+`config_factory` needs a real `transport=` argument because EasyCat will not
+invoke application code with a fake transport merely to inspect it.
 
 ### Local
 

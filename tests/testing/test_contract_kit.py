@@ -74,7 +74,12 @@ class _KitSTT:
             yield event
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "kit-stt"}
+        return {
+            "provider": "kit-stt",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _KitTTS:
@@ -92,7 +97,12 @@ class _KitTTS:
         pass
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "kit-tts"}
+        return {
+            "provider": "kit-tts",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _KitVAD:
@@ -111,7 +121,12 @@ class _KitVAD:
         pass
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "kit-vad"}
+        return {
+            "provider": "kit-vad",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _KitTransport:
@@ -136,7 +151,12 @@ class _KitTransport:
         pass
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "kit-transport"}
+        return {
+            "provider": "kit-transport",
+            "model": "unknown",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _KitBridge:
@@ -339,7 +359,10 @@ async def test_version_info_test_rejects_leaked_secret_values() -> None:
 
     class _LeakySTT(_KitSTT):
         def version_info(self) -> dict[str, str]:
-            return {"provider": "kit-stt", "session": leaked_secret}
+            return {
+                **super().version_info(),
+                "session": leaked_secret,
+            }
 
     suite = _KitSTTSuite()
     with pytest.raises(pytest.fail.Exception, match="sensitive") as exc_info:
@@ -361,6 +384,26 @@ async def test_version_info_test_rejects_missing_provider_without_echoing_mappin
 
     assert leaked_secret not in str(exc_info.value)
     assert "api_key" not in str(exc_info.value)
+
+
+async def test_version_info_test_rejects_missing_diagnostic_fields() -> None:
+    class _IncompleteSTT(_KitSTT):
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "kit-stt", "model": "offline"}
+
+    suite = _KitSTTSuite()
+    with pytest.raises(pytest.fail.Exception, match="api_version, sdk_version"):
+        await suite.test_version_info_is_a_redacted_string_mapping(_IncompleteSTT())
+
+
+async def test_version_info_test_rejects_empty_required_field() -> None:
+    class _EmptyModelSTT(_KitSTT):
+        def version_info(self) -> dict[str, str]:
+            return {**super().version_info(), "model": ""}
+
+    suite = _KitSTTSuite()
+    with pytest.raises(pytest.fail.Exception, match="must be a non-empty str"):
+        await suite.test_version_info_is_a_redacted_string_mapping(_EmptyModelSTT())
 
 
 async def test_tts_suite_rejects_stream_without_audio() -> None:

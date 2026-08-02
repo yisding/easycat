@@ -75,16 +75,30 @@ actually relies on. The `@runtime_checkable` protocols in
 member names—not callability, async behavior, signatures, or return types—so
 do not use it as a provider acceptance test. Each extending page shows the
 matching suite and any surface-specific knobs.
+EasyCat's installed pytest plugin registers the suite's `contract` marker, so
+external projects can keep `strict_markers = true` without duplicating marker
+configuration.
 
 ## Scaffolding an external provider package
 
-`easycat init` ships a `provider` template that generates a standalone
-package skeleton — `pyproject.toml`, a Protocol-conforming provider with a
-config dataclass, a conformance test, an `easycat.vad_providers` entry point,
-and a runnable demo that selects `vad="energy"` through `EasyConfig`:
+`easycat init` ships one focused package starter per speech surface. Every
+starter generates `pyproject.toml`, a typed config, a structural provider,
+the matching lazy-discovery entry point, declared capabilities, an offline
+contract suite, complete version metadata, and an opt-in live-test checklist:
+
+| Surface | Template | Entry-point group | Offline example |
+| --- | --- | --- | --- |
+| STT | `provider-stt` | `easycat.stt_providers` | deterministic final transcript |
+| TTS | `provider-tts` | `easycat.tts_providers` | deterministic PCM16 tone |
+| VAD | `provider` | `easycat.vad_providers` | RMS energy gate |
+
+`provider` remains the VAD template name for compatibility. Choose the
+surface explicitly for new STT/TTS packages:
 
 ```bash
-uv run easycat init my-provider --template provider
+uv run easycat init my-stt --template provider-stt
+uv run easycat init my-tts --template provider-tts
+uv run easycat init my-vad --template provider
 ```
 
 Compare it with the other starting points via
@@ -97,7 +111,9 @@ catalog.
 ```bash
 uv run easycat docs --audience provider-maintainers        # provider-author route map
 uv run easycat docs --audience provider-maintainers --json # same map for automation
-uv run easycat init my-provider --template provider        # external package skeleton
+uv run easycat init my-stt --template provider-stt         # external STT package
+uv run easycat init my-tts --template provider-tts         # external TTS package
+uv run easycat init my-vad --template provider             # external VAD package
 uv run python examples/custom_transport.py                 # runnable custom transport
 uv run pytest tests/test_public_api.py                     # guard the public surfaces
 uv run pytest tests/contracts                              # offline protocol contracts

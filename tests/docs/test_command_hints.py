@@ -44,7 +44,8 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "docs/teaching/PROGRESS.md": (
             "uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence"
         ),
-        "README.md#cli": "easycat init --list-templates --json",
+        "docs/install.md": "uv sync --extra quickstart --group dev",
+        "docs/cli.md": "easycat init --list-templates --json",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
         "CLAUDE.md": "uv run pytest tests/install/test_install_guidance.py",
@@ -66,23 +67,27 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
-    assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
-    assert "easycat docs --verbose" in entries["README.md#cli"].get("commands", ())
+    assert "easycat doctor --json" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --verbose" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat init my-agent --easycat-git URL --easycat-git-rev REV" in entries[
+        "docs/cli.md"
+    ].get("commands", ())
+    assert (
+        "uv run easycat init my-agent --easycat-git "
+        "https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>"
+        in entries["docs/install.md"].get("commands", ())
+    )
     assert "easycat docs --verbose" in entries["docs/README.md"].get("commands", ())
-    assert "easycat docs --audience learners" in entries["README.md#cli"].get("commands", ())
-    assert "easycat docs --audience learners --json" in entries["README.md#cli"].get(
+    assert "easycat docs --audience learners" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience learners --json" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience app-builders" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience app-builders --json" in entries["docs/cli.md"].get(
         "commands", ()
     )
-    assert "easycat docs --audience app-builders" in entries["README.md#cli"].get("commands", ())
-    assert "easycat docs --audience app-builders --json" in entries["README.md#cli"].get(
-        "commands", ()
-    )
-    assert "easycat docs --audience operators" in entries["README.md#cli"].get("commands", ())
-    assert "easycat docs --audience operators --json" in entries["README.md#cli"].get(
-        "commands", ()
-    )
-    assert "easycat docs --audience maintainers" in entries["README.md#cli"].get("commands", ())
-    assert "easycat docs --audience maintainers --json" in entries["README.md#cli"].get(
+    assert "easycat docs --audience operators" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience operators --json" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience maintainers" in entries["docs/cli.md"].get("commands", ())
+    assert "easycat docs --audience maintainers --json" in entries["docs/cli.md"].get(
         "commands", ()
     )
     assert "uv run easycat init --list-templates" in entries["README.md#choose-your-path"].get(

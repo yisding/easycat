@@ -257,10 +257,15 @@ incorrectly counted as a failure; the summary line diverging from
 the per-row statuses.
 
 **Checks.**
-- With no API keys: Python/EasyCat pass; env_* rows skip; env_any
-  fails with `EASYCAT_E203`; overall exit 1.
+- With no API keys in a generic project: env_* rows and env_any skip;
+  keyless/local/custom setups remain valid and the overall run can pass.
 - With one API key: corresponding env_* row passes; reachability
-  probe fires (network stubbed) and passes.
+  probe fires (network stubbed), reports network liveness, and explicitly
+  does not claim credential validity.
+- Obvious example credentials fail without issuing a network probe.
+- Generated scaffold metadata makes required env checks project-aware;
+  Twilio projects validate the stream URL and auth token as well as the
+  provider key.
 - With a probe failure (stubbed `httpx.head`): reachability row
   fails with `EASYCAT_E204`, exit 1.
 - `--provider openai` filters reachability so other providers are

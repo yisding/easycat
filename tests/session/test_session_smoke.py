@@ -134,6 +134,12 @@ class SmokeNoiseReducer:
         return chunk
 
 
+def test_session_requires_an_explicit_config() -> None:
+    """The constructor must not advertise a default that immediately fails validation."""
+    with pytest.raises(TypeError, match="config"):
+        Session()  # type: ignore[call-arg]
+
+
 def test_session_from_providers_builds_raw_provider_session():
     """Advanced callers can wire provider instances without SessionConfig."""
     transport = SmokeTransport()

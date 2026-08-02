@@ -1,5 +1,11 @@
 # EasyConfig Field Reference
 
+Configuration, provider-selection, and credential failures share the public
+`EasyCatError` boundary. Catch that base when one recovery path should handle
+all construction failures; catch `EasyConfigError` when invalid field values
+need separate treatment. `EasyConfigError` remains a `ValueError` for existing
+callers and carries code `EASYCAT_E105`.
+
 This page is the handwritten reference for every `EasyConfig` field. It is kept honest
 by `tests/docs/test_route_contracts.py::test_easyconfig_reference_tracks_config_fields`,
 which compares each section against the live dataclass fields — the same
@@ -21,6 +27,13 @@ the session through `create_session`. The
 high-level `VoiceApp(agent=..., stt=..., tts=...)` fields below are forwarded
 into the chosen preset. See the [public API contract](../public-api.md) for the
 `from easycat import VoiceApp` entry point.
+
+`create_session(config)` treats the mutable dataclass as a specification: it
+copies build-normalized fields and per-session collections before allocating
+runtime collaborators. Reusing one descriptor-based config therefore does not
+share turn-manager state or rewrite the caller's object. A caller-supplied live
+provider, transport, or agent instance is intentionally not cloned; inject a
+factory/config descriptor when each session needs a separately owned client.
 
 ## Construction Fields
 
@@ -92,10 +105,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `openai_api_key` — explicit OpenAI key for the default STT/TTS chain;
   falls back to the `OPENAI_API_KEY` environment variable.
 - `stt` — speech-to-text selection: a shortcut string such as
-  `"deepgram/flux"`, a provider config dataclass, or a live `STTProvider`
-  instance. Unset → OpenAI realtime STT.
-- `tts` — text-to-speech selection: shortcut string, config dataclass, or
-  live `TTSProvider` instance. Unset → OpenAI TTS.
+  `"deepgram/flux"`, a provider config dataclass, a named
+  `STTProviderConfig`, or a live `STTProvider` instance. Unset → OpenAI
+  realtime STT.
+- `tts` — text-to-speech selection: shortcut string, config dataclass, named
+  `TTSProviderConfig`, or live `TTSProvider` instance. Unset → OpenAI TTS.
 - `vad` — `VADConfig` or a live `VADProvider`; backend auto-resolves
   Silero → FunASR → TEN → Krisp unless forced via `VADConfig.backend`.
 - `noise_reduction` — `NoiseReducerConfig` or live `NoiseReducer`; backend

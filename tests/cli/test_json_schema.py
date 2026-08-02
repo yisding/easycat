@@ -147,6 +147,7 @@ def test_explain_usage_error_envelope(cli: CliRunner) -> None:
 
 def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(init_module, "_editable_easycat_source", lambda: None)
     result = cli.invoke(
         app,
         [
@@ -166,6 +167,9 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["files"], list)
     assert isinstance(payload["agent_lines"], int)
     assert isinstance(payload["git"], bool)
+    assert payload["easycat_source"] is None
+    assert payload["easycat_git"] is None
+    assert payload["easycat_git_rev"] is None
     assert payload["run_command"] == "uv run --env-file .env python agent.py"
     assert payload["check_command"] == "uv run ruff check agent.py"
     assert payload["fix_command"] == "uv run ruff check --fix agent.py"
@@ -333,14 +337,14 @@ def test_doctor_ok_envelope(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> 
         return _R()
 
     monkeypatch.setattr("httpx.head", fake_head)
-    result = cli.invoke(app, ["doctor", "--json"])
+    result = cli.invoke(app, ["doctor", "--provider", "openai", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "doctor")
     assert payload["environment"] == "dev"
     # Every check row has the required shape.
     for check in payload["checks"]:
-        assert "name" in check and "status" in check and "detail" in check
+        assert {"name", "status", "detail", "requirement"} <= set(check)
 
 
 def test_doctor_error_envelope(
@@ -353,7 +357,7 @@ def test_doctor_error_envelope(
         return _R()
 
     monkeypatch.setattr("httpx.head", fake_head)
-    result = cli.invoke(app, ["doctor", "--json"])
+    result = cli.invoke(app, ["doctor", "--provider", "openai", "--json"])
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "doctor", status="error")

@@ -42,11 +42,11 @@ def test_optional_extra_guidance_uses_current_uv_commands() -> None:
     )
 
 
-def test_pyproject_allows_uv_patch_upgrades_within_the_audited_minor() -> None:
-    """Patch releases may advance without silently crossing uv minor releases."""
+def test_pyproject_allows_the_audited_uv_minor_releases() -> None:
+    """Contributor uv accepts the two minors verified by CI and the lockfile."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.0,<0.12.0"
+    assert pyproject["tool"]["uv"]["required-version"] == ">=0.11.0,<0.13.0"
 
 
 @pytest.mark.parametrize(
@@ -102,12 +102,9 @@ def test_optional_extra_guidance_references_known_extras() -> None:
     )
 
 
-def test_readme_optional_dependency_list_has_copyable_install_commands() -> None:
-    """The optional-dependency list should expose every non-meta repo extra."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    optional_block = readme.split("Optional dependencies you may need depending on", 1)[1].split(
-        "## CLI", 1
-    )[0]
+def test_install_guide_has_copyable_commands_for_every_optional_dependency() -> None:
+    """The authoritative install guide should expose every non-meta repo extra."""
+    optional_block = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
     expected_extras = sorted(_known_extras() - {"all", "quickstart"})
 
     missing_commands = [
@@ -116,17 +113,14 @@ def test_readme_optional_dependency_list_has_copyable_install_commands() -> None
         if f"uv sync --extra {extra} --group dev" not in optional_block
     ]
 
-    assert not missing_commands, "README optional dependency list missing: " + ", ".join(
+    assert not missing_commands, "Install guide optional dependency list missing: " + ", ".join(
         missing_commands
     )
     assert "uv pip install krisp_audio" in optional_block
 
 
-def test_readme_documents_all_extra_exclusions() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    all_guidance = readme.split("For a broad downstream evaluation install", 1)[1].split(
-        "Cartesia TTS", 1
-    )[0]
+def test_install_guide_documents_all_extra_exclusions() -> None:
+    all_guidance = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
 
     assert "easycat[all,pydantic-ai]" in all_guidance
     assert "easycat[all,pydantic-ai-v2]" in all_guidance
@@ -216,12 +210,12 @@ def test_silero_guidance_uses_bundled_onnx_not_torch() -> None:
     """Silero install docs should not send newcomers to PyTorch."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     silero_deps = pyproject["project"]["optional-dependencies"]["silero-vad"]
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    install_guide = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
     stale: list[str] = []
 
     assert any(dep.startswith("onnxruntime") for dep in silero_deps)
     assert not any(dep.startswith("torch") for dep in silero_deps)
-    assert "no torch required" in readme
+    assert "no torch required" in install_guide
 
     for path in _iter_reader_guidance_files():
         text = path.read_text(encoding="utf-8")
@@ -332,10 +326,10 @@ def test_readme_cli_command_examples_are_locally_valid() -> None:
     assert not problems, "README.md CLI command examples are stale:\n" + "\n".join(problems)
 
 
-def test_readme_json_guidance_covers_schema_command_families() -> None:
-    """README automation guidance should route agents to each JSON command family."""
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    normalized_readme = re.sub(r"\s+", " ", readme)
+def test_cli_reference_routes_automation_to_schema_command_families() -> None:
+    """The CLI reference should route agents to each JSON command family."""
+    cli_reference = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
+    normalized_reference = re.sub(r"\s+", " ", cli_reference)
     schema_body = META_ENTRIES["json-schema"].body
 
     command_families = (
@@ -357,10 +351,10 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
 
     for schema_command in command_families:
         assert schema_command in schema_body
-    assert "`audience_filter`" in normalized_readme
-    assert "`available_audiences`" in normalized_readme
-    assert "`available_audience_filters`" in normalized_readme
-    assert "`audience_alias_note`" in normalized_readme
+    assert "`audience_filter`" in normalized_reference
+    assert "`available_audiences`" in normalized_reference
+    assert "`available_audience_filters`" in normalized_reference
+    assert "`audience_alias_note`" in normalized_reference
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:

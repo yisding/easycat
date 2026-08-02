@@ -32,6 +32,8 @@ def empty_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "DEEPGRAM_API_KEY",
         "ELEVENLABS_API_KEY",
         "CARTESIA_API_KEY",
+        "TWILIO_STREAM_URL",
+        "TWILIO_AUTH_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("NO_COLOR", "1")

@@ -170,6 +170,9 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
         "`async with session:`",
         "asyncio.to_thread(create_session, config)",
         "record_to",
+        "`await session.cancel_turn()`",
+        "`await session.reset_state()`",
+        "`await session.send_text(text)`",
     ):
         assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"
     for stale in (
@@ -179,6 +182,9 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
         "Session.close()",
         "session.destroy()",
         "Session.destroy()",
+        "`session.cancel_turn()`",
+        "`session.reset_state()`",
+        "`session.send_text(text)`",
     ):
         assert stale not in text
 
@@ -584,7 +590,9 @@ def test_extending_docs_route_matches_provider_author_commands() -> None:
     for command in (
         "uv run easycat docs --audience provider-maintainers",
         "uv run easycat docs --audience provider-maintainers --json",
-        "uv run easycat init my-provider --template provider",
+        "uv run easycat init my-stt --template provider-stt",
+        "uv run easycat init my-tts --template provider-tts",
+        "uv run easycat init my-vad --template provider",
         "uv run python examples/custom_transport.py",
         "uv run pytest tests/test_public_api.py",
         "uv run pytest tests/contracts",
@@ -647,6 +655,17 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
         documented_command = command.replace("PATH", "<path>")
         assert f"`{documented_command}`" in cli_section
         assert command in route_commands
+
+    for lifecycle_marker in (
+        "Artifact lifecycle and storage budget",
+        "50 journals",
+        "2 GiB",
+        "14 days",
+        'journal_retention="archive"',
+        'journal_retention="delete"',
+        "session.export_debug_bundle",
+    ):
+        assert lifecycle_marker in observability
 
     # The latency/diff/journal/tail commands are registered on cli/_app.py but
     # were absent from every docs route, so they never reached `docs --json` or

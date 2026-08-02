@@ -5,6 +5,15 @@ detection contract. The provider consumes `AudioChunk` objects and yields
 `VADStartSpeaking` / `VADStopSpeaking` events that drive the turn manager's
 state machine.
 
+Start an out-of-tree package with the compatibility-preserved VAD scaffold:
+
+```bash
+uv run easycat init my-vad --template provider
+```
+
+Use `provider-stt` or `provider-tts` for those speech surfaces; `provider`
+intentionally remains the VAD starter so existing automation does not break.
+
 ## The surface
 
 | Member | Purpose |

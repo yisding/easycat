@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, overload
 
 from easycat._net import is_loopback_host, normalize_auth_token
 
@@ -35,6 +35,72 @@ if TYPE_CHECKING:
     from easycat.transports.websocket import WebSocketConnectionTransport
 
 VoiceMode = Literal["local", "browser", "websocket", "twilio"]
+VoiceModeInput = Literal["local", "browser", "websocket", "twilio", "mic", "ws", "phone"]
+
+_LocalMode = Literal["local", "mic"]
+_BrowserMode = Literal["browser"]
+_WebSocketMode = Literal["websocket", "ws"]
+_TwilioMode = Literal["twilio", "phone"]
+
+
+class _VoiceConfigKwargs(TypedDict, total=False):
+    """Beginner-facing config fields shared by construction and local mode.
+
+    Provider and agent inputs intentionally remain open-ended: EasyCat accepts
+    registered third-party config objects and several optional agent-framework
+    specifications that cannot be expressed as one closed static union. The
+    finite field names and scalar policy values still get precise checking.
+    """
+
+    stt: Any
+    tts: Any
+    vad: Any
+    debug: Literal["off", "light", "full"]
+
+
+class _VoiceAppInitKwargs(_VoiceConfigKwargs, total=False):
+    host: str
+    port: int
+    serve_token: str | None
+    max_sessions: int
+
+
+class _LocalModeKwargs(_VoiceConfigKwargs, total=False):
+    agent: Any
+
+
+class _ServerModeKwargs(TypedDict, total=False):
+    host: str
+    port: int
+    serve_token: str | None
+    max_sessions: int
+    unsafe_allow_no_auth: bool
+
+
+class _BrowserModeKwargs(_ServerModeKwargs, total=False):
+    announce: bool
+
+
+class _WebSocketModeKwargs(_ServerModeKwargs):
+    pass
+
+
+class _TwilioModeKwargs(TypedDict, total=False):
+    host: str
+    media_port: int
+    http_host: str
+    http_port: int
+    stream_url: str | None
+    stream_token_secret: str | None
+    twilio_auth_token: str | None
+    trust_proxy_headers: bool | None
+    unsafe_allow_unsigned_webhooks: bool
+    max_sessions: int
+    start_timeout_s: float
+    public_twiml_url: str | None
+    drain_timeout_s: float
+    force_shutdown_timeout_s: float
+
 
 # Mode aliases resolve to their canonical name before any dispatch.
 _MODE_ALIASES: dict[str, VoiceMode] = {
@@ -140,13 +206,13 @@ def _is_shareable_spec(field: str, value: Any) -> bool:
     # Use the factory predicates so registered third-party extension configs
     # (not just the built-in ``STTConfig`` / ``TTSConfig`` unions) are accepted.
     if field == "stt":
-        from easycat.stt.factory import is_stt_config
+        from easycat.stt.factory import STTProviderConfig, is_stt_config
 
-        return is_stt_config(value)
+        return isinstance(value, STTProviderConfig) or is_stt_config(value)
     if field == "tts":
-        from easycat.tts.factory import is_tts_config
+        from easycat.tts.factory import TTSProviderConfig, is_tts_config
 
-        return is_tts_config(value)
+        return isinstance(value, TTSProviderConfig) or is_tts_config(value)
     if field == "vad":
         from easycat.vad import VADConfig
 
@@ -173,6 +239,37 @@ class VoiceApp:
     ``dev`` is owned by ``VoiceApp`` and is never forwarded into a preset.
     """
 
+    @overload
+    def __init__(
+        self,
+        agent: Any | None = None,
+        *,
+        config: None = None,
+        config_factory: None = None,
+        dev: bool = False,
+        **config_kwargs: Unpack[_VoiceAppInitKwargs],
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        agent: None = None,
+        *,
+        config: EasyConfig,
+        config_factory: None = None,
+        dev: bool = False,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        agent: None = None,
+        *,
+        config: None = None,
+        config_factory: Callable[[Any], EasyConfig],
+        dev: bool = False,
+    ) -> None: ...
+
     def __init__(
         self,
         agent: Any | None = None,
@@ -180,16 +277,17 @@ class VoiceApp:
         config: EasyConfig | None = None,
         config_factory: Callable[[Any], EasyConfig] | None = None,
         dev: bool = False,
-        **config_kwargs: Any,
+        **config_kwargs: object,
     ) -> None:
+        resolved_config_kwargs: dict[str, Any] = dict(config_kwargs)
         # ``agent`` is a high-level field; fold it into the kwargs bag so the
         # allow-list and mutual-exclusion rules treat it uniformly. ``agent`` is
         # a named parameter, so the language already rejects passing it both
         # positionally and by keyword (``TypeError``).
         if agent is not None:
-            config_kwargs["agent"] = agent
+            resolved_config_kwargs["agent"] = agent
 
-        unknown = set(config_kwargs) - _ALLOWED_CONFIG_FIELDS
+        unknown = set(resolved_config_kwargs) - _ALLOWED_CONFIG_FIELDS
         if unknown:
             allowed = sorted(_ALLOWED_CONFIG_FIELDS)
             raise ValueError(
@@ -205,9 +303,9 @@ class VoiceApp:
             styles.append("config")
         if config_factory is not None:
             styles.append("config_factory")
-        if config_kwargs:
+        if resolved_config_kwargs:
             # Name the offending high-level fields so the conflict is concrete.
-            fields = ", ".join(sorted(config_kwargs))
+            fields = ", ".join(sorted(resolved_config_kwargs))
             styles.append(f"high-level field(s) ({fields})")
         if len(styles) > 1:
             raise ValueError(
@@ -218,7 +316,7 @@ class VoiceApp:
 
         self._config = config
         self._config_factory = config_factory
-        self._config_kwargs = config_kwargs
+        self._config_kwargs = resolved_config_kwargs
         self.dev = dev
 
     def _forwardable_config_kwargs(self) -> dict[str, Any]:
@@ -246,7 +344,11 @@ class VoiceApp:
 
     # ── Public entry points ──────────────────────────────────────────
 
-    def session(self, mode: VoiceMode | None = None, **kwargs: Any) -> Session:
+    def session(
+        self,
+        mode: _LocalMode | None = None,
+        **kwargs: Unpack[_LocalModeKwargs],
+    ) -> Session:
         """Return one un-started, caller-owned :class:`Session`.
 
         Only valid for the single-session ``local`` mode. ``browser`` /
@@ -263,47 +365,155 @@ class VoiceApp:
             )
         return self._build_local_session(**kwargs)
 
-    async def serve(self, mode: VoiceMode | None = None, **kwargs: Any) -> None:
+    def resolve_config(
+        self,
+        mode: VoiceModeInput,
+        *,
+        transport: Any | None = None,
+    ) -> EasyConfig:
+        """Resolve one descriptor-only config without starting a session/server.
+
+        This is the preflight/inspection peer of :meth:`run`: provider
+        shortcuts, credentials, VAD, echo-cancellation, and transport defaults
+        are resolved and validated, but no provider client, audio device,
+        listener, or session is created. For a custom ``config_factory``, pass
+        the concrete transport the factory should inspect; EasyCat never calls
+        an application factory with a fabricated transport.
+        """
+        from easycat.config import EasyConfig
+
+        resolved = _normalize_mode(mode)
+        if self._config_factory is not None:
+            if transport is None:
+                raise ValueError(
+                    "resolve_config() cannot inspect a config_factory without a "
+                    "concrete transport; pass transport=... explicitly."
+                )
+            return self._config_factory(transport)
+        if resolved == "local":
+            if transport is not None:
+                return EasyConfig.mic(
+                    transport=transport,
+                    **self._forwardable_config_kwargs(),
+                )
+            return self._local_config()
+
+        # Enforce the same static-config/live-collaborator safety rules as the
+        # real per-connection server before presenting a preview as runnable.
+        factory = self._per_connection_factory(resolved)
+        if transport is not None:
+            return factory(transport)
+
+        forwarded = self._forwardable_config_kwargs()
+        if resolved == "browser":
+            transport_config, _unsafe = self._browser_transport_config()
+            return EasyConfig.browser(transport=transport_config, **forwarded)
+        if resolved == "websocket":
+            from easycat.transports.websocket import WebSocketTransportConfig
+
+            return EasyConfig(transport=WebSocketTransportConfig(), **forwarded)
+        return EasyConfig.phone(**forwarded)
+
+    @overload
+    async def serve(
+        self,
+        mode: _LocalMode,
+        **kwargs: Unpack[_LocalModeKwargs],
+    ) -> None: ...
+
+    @overload
+    async def serve(
+        self,
+        mode: _BrowserMode,
+        **kwargs: Unpack[_BrowserModeKwargs],
+    ) -> None: ...
+
+    @overload
+    async def serve(
+        self,
+        mode: _WebSocketMode,
+        **kwargs: Unpack[_WebSocketModeKwargs],
+    ) -> None: ...
+
+    @overload
+    async def serve(
+        self,
+        mode: _TwilioMode,
+        **kwargs: Unpack[_TwilioModeKwargs],
+    ) -> None: ...
+
+    async def serve(self, mode: VoiceModeInput, **kwargs: object) -> None:
         """Async entry point — run the app for *mode* until shutdown.
 
         This is the composable async verb (it never calls ``asyncio.run``;
         :meth:`run` is the sole loop owner). Use it from inside an existing
         event loop or to compose a ``VoiceApp`` from a higher-level server.
         """
-        resolved = _normalize_mode(mode or "browser")
+        mode_kwargs: dict[str, Any] = dict(kwargs)
+        resolved = _normalize_mode(mode)
         if resolved == "local":
-            await self._serve_local(**kwargs)
+            await self._serve_local(**mode_kwargs)
             return
         # Per-connection server modes build sessions downstream; launch the dev
         # registry UI once up front so the selector is ready as they register.
         self._arm_dev_registry()
         if resolved == "browser":
-            await self._serve_browser(**kwargs)
+            await self._serve_browser(**mode_kwargs)
         elif resolved == "websocket":
-            await self._serve_websocket(**kwargs)
+            await self._serve_websocket(**mode_kwargs)
         else:  # twilio
-            await self._serve_twilio(**kwargs)
+            await self._serve_twilio(**mode_kwargs)
 
-    def run(self, mode: VoiceMode | None = None, **kwargs: Any) -> None:
+    @overload
+    def run(
+        self,
+        mode: _LocalMode,
+        **kwargs: Unpack[_LocalModeKwargs],
+    ) -> None: ...
+
+    @overload
+    def run(
+        self,
+        mode: _BrowserMode,
+        **kwargs: Unpack[_BrowserModeKwargs],
+    ) -> None: ...
+
+    @overload
+    def run(
+        self,
+        mode: _WebSocketMode,
+        **kwargs: Unpack[_WebSocketModeKwargs],
+    ) -> None: ...
+
+    @overload
+    def run(
+        self,
+        mode: _TwilioMode,
+        **kwargs: Unpack[_TwilioModeKwargs],
+    ) -> None: ...
+
+    def run(self, mode: VoiceModeInput, **kwargs: object) -> None:
         """Synchronous entry point — the only method that owns the event loop.
 
         ``run()`` is the sole ``asyncio.run`` caller across ``VoiceApp`` (the
-        per-mode ``run_*`` helpers it delegates to own their own loop). Defaults
-        to the ``browser`` mode.
+        per-mode ``run_*`` helpers it delegates to own their own loop). The mode
+        is required so starting a local device, network listener, or phone
+        integration is always an explicit choice.
         """
-        resolved = _normalize_mode(mode or "browser")
+        mode_kwargs: dict[str, Any] = dict(kwargs)
+        resolved = _normalize_mode(mode)
         if resolved == "local":
-            self._run_local(**kwargs)
+            self._run_local(**mode_kwargs)
             return
         # Per-connection server modes build sessions downstream; launch the dev
         # registry UI once up front so the selector is ready as they register.
         self._arm_dev_registry()
         if resolved == "browser":
-            self._run_browser(**kwargs)
+            self._run_browser(**mode_kwargs)
         elif resolved == "websocket":
-            self._run_websocket(**kwargs)
+            self._run_websocket(**mode_kwargs)
         else:  # twilio
-            self._run_twilio(**kwargs)
+            self._run_twilio(**mode_kwargs)
 
     # ── Local mode ───────────────────────────────────────────────────
 

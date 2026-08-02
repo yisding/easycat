@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import partial
 from typing import Generic, TypeVar
 
@@ -14,6 +15,60 @@ from easycat.session._session import Session
 logger = logging.getLogger(__name__)
 
 TKey = TypeVar("TKey")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionStopFailure(Generic[TKey]):
+    """One session teardown failure captured by :meth:`SessionManager.stop_all`."""
+
+    key: TKey
+    exception: BaseException
+
+
+@dataclass(frozen=True, slots=True)
+class SessionStopReport(Generic[TKey]):
+    """Best-effort aggregate result returned by :meth:`SessionManager.stop_all`."""
+
+    attempted_keys: tuple[TKey, ...]
+    stopped_keys: tuple[TKey, ...]
+    failures: tuple[SessionStopFailure[TKey], ...]
+
+    @property
+    def ok(self) -> bool:
+        """Whether every attempted session stopped successfully."""
+        return not self.failures
+
+    @property
+    def failed_keys(self) -> tuple[TKey, ...]:
+        """Keys whose teardown raised or was cancelled."""
+        return tuple(failure.key for failure in self.failures)
+
+
+def log_session_stop_failures(
+    report: SessionStopReport[TKey],
+    *,
+    context: str,
+    log: logging.Logger,
+) -> bool:
+    """Log an aggregate stop failure with the retained keys and causes.
+
+    Returns ``True`` when the report contains failures so lifecycle owners can
+    keep their own resource ledgers and reject restart until a retry succeeds.
+    """
+    if report.ok:
+        return False
+    details = ", ".join(
+        f"{failure.key!r} ({type(failure.exception).__name__}: {failure.exception})"
+        for failure in report.failures
+    )
+    log.error(
+        "%s failed to stop %d of %d session(s); retained for retry: %s",
+        context,
+        len(report.failures),
+        len(report.attempted_keys),
+        details,
+    )
+    return True
 
 
 class SessionManager(Generic[TKey]):
@@ -147,17 +202,33 @@ class SessionManager(Generic[TKey]):
                 task.add_done_callback(partial(self._finish_stop, key, session))
             return operation[1], force_requested, operation[2]
 
-    async def stop_all(self, *, force: bool = False) -> None:
-        """Stop all sessions, retaining entries whose teardown did not finish."""
+    async def stop_all(self, *, force: bool = False) -> SessionStopReport[TKey]:
+        """Attempt every teardown and return per-session success/failure details.
+
+        A failure never short-circuits the remaining stop attempts. Sessions
+        whose teardown fails remain registered for a later retry, and the same
+        exceptions logged by the owned stop tasks are returned in ``failures``
+        so callers do not have to infer a partial sweep from log output or
+        :meth:`active_keys`.
+        """
         async with self._lock:
             keys = list(self._sessions)
         results = await asyncio.gather(
             *(self.remove(key, force=force) for key in keys),
             return_exceptions=True,
         )
-        # _finish_stop() consumes and logs each owned task's exception. Avoid
-        # emitting the same failure again from this aggregate wait.
-        _ = results
+        stopped: list[TKey] = []
+        failures: list[SessionStopFailure[TKey]] = []
+        for key, result in zip(keys, results, strict=True):
+            if isinstance(result, BaseException):
+                failures.append(SessionStopFailure(key=key, exception=result))
+            else:
+                stopped.append(key)
+        return SessionStopReport(
+            attempted_keys=tuple(keys),
+            stopped_keys=tuple(stopped),
+            failures=tuple(failures),
+        )
 
     def _finish_stop(
         self,
@@ -226,3 +297,11 @@ async def _await_owned_stop(task: asyncio.Task[None]) -> bool:
             return False
         return False
     return True
+
+
+__all__ = [
+    "SessionManager",
+    "SessionStopFailure",
+    "SessionStopReport",
+    "log_session_stop_failures",
+]

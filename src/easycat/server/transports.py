@@ -34,6 +34,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from easycat._numeric import is_finite_number
+from easycat.session_manager import SessionStopReport, log_session_stop_failures
 
 if TYPE_CHECKING:
     from easycat.session import Session
@@ -245,18 +246,31 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             timeout_s=_remaining_timeout(force_deadline),
             label="WebSocket server handlers",
         )
-        await self._bounded_cleanup(
+        sweep_completed, sweep_result = await self._bounded_cleanup(
             self.manager.stop_all(),
             timeout_s=_remaining_timeout(force_deadline),
             label="WebSocket sessions",
         )
+        sweep_error: RuntimeError | None = None
+        if isinstance(sweep_result, SessionStopReport) and log_session_stop_failures(
+            sweep_result,
+            context="WebSocket session shutdown",
+            log=logger,
+        ):
+            sweep_error = RuntimeError(
+                f"WebSocket session shutdown retained {len(sweep_result.failures)} session(s)"
+            )
         # Preserve these ownership ledgers when cancellation or an unexpected
-        # cleanup error aborts the sequence. A later drain can then still close
-        # the established sockets and reap their handlers.
-        self._sessions.clear()
-        self._connections.clear()
+        # cleanup error aborts the sequence or the manager retains a failed
+        # session. A later drain can then retry the manager-owned stop and still
+        # close the established sockets/reap their handlers.
+        if sweep_completed and sweep_error is None:
+            self._sessions.clear()
+            self._connections.clear()
         if listener_error is not None:
             raise listener_error
+        if sweep_error is not None:
+            raise sweep_error
 
     def _active_session_pairs(self) -> list[tuple[int, SessionT]]:
         return [
@@ -269,10 +283,13 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         *,
         timeout_s: float,
         label: str,
-    ) -> None:
-        completed = await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+    ) -> tuple[bool, object | None]:
+        future = asyncio.ensure_future(awaitable)
+        completed = await _await_with_hard_timeout(future, timeout_s=timeout_s)
         if not completed:
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
+            return False, None
+        return True, future.result()
 
 
 class CapacityGate(Generic[KeyT]):

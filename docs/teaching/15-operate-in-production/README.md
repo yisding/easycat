@@ -514,10 +514,12 @@ Key properties:
   is re-raised. If another session has already claimed the key, it is
   preserved. The session's own start path owns rollback of resources it
   opened before that interrupted start.
-- `stop_all()` gathers all sessions' `stop()` calls concurrently and
-  logs exceptions per session without raising. Successfully stopped
-  sessions are removed; failed or cancelled teardowns stay registered
-  for a later retry. Pass `force=True` for that final forced sweep.
+- `stop_all()` gathers all sessions' `stop()` calls concurrently and returns a
+  `SessionStopReport`; one failure never prevents the remaining attempts.
+  Inspect `report.failures` (or `report.ok`) instead of relying on logs alone.
+  Successfully stopped sessions are removed; failed or cancelled teardowns
+  stay registered for a later retry. Pass `force=True` for that final forced
+  sweep.
 - `connection(key, session)` is the context-manager sugar for
   `add` + `remove`.
 - Do not call `remove()` / `stop_all()` on a key while application code
@@ -530,10 +532,10 @@ active slots, duplicate-key rejection, ordinary and cancelled-start
 rollback, key reuse, and context-managed removal without opening a
 microphone. Its final `stop_all()` sweep also proves that every captured
 session is asked to stop, one stop failure does not abort the rest of
-the sweep, and the failed entry remains available for retry. The
-intentional failure is evidence under
-`stop_all.expected_error`, not a stray stderr log that looks like the probe
-itself failed.
+the sweep, and the failed entry remains available for retry. The structured
+result appears under `stop_all.report`; the intentional matching log is
+captured under `stop_all.expected_error` instead of leaking to stderr and
+making the probe itself look failed.
 
 A real Twilio server using exactly this shape lives in
 `examples/twilio_app.py`. Crack it open after this chapter.
@@ -613,10 +615,10 @@ $ uv run easycat
 EasyCat — voice bot framework
 
   Scaffold
-    console     Try EasyCat in your terminal with no API keys
+    console     Try the keyless offline console (--live explicitly enables a provider)
     init        Scaffold a new project from a template
-    doctor      Check API keys, optional extras, and provider reachability
-    serve       Serve the browser voice playground on localhost
+    doctor      Check local readiness, configured credentials, and provider network liveness
+    serve       Serve the browser playground or a manifest-backed VoiceServer
     plan        Show the provider/capability plan for a manifest profile
 
   Debug with the journal

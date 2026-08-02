@@ -16,4 +16,9 @@ dev = [
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+
+[tool.easycat.scaffold]
+template = "$TEMPLATE"
+required_env = $REQUIRED_ENV
+optional_env = $OPTIONAL_ENV
 $EASYCAT_SOURCES_BLOCK

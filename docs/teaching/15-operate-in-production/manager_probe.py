@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass, field
 
 from easycat import SessionManager
+from easycat.session_manager import SessionStopReport
 
 
 @dataclass
@@ -44,7 +45,9 @@ class BlockingStartSession(ProbeSession):
         await asyncio.Event().wait()
 
 
-async def _stop_all_with_captured_error(manager: SessionManager[str]) -> str:
+async def _stop_all_with_captured_error(
+    manager: SessionManager[str],
+) -> tuple[SessionStopReport[str], str]:
     error_output = io.StringIO()
     manager_logger = logging.getLogger("easycat.session_manager")
     previous_handlers = manager_logger.handlers
@@ -54,12 +57,12 @@ async def _stop_all_with_captured_error(manager: SessionManager[str]) -> str:
     manager_logger.setLevel(logging.ERROR)
     manager_logger.propagate = False
     try:
-        await manager.stop_all()
+        report = await manager.stop_all()
     finally:
         manager_logger.handlers = previous_handlers
         manager_logger.setLevel(previous_level)
         manager_logger.propagate = previous_propagate
-    return error_output.getvalue().strip()
+    return report, error_output.getvalue().strip()
 
 
 async def probe() -> dict[str, object]:
@@ -110,7 +113,7 @@ async def probe() -> dict[str, object]:
 
     await manager.add("sweep-healthy", sweep_healthy)  # type: ignore[arg-type]
     await manager.add("sweep-failing", sweep_failing)  # type: ignore[arg-type]
-    expected_stop_error = await _stop_all_with_captured_error(manager)
+    stop_report, expected_stop_error = await _stop_all_with_captured_error(manager)
 
     return {
         "active_together": active_together,
@@ -143,6 +146,16 @@ async def probe() -> dict[str, object]:
             "expected_error": expected_stop_error,
             "failed_slot_retained": manager.get("sweep-failing") is sweep_failing,
             "healthy_slot_released": manager.get("sweep-healthy") is None,
+            "report": {
+                "attempted_keys": stop_report.attempted_keys,
+                "failed_keys": stop_report.failed_keys,
+                "failures": [
+                    {"key": failure.key, "exception": str(failure.exception)}
+                    for failure in stop_report.failures
+                ],
+                "ok": stop_report.ok,
+                "stopped_keys": stop_report.stopped_keys,
+            },
             "start_calls": {
                 "sweep-failing": sweep_failing.start_calls,
                 "sweep-healthy": sweep_healthy.start_calls,

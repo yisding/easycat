@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 
 import pytest
 
@@ -180,6 +181,58 @@ async def test_runtime_drains_after_listener_close_failure() -> None:
     assert connection.close_calls == [(1001, "Server shutdown after drain")]
     assert "manager_stop_all" in events
     await asyncio.wait_for(handler, timeout=1)
+
+
+async def test_runtime_surfaces_failed_manager_sweep_and_retains_ledgers_for_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class RetryableSession:
+        def __init__(self) -> None:
+            self.fail_stop = True
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self, *, force: bool = False) -> None:
+            if self.fail_stop:
+                raise RuntimeError("retryable session failure")
+
+    events: list[str] = []
+    manager = SessionManager[int]()
+    server = _Server(events)
+    connection = _Connection(events)
+    session = RetryableSession()
+    key = id(connection)
+    await manager.add(key, session)  # type: ignore[arg-type]
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        session_factory=lambda _connection: session,
+    )
+    runtime._sessions[key] = session
+    runtime._connections[key] = connection
+
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(
+            RuntimeError,
+            match="WebSocket session shutdown retained 1 session",
+        ),
+    ):
+        await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert "WebSocket session shutdown failed to stop 1 of 1 session" in caplog.text
+    assert "retryable session failure" in caplog.text
+    assert manager.get(key) is session
+    assert runtime._sessions == {key: session}
+    assert runtime._connections == {key: connection}
+
+    session.fail_stop = False
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert manager.get(key) is None
+    assert runtime._sessions == {}
+    assert runtime._connections == {}
 
 
 async def test_cancelled_drain_preserves_connection_bookkeeping_for_retry() -> None:

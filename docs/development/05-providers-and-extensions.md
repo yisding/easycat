@@ -344,10 +344,13 @@ For an in-tree STT/TTS provider:
 8. update provider docs/examples without adding a second metadata table.
 
 For an out-of-tree provider, use direct injection first, then registration and
-entry points if named discovery is valuable. The scaffold command is:
+entry points if named discovery is valuable. Choose the scaffold matching the
+provider surface (`provider` remains the VAD name for compatibility):
 
 ```bash
-uv run easycat init my-provider --template provider
+uv run easycat init my-stt --template provider-stt
+uv run easycat init my-tts --template provider-tts
+uv run easycat init my-vad --template provider
 ```
 
 ## 5.12 Provider and Stage Pitfalls

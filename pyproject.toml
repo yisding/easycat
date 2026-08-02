@@ -147,7 +147,7 @@ all = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.31,<0.12.0"]
+requires = ["uv_build>=0.11.31,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -217,7 +217,7 @@ source-exclude = [
 # tool pin from each setup-uv step so lock generation remains reproducible;
 # --locked independently rejects dependency drift. Review both deliberately
 # before a uv minor-version upgrade.
-required-version = ">=0.11.0,<0.12.0"
+required-version = ">=0.11.0,<0.13.0"
 conflicts = [
     [
         { extra = "pydantic-ai" },
@@ -383,9 +383,10 @@ asyncio_mode = "auto"
 # intervals before it stops. Allow one replacement so a single crashed
 # worker does not abort the rest of the suite, while a second crash ends the
 # run instead of starting a long replacement cycle.
-# Tests that provision external SDKs, binaries, or services run only when
-# explicitly selected with ``-m integration_external``.
-addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_external"'
+# Tests that call live provider APIs or provision external SDKs, binaries, or
+# services run only when explicitly selected. Keeping both out of bare pytest
+# prevents credentials in a developer shell from turning a local run billable.
+addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_live and not integration_external"'
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true

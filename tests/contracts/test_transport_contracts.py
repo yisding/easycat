@@ -50,7 +50,12 @@ class _ContractTransport:
         await self._incoming.put(chunk)
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "contract-transport"}
+        return {
+            "provider": "contract-transport",
+            "model": "unknown",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 def test_transport_contract_matrix_has_rows() -> None:

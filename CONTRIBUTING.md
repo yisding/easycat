@@ -12,7 +12,7 @@ source tour. For compact architecture and repository rules, see
 ```bash
 uv sync --group dev        # install project + dev tools
 just                       # list every task (or read the justfile)
-just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
+just check                 # pre-commit + mypy + credential-free tests
 ```
 
 Run `uv run easycat docs` for the compact reader-facing route index, or
@@ -33,8 +33,8 @@ run `uv run easycat doctor` before debugging tests or examples. Use
 `uv run easycat doctor --env-file .env --json`) for parseable
 environment/check rows.
 
-Don't have [`just`](https://github.com/casey/just)? Every recipe is a one-liner
-you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
+Don't have [`just`](https://github.com/casey/just)? Every recipe has a complete
+raw equivalent in the table below. Install it with `uv tool install rust-just`,
 `brew install just`, `cargo install just`, or your distro's package manager.
 
 ## The development loop
@@ -44,9 +44,10 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
 | Full local test suite | `just test` | `uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"` |
+| Live provider suite (may be billable) | `just test-live` | `uv run pytest -m integration_live` |
 | Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky and not guard"` |
 | One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
-| Lint | `just lint` | `uv run ruff check .` |
+| Lint | `just lint` | `uv run ruff check . && uv run lint-imports` |
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
@@ -61,8 +62,14 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
 | Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
-| Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
+| Pre-PR gauntlet | `just check` | `uv run pre-commit run --all-files && uv run mypy src/easycat && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external"` |
+
+`just check` mirrors CI's core source-quality gates, but it is not a literal
+replay of the workflow: CI also covers the supported Python matrix, minimum
+dependency floors, validation artifact lanes, and built distributions. Run the
+change-specific validation or release lane below when those surfaces are in
+scope.
 
 The docs/onboarding guard table below is generated from the `justfile` by
 `uv run python scripts/regen_guard_commands.py`; edit the `guard-*` recipe
@@ -128,10 +135,11 @@ socket/port-binding tests. If you add tests that bind a **fixed** port (rather
 than port `0`), keep them in one module and prefer marking them
 `integration_socket` — the dedicated socket, stress, and contracts validation
 lanes stay serial.
-`just test` is the full local source of truth; it skips live and external
-integrations so xdist cannot duplicate paid session fixtures. Run those lanes
-explicitly and serially with `pytest -m integration_live` or
-`pytest -m integration_external`.
+Bare `uv run pytest`, `just test`, and `just check` exclude live and external
+integrations, so credentials in a developer's shell cannot accidentally turn a
+local run into billable provider traffic. Run those lanes explicitly and
+serially with `just test-live` / `uv run pytest -m integration_live` or
+`uv run pytest -m integration_external`.
 Always run coverage as `pytest --cov` — never
 `coverage run -m pytest -n auto`, which reports 0% under xdist.
 
@@ -185,8 +193,9 @@ collection. The full list lives in `pyproject.toml` under
 - `integration_socket` — needs localhost socket bind/connect (auto-skipped
   where the sandbox forbids binding; see `tests/conftest.py`).
 - `integration_live` — needs live provider/API endpoints, API keys, and
-  optional provider extras. Excluded from `just test` and `just check`; run
-  explicitly and serially with `pytest -m integration_live`.
+  optional provider extras. Excluded from bare `pytest`, `just test`, and
+  `just check`; run explicitly and serially with `just test-live` or
+  `uv run pytest -m integration_live`. These tests may incur provider charges.
 - `integration_external` — needs external local binaries, SDKs, or services
   without live provider API credentials. Excluded from bare `pytest`,
   `just test`, and `just check`; run explicitly with
@@ -315,13 +324,17 @@ EasyCat uses **registries**, not inheritance. To add a provider:
 1. **Implement** one provider per file under `src/easycat/stt/` or
    `src/easycat/tts/`, satisfying the `STTProvider` / `TTSProvider` Protocol
    in `src/easycat/providers.py`. Reuse `STTBase` / `TTSBase` plumbing.
-2. **Add a config dataclass** for the provider's options.
-3. **Register** the `(provider class, config class)` pair plus catalog
+2. **Add a config dataclass** for the provider's options, then add it to the
+   built-in `STTConfig` or `TTSConfig` typing union in the matching factory.
+   The union is for static typing; runtime extension dispatch remains catalog-based.
+3. **Register** one `ProviderSpec` containing the provider/config pair plus catalog
    metadata (credential env var, install extra, API domains — the
    `ProviderCatalog` rejects incomplete entries at import):
-   - STT: `_PROVIDER_TO_CONFIG` + metadata maps in `src/easycat/stt/factory.py`.
-   - TTS: `_PROVIDER_TO_CONFIG` (aliased `_PROVIDERS`) + metadata maps in
-     `src/easycat/tts/factory.py`.
+   - STT: `_CATALOG` in `src/easycat/stt/factory.py`.
+   - TTS: `_CATALOG` in `src/easycat/tts/factory.py`.
+
+   Do not edit `_PROVIDER_TO_CONFIG`, `_PROVIDERS`, or the metadata maps
+   directly; they are derived catalog views kept for compatibility.
 
    `easycat doctor`, `easycat init` scaffolding, validation provider
    markers, and redaction's sensitive-URL policy all derive from the
@@ -351,7 +364,9 @@ These bullets name the `just` recipes reviewers expect. If `just` is not install
 use the matching raw command from
 [the development loop](#the-development-loop).
 
-- `just check` is green (format + lint + tests).
+- `just check` is green. It covers the core local source gates: all pre-commit
+  hooks, whole-package mypy, and the credential-free local test suite. CI still
+  adds version matrices, dependency floors, validation artifacts, and builds.
 - New code is typed (Python `>=3.11`, typing-first). `mypy` is the
   authoritative type checker: `just typecheck` gates the whole package at
   zero errors (vendored `vad/_funasr_runtime` excluded), with stricter

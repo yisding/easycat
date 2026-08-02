@@ -66,7 +66,8 @@ _INIT_SCHEMA_BODY = """\
 
     {
       "schema_version": 1,
-      "template": "openai-agents" | "provider" |
+      "template": "openai-agents" | "provider" | "provider-stt" |
+                  "provider-tts" |
                   "pydantic-ai" | "pydantic-ai-workflow" |
                   "text-chat" | "twilio-phone" | "webrtc-browser",
       "stt": "<provider>/<model>",            // optional
@@ -77,7 +78,9 @@ _INIT_SCHEMA_BODY = """\
       "agent_instructions": "string",         // optional
       "tools": ["tool-name", ...],            // reserved; currently rejected
       "mcp_servers": ["stdio://...", ...],    // optional MCP URIs
-      "easycat_source": "path/to/easycat"     // optional local checkout path
+      "easycat_source": "path/to/easycat",    // optional local checkout path
+      "easycat_git": "https://host/org/easycat.git", // optional portable source
+      "easycat_git_rev": "commit-or-tag"       // optional Git revision
     }
 
 Required keys: `schema_version`, `template`.  Unknown keys are
@@ -88,12 +91,13 @@ templates, local microphone, browser WebRTC, and Twilio phone transports
 through separate templates, and MCP server URIs starting with
 `stdio://`, `sse://`, `http://`, or `https://`. Plain MCP names such as
 `"filesystem"` are rejected.
-`easycat_source` points the generated `pyproject.toml` at a local
-EasyCat checkout via a `[tool.uv.sources]` block (the `--easycat-source`
-flag overrides it). When omitted, editable/repo installs are
-auto-detected and wired the same way; published installs render no
-block. Pre-launch this is what makes a scaffold's `uv sync` resolve at
-all — `easycat` is not on PyPI yet.
+`easycat_source` / `--easycat-source` points the generated
+`pyproject.toml` at a local editable checkout. `easycat_git` /
+`--easycat-git` writes a portable Git-backed `[tool.uv.sources]` entry;
+pin it with `easycat_git_rev` / `--easycat-git-rev` for reproducible CI.
+Local and Git sources are mutually exclusive. When both source kinds are
+omitted, editable/repo installs retain local-path auto-detection; published
+installs render no block. Git URLs must not embed credentials.
 Reserved keys `llm` and `tools` are accepted by schema_version 1 so
 callers get a stable EASYCAT_E102 explanation; this release does not
 wire them into templates yet. Add LLM or tool setup directly in the
@@ -109,7 +113,8 @@ context. Each `catalog` row includes:
 (a `my-agent` preview sequence), `run_command`, `check_command`, and
 `fix_command`.
 Successful `easycat init NAME --json` also includes
-`next_step_commands`, an ordered
+`easycat_source`, `easycat_git`, and `easycat_git_rev` so automation can
+verify the rendered dependency source, plus `next_step_commands`, an ordered
 copy/sync/doctor/check/fix/docs/app-builder-docs/docs-json/json-schema/run
 normal-path sequence from the human success footer, plus `fix_command` for
 Ruff-fixable lint findings.
@@ -168,6 +173,7 @@ entry points include:
                          `command_note` explains installed creation, repo-root
                          creation, and post-scaffold command context
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
+  `easycat_source`, `easycat_git`, `easycat_git_rev`,
   `run_command`, `check_command`, `fix_command`, `next_step_commands`,
   `command_note` -
                          `easycat init NAME --json`
