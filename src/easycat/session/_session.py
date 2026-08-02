@@ -1361,6 +1361,11 @@ class Session:
             raise RuntimeError("Session.stop() requires a running asyncio task")
         if self._start_task is current_task:
             raise RuntimeError("Session.stop() cannot run reentrantly during start()")
+        if current_task.cancelling():
+            # Deliver a newly-pending cancellation before sampling baselines
+            # used to distinguish caller cancellation from a joined stop.
+            # A previously caught cancellation is not re-delivered here.
+            await asyncio.sleep(0)
 
         # Serialize the startup transaction against teardown, but release the
         # lock before the potentially long stop body so a force caller can
@@ -1407,10 +1412,11 @@ class Session:
                 self._stop_force = True
                 superseded_task.cancel()
                 break
+            cancellation_requests = current_task.cancelling()
             try:
                 await asyncio.shield(active_stop)
             except asyncio.CancelledError:
-                if current_task.cancelling():
+                if current_task.cancelling() > cancellation_requests:
                     raise
                 # The joined stop was superseded by another force caller.
                 # Re-read ownership and join its replacement.

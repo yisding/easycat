@@ -103,11 +103,16 @@ class _ConnectUntilStoppedClient:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.connected = False
+        self.connect_cancelled = False
         self.closed = False
 
     async def connect(self) -> None:
         self.started.set()
-        await self.release.wait()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.connect_cancelled = True
+            raise
         self.connected = True
 
     async def close(self) -> None:
@@ -134,6 +139,22 @@ async def test_connect_until_stopped_closes_when_stop_fires_first() -> None:
     assert await task is False
     assert not client.connected
     assert client.closed
+
+
+async def test_connect_until_stopped_cancellation_closes_and_reaps_connector() -> None:
+    client = _ConnectUntilStoppedClient()
+    task = asyncio.create_task(  # type: ignore[arg-type]
+        connect_until_stopped(client, asyncio.Event())
+    )
+    await client.started.wait()
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert client.connect_cancelled
+    assert client.closed
+    assert not client.connected
 
 
 class TestReconnectingWebSocket:
@@ -855,6 +876,29 @@ class TestReconnectingWebSocket:
 
         connect_fn.assert_awaited_once()
         candidate.close.assert_awaited_once()
+        assert ws._ws is None
+        assert ws._connected.is_set() is False
+        assert ws._ever_connected is False
+
+    async def test_reconnect_callback_failure_rolls_back_unprimed_candidate(self):
+        events_received = []
+        event_bus = EventBus()
+        event_bus.subscribe(ReconnectSuccess, events_received.append)
+        callback = AsyncMock(side_effect=RuntimeError("request replay failed"))
+        candidate = FakeWSConnection()
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            event_bus=event_bus,
+            on_reconnect=callback,
+        )
+
+        with pytest.raises(RuntimeError, match="request replay failed"):
+            await ws._install_connection(candidate, attempt=0, notify_reconnect=True)
+
+        callback.assert_awaited_once()
+        candidate.close.assert_awaited_once()
+        assert events_received == []
         assert ws._ws is None
         assert ws._connected.is_set() is False
         assert ws._ever_connected is False

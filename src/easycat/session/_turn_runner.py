@@ -554,6 +554,12 @@ class TurnRunner:
 
     async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            # Checkpoint before mutating ownership. Otherwise a cancellation
+            # requested immediately before entry is included in the baseline
+            # below and mistaken for the speculative task's cancellation.
+            await asyncio.sleep(0)
         task = self._preemptive_task
         self._preemptive_task = None
         self._preemptive_transcript = ""
@@ -566,6 +572,7 @@ class TurnRunner:
             # teardown close the surrounding session.
             self._runtime_scope.discard(cast(asyncio.Task[Any], task))
             return
+        cancellation_requests = current_task.cancelling() if current_task is not None else 0
         if not task.done():
             task.cancel()
         try:
@@ -577,8 +584,7 @@ class TurnRunner:
             # Re-raise the latter so a cancelled host (STT event consumer,
             # ``on_turn_ended``, ``Session.stop``) does not resume past its
             # cancellation point and keep working on a stale turn.
-            current_task = asyncio.current_task()
-            if current_task is not None and current_task.cancelling():
+            if current_task is not None and current_task.cancelling() > cancellation_requests:
                 raise
         finally:
             self._runtime_scope.discard(task)

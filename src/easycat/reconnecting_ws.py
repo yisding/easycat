@@ -93,17 +93,27 @@ async def connect_until_stopped(
             {connect_task, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
+    except BaseException as wait_error:
+        connect_task.cancel()
+        try:
+            await ws.close()
+        except BaseException as close_error:
+            wait_error.add_note(
+                f"WebSocket cleanup after interrupted connect failed: {close_error!r}"
+            )
+        await asyncio.gather(connect_task, return_exceptions=True)
+        raise
     finally:
         if not stop_task.done():
             stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
+        await asyncio.gather(stop_task, return_exceptions=True)
 
     if connect_task not in done:
-        await ws.close()
         connect_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await connect_task
+        try:
+            await ws.close()
+        finally:
+            await asyncio.gather(connect_task, return_exceptions=True)
         return False
 
     connect_task.result()
@@ -261,7 +271,7 @@ class ReconnectingWebSocket:
             self._mark_reconnect_exhausted(attempt, "failed reconnect attempts")
         await self._emit_reconnect_failure(str(last_error))
         if self._on_give_up:
-            await self._invoke_callback(self._on_give_up)
+            await self._invoke_callback(self._on_give_up, suppress_errors=True)
         raise ConnectionError(f"Failed to connect after {attempt} attempts") from last_error
 
     async def _install_connection(
@@ -290,9 +300,9 @@ class ReconnectingWebSocket:
         logger.debug("WebSocket connected to %s (attempt %d)", self._url, attempt + 1)
         self._connected.set()
         try:
-            await self._emit_reconnect_success()
             if (notify_reconnect or attempt > 0) and self._on_reconnect:
                 await self._invoke_callback(self._on_reconnect)
+            await self._emit_reconnect_success()
             if self._closed:
                 raise ConnectionError("WebSocket closed during reconnect")
         except BaseException as install_error:
@@ -661,7 +671,12 @@ class ReconnectingWebSocket:
 
             await self._event_bus.emit(ReconnectFailure(provider=self._provider_name, error=error))
 
-    async def _invoke_callback(self, callback: ReconnectCallback) -> None:
+    async def _invoke_callback(
+        self,
+        callback: ReconnectCallback,
+        *,
+        suppress_errors: bool = False,
+    ) -> None:
         """Invoke a sync or async callback."""
         try:
             result = callback()
@@ -669,6 +684,8 @@ class ReconnectingWebSocket:
                 await result
         except Exception:
             logger.exception("Error in reconnect callback %s", callback)
+            if not suppress_errors:
+                raise
 
     async def _invoke_disconnect_callback(
         self,

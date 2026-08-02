@@ -280,6 +280,30 @@ class TestWebTransportConnectionTransport:
         assert t._disconnect_cleanup_error is None  # noqa: SLF001
 
     @pytest.mark.asyncio
+    async def test_disconnect_retries_real_protocol_close_failure(self) -> None:
+        t = _build_connection_transport()
+        await t.connect()
+        session = t._session  # noqa: SLF001
+        assert session is not None
+        protocol = session._quic_protocol  # noqa: SLF001
+        protocol.close = Mock(  # type: ignore[method-assign]
+            side_effect=[RuntimeError("QUIC close failed"), None]
+        )
+
+        with pytest.raises(RuntimeError, match="QUIC close failed"):
+            await t.disconnect()
+
+        assert protocol.close.call_count == 1
+        assert t._connection_close_pending is True  # noqa: SLF001
+        assert isinstance(t._disconnect_cleanup_error, RuntimeError)  # noqa: SLF001
+
+        await t.disconnect()
+
+        assert protocol.close.call_count == 2
+        assert t._connection_close_pending is False  # noqa: SLF001
+        assert t._disconnect_cleanup_error is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
     async def test_disconnect_retries_diagnostic_only_cleanup_failure(self) -> None:
         t = _build_connection_transport()
         await t.connect()
@@ -396,6 +420,20 @@ class TestWebTransportConnectionTransport:
         async for c in t.receive_audio():
             chunks.append(c)
         assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_force_close_wakes_consumers_when_quic_close_raises(self) -> None:
+        t = _build_connection_transport()
+        session = t._session  # noqa: SLF001
+        assert session is not None
+        session.close_connection = Mock(side_effect=RuntimeError("close failed"))  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="close failed"):
+            t.force_close(reason="shutdown")
+
+        assert t._on_close.is_set()  # noqa: SLF001
+        assert await t._in_queue.get() is None  # noqa: SLF001
+        assert await t._out_queue.get() is None  # noqa: SLF001
 
     @pytest.mark.asyncio
     async def test_connection_lost_marks_disconnected_and_wakes_writer(self) -> None:

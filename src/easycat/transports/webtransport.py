@@ -683,8 +683,10 @@ class _WebTransportSession:
                 f"session {self._session_id} exceeded {_MAX_REJECTED_STREAMS} rejected streams",
                 fatal=True,
             )
-            self.close_connection(reason="too many rejected streams")
-            self._on_close.set()
+            try:
+                self.close_connection(reason="too many rejected streams")
+            finally:
+                self._on_close.set()
 
     def _handle_audio_bytes(self, data: bytes) -> None:
         if not data:
@@ -748,8 +750,10 @@ class _WebTransportSession:
                 f"oversized control frame poisoned session {self._session_id}",
                 fatal=True,
             )
-            self.close_connection(reason="control framing violation")
-            self._on_close.set()
+            try:
+                self.close_connection(reason="control framing violation")
+            finally:
+                self._on_close.set()
 
     def _handle_control_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
@@ -851,10 +855,7 @@ class _WebTransportSession:
 
         ``QuicConnectionProtocol.close`` flushes the close frame itself.
         """
-        try:
-            self._quic_protocol.close(error_code=0, reason_phrase=reason)
-        except Exception:
-            logger.debug("Error closing WebTransport QUIC connection", exc_info=True)
+        self._quic_protocol.close(error_code=0, reason_phrase=reason)
 
     async def _await_outbound_capacity(self) -> None:
         """Block while aioquic's per-stream send buffer for the current
@@ -1510,11 +1511,13 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         """
         self._connected = False
         self._client_connected.clear()
-        if self._session is not None:
-            self._session.close_connection(reason=reason)
-        self._enqueue_sentinel()
-        self._enqueue_out_sentinel()
-        self._on_close.set()
+        try:
+            if self._session is not None:
+                self._session.close_connection(reason=reason)
+        finally:
+            self._enqueue_sentinel()
+            self._enqueue_out_sentinel()
+            self._on_close.set()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if not self._connected:
