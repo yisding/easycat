@@ -342,6 +342,68 @@ class TestInMemoryRingBufferThreadSafety:
 
 
 class TestDegradedMode:
+    def test_concurrent_degradation_attempts_emit_one_marker(self):
+        """Only the first racing append may publish the degraded transition."""
+        j = InMemoryRingBuffer(capacity=10)
+        barrier = threading.Barrier(2)
+        results: list[int] = []
+
+        def broken(*_args, **_kwargs):
+            barrier.wait(timeout=1.0)
+            raise RuntimeError("disk full")
+
+        j._do_append = broken
+
+        def append() -> None:
+            results.append(j.append(kind=JournalRecordKind.EVENT, name="e", session_id="s1"))
+
+        first = threading.Thread(target=append)
+        second = threading.Thread(target=append)
+        first.start()
+        second.start()
+        first.join(timeout=2.0)
+        second.join(timeout=2.0)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert results == [-1, -1]
+        degraded = [
+            record for record in j.read(start=-1) if record.kind == JournalRecordKind.DEGRADED
+        ]
+        assert len(degraded) == 1
+
+    def test_append_that_entered_before_degradation_cannot_write_afterwards(self):
+        """The degraded-state decision and normal append must be serialized."""
+        j = InMemoryRingBuffer(capacity=10)
+        original_do_append = j._do_append
+        entered = threading.Event()
+        release = threading.Event()
+        results: list[int] = []
+
+        def delayed(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=1.0)
+            return original_do_append(*args, **kwargs)
+
+        j._do_append = delayed
+
+        late_append = threading.Thread(
+            target=lambda: results.append(
+                j.append(kind=JournalRecordKind.EVENT, name="late", session_id="s1")
+            )
+        )
+        late_append.start()
+        try:
+            assert entered.wait(timeout=1.0)
+            j._enter_degraded("s1", RuntimeError("disk full"))
+        finally:
+            release.set()
+            late_append.join(timeout=2.0)
+
+        assert not late_append.is_alive()
+        assert results == [-1]
+        assert [record.name for record in j.read(start=-1)] == ["journal_degraded"]
+
     def test_degraded_on_internal_error(self, caplog):
         j = InMemoryRingBuffer(capacity=10)
         # Simulate a broken internal by making _do_append raise
