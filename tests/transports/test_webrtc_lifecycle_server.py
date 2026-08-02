@@ -1704,6 +1704,41 @@ async def test_serve_webrtc_config_sessions_drains_after_listener_stop_failure(
     runner.cleanup.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_standalone_shutdown_preserves_drain_cancellation_after_listener_error() -> None:
+    from easycat.server.webrtc_routes import _shutdown_standalone_webrtc
+
+    class _Gate:
+        def start_draining(self) -> None:
+            pass
+
+        async def drain(self, *_args: object, **_kwargs: object) -> None:
+            raise asyncio.CancelledError
+
+    site = SimpleNamespace(stop=AsyncMock(side_effect=RuntimeError("listener failed")))
+    runner = SimpleNamespace(cleanup=AsyncMock())
+    routes = SimpleNamespace(
+        _stop_managed_session=AsyncMock(),
+        cancel_cleanup_tasks=AsyncMock(),
+    )
+    manager = SimpleNamespace(stop_all=AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _shutdown_standalone_webrtc(
+            site=site,
+            runner=runner,
+            gate=_Gate(),  # type: ignore[arg-type]
+            active_sessions={},
+            routes=routes,
+            manager=manager,
+            drain_timeout_s=0.0,
+            force_shutdown_timeout_s=0.1,
+        )
+
+    routes.cancel_cleanup_tasks.assert_awaited_once()
+    manager.stop_all.assert_awaited_once_with(force=True)
+
+
 @pytest.mark.integration_socket
 @pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
