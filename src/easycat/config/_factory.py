@@ -420,19 +420,37 @@ def _create_debug_resources(
     )
     if config.debug == "off":
         return _DebugResources(artifact_store=artifact_store, journal=None)
-    journal = create_journal(
-        session_id,
-        debug=config.debug,
-        backend=config.journal_backend,
-        capacity=config.journal_capacity,
-        redaction=config.journal_redaction,
-        artifact_store=(
-            artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-        ),
-        retention_mode=config.journal_retention,
-        data_dir=config.data_dir,
-    )
+    try:
+        journal = create_journal(
+            session_id,
+            debug=config.debug,
+            backend=config.journal_backend,
+            capacity=config.journal_capacity,
+            redaction=config.journal_redaction,
+            artifact_store=(
+                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+            ),
+            retention_mode=config.journal_retention,
+            data_dir=config.data_dir,
+        )
+    except BaseException:
+        _close_factory_resource(artifact_store)
+        raise
     return _DebugResources(artifact_store=artifact_store, journal=journal)
+
+
+def _close_factory_resource(resource: Any) -> None:
+    """Close a partially built resource without masking the factory failure."""
+    try:
+        close = getattr(resource, "close", None)
+        if callable(close) and not inspect.iscoroutinefunction(close):
+            close()
+    except BaseException:
+        logger.warning(
+            "Factory rollback cleanup failed for %s",
+            type(resource).__name__,
+            exc_info=True,
+        )
 
 
 def _register_close(rollback: ExitStack, resource: Any) -> Any:
@@ -444,7 +462,7 @@ def _register_close(rollback: ExitStack, resource: Any) -> Any:
     """
     close = getattr(resource, "close", None)
     if callable(close) and not inspect.iscoroutinefunction(close):
-        rollback.callback(close)
+        rollback.callback(_close_factory_resource, resource)
     return resource
 
 
@@ -796,9 +814,8 @@ def create_session(config: EasyConfig) -> Session:
     session_id = config.session_id or f"session-{uuid4().hex[:12]}"
     debug = _create_debug_resources(config, session_id)
     with ExitStack() as rollback:
-        close_journal = getattr(debug.journal, "close", None)
-        if callable(close_journal):
-            rollback.callback(close_journal)
+        _register_close(rollback, debug.artifact_store)
+        _register_close(rollback, debug.journal)
         built = _build_audio_session(config, session_id, debug, rollback)
         _finalize_audio_session(config, built)
         rollback.pop_all()
@@ -1030,9 +1047,8 @@ def create_text_session(
     sid = config.session_id or f"session-{uuid4().hex[:12]}"
     debug_resources = _create_debug_resources(config, sid)
     with ExitStack() as rollback:
-        close_journal = getattr(debug_resources.journal, "close", None)
-        if callable(close_journal):
-            rollback.callback(close_journal)
+        _register_close(rollback, debug_resources.artifact_store)
+        _register_close(rollback, debug_resources.journal)
         event_bus = EventBus(
             slow_handler_threshold_s=config.slow_handler_threshold_s,
             handler_error_policy=config.handler_error_policy,
