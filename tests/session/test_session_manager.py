@@ -46,6 +46,25 @@ async def test_await_owned_stop_ignores_preexisting_cancellation_count() -> None
 
 
 @pytest.mark.asyncio
+async def test_await_owned_stop_preserves_cancellation_pending_at_entry() -> None:
+    owned = asyncio.create_task(asyncio.Event().wait())
+
+    async def cancel_before_await() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await session_manager_module._await_owned_stop(owned)
+
+    caller = asyncio.create_task(cancel_before_await())
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert not owned.done()
+    owned.cancel()
+    await asyncio.gather(owned, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_await_owned_stop_prioritizes_new_caller_cancellation() -> None:
     owned_started = asyncio.Event()
     awaiting_owned = asyncio.Event()
