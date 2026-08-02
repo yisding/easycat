@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
 from importlib.metadata import version
@@ -174,6 +175,12 @@ class FunASROnnxVAD(_VADBase):
             yield_events = self._evaluate_funasr_segments(segments, audio_time_s)
             for event in yield_events:
                 yield event
+
+            # Buffered transports may deliver many model frames in one chunk.
+            # Yield between frames so cancellation and other pipeline work do
+            # not wait for a silent backlog to drain.
+            if len(self._buffer) >= frame_bytes:
+                await asyncio.sleep(0)
 
     def _evaluate_funasr_segments(self, segments: Any, now: float) -> Iterator[Event]:
         """Route FunASR boundary pairs through the shared VAD state machine."""

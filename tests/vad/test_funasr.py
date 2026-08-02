@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -293,6 +294,56 @@ async def test_funasr_vad_resamples_8k_input(monkeypatch: pytest.MonkeyPatch):
     assert vad._audio_resampler.source_rate == 8000
     assert model_calls >= 1
     assert len(vad._buffer) < vad._chunk_samples * 2
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_yields_to_event_loop_while_draining_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Large silent chunks must not defer cancellation behind the whole backlog."""
+
+    class _FakeWaveform:
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(_data: bytes, dtype: object) -> _FakeWaveform:
+            assert dtype == "int16"
+            return _FakeWaveform()
+
+    class _SilentModel:
+        def __call__(self, **_kwargs: object) -> list[object]:
+            return []
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _SilentModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+    vad = FunASROnnxVAD()
+    observer_ran = False
+
+    async def observe_loop() -> None:
+        nonlocal observer_ran
+        observer_ran = True
+
+    observer = asyncio.create_task(observe_loop())
+    try:
+        events = [
+            event async for event in vad.process(_make_chunk(n_samples=vad._chunk_samples * 3))
+        ]
+        assert events == []
+        assert observer_ran
+    finally:
+        await observer
 
 
 def test_funasr_vad_configure_updates_model_silence(monkeypatch: pytest.MonkeyPatch):
