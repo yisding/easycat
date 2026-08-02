@@ -17,8 +17,9 @@ class TextPartDelta:
 
 
 class ToolCallPartDelta:
-    def __init__(self, args_delta: Any) -> None:
+    def __init__(self, args_delta: Any, tool_call_id: str | None = None) -> None:
         self.args_delta = args_delta
+        self.tool_call_id = tool_call_id
 
 
 class PartDeltaEvent:
@@ -321,6 +322,28 @@ def test_tool_call_delta_dict_is_serialized_as_text() -> None:
     assert event is not None
     assert event.kind == "tool_delta"
     assert event.text == '{"city": "Tokyo"}'
+    assert event.call_id == ""
+
+
+def test_tool_call_delta_preserves_call_id_in_event_and_recorder() -> None:
+    journal = InMemoryRingBuffer(capacity=1000)
+    recorder = _recorder(journal)
+
+    event = translate_event(
+        PartDeltaEvent(ToolCallPartDelta('{"city":', tool_call_id="tc-delta")),
+        recorder,
+    )
+
+    assert event is not None
+    assert event.kind == "tool_delta"
+    assert event.text == '{"city":'
+    assert event.call_id == "tc-delta"
+    [record] = [r.data for r in journal.read() if r.name == "tool_phase_changed"]
+    assert (record["phase"], record["tool_name"], record["call_id"]) == (
+        "delta",
+        "",
+        "tc-delta",
+    )
 
 
 @pytest.mark.asyncio

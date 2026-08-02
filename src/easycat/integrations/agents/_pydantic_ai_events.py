@@ -29,9 +29,10 @@ def _translate_delta(event: Any, recorder: AgentRecorder | None) -> AgentBridgeE
     if not args:
         return None
     text = args if isinstance(args, str) else json.dumps(args, default=str)
+    call_id = getattr(delta, "tool_call_id", "") or ""
     if recorder is not None:
-        recorder.record_tool_call(phase="delta", name="")
-    return AgentBridgeEvent(kind="tool_delta", text=text)
+        recorder.record_tool_call(phase="delta", name="", call_id=call_id)
+    return AgentBridgeEvent(kind="tool_delta", text=text, call_id=call_id)
 
 
 def _translate_tool_started(
