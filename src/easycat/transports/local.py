@@ -63,6 +63,17 @@ class LocalTransportConfig:
 
     def __post_init__(self) -> None:
         if (
+            not isinstance(self.frame_duration_ms, int)
+            or isinstance(self.frame_duration_ms, bool)
+            or self.frame_duration_ms <= 0
+        ):
+            raise ValueError("frame_duration_ms must be a positive integer")
+        if self.audio_format.sample_rate * self.frame_duration_ms // 1000 <= 0:
+            raise ValueError(
+                "frame_duration_ms is too short to produce a sample for the "
+                "configured audio_format"
+            )
+        if (
             not isinstance(self.output_preroll_frames, int)
             or isinstance(self.output_preroll_frames, bool)
             or self.output_preroll_frames < 0

@@ -212,11 +212,15 @@ class InMemoryRingBuffer:
             )
             self._buf.append(record)
 
-            # Track ref counts for the new record.
-            if input_ref:
-                self._ref_counts[input_ref] = self._ref_counts.get(input_ref, 0) + 1
-            if output_ref:
-                self._ref_counts[output_ref] = self._ref_counts.get(output_ref, 0) + 1
+            # Reference counts exist solely to release artifacts when their
+            # records age out.  Without an artifact store there is nothing to
+            # release, so retaining every caller-supplied ref would turn this
+            # bounded journal into an unbounded metadata cache.
+            if self._artifact_store is not None:
+                if input_ref:
+                    self._ref_counts[input_ref] = self._ref_counts.get(input_ref, 0) + 1
+                if output_ref:
+                    self._ref_counts[output_ref] = self._ref_counts.get(output_ref, 0) + 1
 
             # Decrement ref counts for evicted record and clean up orphans.
             if was_full:
@@ -231,6 +235,12 @@ class InMemoryRingBuffer:
 
     def _insert_overflow_marker(self, session_id: str, timing: TimingInfo) -> None:
         """Insert the loss marker after its first or latest eviction. Caller holds lock."""
+        # A one-record buffer cannot retain both the newest real record and a
+        # separate overflow marker.  Keep the useful record and expose loss
+        # through ``dropped_records`` / follow-gap detection instead of
+        # evicting every post-overflow event solely to preserve the marker.
+        if self._capacity == 1:
+            return
         evicted_refs = self._refs_of_next_eviction() if len(self._buf) == self._capacity else []
         if len(self._buf) == self._capacity:
             self._dropped_records += 1
@@ -279,7 +289,7 @@ class InMemoryRingBuffer:
 
     def _decrement_and_evict_refs(self, refs: list[str]) -> None:
         """Decrement ref counts and delete orphaned artifacts. Caller holds lock."""
-        if not self._artifact_store:
+        if self._artifact_store is None:
             return
         for ref in refs:
             count = self._ref_counts.get(ref, 0) - 1

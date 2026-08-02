@@ -159,16 +159,21 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
     async def _run_connection(self, connection: ConnectionT) -> None:
         key = id(connection)
         cleanup: Callable[[], None] | None = None
+        # A connection can spend meaningful time in an asynchronous preflight
+        # (for example Twilio authentication) before it yields a Session. It
+        # still needs to be visible to drain: cancellation of its handler is
+        # not enough to make every websocket implementation close the accepted
+        # socket.
+        self._connections[key] = connection
         try:
             created = self._session_factory(connection)
             session = await created if isinstance(created, Awaitable) else created
             if session is None:
                 return
-            # The connection must be visible to shutdown immediately, but the
-            # session is not drainable until manager.add() has completed
-            # Session.start(). A drain during startup closes the connection and
-            # cancels this handler, leaving Session.start() to roll itself back.
-            self._connections[key] = connection
+            # The session is not drainable until manager.add() has completed
+            # Session.start(). A drain during startup closes the already
+            # registered connection and cancels this handler, leaving
+            # Session.start() to roll itself back.
             if self._on_session is not None:
                 cleanup = self._on_session(session)
             if self._runtime_feedback:

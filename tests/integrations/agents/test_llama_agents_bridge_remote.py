@@ -67,6 +67,34 @@ class TestRemoteLlamaAgentsBridge:
         assert [event.text for event in second_turn if event.kind == "done"] == ["Remote done"]
 
     @pytest.mark.asyncio
+    async def test_remote_start_failure_keeps_interruption_note_for_retry(
+        self, fake_workflows_modules
+    ):
+        class _FailOnceClient(_RemoteClient):
+            async def run_workflow_nowait(self, workflow_name: str, **kwargs: Any) -> _HandlerData:
+                self.run_calls.append({"workflow_name": workflow_name, **kwargs})
+                if len(self.run_calls) == 1:
+                    raise RuntimeError("remote workflow start failed")
+                return _HandlerData("h-retried")
+
+        client = _FailOnceClient()
+        bridge = LlamaAgentsBridge(client=client, workflow_name="greet")
+        bridge.append_interruption_note("retry-note")
+
+        with pytest.raises(RuntimeError, match="remote workflow start failed"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("next"), _recorder()):
+                pass
+
+        assert client.run_calls[0]["start_event"].easycat_interruption_note == "retry-note"
+        assert bridge._pending_interruption_note == "retry-note"
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("next"), _recorder()):
+            pass
+
+        assert client.run_calls[1]["start_event"].easycat_interruption_note == "retry-note"
+        assert bridge._pending_interruption_note is None
+
+    @pytest.mark.asyncio
     async def test_remote_hitl_retry_after_send_failure(self, fake_workflows_modules):
         """A transient send_event failure must keep the bridge waiting for
         input so a retry resends the HumanResponseEvent instead of starting

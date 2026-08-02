@@ -324,6 +324,36 @@ async def test_mcp_servers_restored_when_runner_call_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_runner_start_failure_keeps_chained_interruption_note_for_retry(monkeypatch):
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    agent = _Agent()
+    runner = _FakeRunner(call_error=RuntimeError("runner failed"))
+    monkeypatch.setattr(openai_agents_module, "Runner", runner)
+    bridge = OpenAIAgentsBridge(agent, use_previous_response_id=True)
+    bridge._previous_response_id = "resp-prior"
+    bridge.append_interruption_note("[user interrupted]")
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        async for _ in bridge.invoke(AgentTurnInput.from_text("retry me"), _recorder()):
+            pass
+
+    assert bridge._pending_interruption == "[user interrupted]"
+    assert runner.calls[0].input_data == [
+        {"role": "developer", "content": "[user interrupted]"},
+        {"role": "user", "content": "retry me"},
+    ]
+
+    runner._call_error = None
+    runner._results.append(_RunResult(last_agent=agent, last_response_id="resp-retried"))
+    async for _ in bridge.invoke(AgentTurnInput.from_text("retry me"), _recorder()):
+        pass
+
+    assert runner.calls[1].input_data == runner.calls[0].input_data
+    assert bridge._pending_interruption is None
+
+
+@pytest.mark.asyncio
 async def test_mcp_servers_restored_when_stream_iteration_fails(monkeypatch):
     import easycat.integrations.agents.openai_agents as openai_agents_module
 

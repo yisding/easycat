@@ -531,6 +531,30 @@ async def test_end_stream_times_out_and_resolves_pending_future() -> None:
 
 
 @pytest.mark.asyncio
+async def test_end_stream_error_emits_typed_error_and_resolves_pending_future() -> None:
+    class _RaisingSTT(_RecordingSTT):
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            raise RuntimeError("provider close failed")
+
+        def version_info(self) -> dict[str, str]:
+            return {"provider": "deepgram"}
+
+    stt = _RaisingSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(stt=stt)
+    turn = _new_turn()
+
+    await committer.end_stream(turn)
+
+    assert stt.end_stream_calls == 1
+    assert turn.pending_stt_segment_futures == []
+    [error] = [event for event in emitted if isinstance(event, Error)]
+    assert error.stage == ErrorStage.STT
+    assert error.provider == "deepgram"
+    assert isinstance(error.exception, RuntimeError)
+
+
+@pytest.mark.asyncio
 async def test_segment_final_journal_records_confidence_and_word_timestamps() -> None:
     """Provider-captured confidence/word timings reach the journal record."""
 

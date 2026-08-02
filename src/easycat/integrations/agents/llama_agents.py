@@ -435,6 +435,7 @@ class LlamaAgentsBridge:
                 kwargs["ctx"] = self._ctx
 
             handler = self._workflow.run(**kwargs)
+            self._consume_start_interruption_note(start_payload)
             events = self._stream_local_events(handler)
         self._active_handler = handler
         self._active_handler_id = _string_or_none(getattr(handler, "run_id", None))
@@ -667,6 +668,7 @@ class LlamaAgentsBridge:
                 start_event=start_event,
                 context=self._remote_context if self._preserve_context else None,
             )
+            self._consume_start_interruption_note(start_payload)
             handler_id = _string_or_none(getattr(handler_data, "handler_id", None))
             if handler_id is None:
                 raise BridgeInputError(
@@ -930,8 +932,21 @@ class LlamaAgentsBridge:
             payload[self._turn_id_key] = turn_input.turn_id
         if self._interruption_note_key is not None and self._pending_interruption_note:
             payload[self._interruption_note_key] = self._pending_interruption_note
-            self._pending_interruption_note = None
         return payload
+
+    def _consume_start_interruption_note(self, payload: Mapping[str, Any]) -> None:
+        """Clear a queued interruption note only after a start was accepted.
+
+        Constructing a start payload is speculative: local ``workflow.run``
+        and remote ``run_workflow_nowait`` can fail before a workflow sees it.
+        Keeping the note until either call returns lets the next invocation
+        retry with the same recovery context.
+        """
+        if self._interruption_note_key is None:
+            return
+        note = payload.get(self._interruption_note_key)
+        if note is not None and self._pending_interruption_note == note:
+            self._pending_interruption_note = None
 
     def _extract_event_text(self, event: Any) -> str | None:
         if self._event_text_extractor is not None:

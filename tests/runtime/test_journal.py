@@ -202,6 +202,29 @@ class TestInMemoryRingBuffer:
         assert j.dropped_records > 0
         assert JournalView(j).dropped_records == j.dropped_records
 
+    def test_capacity_one_keeps_the_latest_real_record_after_overflow(self):
+        j = InMemoryRingBuffer(capacity=1)
+        for i in range(5):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        # A one-record buffer has no room for both an event and a separate
+        # loss marker.  It must retain the newest useful event rather than
+        # evicting it to preserve the marker.
+        assert [record.name for record in j.read()] == ["e4"]
+        assert j.dropped_records == 4
+
+    def test_refs_do_not_accumulate_without_an_artifact_store(self):
+        j = InMemoryRingBuffer(capacity=2)
+        for i in range(20):
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name=f"e{i}",
+                session_id="s1",
+                input_ref=f"ref-{i}",
+            )
+
+        assert j._ref_counts == {}
+
     def test_long_overflow_keeps_loss_visible(self):
         j = InMemoryRingBuffer(capacity=1_000)
         for i in range(3_000):
