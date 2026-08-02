@@ -37,7 +37,12 @@ class _ContractVAD:
         }
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "contract-vad"}
+        return {
+            "provider": "contract-vad",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 def test_vad_provider_contract_matrix_has_rows() -> None:

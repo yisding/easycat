@@ -745,6 +745,26 @@ async def test_mode_switching():
     assert tm.mode == TurnMode.VAD
 
 
+def test_config_normalizes_serialized_turn_mode() -> None:
+    config = TurnManagerConfig(mode="push_to_talk")  # type: ignore[arg-type]
+
+    assert config.mode is TurnMode.PUSH_TO_TALK
+
+
+def test_config_rejects_invalid_turn_mode() -> None:
+    with pytest.raises(ValueError, match="Invalid mode"):
+        TurnManagerConfig(mode="push-to-talk")  # type: ignore[arg-type]
+
+
+def test_set_mode_rejects_invalid_value_without_mutating_mode() -> None:
+    tm = TurnManager(EventBus(), config=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK))
+
+    with pytest.raises(ValueError, match="Invalid mode"):
+        tm.set_mode("manual")  # type: ignore[arg-type]
+
+    assert tm.mode is TurnMode.PUSH_TO_TALK
+
+
 @pytest.mark.asyncio
 async def test_bot_started_ignores_user_paused_until_turn_ends():
     """bot_started_speaking must not bypass a paused user's TurnEnded path."""

@@ -124,6 +124,37 @@ def test_browser_factory_builds_fresh_config_per_transport(
     assert config1.enable_echo_cancellation is True
 
 
+@pytest.mark.parametrize(
+    ("mode", "transport_type"),
+    [
+        ("local", "LocalTransportConfig"),
+        ("browser", "WebRTCTransportConfig"),
+        ("websocket", "WebSocketTransportConfig"),
+        ("twilio", "TwilioTransportConfig"),
+    ],
+)
+def test_resolve_config_previews_defaults_without_starting_runtime(
+    mode: str,
+    transport_type: str,
+) -> None:
+    app = VoiceApp(agent="my-agent")
+
+    config = app.resolve_config(mode)  # type: ignore[arg-type]
+
+    assert isinstance(config, EasyConfig)
+    assert config.agent == "my-agent"
+    assert type(config.transport).__name__ == transport_type
+    assert type(config.stt).__name__ == "OpenAIRealtimeSTTConfig"
+    assert type(config.tts).__name__ == "OpenAITTSConfig"
+
+
+def test_resolve_config_requires_transport_for_application_factory() -> None:
+    app = VoiceApp(config_factory=lambda transport: EasyConfig.browser(transport=transport))
+
+    with pytest.raises(ValueError, match="concrete transport"):
+        app.resolve_config("browser")
+
+
 def test_browser_rejects_static_config() -> None:
     app = VoiceApp(config=EasyConfig.browser(agent="a"))
     with pytest.raises(ValueError) as exc:
@@ -161,6 +192,27 @@ def test_browser_allows_string_and_config_high_level_fields(
     # Building the per-connection factory (where the guard runs) must not raise.
     VoiceApp(agent="a", stt=OpenAISTTConfig()).run("browser")
     assert "factory" in captured_webrtc
+
+
+@pytest.mark.parametrize("mode", ["browser", "websocket"])
+def test_per_connection_modes_allow_named_provider_config_wrappers(
+    mode: str,
+    captured_webrtc: dict[str, Any],
+    captured_websocket: dict[str, Any],
+) -> None:
+    from easycat.stt.factory import STTProviderConfig
+    from easycat.tts.factory import TTSProviderConfig
+
+    app = VoiceApp(
+        agent="a",
+        stt=STTProviderConfig(provider="openai", api_key="test-key"),
+        tts=TTSProviderConfig(provider="openai", api_key="test-key"),
+    )
+
+    app.run(mode)  # type: ignore[arg-type]
+
+    captured = captured_webrtc if mode == "browser" else captured_websocket
+    assert "factory" in captured
 
 
 def test_browser_allows_framework_agent_spec(

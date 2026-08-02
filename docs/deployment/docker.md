@@ -28,6 +28,10 @@ provider-backed EasyCat session.  Non-browser clients should send
 Inside the container, Compose explicitly sets `EASYCAT_WS_HOST=0.0.0.0`
 so Docker's loopback-published host port can reach the process; keep the
 host-side bind on loopback or put equivalent ingress controls in front.
+Compose also sets `EASYCAT_WS_ALLOW_QUERY_TOKEN=1` for the bundled browser
+demo. This opt-in is appropriate only because the published host port remains
+loopback-only; production clients should keep it unset and use the bearer
+header.
 
 For the browser example, serve the static client from the repo in a
 second terminal:
@@ -41,14 +45,12 @@ Then open
 The page derives the WebSocket host from `localhost` and connects to
 `ws://localhost:8765` automatically.
 
-> **`?token=` query auth is off by default (breaking change).** Browsers cannot
-> set headers on the WebSocket handshake, so the bundled
-> `ws_browser_client.html` authenticates with a `?token=` query parameter. Query
-> tokens are now gated behind `allow_query_token` (default `False`). To keep the
-> bundled browser client working locally, start the server with
-> `run_websocket_config_server(config, allow_query_token=True)` (a loopback/dev
-> opt-in). Production non-browser clients should send
-> `Authorization: Bearer $EASYCAT_WS_TOKEN` and leave query auth off.
+Browsers cannot set headers on the WebSocket handshake, so
+`ws_browser_client.html` uses the token query parameter. The example server
+maps the explicit `EASYCAT_WS_ALLOW_QUERY_TOKEN=1` environment setting to
+`allow_query_token=True`; without that opt-in, query auth remains off. This
+keeps a direct `uv run python examples/ws_server.py` launch header-only unless
+the developer deliberately enables the local browser flow.
 
 To stop:
 

@@ -49,6 +49,7 @@ from easycat import (
     require_env,
 )
 from easycat.helpers import create_shutdown_event
+from easycat.session_manager import log_session_stop_failures as log_stop_failures
 from easycat.supervisor import (
     SUPERVISOR_TOKEN_ENV,
     serve_supervisor_websocket,
@@ -172,7 +173,7 @@ async def main() -> None:
         for broadcaster in list(broadcasters.values()):
             broadcaster.close()
         broadcasters.clear()
-        await manager.stop_all()
+        log_stop_failures(await manager.stop_all(), context="Supervisor shutdown", log=logger)
 
 
 if __name__ == "__main__":

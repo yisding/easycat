@@ -11,8 +11,9 @@ Before the first run, set ``OPENAI_API_KEY`` and verify the environment with
 ``uv run easycat doctor --env-file .env`` and
 ``uv run --env-file .env ...``.
 
-``EasyConfig`` + ``run`` is the entry path. Drop to ``Session.from_providers(...)``
-only when you need to hand-build provider instances.
+``EasyConfig`` + ``run`` is the synchronous entry path; use ``await arun(...)``
+when your application already owns an event loop. Drop to
+``Session.from_providers(...)`` only when you need to hand-build provider instances.
 
 The top-level package intentionally exposes the app-facing surface only;
 providers, stage internals, and telephony/debug helpers stay importable
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
     )
     from easycat.debug.bundle import RunBundle
     from easycat.debug.export import export_debug_bundle
-    from easycat.errors import EasyCatError, ErrorEntry
+    from easycat.errors import EasyCatError, EasyConfigError, ErrorEntry
     from easycat.events import (
         DTMF,
         AgentDelta,
@@ -111,6 +112,7 @@ if TYPE_CHECKING:
         VoicemailDetected,
     )
     from easycat.helpers import (
+        arun,
         attach_runtime_feedback,
         require_env,
         run,

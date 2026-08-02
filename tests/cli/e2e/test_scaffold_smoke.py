@@ -200,3 +200,94 @@ def test_provider_scaffold_named_vad_conformance_suite_passes(
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded provider project:\n{proc.stdout}\n{proc.stderr}"
     )
+
+
+@pytest.mark.parametrize(
+    ("template", "contract_file"),
+    [
+        ("provider-stt", "test_custom_stt.py"),
+        ("provider-tts", "test_custom_tts.py"),
+    ],
+)
+def test_speech_provider_scaffold_contract_suite_passes(
+    cli: CliRunner,
+    tmp_path: Path,
+    template: str,
+    contract_file: str,
+) -> None:
+    """Each speech-provider on-ramp executes offline after generation."""
+    project = _scaffold_project(cli, tmp_path, template)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            contract_file,
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+    )
+    assert proc.returncode == 0, (
+        f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("template", "contract_file"),
+    [
+        ("provider-stt", "test_custom_stt.py"),
+        ("provider-tts", "test_custom_tts.py"),
+    ],
+)
+def test_speech_provider_bare_pytest_excludes_live_tests_with_ambient_credentials(
+    cli: CliRunner,
+    tmp_path: Path,
+    template: str,
+    contract_file: str,
+) -> None:
+    """Generated pytest defaults must keep credentialed tests explicitly opt-in."""
+    project = _scaffold_project(cli, tmp_path, template)
+    live_sentinel = project / "test_live_selection_guard.py"
+    live_sentinel.write_text(
+        """import pytest
+
+
+@pytest.mark.integration_live
+def test_live_requests_are_never_implicit() -> None:
+    raise AssertionError("bare pytest selected an integration_live test")
+""",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            contract_file,
+            live_sentinel.name,
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "OPENAI_API_KEY": "sk-ambient-provider-credential",
+            "DEEPGRAM_API_KEY": "dg-ambient-provider-credential",
+            "ELEVENLABS_API_KEY": "el-ambient-provider-credential",
+        },
+    )
+
+    assert proc.returncode == 0, (
+        f"bare pytest selected a live test in {template}:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "1 deselected" in proc.stdout

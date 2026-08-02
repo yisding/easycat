@@ -62,6 +62,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
 from easycat.server.transports import _await_with_hard_timeout
+from easycat.session_manager import SessionStopReport, log_session_stop_failures
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports._webrtc_stats import WebRTCStatsState
 
@@ -78,6 +79,29 @@ logger = logging.getLogger(__name__)
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
 WebRTCConfigFactory = Callable[["WebRTCTransport"], "EasyConfig | Session"]
+
+
+def _standalone_sweep_error(
+    *,
+    swept: bool,
+    sweep_task: asyncio.Task[SessionStopReport[int]],
+    timeout_s: float,
+) -> RuntimeError | None:
+    """Surface a completed sweep report without losing hard-timeout behavior."""
+    if not swept:
+        logger.warning(
+            "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
+            timeout_s,
+        )
+        return None
+    report = sweep_task.result()
+    if not isinstance(report, SessionStopReport) or not log_session_stop_failures(
+        report,
+        context="Standalone WebRTC session shutdown",
+        log=logger,
+    ):
+        return None
+    return RuntimeError(f"Standalone WebRTC shutdown retained {len(report.failures)} session(s)")
 
 
 class WebRTCRoutes:
@@ -625,15 +649,17 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
         if body_error is None:
             body_error = exc
     try:
+        sweep_task = asyncio.create_task(manager.stop_all(force=True))
         swept = await _await_with_hard_timeout(
-            manager.stop_all(force=True),
+            sweep_task,
             timeout_s=max(force_shutdown_timeout_s, 0.0),
         )
-        if not swept:
-            logger.warning(
-                "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
-                force_shutdown_timeout_s,
-            )
+        report_error = _standalone_sweep_error(
+            swept=swept,
+            sweep_task=sweep_task,
+            timeout_s=force_shutdown_timeout_s,
+        )
+        body_error = body_error or report_error
     except BaseException as exc:
         if body_error is None:
             body_error = exc

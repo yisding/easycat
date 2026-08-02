@@ -184,6 +184,47 @@ def test_ws_server_uses_config_server_helper() -> None:
     assert "run_websocket_config_server" in source
     assert "create_session" not in source
     assert 'require_env("OPENAI_API_KEY")' in source
+    assert "allow_query_token=_allow_query_token_from_env()" in source
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, False), ("0", False), ("false", False), ("1", True), ("TRUE", True)],
+)
+def test_ws_server_query_token_auth_requires_explicit_env_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str | None,
+    expected: bool,
+) -> None:
+    import examples.ws_server as ws_server
+
+    if configured is None:
+        monkeypatch.delenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", configured)
+
+    assert ws_server._allow_query_token_from_env() is expected
+
+
+def test_ws_server_passes_browser_demo_opt_in_to_config_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import examples.ws_server as ws_server
+
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-key")
+    monkeypatch.setenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", "1")
+
+    def fake_run(config, **kwargs):  # noqa: ANN001
+        observed["config"] = config
+        observed.update(kwargs)
+
+    monkeypatch.setattr(ws_server, "run_websocket_config_server", fake_run)
+
+    ws_server.main()
+
+    assert callable(observed["config"])
+    assert observed["allow_query_token"] is True
 
 
 def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch):
@@ -264,6 +305,7 @@ def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():
     compose = (REPO_ROOT / "docker" / "compose.yaml").read_text()
 
     assert "EASYCAT_WS_TOKEN: ${EASYCAT_WS_TOKEN:?set EASYCAT_WS_TOKEN" in compose
+    assert 'EASYCAT_WS_ALLOW_QUERY_TOKEN: "1"' in compose
     assert '"127.0.0.1:8765:8765"' in compose
     assert '- "8765:8765"' not in compose
 
@@ -373,6 +415,7 @@ def test_docker_guide_serves_browser_client_from_localhost():
 
     assert "python -m http.server 8080 --directory examples" in guide
     assert "http://localhost:8080/ws_browser_client.html?token=<EASYCAT_WS_TOKEN>" in guide
+    assert "EASYCAT_WS_ALLOW_QUERY_TOKEN=1" in guide
     assert "`examples/ws_browser_client.html?token=" not in guide
     assert 'location.hostname + ":8765"' in client
 
@@ -571,6 +614,7 @@ def test_ws_supervisor_server_uses_manager_feedback_lifecycle() -> None:
     assert "serve_supervisor_websocket(" in source
     assert "supervisor_auth_token_from_env()" in source
     assert "create_shutdown_event()" in source
+    assert "log_stop_failures(await manager.stop_all()" in source
     assert "secrets.token_urlsafe" not in source
     assert "print(supervisor_token)" not in source
     assert "add_signal_handler" not in source

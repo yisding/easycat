@@ -82,9 +82,11 @@ Each `connection(...)` context calls `remove()` in `finally`, which
 
 `stop_all()` awaits every captured session's `stop()` concurrently,
    removes successful entries, and retains failed or cancelled entries for
-   retry. The probe captures one expected failure under
-   `stop_all.expected_error`; it does not leak an alarming log line to stderr.
-   That failure does not prevent the other stop or escape from `stop_all()`.
+   retry. Its `SessionStopReport` records the same failure under
+   `stop_all.report.failures`, so callers do not have to scrape logs or compare
+   registry snapshots. The probe also captures the matching expected log under
+   `stop_all.expected_error`; it does not leak an alarming line to stderr.
+   That failure does not prevent the other stop or raise from `stop_all()`.
    This isolates shutdown failures; it does not make a failed session's own
    cleanup successful.
 

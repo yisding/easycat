@@ -93,7 +93,7 @@ already own:
 | LangChain `Runnable` | `LangChainBridge` | LCEL chains, runnable events, and message history | `--extra langchain`; install the model package separately |
 | Compiled LangGraph graph | `LangGraphBridge` | Nodes, checkpoints, resumable state, and native state edits | `--extra langgraph`; install the model package separately |
 | LlamaIndex Workflow | `LlamaAgentsBridge` | Local/remote workflows and human-in-the-loop resumption | `--extra llama-agents` |
-| Responses API base URL | `RemoteResponsesAPIBridge` | An agent running behind an HTTP/SSE service boundary | Core; provide `agent_model` and remote auth as needed |
+| Remote Responses API base URL | `RemoteResponsesAPIBridge` | An agent running behind an HTTP/SSE service boundary | Core; provide `agent_model` and remote auth as needed |
 | Object with `on_user_turn(...)` | `GenericWorkflowBridge` | Your own orchestration without a framework adapter | No framework extra |
 | Object with `async run(text)` | `AgentRunner` | The smallest single-response agent contract | No framework extra |
 

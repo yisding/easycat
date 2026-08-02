@@ -101,7 +101,8 @@ def test_help_renders(cli: CliRunner) -> None:
     )
     assert "Run easycat docs --json for machine-readable docs routes" in normalized
     assert "Run easycat explain json-schema for CLI JSON" in normalized
-    assert "Check API keys, optional extras, and provider reachability" in result.stdout
+    assert "configured credentials" in normalized
+    assert "network liveness" in normalized
     assert "Run validation checks and inspect validation reports" in result.stdout
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
@@ -197,9 +198,9 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
     assert "Docs and guidance" in result.stdout
-    assert "Check API keys, optional extras, and provider reachability" in result.stdout
-    assert "Check API keys, extras, and provider reachability" not in result.stdout
-    assert "Check environment and provider reachability" not in result.stdout
+    assert "configured credentials, and provider network liveness" in normalized
+    assert "keyless offline console" in normalized
+    assert "--live explicitly enables a provider" in normalized
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "Show documentation entry points" not in result.stdout
     assert "Route a call problem by symptom, or look up an error code" in result.stdout

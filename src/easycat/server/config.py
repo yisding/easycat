@@ -25,6 +25,8 @@ from easycat._numeric import is_finite_number
 from easycat.server.auth import AuthPolicy
 from easycat.server.transports import _validate_max_sessions
 
+_DRAIN_MODES = frozenset({"stop_sessions", "await_natural_end"})
+
 
 @dataclass
 class VoiceServerConfig:
@@ -78,6 +80,10 @@ class VoiceServerConfig:
 
     def __post_init__(self) -> None:
         _validate_max_sessions(self.max_sessions)
+        if not isinstance(self.drain_mode, str) or self.drain_mode not in _DRAIN_MODES:
+            raise ValueError(
+                f"Invalid drain_mode={self.drain_mode!r}. Must be one of {sorted(_DRAIN_MODES)}."
+            )
         for name, value in (
             ("drain_timeout_s", self.drain_timeout_s),
             ("force_shutdown_timeout_s", self.force_shutdown_timeout_s),

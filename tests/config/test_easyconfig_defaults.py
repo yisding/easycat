@@ -11,7 +11,7 @@ from easycat import (
     PCM16_MONO_24K,
     EasyConfig,
 )
-from easycat.config import TelephonyConfig
+from easycat.config import EasyConfigError, TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
@@ -74,6 +74,19 @@ def test_easycat_config_validates_journal_redaction():
             openai_api_key="test-key",
             journal_redaction="everything",  # type: ignore[arg-type]
         )
+
+
+def test_easycat_config_rejects_invalid_caller_id_exposure():
+    with pytest.raises(EasyConfigError, match="caller_id_exposure"):
+        EasyConfig(
+            openai_api_key="test-key",
+            caller_id_exposure="offf",  # type: ignore[arg-type]
+        )
+
+
+def test_easycat_validation_errors_share_one_config_exception():
+    with pytest.raises(EasyConfigError, match="journal_capacity"):
+        EasyConfig(openai_api_key="test-key", journal_capacity=0)
 
 
 def test_easycat_config_defaults_event_dispatch_diagnostics():

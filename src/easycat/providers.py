@@ -32,8 +32,10 @@ class VersionedProvider(Protocol):
 
     Field conventions
     -----------------
-    The returned mapping is free-form, but for postmortem diagnosis to be
-    legible across providers the following keys carry an agreed meaning:
+    The returned mapping may include extra fields, but the installable
+    provider contract suite requires the following four non-empty keys so
+    postmortem diagnosis stays legible across providers. Use ``"unknown"``
+    when a field does not apply:
 
     - ``provider``: stable short name of the provider (e.g. ``"openai"``).
     - ``model``: the model that actually produced the output for this

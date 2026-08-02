@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from agents import Agent, function_tool
-from easycat import EasyConfig, run
+from easycat import VoiceApp
 
 
 @function_tool
@@ -13,4 +13,4 @@ def current_time() -> str:
 
 
 agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS", tools=[current_time])
-run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))  # noqa: F821
+VoiceApp(agent=agent, **__EASYCAT_CONFIG_EXTRA__).run("local")  # noqa: F821

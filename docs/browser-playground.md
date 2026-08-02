@@ -1,26 +1,30 @@
 # Browser Playground
 
-Talk to a voice bot in the browser with one command. `easycat serve` drives a
-`VoiceApp` that wires `EasyConfig.browser()` to the bundled WebRTC client and
-prints the URL to open. The page shows a live transcript (user and bot), an
-interruption indicator that lights up when you barge in, and a per-turn latency
-readout (final user transcript → first bot audio).
+Talk to EasyCat's bundled playground agent in the browser. Without a manifest,
+`easycat serve` wires the playground to the bundled WebRTC client and prints the
+URL to open; it does not import a `VoiceApp` from the current directory. The page
+shows a live transcript (user and bot), an interruption indicator that lights up
+when you barge in, and a per-turn latency readout (final user transcript → first
+bot audio).
 
 ## Quickstart
 
 ```bash
 uv sync --extra quickstart --extra webrtc --group dev
-export OPENAI_API_KEY="..."
-uv run easycat doctor          # check keys and extras first
-uv run easycat doctor --json   # parseable variant for automation
-uv run easycat serve
+test -e .env || cp .env.example .env
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run --env-file .env easycat serve
 ```
+
+If the key is exported instead, use `uv run easycat doctor`; add `--json`
+(`uv run easycat doctor --json`) for parseable checks.
 
 Then open the printed URL (`Open http://localhost:8080`) and click **Start**.
 
 Useful options:
 
-- `--mode` — deployment mode to serve. Defaults to `browser` (WebRTC + bundled
+- `--mode` — playground mode to serve. Defaults to `browser` (WebRTC + bundled
   client); pass `--mode websocket` for per-client WebSocket sessions or
   `--mode local` for a local mic/speaker run. The same `VoiceApp` backs every
   mode.
@@ -33,6 +37,8 @@ Useful options:
   bundled client forwards it as an `Authorization: Bearer` header.
 - `--agent-model` / `--instructions` — swap the playground agent's OpenAI
   Responses API model or its guidance.
+- `--manifest` / `--profile` — build a manifest-backed `VoiceServer` instead
+  of the bundled playground.
 
 For a script-shaped equivalent (and EC2/TURN deployment notes), see
 `uv run python examples/webrtc_server.py`. To inspect the session afterwards,

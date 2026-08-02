@@ -35,6 +35,14 @@ def test_xdist_allows_one_replacement_without_a_restart_cycle() -> None:
     )
 
 
+def test_bare_pytest_excludes_live_and_external_integrations() -> None:
+    """Credentials in a developer shell must not make a normal run billable."""
+    addopts = shlex.split(_ini_options()["addopts"])
+    marker_expression = addopts[addopts.index("-m") + 1]
+
+    assert marker_expression == "not integration_live and not integration_external"
+
+
 def test_timeout_settings_stay_ordered() -> None:
     """faulthandler must dump the stuck stack BEFORE the timeout kills it.
 

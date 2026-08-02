@@ -5,6 +5,17 @@ contract. `synthesize()` returns an async iterator of provider-scoped
 `TTSEvent` objects carrying `AudioChunk` payloads; Session maps them to the
 EasyCat-level `TTSAudio` events and schedules playback.
 
+Start an out-of-tree package with the TTS-specific scaffold:
+
+```bash
+uv run easycat init my-tts --template provider-tts
+```
+
+It includes the config, `easycat.tts_providers` entry point, named
+registration, `offline` capability declaration, all four `version_info()`
+fields, an offline `TTSProviderContractSuite`, and explicit TODOs for adding
+credentials and an `integration_live` suite without contaminating local tests.
+
 ## The surface
 
 | Member | Purpose |

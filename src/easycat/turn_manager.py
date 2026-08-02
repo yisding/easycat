@@ -78,6 +78,19 @@ class TurnMode(enum.Enum):
     PUSH_TO_TALK = "push_to_talk"
 
 
+def _normalize_turn_mode(mode: object) -> TurnMode:
+    """Normalize serialized enum values and reject unknown turn policies."""
+    if isinstance(mode, TurnMode):
+        return mode
+    if isinstance(mode, str):
+        try:
+            return TurnMode(mode)
+        except ValueError:
+            pass
+    allowed = sorted(candidate.value for candidate in TurnMode)
+    raise ValueError(f"Invalid mode={mode!r}. Must be a TurnMode or one of {allowed}.")
+
+
 @dataclass
 class TurnManagerConfig:
     """Configuration for TurnManager."""
@@ -143,6 +156,13 @@ class TurnManagerConfig:
     endpoint_threshold: float | None = None
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Normalize and validate mutable turn policy before runtime use."""
+        # Accept the serialized values used by YAML/JSON manifests, but store
+        # the enum so every downstream comparison has one canonical shape.
+        self.mode = _normalize_turn_mode(self.mode)
         for name, value in (
             ("end_of_turn_silence_ms", self.end_of_turn_silence_ms),
             ("stt_segment_silence_ms", self.stt_segment_silence_ms),
@@ -189,6 +209,7 @@ class TurnManager:
     ) -> None:
         self._event_bus = event_bus
         self._config = config or TurnManagerConfig()
+        self._config.validate()
 
         # Callback for barge-in: expected to perform the audible cutoff and
         # arrange old-turn cleanup. The callback is the sole emitter of the
@@ -826,8 +847,10 @@ class TurnManager:
 
     def set_mode(self, mode: TurnMode) -> None:
         """Switch between VAD and push-to-talk mode."""
-        self._mode = mode
-        logger.debug("Turn mode set to %s", mode.value)
+        normalized = _normalize_turn_mode(mode)
+        self._mode = normalized
+        self._config.mode = normalized
+        logger.debug("Turn mode set to %s", normalized.value)
 
     def reset(self, *, preserve_token: bool = False) -> None:
         """Reset turn manager to idle state.

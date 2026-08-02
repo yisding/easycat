@@ -47,7 +47,12 @@ class _ContractTTS:
         self.cancel_calls += 1
 
     def version_info(self) -> dict[str, str]:
-        return {"provider": "contract-tts"}
+        return {
+            "provider": "contract-tts",
+            "model": "offline",
+            "api_version": "v1",
+            "sdk_version": "none",
+        }
 
 
 class _StaticByteStream(httpx.AsyncByteStream):

@@ -42,7 +42,13 @@ from easycat.cli.scaffold._schema import (
     parse_config,
 )
 from easycat.config import _VALID_MCP_SCHEMES
-from easycat.errors import EASYCAT_E101, EASYCAT_E102, EASYCAT_E103, EASYCAT_E104
+from easycat.errors import (
+    EASYCAT_E101,
+    EASYCAT_E102,
+    EASYCAT_E103,
+    EASYCAT_E104,
+    EasyCatError,
+)
 from easycat.stt.factory import available_stt_providers
 from easycat.tts.factory import available_tts_providers
 
@@ -103,6 +109,15 @@ class _TemplateSpec:
     check_files: tuple[str, ...] = ("agent.py",)
     expected_transport: str | None = None
     supports_audio_config: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedEasyCatSource:
+    """One rendered dependency source for the generated project."""
+
+    local_path: Path | None = None
+    git_url: str | None = None
+    git_rev: str | None = None
 
 
 class _TemplateCatalogEntry(TypedDict):
@@ -213,12 +228,34 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         mode="voice",
         transport="local mic",
         framework="OpenAI Agents",
-        best_for="Publishing a custom EasyCat provider package out of tree.",
+        best_for="Publishing a custom EasyCat VAD provider package out of tree.",
         required_env=("OPENAI_API_KEY",),
         optional_env=(),
-        description="External provider package skeleton with conformance test and live demo.",
+        description="External VAD provider package skeleton with conformance test and live demo.",
         base_extras=("openai-agents", "local"),
         check_files=("agent.py", "custom_vad.py", "test_custom_vad.py"),
+    ),
+    "provider-stt": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="OpenAI Agents",
+        best_for="Publishing a custom EasyCat STT provider package out of tree.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="External STT provider skeleton with registration and offline contracts.",
+        base_extras=("openai-agents", "local"),
+        check_files=("agent.py", "custom_stt.py", "test_custom_stt.py"),
+    ),
+    "provider-tts": _TemplateSpec(
+        mode="voice",
+        transport="local mic",
+        framework="OpenAI Agents",
+        best_for="Publishing a custom EasyCat TTS provider package out of tree.",
+        required_env=("OPENAI_API_KEY",),
+        optional_env=(),
+        description="External TTS provider skeleton with registration and offline contracts.",
+        base_extras=("openai-agents", "local"),
+        check_files=("agent.py", "custom_tts.py", "test_custom_tts.py"),
     ),
 }
 _UNKNOWN_TEMPLATE_SPEC = _TemplateSpec(
@@ -371,17 +408,97 @@ def _editable_easycat_source() -> Path | None:
     return source if (source / "pyproject.toml").is_file() else None
 
 
-def _resolve_easycat_source(cli_source: str | None, cfg: InitConfig) -> Path | None:
-    """Resolve where the generated project should source ``easycat`` from.
+def _invalid_git_source(problem: str) -> EasyCatError:
+    return EASYCAT_E102(problem=f"invalid easycat Git source: {problem}")
 
-    Priority: ``--easycat-source`` flag > ``easycat_source`` in
-    ``--config`` JSON > auto-detected editable install.  Explicit paths
-    are validated up front (must contain a ``pyproject.toml``) so the
-    scaffold cannot generate a project whose ``uv sync`` dead-ends.
+
+def _validate_git_source_url(value: str) -> str:
+    """Validate a portable, credential-free Git remote for generated TOML."""
+    if not value or value != value.strip() or any(char.isspace() for char in value):
+        raise _invalid_git_source("URL must be a non-empty string without whitespace")
+
+    parsed = urlsplit(value)
+    if parsed.scheme:
+        if parsed.scheme not in {"git", "http", "https", "ssh"}:
+            raise _invalid_git_source(
+                "URL must use git://, http://, https://, ssh://, or Git's user@host:path form"
+            )
+        if not parsed.hostname or not parsed.path.strip("/"):
+            raise _invalid_git_source("URL must include a host and repository path")
+        if parsed.scheme in {"http", "https"} and (parsed.username or parsed.password):
+            raise _invalid_git_source(
+                "HTTP(S) URLs must not embed credentials; use a Git credential helper"
+            )
+        if parsed.password:
+            raise _invalid_git_source("URLs must not embed passwords or tokens")
+        return value
+
+    # Git's scp-like SSH syntax, for example git@github.com:org/repo.git.
+    if re.fullmatch(r"[^/@:\s]+@[^/@:\s]+:[^\s]+", value):
+        return value
+    raise _invalid_git_source(
+        "URL must use git://, http://, https://, ssh://, or Git's user@host:path form"
+    )
+
+
+def _validate_git_revision(value: str) -> str:
+    """Validate a branch, tag, or commit without constraining Git's ref grammar."""
+    if not value or value != value.strip() or any(char.isspace() for char in value):
+        raise _invalid_git_source("revision must be non-empty and contain no whitespace")
+    if value.startswith("-"):
+        raise _invalid_git_source("revision must not start with '-'")
+    return value
+
+
+def _resolve_easycat_source(
+    cli_source: str | None,
+    cli_git: str | None,
+    cli_git_rev: str | None,
+    cfg: InitConfig,
+) -> _ResolvedEasyCatSource:
+    """Resolve one local or portable Git dependency source.
+
+    Explicit local and Git inputs are mutually exclusive across CLI flags and
+    JSON config. Same-kind CLI values override their config counterparts. With
+    no explicit source, editable/repo installs retain the historical local-path
+    auto-detection behavior.
     """
+    local_declared = cli_source is not None or cfg.easycat_source is not None
+    git_declared = any(
+        value is not None for value in (cli_git, cli_git_rev, cfg.easycat_git, cfg.easycat_git_rev)
+    )
+    if local_declared and git_declared:
+        raise EASYCAT_E102(
+            problem=(
+                "easycat local and Git sources are mutually exclusive; use either "
+                "--easycat-source/easycat_source or "
+                "--easycat-git/easycat_git (with an optional Git revision)"
+            )
+        )
+
+    if git_declared:
+        git_url = cli_git if cli_git is not None else cfg.easycat_git
+        if git_url is None:
+            raise _invalid_git_source(
+                "a revision requires --easycat-git or the easycat_git config field"
+            )
+        # A CLI URL is a complete source override. A revision-only CLI flag can
+        # still pin the URL supplied by JSON config.
+        git_rev = (
+            cli_git_rev
+            if cli_git_rev is not None
+            else (None if cli_git is not None else cfg.easycat_git_rev)
+        )
+        return _ResolvedEasyCatSource(
+            git_url=_validate_git_source_url(git_url),
+            git_rev=_validate_git_revision(git_rev) if git_rev is not None else None,
+        )
+
     explicit = cli_source if cli_source is not None else cfg.easycat_source
     if explicit is None:
-        return _editable_easycat_source()
+        return _ResolvedEasyCatSource(local_path=_editable_easycat_source())
+    if not explicit.strip():
+        raise EASYCAT_E102(problem="easycat_source must be a non-empty checkout path")
     source = Path(explicit).expanduser().resolve()
     if not (source / "pyproject.toml").is_file():
         raise EASYCAT_E102(
@@ -391,16 +508,31 @@ def _resolve_easycat_source(cli_source: str | None, cfg: InitConfig) -> Path | N
                 "root, e.g. --easycat-source ~/Code/easycat."
             )
         )
-    return source
+    return _ResolvedEasyCatSource(local_path=source)
 
 
-def _sources_block(easycat_source: Path | None) -> str:
+def _sources_block(
+    easycat_source: Path | None,
+    easycat_git: str | None = None,
+    easycat_git_rev: str | None = None,
+) -> str:
     """Render the ``[tool.uv.sources]`` block for the generated pyproject.
 
     Returns an empty string for published installs — the
     ``$EASYCAT_SOURCES_BLOCK`` placeholder line is then dropped entirely
     by :func:`_render_text`.
     """
+    if easycat_git is not None:
+        fields = [f"git = {json.dumps(easycat_git)}"]
+        if easycat_git_rev is not None:
+            fields.append(f"rev = {json.dumps(easycat_git_rev)}")
+        return (
+            "\n"
+            "# Portable Git source selected by easycat init. Pin a reviewed\n"
+            "# revision for reproducible CI and collaborator installs.\n"
+            "[tool.uv.sources]\n"
+            f"easycat = {{ {', '.join(fields)} }}"
+        )
     if easycat_source is None:
         return ""
     path_literal = json.dumps(str(easycat_source))
@@ -701,6 +833,30 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     return "\n" + "\n".join(extra) + "\n"
 
 
+def _required_env_for(cfg: InitConfig) -> tuple[str, ...]:
+    """Return every env var the rendered scaffold needs on its default path."""
+    required = list(_TEMPLATE_SPECS.get(cfg.template, _UNKNOWN_TEMPLATE_SPEC).required_env)
+    seen = set(required)
+    for provider_spec in (cfg.stt, cfg.tts):
+        if not provider_spec:
+            continue
+        var = _provider_to_env_var().get(_provider_name(provider_spec))
+        if var and var not in seen:
+            required.append(var)
+            seen.add(var)
+    return tuple(required)
+
+
+def _optional_env_for(cfg: InitConfig) -> tuple[str, ...]:
+    """Return optional scaffold knobs, excluding anything required dynamically."""
+    required = set(_required_env_for(cfg))
+    return tuple(
+        name
+        for name in _TEMPLATE_SPECS.get(cfg.template, _UNKNOWN_TEMPLATE_SPEC).optional_env
+        if name not in required
+    )
+
+
 def _escape_surrogates(value: str) -> str:
     """Escape surrogate code points so rendered files stay UTF-8 encodable."""
     return "".join(
@@ -725,6 +881,8 @@ def _substitutions(
     project_name: str,
     *,
     easycat_source: Path | None = None,
+    easycat_git: str | None = None,
+    easycat_git_rev: str | None = None,
 ) -> dict[str, str]:
     return {
         "AGENT_NAME": _python_string_literal_contents(
@@ -735,11 +893,18 @@ def _substitutions(
         ),
         "PROJECT_NAME": project_name,
         "PYPROJECT_NAME": _pyproject_name(project_name),
+        "TEMPLATE": cfg.template,
+        "REQUIRED_ENV": json.dumps(list(_required_env_for(cfg))),
+        "OPTIONAL_ENV": json.dumps(list(_optional_env_for(cfg))),
         "EASYCAT_CONFIG_EXTRA": _config_extra_kwargs(cfg),
         "EASYCAT_VERSION_FLOOR": _easycat_version_floor(),
         "EXTRAS": _extras_for(cfg),
         "EXTRA_ENV_VARS": _extra_env_vars(cfg),
-        "EASYCAT_SOURCES_BLOCK": _sources_block(easycat_source),
+        "EASYCAT_SOURCES_BLOCK": _sources_block(
+            easycat_source,
+            easycat_git,
+            easycat_git_rev,
+        ),
     }
 
 
@@ -758,8 +923,7 @@ def _should_template(source: Path) -> bool:
 
 def _render_text(text: str, mapping: dict[str, str]) -> str:
     if not mapping.get("EASYCAT_SOURCES_BLOCK"):
-        # Published install: drop the placeholder line entirely so the
-        # generated pyproject.toml ends cleanly after `[tool.ruff]`.
+        # Published install: drop the optional local-source block entirely.
         text = text.replace("$EASYCAT_SOURCES_BLOCK\n", "")
     rendered = Template(text).safe_substitute(mapping)
     extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
@@ -889,6 +1053,19 @@ def init(
             "resolve `easycat` from (auto-detected for editable/repo installs)."
         ),
     ),
+    easycat_git: str | None = typer.Option(
+        None,
+        "--easycat-git",
+        help=(
+            "Portable EasyCat Git repository URL for generated projects; mutually "
+            "exclusive with --easycat-source."
+        ),
+    ),
+    easycat_git_rev: str | None = typer.Option(
+        None,
+        "--easycat-git-rev",
+        help="Optional branch, tag, or commit to pin with --easycat-git.",
+    ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."
     ),
@@ -941,7 +1118,12 @@ def init(
         )
 
     _validate_for_template(cfg)
-    source = _resolve_easycat_source(easycat_source, cfg)
+    source = _resolve_easycat_source(
+        easycat_source,
+        easycat_git,
+        easycat_git_rev,
+        cfg,
+    )
 
     target = Path(name).resolve()
     if _is_existing_non_dir(target) or (not force and _is_non_empty_dir(target)):
@@ -949,7 +1131,13 @@ def init(
 
     target.mkdir(parents=True, exist_ok=True)
 
-    mapping = _substitutions(cfg, target.name, easycat_source=source)
+    mapping = _substitutions(
+        cfg,
+        target.name,
+        easycat_source=source.local_path,
+        easycat_git=source.git_url,
+        easycat_git_rev=source.git_rev,
+    )
     written = _copy_template(cfg.template, target, mapping)
     git_ok = False if no_git else _maybe_git_init(target)
 
@@ -965,7 +1153,9 @@ def init(
                 pyproject_name=_pyproject_name(target.name),
                 files=[str(p.relative_to(target)) for p in written],
                 agent_lines=agent_lines,
-                easycat_source=str(source) if source else None,
+                easycat_source=str(source.local_path) if source.local_path else None,
+                easycat_git=source.git_url,
+                easycat_git_rev=source.git_rev,
                 git=git_ok,
                 run_command=_next_step_run_command(cfg.template),
                 check_command=_next_step_check_command(cfg.template),
@@ -981,8 +1171,11 @@ def init(
         rel = p.relative_to(target)
         extra = f" ({agent_lines} lines)" if rel.name == "agent.py" else ""
         success(f"{rel}{extra}")
-    if source is not None:
-        info(f"easycat resolved from local checkout: {escape(str(source))}")
+    if source.local_path is not None:
+        info(f"easycat resolved from local checkout: {escape(str(source.local_path))}")
+    elif source.git_url is not None:
+        revision = f" at {source.git_rev}" if source.git_rev else ""
+        info(f"easycat resolved from portable Git source: {escape(source.git_url + revision)}")
     if git_ok:
         success("git init")
     elif not no_git:

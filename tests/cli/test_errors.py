@@ -14,9 +14,21 @@ from easycat.errors import (
     EASYCAT_E501,
     REGISTRY,
     EasyCatError,
+    EasyConfigError,
     register,
     suggest_codes,
 )
+
+
+def test_config_errors_share_the_public_easycat_error_boundary() -> None:
+    err = EasyConfigError("agent is required")
+
+    assert isinstance(err, EasyCatError)
+    assert isinstance(err, ValueError)
+    assert err.code == "EASYCAT_E105"
+    assert str(err) == "agent is required"
+    assert err.rendered_fix() is not None
+    assert exit_code_for(err.code) == 2
 
 
 def test_every_registered_code_has_factory() -> None:

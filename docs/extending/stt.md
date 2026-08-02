@@ -6,6 +6,17 @@ provider-scoped `STTEvent` objects from the `events()` async iterator.
 Session consumes those events and emits the EasyCat-level
 `STTPartial` / `STTFinal` events itself.
 
+Start an out-of-tree package with the STT-specific scaffold:
+
+```bash
+uv run easycat init my-stt --template provider-stt
+```
+
+It includes the config, `easycat.stt_providers` entry point, named
+registration, `offline` capability declaration, all four `version_info()`
+fields, an offline `STTProviderContractSuite`, and explicit TODOs for adding
+credentials and an `integration_live` suite without contaminating local tests.
+
 ## The surface
 
 | Member | Purpose |
@@ -138,6 +149,32 @@ register_stt_provider(
 )
 ```
 
+If capabilities depend on the selected model or config, supply a resolver
+instead of declaring the capability for every variant:
+
+```python
+def resolve_capabilities(
+    config: object,
+    model: str | None,
+) -> frozenset[str]:
+    selected_model = config.model if isinstance(config, YourSTTConfig) else model
+    if selected_model and selected_model.endswith("-native"):
+        return frozenset({"native_endpointing"})
+    return frozenset()
+
+
+register_stt_provider(
+    "yours",
+    YourSTT,
+    YourSTTConfig,
+    capability_resolver=resolve_capabilities,
+)
+```
+
+The resolver receives either the concrete config instance or `None`, plus the
+model selected by shortcut parsing when available. Its result is combined with
+the static `capabilities` set.
+
 `YourSTT` must accept a `YourSTTConfig` instance as its constructor argument —
 the same contract built-in providers follow. A config that declares
 `event_bus: EventBus | None = None` receives the session bus before provider
@@ -161,6 +198,7 @@ What each metadata field feeds:
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
 | `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
 | `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries |
+| `capability_resolver` | model/config-dependent capabilities; returns a `frozenset[str]` that is combined with static capabilities |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
 
 When `native_endpointing` is declared, `EasyConfig` drives turns from STT

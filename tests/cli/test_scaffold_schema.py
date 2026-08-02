@@ -42,6 +42,8 @@ def test_parse_config_dispatches_every_field_kind() -> None:
             tools=["weather"],
             mcp_servers=["stdio:///bin/echo"],
             easycat_source="../easycat",
+            easycat_git=None,
+            easycat_git_rev=None,
         )
     )
 
@@ -56,6 +58,8 @@ def test_parse_config_dispatches_every_field_kind() -> None:
         tools=["weather"],
         mcp_servers=["stdio:///bin/echo"],
         easycat_source="../easycat",
+        easycat_git=None,
+        easycat_git_rev=None,
     )
 
 
@@ -120,6 +124,8 @@ def test_parse_config_rejects_blank_required_strings(template: str) -> None:
         "agent_name",
         "agent_instructions",
         "easycat_source",
+        "easycat_git",
+        "easycat_git_rev",
     ],
 )
 @pytest.mark.parametrize("value", [42, True, []])
@@ -141,6 +147,8 @@ def test_parse_config_accepts_explicit_null_for_optional_strings() -> None:
             agent_name=None,
             agent_instructions=None,
             easycat_source=None,
+            easycat_git=None,
+            easycat_git_rev=None,
         )
     )
 

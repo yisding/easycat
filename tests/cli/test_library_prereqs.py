@@ -16,6 +16,7 @@ See ``TEST_PLANS.md`` §14 and §15.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -91,12 +92,16 @@ class _StubSession:
 def _install_immediate_shutdown(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     installs: list[str] = []
 
-    def install_shutdown(_loop, stop_event) -> bool:  # noqa: ANN001
+    @contextmanager
+    def install_shutdown(_loop, stop_event):  # noqa: ANN001,ANN202
         installs.append("install")
         stop_event.set()
-        return True
+        try:
+            yield True
+        finally:
+            installs.append("restore")
 
-    monkeypatch.setattr("easycat.helpers._install_shutdown_signal_handlers", install_shutdown)
+    monkeypatch.setattr("easycat.helpers._shutdown_signal_handler_scope", install_shutdown)
     return installs
 
 
@@ -112,7 +117,7 @@ def test_run_uses_session_async_context(monkeypatch: pytest.MonkeyPatch) -> None
     installs = _install_immediate_shutdown(monkeypatch)
 
     easycat.run(EasyConfig(openai_api_key="stub"))
-    assert installs == ["install"]
+    assert installs == ["install", "restore"]
     assert "start" in session.events
     assert "stop(force=True)" in session.events
     # Stop must come after start.
@@ -130,7 +135,7 @@ def test_run_session_uses_existing_session_async_context(
 
     run_session(session)
 
-    assert installs == ["install"]
+    assert installs == ["install", "restore"]
     assert session.events == ["start", "stop(force=True)"]
 
 
@@ -156,10 +161,12 @@ def test_run_session_exits_when_session_stops_itself(
 
     session = SelfStoppingSession()
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
-    monkeypatch.setattr(
-        "easycat.helpers._install_shutdown_signal_handlers",
-        lambda _loop, _stop_event: handlers_installed,
-    )
+
+    @contextmanager
+    def signal_scope(_loop, _stop_event):  # noqa: ANN001,ANN202
+        yield handlers_installed
+
+    monkeypatch.setattr("easycat.helpers._shutdown_signal_handler_scope", signal_scope)
 
     real_asyncio_run = asyncio.run
 

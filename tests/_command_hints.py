@@ -526,6 +526,21 @@ def _validate_pre_commit_hint(
         problems.append(f"{label}: missing pre-commit config .pre-commit-config.yaml")
 
 
+def _validate_import_linter_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if args:
+        problems.append(f"{label}: unsupported lint-imports arguments {shlex.join(args)!r}")
+        return
+    pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    if "[tool.importlinter]" not in pyproject:
+        problems.append(f"{label}: missing [tool.importlinter] configuration")
+
+
 def _uv_run_command_tokens(
     *,
     label: str,
@@ -613,8 +628,12 @@ def _validate_uv_run_hint(
             )
         case ["mypy", *args]:
             _validate_mypy_hint(label=label, repo_root=repo_root, args=args, problems=problems)
-        case ["pre-commit", *args]:
-            _validate_pre_commit_hint(
+        case [tool, *args] if tool in {"lint-imports", "pre-commit"}:
+            validator = {
+                "lint-imports": _validate_import_linter_hint,
+                "pre-commit": _validate_pre_commit_hint,
+            }[tool]
+            validator(
                 label=label,
                 repo_root=repo_root,
                 args=args,

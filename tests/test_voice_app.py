@@ -159,6 +159,15 @@ def test_unknown_mode_raises() -> None:
     assert "nonsense" in str(exc.value)
 
 
+def test_run_and_serve_require_an_explicit_mode() -> None:
+    app = VoiceApp(agent="a")
+
+    with pytest.raises(TypeError, match="mode"):
+        app.run()  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="mode"):
+        app.serve()  # type: ignore[call-arg]
+
+
 def test_mic_alias_resolves_to_local(
     monkeypatch: pytest.MonkeyPatch, fake_create_session: list[EasyConfig]
 ) -> None:

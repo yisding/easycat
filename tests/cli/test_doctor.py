@@ -39,13 +39,11 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 def test_doctor_all_skips_when_no_keys(cli: CliRunner, empty_env: None, no_network: None) -> None:
     result = cli.invoke(app, ["doctor"])
-    # Exit 1 because env_any fails when no keys are set.
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.stderr
     assert "EasyCat doctor" in result.stderr
-    assert "EASYCAT_E203" in result.stderr
-    assert "--env-file" in result.stderr
-    assert ".env" in result.stderr
-    assert "easycat doctor" in result.stderr
+    assert "valid for" in result.stderr
+    assert "keyless/local/custom setups" in result.stderr
+    assert "EASYCAT_E203" not in result.stderr
 
 
 def test_doctor_help_names_first_run_checks(cli: CliRunner) -> None:
@@ -53,7 +51,8 @@ def test_doctor_help_names_first_run_checks(cli: CliRunner) -> None:
     help_text = " ".join(result.stdout.split())
 
     assert result.exit_code == 0
-    assert "Check API keys, optional extras, and provider reachability" in help_text
+    assert "configured credentials" in help_text
+    assert "network liveness" in help_text
     assert "--env-file" in result.stdout
     assert "for example, .env" in help_text
     assert "--provider" in result.stdout
@@ -75,7 +74,7 @@ def test_doctor_passes_with_one_key(
     monkeypatch.setenv("NO_COLOR", "1")
     result = cli.invoke(app, ["doctor"])
     assert result.exit_code == 0, result.stderr
-    assert "openai reachable" in result.stderr
+    assert "openai network reachable" in result.stderr
 
 
 def test_doctor_treats_whitespace_credentials_as_missing(
@@ -89,7 +88,7 @@ def test_doctor_treats_whitespace_credentials_as_missing(
 
     unscoped = {check.name: check for check in doctor_module.check_env_vars()}
     assert unscoped["env_openai"].status == "skip"
-    assert unscoped["env_any"].status == "fail"
+    assert unscoped["env_any"].status == "skip"
     assert doctor_module.check_provider_reachability("openai") == []
 
 
@@ -110,24 +109,32 @@ def test_doctor_passes_with_cartesia_only(
     monkeypatch.setenv("NO_COLOR", "1")
     result = cli.invoke(app, ["doctor"])
     assert result.exit_code == 0, result.stderr
-    assert "cartesia reachable" in result.stderr
+    assert "cartesia network reachable" in result.stderr
     scoped = cli.invoke(app, ["doctor", "--provider", "cartesia"])
     assert scoped.exit_code == 0, scoped.stderr
 
 
 def test_doctor_json_envelope(cli: CliRunner, empty_env: None, no_network: None) -> None:
     result = cli.invoke(app, ["doctor", "--json"])
-    assert result.exit_code == 1
+    assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == 1
     assert payload["command"] == "doctor"
-    assert payload["status"] == "error"
+    assert payload["status"] == "ok"
     assert payload["environment"] == "dev"
-    # Every check has name/status/detail keys.
+    # Every check exposes both outcome and configuration relevance.
     for check in payload["checks"]:
-        assert "name" in check and "status" in check and "detail" in check
+        assert {"name", "status", "detail", "requirement"} <= set(check)
+    assert {check["requirement"] for check in payload["checks"]} == {
+        "required",
+        "optional",
+        "unused",
+        "not_applicable",
+    }
     env_any = next(check for check in payload["checks"] if check["name"] == "env_any")
-    assert "easycat doctor --env-file .env" in env_any["fix"]
+    assert env_any["status"] == "skip"
+    assert env_any["requirement"] == "not_applicable"
+    assert "fix" not in env_any
 
 
 def test_doctor_env_file_loads_keys_and_restores_env(
@@ -382,6 +389,239 @@ def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.Monkey
     assert "EASYCAT_E204" in result.stderr
 
 
+def test_doctor_rejects_obvious_placeholder_credential(
+    cli: CliRunner,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    result = cli.invoke(
+        app,
+        ["doctor", "--provider", "openai"],
+        env={"OPENAI_API_KEY": "sk-your-key-here"},
+    )
+
+    assert result.exit_code == 1
+    assert "looks like a placeholder" in result.stderr
+    assert "EASYCAT_E203" in result.stderr
+    assert "reach_openai" not in result.stderr
+
+
+def test_doctor_network_probe_does_not_claim_credential_validity(
+    monkeypatch: pytest.MonkeyPatch,
+    empty_env: None,
+) -> None:
+    class Unauthorized:
+        status_code = 401
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-configured")
+    monkeypatch.setattr("httpx.head", lambda *args, **kwargs: Unauthorized())
+
+    result = doctor_module.check_provider_reachability("openai")
+
+    assert len(result) == 1
+    assert result[0].status == "ok"
+    assert "network reachable (HTTP 401)" in result[0].detail
+    assert "credential validity not checked" in result[0].detail
+
+
+def test_doctor_uses_scaffold_metadata_to_validate_all_twilio_requirements(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "twilio-phone"
+required_env = ["OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TWILIO_STREAM_URL=wss://your-public-host:8766
+TWILIO_AUTH_TOKEN=your-twilio-auth-token
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["scaffold"]["status"] == "ok"
+    assert checks["env_openai"]["status"] == "ok"
+    assert checks["env_twilio_stream_url"]["status"] == "fail"
+    assert checks["env_twilio_auth_token"]["status"] == "fail"
+    assert checks["env_twilio_stream_url"]["code"] == "EASYCAT_E210"
+
+
+def test_doctor_scaffold_requirements_pass_with_real_values(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "twilio-phone"
+required_env = ["OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TWILIO_STREAM_URL=wss://voice.example.net/media
+TWILIO_AUTH_TOKEN=0123456789abcdef0123456789abcdef
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["env_twilio_stream_url"]["status"] == "ok"
+    assert checks["env_twilio_auth_token"]["status"] == "ok"
+
+
+def test_doctor_scaffold_optional_env_is_allowed_and_non_blocking(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "webrtc-browser"
+required_env = ["OPENAI_API_KEY"]
+optional_env = ["TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL", "DEEPGRAM_API_KEY"]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-real-value\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["scaffold"]["detail"].endswith("1 required, 4 optional env vars)")
+    for name in (
+        "env_turn_server_url",
+        "env_turn_username",
+        "env_turn_credential",
+        "env_deepgram",
+    ):
+        assert checks[name]["status"] == "skip"
+        assert checks[name]["requirement"] == "optional"
+
+
+def test_doctor_rejects_placeholder_when_optional_env_is_configured(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "webrtc-browser"
+required_env = ["OPENAI_API_KEY"]
+optional_env = ["TURN_SERVER_URL"]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENAI_API_KEY=sk-real-value\nTURN_SERVER_URL=your-turn-url\n",
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 1
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["env_turn_server_url"]["status"] == "fail"
+    assert checks["env_turn_server_url"]["requirement"] == "optional"
+
+
+def test_doctor_rejects_overlapping_scaffold_env_metadata(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "broken"
+required_env = ["OPENAI_API_KEY"]
+optional_env = ["OPENAI_API_KEY"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--json"])
+
+    assert result.exit_code == 2
+    assert "cannot be both required and optional" in result.stdout
+
+
+def test_doctor_scaffold_does_not_probe_unrelated_ambient_provider(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "openai-agents"
+required_env = ["OPENAI_API_KEY"]
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-value")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-unrelated")
+    probed: list[str] = []
+
+    def fake_head(url: str, **_kwargs: object) -> object:
+        probed.append(url)
+        if "deepgram" in url:
+            raise AssertionError("unused provider must not be probed")
+        return type("Response", (), {"status_code": 200})()
+
+    monkeypatch.setattr("httpx.head", fake_head)
+
+    result = cli.invoke(app, ["doctor", "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["env_openai"]["requirement"] == "required"
+    assert checks["env_deepgram"]["status"] == "skip"
+    assert checks["env_deepgram"]["requirement"] == "unused"
+    assert probed == [doctor_module._PROVIDER_PROBE_URL["openai"]]
+
+
 def test_doctor_check_functions_are_pure() -> None:
     """Each individual check returns a CheckResult; no side effects."""
     py_check = doctor_module.check_python_version()
@@ -508,9 +748,30 @@ def test_check_journal_writable_ok(
 ) -> None:
     """Pointing EASYCAT_DATA_DIR at a writable tmp dir yields ok."""
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
+    (tmp_path / "journals").mkdir()
     result = doctor_module.check_journal_writable()
     assert result.status == "ok", result.detail
     assert str(tmp_path) in result.detail
+
+
+def test_check_journal_writable_does_not_touch_existing_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, empty_env: None
+) -> None:
+    data_dir = tmp_path / "data"
+    journal_dir = data_dir / "journals"
+    journal_dir.mkdir(parents=True)
+    sentinel = journal_dir / "existing.jsonl"
+    sentinel.write_text("preserve me\n", encoding="utf-8")
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
+    before_names = sorted(path.name for path in journal_dir.iterdir())
+    before_mtime = journal_dir.stat().st_mtime_ns
+
+    result = doctor_module.check_journal_writable()
+
+    assert result.status == "ok", result.detail
+    assert sorted(path.name for path in journal_dir.iterdir()) == before_names
+    assert journal_dir.stat().st_mtime_ns == before_mtime
+    assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
 
 
 def test_check_journal_writable_does_not_follow_predictable_probe_symlink(
@@ -533,7 +794,7 @@ def test_check_journal_writable_does_not_follow_predictable_probe_symlink(
     assert probe.is_symlink()
 
 
-def test_journal_dir_matches_runtime_data_dir_contract(
+def test_journal_check_is_read_only_and_matches_runtime_data_dir_contract(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
     """Doctor must probe the same journal root that SqliteJournal uses."""
@@ -544,23 +805,25 @@ def test_journal_dir_matches_runtime_data_dir_contract(
 
     result = doctor_module.check_journal_writable()
 
-    assert result.status == "ok", result.detail
-    assert result.detail == str(data_dir / "journals")
-    assert (data_dir / "journals").is_dir()
+    assert result.status == "skip", result.detail
+    assert result.code == "EASYCAT_E207"
+    assert str(data_dir / "journals") in result.detail
+    assert not (data_dir / "journals").exists()
     assert not (xdg_cache / "easycat" / "journals").exists()
 
 
 def test_check_journal_writable_fails_on_readonly(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
-    """If the journal dir can't be created, surface E207."""
-    # Point at a path that collides with a regular file, so mkdir() fails.
+    """If the journal dir cannot be created safely, surface E207 read-only."""
+    # Point at a path that collides with a regular file. Doctor must not replace it.
     blocker = tmp_path / "blocker"
     blocker.write_text("not a dir")
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(blocker))
     result = doctor_module.check_journal_writable()
     assert result.status == "fail"
     assert result.code == "EASYCAT_E207"
+    assert blocker.read_text(encoding="utf-8") == "not a dir"
 
 
 def test_check_journal_writable_does_not_follow_fixed_probe_symlink(
@@ -629,8 +892,8 @@ def test_doctor_fix_creates_journal_dir(
     empty_env: None,
 ) -> None:
     """``--fix`` mkdirs the journal directory when E207 is reported."""
-    # Stage 1: block the default mkdir by pointing EASYCAT_DATA_DIR at a
-    # non-existent nested path, then remove any previously-created dir.
+    # Point EASYCAT_DATA_DIR at a non-existent nested path. Default doctor only
+    # reports it; --fix owns the creation.
     data_dir = tmp_path / "never-created"
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
@@ -644,3 +907,34 @@ def test_doctor_fix_creates_journal_dir(
     assert journal_dir.exists(), "journal dir should have been auto-created by --fix"
     # Exit code should be 0 after remediation, since all other checks pass.
     assert result.exit_code == 0, result.stderr
+
+
+def test_doctor_fix_json_reports_each_mutation_and_is_idempotent(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    no_network: None,
+    empty_env: None,
+) -> None:
+    data_dir = tmp_path / "data"
+    journal_dir = data_dir / "journals"
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
+
+    first = cli.invoke(app, ["doctor", "--fix", "--json"])
+
+    assert first.exit_code == 0, first.stderr
+    first_payload = json.loads(first.stdout)
+    assert first_payload["fixes"] == [
+        {
+            "action": "create_directory",
+            "target": str(journal_dir),
+            "status": "applied",
+            "detail": "created journal directory",
+        }
+    ]
+    assert journal_dir.is_dir()
+
+    second = cli.invoke(app, ["doctor", "--fix", "--json"])
+
+    assert second.exit_code == 0, second.stderr
+    assert json.loads(second.stdout)["fixes"] == []

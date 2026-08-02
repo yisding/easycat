@@ -13,16 +13,21 @@ from easycat import (
     EventBus,
     Session,
     SessionConfig,
+    STTProviderConfig,
+    TTSProviderConfig,
+    TurnMode,
     create_session,
 )
+from easycat.config import EasyConfigError
 from easycat.config import _factory as config_factory
 from easycat.runtime.artifacts import ArtifactWriteReceipt
 from easycat.session._types import CallIdentity
 from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
+from easycat.stt.openai_provider import OpenAISTT
 from easycat.transports.twilio_media import TwilioConnectionTransport
 from easycat.tts.input import TTSInputPolicy
-from easycat.tts.openai_tts import OpenAITTSConfig
+from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 from tests.config._helpers import (
     _DummyAgent,
     _DummyWebSocket,
@@ -169,6 +174,28 @@ async def test_session_stop_releases_outbound_identity_subscription_only() -> No
     await bus.emit(event)
     assert observed == [event]
     assert session.call_identity is None
+
+
+def test_create_session_copies_mutable_config_for_each_runtime() -> None:
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        debug="off",
+    )
+    config.turn_taking.mode = "push_to_talk"  # type: ignore[assignment]
+
+    first = create_session(config)
+    second = create_session(config)
+
+    assert config.turn_taking.mode == "push_to_talk"
+    assert first._turn_manager.mode is TurnMode.PUSH_TO_TALK
+    assert second._turn_manager.mode is TurnMode.PUSH_TO_TALK
+    assert first._turn_manager is not second._turn_manager
+    assert first._turn_manager._config is not config.turn_taking
+    assert second._turn_manager._config is not first._turn_manager._config
 
 
 @pytest.mark.asyncio
@@ -350,6 +377,25 @@ def test_create_session_binds_custom_identity_sink_capability():
     assert session.call_identity is identity
 
 
+def test_create_session_accepts_root_exported_named_provider_configs() -> None:
+    session = create_session(
+        EasyConfig(
+            openai_api_key="test-key",
+            stt=STTProviderConfig(provider="openai"),
+            tts=TTSProviderConfig(provider="openai"),
+            vad=_ProviderShapeVAD(),
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+            debug="off",
+        )
+    )
+
+    assert isinstance(session.stt, OpenAISTT)
+    assert isinstance(session.tts, OpenAITTS)
+    assert session.stt._config.event_bus is session.event_bus
+    assert session.tts._config.event_bus is session.event_bus
+
+
 def test_create_session_accepts_custom_provider_instances_without_sessionconfig(  # noqa: C901
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -450,8 +496,16 @@ def test_create_session_accepts_custom_provider_instances_without_sessionconfig(
     assert session._enable_aec is True
 
 
-def test_create_session_requires_real_agent_when_audio_pipeline_is_real():
-    with pytest.raises(ValueError, match="agent"):
+def test_create_session_requires_agent_before_allocating_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before agent validation"),
+    )
+
+    with pytest.raises(EasyConfigError, match="agent is required"):
         create_session(
             EasyConfig(
                 stt=_ProviderShapeSTT(),
@@ -461,6 +515,27 @@ def test_create_session_requires_real_agent_when_audio_pipeline_is_real():
                 agent=None,
             )
         )
+
+
+def test_create_session_revalidates_mutated_privacy_policy_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+    )
+    config.caller_id_exposure = "offf"  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before policy validation"),
+    )
+
+    with pytest.raises(EasyConfigError, match="caller_id_exposure"):
+        create_session(config)
 
 
 def test_create_session_accepts_policy_only_custom_tts(

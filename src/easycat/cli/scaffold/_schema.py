@@ -75,6 +75,8 @@ class InitConfig:
     tools: list[str] = field(default_factory=list, metadata=_STRING_LIST_METADATA)
     mcp_servers: list[str] = field(default_factory=list, metadata=_STRING_LIST_METADATA)
     easycat_source: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    easycat_git: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    easycat_git_rev: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
 
 
 _INIT_CONFIG_FIELDS = fields(InitConfig)

@@ -30,7 +30,7 @@ uv run easycat doctor --json
 uv run easycat doctor --env-file .env
 uv run easycat doctor --env-file .env --json
 uv run --env-file .env python examples/openai_agents_voice.py
-uv run easycat console
+uv run easycat console --voice-demo
 uv run python examples/journal_demo.py
 uv run python docs/teaching/offline_spine.py --run --jobs 4
 uv run easycat init --list-templates
@@ -52,7 +52,9 @@ uv sync --extra debugger --group dev
 Commands:
 
 ```bash
-uv sync --extra quickstart --extra webrtc --group dev
+uv sync --group dev
+uv run easycat console --voice-demo
+uv sync --extra quickstart --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env
@@ -61,10 +63,28 @@ uv run python examples/openai_agents_voice.py
 uv run --env-file .env python examples/openai_agents_voice.py
 ```
 
+## Installation and extras
+
+- Path: docs/install.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/install.md
+- Audience: app builders
+- Choose a portable dependency source and the smallest provider, transport, agent-framework, or processing extras for an application.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run easycat console --voice-demo
+uv run easycat init my-agent --easycat-git https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>
+uv sync --extra quickstart --group dev
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+```
+
 ## CLI and scaffolds
 
-- Path: README.md#cli
-- URL: https://github.com/yisding/easycat/blob/main/README.md#cli
+- Path: docs/cli.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/cli.md
 - Audience: app builders
 - Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
 
@@ -76,6 +96,7 @@ easycat console --voice-demo
 easycat init --list-templates
 easycat init --list-templates --json
 easycat init my-agent
+easycat init my-agent --easycat-git URL --easycat-git-rev REV
 easycat doctor --json
 easycat doctor --env-file .env --json
 easycat docs
@@ -710,7 +731,9 @@ Commands:
 ```bash
 uv run easycat docs --audience provider-maintainers
 uv run easycat docs --audience provider-maintainers --json
-uv run easycat init my-provider --template provider
+uv run easycat init my-stt --template provider-stt
+uv run easycat init my-tts --template provider-tts
+uv run easycat init my-vad --template provider
 uv run python examples/custom_transport.py
 uv run pytest tests/test_public_api.py
 uv run pytest tests/contracts

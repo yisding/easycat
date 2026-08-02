@@ -29,6 +29,7 @@ _register(
 )
 _register(
     "easycat.helpers",
+    "arun",
     "attach_runtime_feedback",
     "require_env",
     "run",
@@ -79,7 +80,7 @@ _register("easycat.debug.bundle", "RunBundle")
 _register("easycat.debug.export", "export_debug_bundle")
 
 # Errors.
-_register("easycat.errors", "EasyCatError", "ErrorEntry")
+_register("easycat.errors", "EasyCatError", "EasyConfigError", "ErrorEntry")
 
 # Core events.
 _register(

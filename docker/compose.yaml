@@ -13,6 +13,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in your shell or a .env file}
       EASYCAT_WS_HOST: 0.0.0.0
       EASYCAT_WS_TOKEN: ${EASYCAT_WS_TOKEN:?set EASYCAT_WS_TOKEN in your shell or a .env file}
+      # Browser-demo opt-in. Safe here because the published host port below
+      # is loopback-only; production clients should use Authorization headers.
+      EASYCAT_WS_ALLOW_QUERY_TOKEN: "1"
       EASYCAT_WS_MAX_SESSIONS: ${EASYCAT_WS_MAX_SESSIONS:-10}
     ports:
       - "127.0.0.1:8765:8765"

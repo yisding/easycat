@@ -94,6 +94,65 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   session needs more in-memory history.
 - `record_to="runs"` on `EasyConfig` or `create_text_session(...)` exports a
   timestamped debug bundle on clean shutdown when journaling is enabled.
+
+To consume a journal while a session runs, give `follow(...)` an explicit stop
+event and always join the tail task during teardown:
+
+```python
+import asyncio
+
+from easycat import EasyConfig, JournalRecordKind, create_session
+
+
+async def tail(session, stop_tailing: asyncio.Event) -> None:
+    async for record in session.journal.follow(stop=stop_tailing):
+        if record.kind == JournalRecordKind.EVENT:
+            print(f"[{record.name}] {record.data}")
+
+
+async def run_and_tail(config: EasyConfig) -> None:
+    async with create_session(config) as session:
+        stop_tailing = asyncio.Event()
+        tail_task = asyncio.create_task(tail(session, stop_tailing))
+        try:
+            await session.wait_closed()
+        finally:
+            stop_tailing.set()
+            await tail_task
+```
+
+For a durable journal, inspect the same record stream without application code:
+
+```bash
+uv run easycat inspect .easycat/journals/<session_id>.sqlite
+```
+
+#### Artifact lifecycle and storage budget
+
+1. A running `debug="full"` session owns a live SQLite journal and artifact
+   directory under `data_dir` (by default `.easycat`). Retention and crash
+   sweeps never move or delete a journal that still holds its live-owner claim.
+2. `await session.stop()` closes writable backends and records clean close. The
+   session retains a read-only `session.journal` view and can still execute
+   `session.export_debug_bundle(...)` for postmortem inspection.
+3. Every persistent SQLite close runs an opportunistic retention sweep. The
+   built-in budget keeps at most **50 journals**, **2 GiB**, and **14 days** of
+   live journal history; whichever limit is reached first prunes the oldest
+   clean session. `journal_retention="archive"` (default) moves that session's
+   database and artifacts into a private `.tar.gz` under `data_dir/archive/`;
+   `journal_retention="delete"` removes them instead.
+4. `easycat bundles list` discovers live, clean, and
+   unclean/crash-recovered artifacts from the default data root. Retention
+   archives are not included in bundle discovery; inspect or extract them only
+   in an isolated, operator-controlled location. Raw sources remain sensitive
+   even when a rendered CLI view is redacted.
+
+The count/byte/age values above bound the active journal set, not archived
+tarballs, exported bundles, or copies in object storage. Deployments using the
+archive policy must separately budget and expire `data_dir/archive/` alongside
+their tenant, legal, encryption, and deletion policies; EasyCat cannot expire
+copies it no longer owns.
+
 - Error records preserve PEP 678 exception notes in `ErrorInfo.notes`. Runtime
   `Error` events attach `stage`, `provider`, `code`, `session_id`, and
   `turn_id` when known; stage wrappers also attach `elapsed_ms`, `sequence`,

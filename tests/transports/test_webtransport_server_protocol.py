@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
@@ -855,6 +856,38 @@ async def test_serve_webtransport_config_sessions_manages_session_lifecycle(
             stop_event.set()
             accepted_transport.closed.set()
             await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_webtransport_shutdown_surfaces_failed_session_report(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from easycat.server.webtransport import _shutdown_webtransport_sessions
+    from easycat.session_manager import SessionStopFailure, SessionStopReport
+
+    report = SessionStopReport(
+        attempted_keys=(7,),
+        stopped_keys=(),
+        failures=(
+            SessionStopFailure(key=7, exception=RuntimeError("webtransport teardown failed")),
+        ),
+    )
+    server = SimpleNamespace(stop=AsyncMock())
+    manager = SimpleNamespace(stop_all=AsyncMock(return_value=report))
+
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(
+            RuntimeError,
+            match="WebTransport shutdown retained 1 session",
+        ),
+    ):
+        await _shutdown_webtransport_sessions(server, manager)  # type: ignore[arg-type]
+
+    assert "WebTransport session shutdown failed to stop 1 of 1 session" in caplog.text
+    assert "webtransport teardown failed" in caplog.text
+    server.stop.assert_awaited_once()
+    manager.stop_all.assert_awaited_once()
 
 
 def test_run_webtransport_config_server_delegates_to_async_helper(

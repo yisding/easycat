@@ -6,9 +6,10 @@ import enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat.errors import EasyConfigError
 from easycat.events import EventBus
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.providers import (
@@ -61,6 +62,29 @@ class TurnState(enum.Enum):
 
 
 CallDirection = Literal["inbound", "outbound", "unknown"]
+CallerIdExposure = Literal["off", "system_message", "tools_only"]
+
+_CALL_DIRECTIONS = frozenset({"inbound", "outbound", "unknown"})
+_CALLER_ID_EXPOSURES = frozenset({"off", "system_message", "tools_only"})
+_JOURNAL_DETAILS = frozenset({"off", "light", "full"})
+_INTERRUPTION_MODES = frozenset({"truncate", "message"})
+_RUNTIME_MODES = frozenset({"chained_pipeline", "text_session"})
+_JOURNAL_REDACTIONS = frozenset({"secrets", "pii"})
+
+
+def _validate_policy(name: str, value: object, allowed: frozenset[str]) -> str:
+    """Return a validated string policy or raise with an actionable message."""
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError(f"Invalid {name}={value!r}. Must be one of {sorted(allowed)}.")
+    return value
+
+
+def _validate_caller_id_exposure(value: object) -> CallerIdExposure:
+    """Validate the privacy boundary shared by config and live Session state."""
+    return cast(
+        CallerIdExposure,
+        _validate_policy("caller_id_exposure", value, _CALLER_ID_EXPOSURES),
+    )
 
 
 @dataclass(frozen=True)
@@ -94,8 +118,8 @@ class CallIdentity:
     country: str | None = None
     custom_fields: dict[str, str] = field(default_factory=dict)
 
-
-CallerIdExposure = Literal["off", "system_message", "tools_only"]
+    def __post_init__(self) -> None:
+        _validate_policy("direction", self.direction, _CALL_DIRECTIONS)
 
 
 # Mapping from TurnManagerState to the Session-level TurnState.
@@ -249,3 +273,33 @@ class SessionConfig:
     # Keep appended for positional compatibility with older SessionConfig calls.
     capture_audio: bool | Callable[[], bool] = True
     journal_redaction: Literal["secrets", "pii"] = "secrets"
+
+    def __post_init__(self) -> None:
+        """Reject invalid runtime policies before any Session resources are wired."""
+        _validate_policy("journal_detail", self.journal_detail, _JOURNAL_DETAILS)
+        _validate_policy("interruption_mode", self.interruption_mode, _INTERRUPTION_MODES)
+        _validate_policy("runtime_mode", self.runtime_mode, _RUNTIME_MODES)
+        _validate_caller_id_exposure(self.caller_id_exposure)
+        _validate_policy("journal_redaction", self.journal_redaction, _JOURNAL_REDACTIONS)
+        self._validate_required_collaborators()
+
+    def _validate_required_collaborators(self) -> None:
+        """Reject incomplete raw session wiring at the config boundary."""
+        missing: list[str] = []
+        if self.runtime_mode == "chained_pipeline":
+            if self.agent is None:
+                missing.append("agent")
+            for name in ("stt", "tts", "transport"):
+                if getattr(self, name) is None:
+                    missing.append(name)
+            if self.enable_vad and self.vad is None:
+                missing.append("vad")
+        if missing:
+            remedy = (
+                "Use EasyConfig + create_session/run for automatic provider wiring, "
+                "or pass live provider instances to SessionConfig."
+            )
+            raise EasyConfigError(
+                f"SessionConfig(runtime_mode={self.runtime_mode!r}) requires: "
+                f"{', '.join(missing)}. {remedy}"
+            )

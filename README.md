@@ -4,9 +4,11 @@ Slim, batteries-included voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow.
 
-### Quickstart (VoiceApp)
-`VoiceApp` is the app-first entry point: one noun for your voice product, with
-one-word mode switching. Build it once with your agent, then pick where it runs:
+### Quickstart
+
+`VoiceApp` is the beginner and product-level entry point: give it your agent,
+then explicitly choose where it runs. The README, first example, feature ladder,
+and default scaffold all use this same shape:
 
 ```python
 from agents import Agent
@@ -14,18 +16,17 @@ from agents import Agent
 from easycat import VoiceApp
 
 app = VoiceApp(agent=Agent(name="assistant", instructions="You are a helpful voice assistant."))
-app.run("browser")  # or "local", "websocket", "twilio"
+app.run("local")
 ```
 
-`app.run("local")` talks over your mic/speakers; `app.run("websocket")` serves
-per-client WebSocket sessions; `app.run("twilio")` answers phone calls. Run it
-from the CLI with `easycat serve --mode browser`. See
-[examples/voice_app.py](examples/voice_app.py).
+`local` uses your microphone and speakers. The same app can run in `browser`,
+`websocket`, or `twilio` mode when you install that mode's extras and server
+requirements. See [examples/voice_app.py](examples/voice_app.py). The separate
+`easycat serve` command runs EasyCat's bundled playground (or an explicit
+server manifest); it does not import the `VoiceApp` in your Python file.
 
-### Quickstart (EasyConfig)
-For the lower-level shape, `run(EasyConfig.mic(agent=...))` is the one canonical
-shape — the three-line path identical in `examples/openai_agents_voice.py` and
-the scaffold that `easycat init my-agent` writes:
+Graduate to `EasyConfig` when you need explicit providers, turn taking,
+journaling, or a caller-owned session:
 
 ```python
 from agents import Agent
@@ -39,28 +40,35 @@ run(
 )
 ```
 
-By default, `run(...)` shows live console feedback only on an interactive
-stderr. Use `run(config, feedback="off")` to keep a process quiet, or
-`feedback="on"` to force the same first-run transcript/status output when
-stderr is redirected.
+Async application? Use `await arun(config)`. Calling `run(...)` from an active
+event loop fails before startup and points you to `arun(...)`.
 
-> Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
-> (gpt-realtime-whisper) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
-> environment) when you do not override `stt` or `tts`. The Realtime STT
-> streams transcription over a WebSocket as audio arrives — sub-second
-> stop-to-final latency, not a batch upload at end of turn. The Realtime
-> API is priced separately from `/v1/audio/transcriptions`; see OpenAI's
-> pricing page. If you omit the API key, you must supply `stt` and `tts`
+The convenience helpers show live console feedback only on an interactive
+stderr. Use `feedback="off"` to keep a process quiet or `feedback="on"` to
+force first-run transcript/status output when stderr is redirected.
+
+> `VoiceApp(...).run("local")` and `EasyConfig.mic(...)` automatically wire
+> OpenAI Realtime STT (`gpt-realtime-whisper`) and OpenAI TTS from
+> `OPENAI_API_KEY` when you do not override `stt` or `tts`. This is provider
+> traffic and may incur charges. If you omit the key, supply STT and TTS
 > configs explicitly.
->
-> The underlying bridge classes live in `easycat.integrations.agents`
-> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
-> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`, `LangChainBridge`,
-> `LangGraphBridge`) for callers who want to construct them by hand.
 
 ## Install
 
 Python 3.11+ is required.
+
+First prove the checkout works without API keys, audio hardware, or provider
+traffic:
+
+```bash
+uv sync --group dev
+uv run easycat --version
+uv run easycat console --voice-demo
+```
+
+`console --voice-demo` runs one scripted turn through the real audio pipeline
+and writes a replayable debug bundle. Ambient API keys are ignored; only
+`easycat console --live` opts into provider traffic that may incur charges.
 
 Local microphone/speaker modes also need the PortAudio runtime. Install it
 before the Python extra on Linux or macOS:
@@ -74,39 +82,48 @@ sudo apt-get install -y libportaudio2
 brew install portaudio
 ```
 
-EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart,webrtc]'`
-will work only after launch. Until then, an application should depend on a
-local checkout — scaffolds from `easycat init` wire this automatically with
-a `[tool.uv.sources]` block; for a hand-written `pyproject.toml`, add:
+EasyCat is not published to PyPI yet. For a portable application dependency,
+pin a Git commit (replace `<commit-sha>` with the revision you audited):
 
 ```toml
 [project]
-dependencies = ["easycat[quickstart,webrtc]"]
+dependencies = ["easycat[quickstart]"]
 
 [tool.uv.sources]
-easycat = { path = "/path/to/easycat", editable = true }
+easycat = { git = "https://github.com/yisding/easycat.git", rev = "<commit-sha>" }
 ```
 
-For this repository, four commands go from clone to a talking bot. Keys live
-in a project `.env` — the same convention `easycat init` scaffolds:
+Use `easycat = { path = "/path/to/easycat", editable = true }` only when
+developing EasyCat and the application together. Generated scaffolds make that
+editable source explicit when they are created from a local checkout. Generate
+a portable scaffold directly with
+`uv run easycat init my-agent --easycat-git https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>`;
+Git and local source options are mutually exclusive.
+
+For this repository, four commands go from the checkout to a talking bot. The
+first command preserves an existing `.env`; after it runs, edit `.env` and add
+your key before running doctor:
 
 ```bash
-uv sync --extra quickstart --extra webrtc --group dev
-echo 'OPENAI_API_KEY=your-api-key' > .env
+uv sync --extra quickstart --group dev
+test -e .env || cp .env.example .env
 uv run easycat doctor --env-file .env
 uv run --env-file .env python examples/openai_agents_voice.py
 ```
 
 Prefer exported shell variables? `uv run easycat doctor` and
 `uv run python examples/openai_agents_voice.py` work the same once
-`OPENAI_API_KEY` is exported.
+`OPENAI_API_KEY` is exported. Add `--json` (`uv run easycat doctor --json`, or
+`uv run easycat doctor --env-file .env --json`) for parseable checks. See the
+[installation and extras guide](docs/install.md) for browser, telephony,
+provider, agent-framework, and local-model installs.
 
 ## Choose Your Path
 
 | You want to | Start here | First move |
 |---|---|---|
 | Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor`; for `.env` keys, use `uv run easycat doctor --env-file .env` and `uv run --env-file .env python examples/openai_agents_voice.py` |
-| No mic or API key yet | [Journal demo](examples/journal_demo.py) and [hardware-free teaching spine](docs/teaching/#hardware-free-checkpoint-spine) | Run `uv run easycat console` or `uv run python examples/journal_demo.py`; use `uv run python docs/teaching/offline_spine.py --run --jobs 4` for one credential-free checkpoint from every chapter |
+| No mic or API key yet | [Journal demo](examples/journal_demo.py) and [hardware-free teaching spine](docs/teaching/#hardware-free-checkpoint-spine) | Run `uv run easycat console --voice-demo` or `uv run python examples/journal_demo.py`; use `uv run python docs/teaching/offline_spine.py --run --jobs 4` for one credential-free checkpoint from every chapter |
 | Learn EasyCat feature by feature | [EasyCat feature ladder](docs/using-easycat/) | Start with [`VoiceApp`](docs/using-easycat/00-first-voice-app/), then add one product capability per chapter |
 | Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
 | Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
@@ -117,786 +134,90 @@ Prefer exported shell variables? `uv run easycat doctor` and
 
 ## Learn the pipeline from scratch
 
-The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
-pipeline ground-up, in the spirit of *Crafting Interpreters* and
-`nanoGPT`. Each chapter is a self-contained folder with a runnable
-`main.py` and a narrative `README.md`. Start at
-[`docs/teaching/00-hello-audio/`](docs/teaching/00-hello-audio/) and add
-one stage per chapter (echo → transcribe → VAD → blocking agent →
-streaming agent → tools → smart-turn → interruption → noise/AEC →
-journal → evals → swap providers → BYO agent → operate in production).
-
-For the maintained docs map, see [`docs/README.md`](docs/README.md).
+The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice pipeline
+ground-up, from audio chunks through production operations. Each chapter is a
+self-contained folder with a runnable program and exercises. Use this route when
+you want to understand the machinery rather than only assemble an application.
 
 ## Learn EasyCat feature by feature
 
 The [EasyCat feature ladder](docs/using-easycat/) starts with a working
-`VoiceApp` and teaches the public product surface one capability at a time:
-runtime modes, providers and voices, conversation controls, tools, agent
-frameworks, sessions and events, debugging, evals, multi-client servers,
-telephony, and production operations. Start at
-[`00-first-voice-app`](docs/using-easycat/00-first-voice-app/).
-
-Use the ground-up ladder above when you want to build the underlying voice
-pipeline from PCM onward; use the feature ladder when you want to build an app
-with EasyCat first and reveal lower-level control as you need it.
-
-## Optional extras
-
-The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
-SDK, NumPy, onnxruntime, and LiveKit AEC3 echo cancellation. SoXR is a core
-dependency because every transport and provider can cross a sample-rate
-boundary. RNNoise is
-opt-in because noise reduction defaults off and its Python binding pulls a
-large multimedia/plotting dependency chain; add the `rnnoise` extra only when
-you enable that backend. `quickstart` also does not include TEN VAD; install
-that optional extra separately only if you accept its non-permissive license.
-Silero VAD runs on its bundled ONNX model via `onnxruntime` (already in
-`quickstart`) — no torch required. If you want a leaner install with Silero,
-add extras individually:
-
-```bash
-uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
-```
-
-Optional dependencies you may need depending on providers, transports, agent
-frameworks, and debugging/audio-processing features:
-- sounddevice + NumPy (LocalTransport and local audio buffers; requires the
-  PortAudio runtime above): `uv sync --extra local --group dev`
-- aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
-- aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
-- Twilio SDK + aiohttp (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
-- FastAPI + uvicorn telephony server layer: `uv sync --extra telephony-fastapi --group dev`
-- Complete Twilio FastAPI reference app and scaffold: `uv sync --extra telephony --extra telephony-fastapi --group dev`
-- OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
-- PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
-- PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
-- LangChain core: `uv sync --extra langchain --group dev`
-- LangGraph: `uv sync --extra langgraph --group dev`
-- LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents --group dev`
-- LiveKit AEC3 echo cancellation: `uv sync --extra aec --group dev`
-- aiohttp debugger UI: `uv sync --extra debugger --group dev`
-- NumPy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
-- ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad --group dev`
-- numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad --group dev` — runs the bundled ONNX model (no torch required)
-- numpy + onnxruntime + kaldi-native-fbank (FunASR VAD): `uv sync --extra funasr-vad --group dev`
-  runs the bundled FunASR FSMN-VAD model through EasyCat's in-tree runtime.
-- pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise --group dev`
-- Krisp SDK (krisp_audio): `uv pip install krisp_audio`
-- Provider extras/keys:
-  `uv sync --extra openai --group dev`,
-  `uv sync --extra deepgram --group dev`,
-  `uv sync --extra elevenlabs --group dev`,
-  or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
-  use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
-  add no vendor SDK).
-
-For a broad downstream evaluation install, run
-`uv add 'easycat[all,pydantic-ai]'` for stable PydanticAI v1 or
-`uv add 'easycat[all,pydantic-ai-v2]'` for stable v2. In this repository, use
-`uv sync --extra all --extra pydantic-ai --group dev` or
-`uv sync --extra all --extra pydantic-ai-v2 --group dev`, respectively. The
-`all` extra deliberately omits `ten-vad` because of its non-permissive license
-and omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2` extras.
-
-Every EasyCat install includes SoXR for filtered, native-speed sample-rate
-conversion. `easycat doctor` reports the active backend; the dependency-free
-filtered resampler remains a runtime fallback if the native backend fails.
-Continuous transport, provider, VAD, noise-reduction, and TTS paths retain
-filter history and fractional phase across chunks, so packet boundaries do
-not become audible sample-rate-conversion boundaries.
-
-Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
-socket per voice session by default. EasyCat calls the provider's `warmup()`
-hook during session startup so the first reply does not pay a TCP/TLS handshake.
-Set `persistent_ws=False` on the provider config to retain the legacy
-one-socket-per-utterance behavior; ElevenLabs HTTP mode disables WebSocket
-persistence automatically. ElevenLabs WebSocket mode also defaults to
-`auto_mode=True` so complete clauses begin synthesis without waiting on the
-server's chunk schedule.
+`VoiceApp`, then adds runtime modes, providers, conversation controls, tools,
+agent frameworks, sessions, debugging, evals, servers, telephony, and operations
+one capability at a time.
 
 ## CLI
 
-The commands below use the installed CLI form. From this repository, prefix
-them with `uv run`, for example `uv run easycat doctor`.
+These examples use the installed form. From this repository, prefix commands
+with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
-easycat console          # try EasyCat in your terminal — no API keys required
-easycat console --voice-demo # run one scripted no-key turn through the full audio pipeline
-easycat init my-agent    # scaffold a new project from a template
-easycat init --list-templates # compare templates, base package requirements, env vars, files, preflight/check/fix/docs/json-schema/run commands
-easycat init --list-templates --json # emit the machine-readable template catalog
-easycat doctor           # check API keys, optional extras, provider reachability
-easycat doctor --json    # emit machine-readable environment checks
-easycat doctor --env-file .env --json # emit checks with project .env loaded
-easycat serve            # serve the browser voice playground on localhost
-easycat plan             # show the provider/capability plan for a manifest profile
-easycat plan --json      # emit the machine-readable provider/capability plan
-easycat docs             # list route labels and available audience filters
-easycat docs --verbose   # expand every route with descriptions and command hints
-easycat docs --audience learners # expand routes for one reader audience or broad role
-easycat docs --audience learners --json # emit a filtered docs route map for learners
-easycat docs --json      # emit docs routes, audiences, and command hints for automation
-easycat docs --audience app-builders # filter docs to scaffold and app-building routes
-easycat docs --audience app-builders --json # emit a filtered docs route map for app builders
-easycat docs --audience operators # filter docs to deployment and observability routes
-easycat docs --audience operators --json # emit a filtered docs route map for operators
-easycat docs --audience maintainers # filter docs to architecture and maintenance routes
-easycat docs --audience maintainers --json # emit a filtered docs route map for maintainers
-easycat explain E102     # look up errors and CLI schema topics
-easycat explain json-schema # document the --json envelope and command metadata
-easycat explain --list   # list every error code and meta topic
-easycat bundles list      # list captured debug bundles and crash dumps
-easycat bundles list --json # emit machine-readable bundle list
-easycat bundles show PATH # summarise a debug bundle or SQLite journal
-easycat bundles show PATH --json # emit machine-readable bundle/journal summary
-easycat bundles export PATH # write a redacted coding-agent context pack
-easycat bundles export PATH --output DIR --json # emit context-pack metadata
-easycat inspect PATH      # summarise a debug bundle or SQLite journal
-easycat inspect PATH --json # emit machine-readable bundle/journal summary
-easycat replay PATH       # replay a debug bundle or SQLite journal
-easycat debugger serve PATH # open the browser debugger UI for a bundle/journal
-easycat replay PATH --json # emit machine-readable replay summary
-easycat latency PATH      # summarise critical-path latency percentiles for a bundle
-easycat diff PATH_A PATH_B # diff two bundles turn-by-turn for milestone regressions
-easycat journal grep PATH --query TEXT # full-text search a journal or bundle (redacted)
-easycat journal follow PATH # live-tail a journal as it grows (redacted)
-easycat journal promote PATH TURN_ID --out FILE # save one turn as a replayable regression bundle
-easycat tail PATH         # live-tail a SQLite journal as it grows
-easycat validate quick       # run deterministic local validation
-easycat validate quick --json # emit quick validation in the standard envelope
-easycat validate contracts   # run offline provider/protocol contract validation
-easycat validate contracts --json # emit contract validation in the standard envelope
-easycat validate release     # run the strict installed-wheel release gate
-easycat validate release --json # emit release validation in the standard envelope
-easycat validate report .easycat/validation/latest.json # render latest validation report
-easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
+easycat console --voice-demo        # deterministic, keyless proof of life
+easycat init --list-templates       # compare application/provider scaffolds
+easycat doctor                      # inspect local readiness without changing it
+easycat doctor --env-file .env --json
+easycat serve                       # bundled browser playground on loopback
+easycat docs --audience app-builders
+easycat validate quick              # deterministic local validation
+easycat bundles list                # discover captured runs and journals
 ```
 
-From an empty directory, `easycat init --list-templates` shows the available
-scaffolds with best-fit guidance, the base `easycat[...]` package requirement
-and extras, required environment variables, optional environment knobs,
-generated files, transport, framework, and copyable
-create/preflight/check/fix/docs/json-schema/run commands.
-`easycat init my-agent` scaffolds the same one shown above: the canonical
-`run(EasyConfig.mic(agent=...))` shape.
-Then `easycat doctor` validates your environment before the first run. If your
-provider keys live in a project `.env`, use `easycat doctor --env-file .env`;
-add `--json` for the same environment/check rows without Rich formatting.
-Use `easycat docs --audience learners` to narrow the human map,
-`easycat docs --audience app-builders` for scaffold and app-building routes,
-`easycat docs --audience operators` for deployment and observability routes,
-or `easycat docs --audience maintainers` for architecture and maintenance
-routes; the `maintainers` and `operators` filters also include compound labels
-such as `provider maintainers`, `release maintainers`, and
-`operators and maintainers`.
-Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
-[llms.txt](llms.txt) for machine-readable docs route discovery or run
-`easycat explain json-schema`.
-`easycat explain json-schema` documents the standard `--json` envelope. It covers
-the docs route map,
-template catalog, scaffold output, doctor environment/checks output,
-validation quick/contracts/release/report output, bundle list/show/export,
-inspect, and replay command families, including command-specific fields such
-as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
-`available_audiences`, `available_audience_filters`,
-`audience_alias_note`, `command_note`, `base_requirement`, `create_command`,
-`repo_create_command`,
-`next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
-`fix_command`, `environment`, `checks`, `validation`, `source_path`, and
-`fidelity_effective`, and error fields such as `report_path`, `path`, and
-`output_path`. Replace uppercase or angle-bracket placeholders in command
-hints, such as `PATH` or `<session_id>`, before running them.
+`easycat init --list-templates` reports each scaffold's base `easycat[...]`
+package requirement and extras, required environment variables, optional
+environment knobs, generated files, and copyable
+create/preflight/check/fix/docs/json-schema/run commands. Add `--json` for the
+machine-readable catalog. A generated default app
+uses the same `VoiceApp(...).run("local")` shape as the quickstart.
+
+Use the [CLI reference](docs/cli.md) for every command family, `easycat docs`
+for audience-specific routes, and `easycat explain json-schema` for the stable
+JSON envelope. Coding agents should start with [AGENTS.md](AGENTS.md) and
+[llms.txt](llms.txt).
 
 ## Current capabilities
-- Session runtime that wires the configurable audio pipeline (noise reduction, echo cancellation, VAD, and smart-turn tuning) -> STT -> agent -> TTS
-- Typed event system with an EventBus for streaming-first voice events and
-  configurable handler-error policy
-- Passive supervisor listen-in via session audio fan-out on the EventBus
-- STT providers: OpenAI, Deepgram, ElevenLabs, Cartesia
-- TTS providers: OpenAI, Deepgram, ElevenLabs, Cartesia
-- VAD providers: Silero (open-source), FunASR ONNX VAD (open-source), optional TEN VAD (non-permissive license), and Krisp (commercial)
-- Noise reduction: RNNoise (open-source), Krisp (commercial), passthrough fallback
-- Transports: Local (sounddevice), WebSocket server, WebRTC (aiortc), WebTransport (aioquic), Twilio Media Streams server
-- Telephony helpers: DTMF parsing/aggregation, voicemail detection, TwiML helpers, outbound calling (Twilio), screening + IVR navigation, per-number health / retry / compliance gates, caller-ID propagation to the agent or tools
-- Reliability/observability: reconnecting WebSocket, timeouts, bounded queues, metrics/tracing
-- Agent/workflow adapters: OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, Remote Responses API, and generic workflows
 
-## Bring your own agent
-EasyCat does not replace your agent framework. Build your agent or workflow with
-your SDK of choice and hand it to EasyCat — `create_session` auto-detects
-OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, Remote
-Responses API URLs, and your own async workflow objects with
-`on_user_turn(...)` via `auto_adapt_agent`, so you don't have to wrap them
-yourself.
+- Session pipeline: noise reduction, echo cancellation, VAD, turn taking, STT,
+  agent streaming, output processors, and TTS.
+- STT and TTS: OpenAI, Deepgram, ElevenLabs, and Cartesia.
+- VAD: Silero, FunASR, optional TEN VAD, and Krisp. Noise reduction: RNNoise,
+  Krisp, and a passthrough fallback.
+- Transports: Local, WebSocket, WebRTC, WebTransport, and Twilio Media Streams.
+- Agent/workflow adapters: `OpenAIAgentsBridge`, `PydanticAIBridge`,
+  `LangChainBridge`, `LangGraphBridge`, `LlamaAgentsBridge`,
+  `RemoteResponsesAPIBridge`, and `GenericWorkflowBridge`.
+- Typed events, interruption, telephony actions, multi-session servers,
+  durable journals, replay, latency analysis, and debugger tooling.
 
-The top-level import surface is intentionally curated and lazy. See the
+## Build beyond the quickstart
+
+EasyCat does not replace your agent framework. Pass an OpenAI Agents SDK,
+PydanticAI, LangChain, LangGraph, LlamaAgents, Remote Responses API, or your own
+async workflow object to `VoiceApp`/`EasyConfig`; the matching bridge is selected
+automatically. Construct a bridge directly only when you need bridge-specific
+options.
+
+The top-level import surface is curated and lazy. See the
 [public API contract](docs/public-api.md) before adding or depending on new
-`from easycat import ...` names. The canonical entry point is the
-[quickstart](#quickstart-easyconfig) at the top of this README.
-
-### Advanced: own the lifecycle
-When you need the session object itself — event subscriptions, text turns, debug bundles, or your own event loop — follow the graduation guide [from EasyConfig to Session](docs/from-easyconfig-to-session.md).
-
-## Telephony (inbound + outbound)
-
-### Inbound calls (Twilio Media Streams)
-Point Twilio's inbound webhook at a handler that returns
-`<Connect><Stream>` TwiML and passes actual webhook form values through
-as `<Parameter>` children:
-
-```python
-import os
-from urllib.parse import parse_qsl
-
-from fastapi import Request, Response
-from easycat.telephony import validate_twilio_webhook_signature
-from easycat.transports import TwilioStreamTokenStore
-from easycat.transports.twilio_media import twiml_connect_stream
-
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-stream_tokens = TwilioStreamTokenStore(
-    os.getenv("TWILIO_STREAM_TOKEN_SECRET") or TWILIO_AUTH_TOKEN or None
-)
-
-
-@app.post("/twiml")
-async def twiml(request: Request) -> Response:
-    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
-    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
-        auth_token=TWILIO_AUTH_TOKEN,
-        url=str(request.url),  # must be Twilio's exact public URL
-        params=form_items,
-        signature=request.headers.get("x-twilio-signature"),
-    ):
-        return Response(status_code=403)
-
-    form = dict(form_items)
-    xml = twiml_connect_stream(
-        "wss://your-app.example.com/twilio",
-        parameters={
-            "Direction": form.get("Direction") or "inbound",
-            "From": form.get("From", ""),
-            "To": form.get("To", ""),
-            "CallerName": form.get("CallerName", ""),
-        },
-        stream_token=stream_tokens.issue(),
-    )
-    return Response(content=xml, media_type="application/xml")
-```
-
-`TwilioTransport` parses `start.customParameters` and writes a
-`CallIdentity` (caller / called numbers, direction, optional display
-name, and any extra fields you pass) onto
-`session.call_identity`. Tool code inside your agent reads
-`session.call_identity.caller_number` directly. Do not pass
-`"{{From}}"`-style placeholders to `twiml_connect_stream`; Twilio
-forwards those verbatim in generated TwiML. When webhook validation is
-enabled behind a proxy, validate against the same public URL Twilio
-called, not an internal service URL.
-
-Pass the same token store to the WebSocket transport with
-`TwilioTransportConfig(stream_token_validator=stream_tokens.consume)`.
-The built-in store is in-memory and suited to a single app process. For
-multiple workers or replicas, route TwiML and WebSocket traffic to the
-same process or provide a shared validator/store.
-
-### Outbound calls (Twilio REST)
-Enable the outbound pipeline via `EasyConfig.telephony`:
-
-```python
-from easycat import (
-    EasyConfig,
-    OutboundCallConfig,
-    TelephonyConfig,
-    VoicemailDetectionConfig,
-    create_session,
-)
-
-config = EasyConfig(
-    agent=your_agent,
-    greeting="Hi, this is Lucy from Example Health.",
-    telephony=TelephonyConfig(
-        enable_outbound_call_manager=True,
-        outbound=OutboundCallConfig(
-            from_number="+15559876543",
-            twilio_account_sid="AC…",
-            twilio_auth_token="…",
-            twiml_url="https://your-app.example.com/outbound.twiml",
-            status_callback_url="https://your-app.example.com/status",
-            voicemail_detection=VoicemailDetectionConfig(
-                mode="detect_end_of_greeting",  # or "detect"
-                detection_timeout_s=30,
-            ),
-        ),
-    ),
-)
-session = create_session(config)
-```
-
-With the outbound manager enabled you also get:
-
-- `NumberHealthMonitor` — per-number answer rate, block count, pacing
-- `CallDispositionTracker` — human / voicemail / IVR disposition stats
-- `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
-- `DNCList` and `check_calling_hours` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
-
-Start the session before placing calls, and feed Twilio status callbacks
-back into the same event bus:
-
-```python
-from urllib.parse import parse_qsl
-
-from fastapi import HTTPException, Request, Response
-from easycat.telephony import emit_call_status, validate_twilio_webhook_signature
-
-
-await session.start()
-manager = session.outbound_call_manager
-if manager is None:
-    raise RuntimeError("Outbound manager is not configured")
-
-call_sid = await manager.place_call("+15551234567")
-
-
-@app.post("/status")
-async def status(request: Request) -> Response:
-    form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
-    if TWILIO_AUTH_TOKEN and not validate_twilio_webhook_signature(
-        auth_token=TWILIO_AUTH_TOKEN,
-        url=str(request.url),
-        params=form_items,
-        signature=request.headers.get("x-twilio-signature"),
-    ):
-        raise HTTPException(status_code=403)
-    await emit_call_status(dict(form_items), session.event_bus)
-    return Response(status_code=204)
-```
-
-When the session places an outbound call via `CallInitiated`,
-`session.call_identity` is stamped with `direction="outbound"` and the
-dialed number.  `TwilioTransport` mirrors the other direction: on the
-``<Stream>`` start event it parses caller-ID + geographic
-customParameters and emits ``CallAnswered``, so observers like
-``CallDispositionTracker`` see inbound and outbound calls through the
-same lifecycle.
-
-### Bot speaks first
-Set `EasyConfig.greeting` (or pass `greeting=...`) to have the bot
-synthesize a greeting on the first `CallAnswered` event.  Works for
-both inbound (stream start) and outbound (callee pickup).  Use this to
-play an AI-disclosure or identification line before the caller's first
-utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
-140 for outbound AI calls.
-
-### Caller-ID exposure policy
-Control whether the LLM sees the caller's number or only tool code
-does via `EasyConfig.caller_id_exposure`:
-
-- `"tools_only"` (default): number available at
-  `session.call_identity.caller_number` for tools, hidden from the
-  LLM prompt. Right for PII-sensitive workflows.
-- `"system_message"`: prepend a short system note on every turn
-  (`"The caller's phone number is +1555…"`). Use when the agent needs
-  to greet by number, look up account, etc.
-- `"off"`: hide from both layers.
-
-```python
-config = EasyConfig(
-    agent=your_agent,
-    caller_id_exposure="system_message",
-)
-```
-
-### Transport kind
-Tools that should behave differently on a phone call vs. a browser
-session read `session.transport_kind` — one of `"telephony"`,
-`"webrtc"`, `"websocket"`, `"local"`, `"noop"`, or `"custom"`.  Use
-it to skip "open this URL" prompts on phone calls or mute emoji in
-voice-only surfaces.
-
-## Session lifecycle
-
-- `async with session:` is the preferred public teardown idiom — entering starts the session, exiting calls `stop(force=True)`.
-- `await session.stop()` is the single public teardown verb: the default (`force=False`) drains in-flight work gracefully; `force=True` aggressively cancels the pipeline first.
-- `await session.wait_closed()` blocks until the session has stopped — the idiomatic pair for `async with session: await session.wait_closed()`.
-- After a clean `stop()`, postmortem inspection is still supported: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work.
-
-
-## Pre-TTS output processors (easy mode)
-If you want to change how the assistant is spoken (for example phone-number pacing
-or custom pronunciations), pass processors in config:
-
-```python
-from easycat import (
-    EasyConfig,
-    PauseProcessor,
-    PhoneticReplacementProcessor,
-    create_session,
-)
-
-config = EasyConfig(
-    output_processors=[
-        # Replace names/terms with pronunciation-friendly spellings.
-        # e.g. "Siobhan" -> "shi-vawn"
-        #      "Nguyen" -> "win"
-        #
-        # Then apply phone-number pause formatting (via regex).
-        # Note: processor order matters.
-        PhoneticReplacementProcessor(
-            {
-                "Siobhan": "shi-vawn",
-                "Nguyen": "win",
-            }
-        ),
-        PauseProcessor(
-            pattern=r"\+?\d[\d\s().-]{5,}\d",
-            unit_pattern=r"\d",
-            minimum_units=7,
-            style="ellipsis",
-            ellipsis_count=1,
-        ),
-    ],
-)
-session = create_session(config)
-```
-
-Or use the convenience helper for the common pronunciation + phone-number stack:
-
-```python
-from easycat import EasyConfig, create_session, default_pronunciation_processors
-
-config = EasyConfig(
-    output_processors=default_pronunciation_processors(
-        name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
-        phone_ellipsis_count=1,
-    ),
-)
-session = create_session(config)
-```
-
-
-
-Need pauses for any custom pattern (not just phone numbers)?
-
-```python
-PauseProcessor(
-    # match "ticket #48291" style spans
-    pattern=r"ticket\s+#?\d+",
-    # pause between matched digits
-    unit_pattern=r"\d",
-    minimum_units=2,
-    # ellipsis is the provider-compatible default:
-    style="ellipsis",
-    # 1 => "...", 2 => "... ..."
-    ellipsis_count=1,
-)
-```
-
-Notes:
-- `strip_markdown=True` still works and is automatically composed with processors.
-- The default ellipsis style reaches every bundled TTS provider as a plain-text
-  pacing cue; the provider decides its exact duration.
-- Exact `pause_ms` timing requires `style="ssml"` and a provider with native
-  SSML support. Every bundled provider currently strips unsupported SSML break
-  tags, retaining spaced digits but losing exact timing.
-- `default_pronunciation_processors(..., phone_pause_style="ssml",
-  phone_pause_ms=180)` opts the convenience stack into that native-SSML path.
-- For provider authors, `synthesize` accepts either a legacy `str` or `TTSInput`;
-  expose `input_policy` with `TTSInputPolicy.native_ssml()` only when the backend
-  accepts SSML unchanged.
-
-### Local/open-source speech pipeline
-EasyCat ships with hosted STT/TTS providers (OpenAI, Deepgram, ElevenLabs, and
-Cartesia). To run fully local speech, plug in your own STT/TTS implementations and use
-the same `EasyConfig` surface:
-
-```python
-from easycat import EasyConfig, create_session
-
-from my_local_agent import LocalAgent
-from my_local_stt import LocalSTTProvider
-from my_local_tts import LocalTTSProvider
-
-session = create_session(
-    EasyConfig.mic(
-        stt=LocalSTTProvider(...),
-        tts=LocalTTSProvider(...),
-        agent=LocalAgent(...),
-    )
-)
-```
-
-This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
-swap in open-source models for fully local operation. Provider instances are
-accepted directly with `vad=`, `noise_reduction=`, and `echo_cancellation=`
-when you have custom audio-processing stages.
-
-Reusable local packages can also register STT, TTS, VAD, noise-reduction, and
-echo-cancellation configs without an `env_var`. That enables shortcuts such as
-`stt="local-whisper/base"`, `tts="local-piper/en_US"`, and `vad="energy"`,
-plus planning, scaffold extras, readiness probes, and installed-package entry
-point discovery without a dummy credential; see the
-[provider extending guides](docs/extending/).
-
-## Inspecting conversation flow
-
-Observability is handled by the journal runtime. It defaults to `debug="light"`
-(in-memory), so sessions are recorded without any per-frame disk writes on the
-live audio loop; opt into `debug="full"` (SQLite WAL, crash-durable) for deep
-debugging. Either way you can tail records live or read them after the session
-ends:
-
-```python
-import asyncio
-
-from easycat import EasyConfig, JournalRecordKind, create_session
-
-
-async def tail(session, stop_tailing: asyncio.Event) -> None:
-    async for record in session.journal.follow(stop=stop_tailing):
-        if record.kind == JournalRecordKind.EVENT:
-            print(f"[{record.name}] {record.data}")
-
-
-async def main() -> None:
-    config = EasyConfig(debug="light")
-    async with create_session(config) as session:
-        stop_tailing = asyncio.Event()
-        tail_task = asyncio.create_task(tail(session, stop_tailing))
-        try:
-            await session.wait_closed()
-        finally:
-            stop_tailing.set()
-            await tail_task
-
-
-asyncio.run(main())
-```
-
-Records carry `session_id`, `turn_id`, and monotonic sequence numbers so
-cross-system traces join cleanly.
-
-Use `debug="full"` when you need durable inspection. EasyCat writes SQLite
-journals under `.easycat/journals/`; pass `record_to="runs"` on `EasyConfig`
-or `create_text_session(...)` when you also want a timestamped debug bundle
-exported on shutdown. After the run, inspect a journal from the terminal or open the browser debugger UI:
-
-```bash
-uv run easycat inspect .easycat/journals/<session_id>.sqlite
-uv run easycat debugger serve .easycat/journals/<session_id>.sqlite --no-open-browser
-```
-
-The debugger UI is the during-call/post-call workspace: an overview dashboard,
-live event lanes, per-turn latency waterfalls, transcripts with audio playback,
-raw record inspection with paging, deterministic issue cards,
-replay, and live-session bundle export.
-
-### Hook directly into agent/tool events
-You can subscribe to agent stream events (including tool calls) via the session:
-
-```python
-session = create_session(config)
-
-registrations = session.subscribe_agent_events(
-    on_delta=lambda e: print("delta:", e.text),
-    on_final=lambda e: print("final:", e.text),
-    on_tool_started=lambda e: print("tool start:", e.tool_name, e.call_id),
-    on_tool_delta=lambda e: print("tool delta:", e.call_id, e.delta),
-    on_tool_result=lambda e: print("tool result:", e.call_id, e.result),
-)
-
-# Later, detach all handlers in one call:
-session.unsubscribe_handlers(registrations)
-```
-
-### OpenAI Agents SDK (idiomatic)
-```python
-from agents import Agent
-
-from easycat import EasyConfig, create_session
-
-agent = Agent(
-    name="Support",
-    instructions="Help customers with account issues.",
-)
-
-config = EasyConfig(
-    agent=agent,
-)
-session = create_session(config)
-```
-
-### PydanticAI (idiomatic)
-```python
-from pydantic_ai import Agent as PydanticAgent
-
-from easycat import EasyConfig, create_session
-
-pydantic_agent = PydanticAgent(
-    "openai:gpt-5.2",
-    system_prompt="Help customers with account issues.",
-)
-
-config = EasyConfig(
-    agent=pydantic_agent,
-)
-session = create_session(config)
-```
-
-The `pydantic-ai` extra targets stable PydanticAI v1. The
-`pydantic-ai-v2` extra installs `pydantic-ai>=2.5.1,<3.0.0` for apps that
-have moved to the stable v2 release.
-
-### Workflows (recommended for multi-step voice apps)
-
-For voice apps with step-based control flow, define a workflow object with
-an async `on_user_turn(text) -> str` method and hand it to
-`create_session`.  `auto_adapt_agent` wraps it in a
-`GenericWorkflowBridge`, so no import dance is needed.
-
-```python
-from easycat import EasyConfig, create_session
-
-
-class BookingWorkflow:
-    def __init__(self) -> None:
-        self.flight = None
-
-    async def on_user_turn(self, text: str) -> str:
-        if self.flight is None:
-            self.flight = {"flight_number": "AK456"}
-            return "I found flight AK456. What seat would you like?"
-        return "Got it. I saved seat 1A for you."
-
-
-workflow = BookingWorkflow()
-
-config = EasyConfig(
-    agent=workflow,  # auto-adapted to GenericWorkflowBridge
-)
-session = create_session(config)
-```
-
-Need recorder access, cancellation tokens, or handoffs? Add a
-`recorder: AgentRecorder` parameter to `on_user_turn` — the bridge
-flips into deep mode and calls your method with the live recorder plus
-a cancel token.
-
-In most cases, you can just pass your PydanticAI agent or workflow to
-`EasyConfig(agent=...)` and call `create_session(config)`; EasyCat
-auto-adapts it to the right bridge. Under the hood, simple single-agent
-assistants use `PydanticAIBridge`, while step-based workflows with
-specialist pinning or programmatic hand-offs use `GenericWorkflowBridge`.
-
-### LangChain and LangGraph
-
-Pass a LangChain `Runnable` directly as `EasyConfig(agent=...)`; EasyCat
-wraps it in `LangChainBridge` and streams text deltas, tool calls, and
-journal cursors from `astream_events()`. Install the repo extra with
-`uv sync --extra langchain --group dev`; model packages such as `langchain-openai`
-are installed separately by your app.
-
-Pass a compiled LangGraph graph directly the same way. To be auto-adapted,
-the graph must be compiled with a checkpointer, for example
-`graph.compile(checkpointer=InMemorySaver())`; EasyCat then uses
-`LangGraphBridge` so thread IDs, checkpoints, node cursors, and barge-in
-state edits stay LangGraph-native. Install the repo extra with
-`uv sync --extra langgraph --group dev`; see `examples/langchain_voice.py` and
-`examples/langgraph_voice.py` for runnable versions.
-
-### LlamaAgents / LlamaIndex Workflows
-
-For LlamaAgents' `llama-index-workflows` package, pass a `Workflow`
-instance directly or construct `LlamaAgentsBridge` when you need to set
-the start-event key. By default the bridge sends the user turn as
-`StartEvent(message=...)` and preserves the workflow `Context` across
-turns.
-
-```python
-from workflows import Workflow, step
-from workflows.events import StartEvent, StopEvent
-
-from easycat import EasyConfig, create_session
-
-
-class GreetingWorkflow(Workflow):
-    @step
-    async def greet(self, ev: StartEvent) -> StopEvent:
-        return StopEvent(result=f"Hello, {ev.message}")
-
-
-session = create_session(
-    EasyConfig(
-        agent=GreetingWorkflow(),
-    )
-)
-```
-
-To call a workflow mounted on a LlamaAgents workflow server, construct
-the bridge with a `WorkflowClient` or `base_url`:
-
-```python
-from easycat.integrations.agents import LlamaAgentsBridge
-
-bridge = LlamaAgentsBridge(base_url="http://localhost:8080", workflow_name="greet")
-```
-
-Workflows that stream `ProgressEvent(msg=...)` style events are surfaced
-as EasyCat text deltas. Human-in-the-loop workflows that emit
-`InputRequiredEvent(prefix=...)` pause after speaking the prompt; the
-next user turn is sent back as `HumanResponseEvent(response=...)` and
-the same workflow handler resumes. If your workflow uses custom start
-or human-response events, pass `start_event_factory=` or
-`human_response_event_factory=` when constructing the bridge.
-
-## Examples
-Runnable examples live in the `examples/` directory. The maintained command
-matrix is [`examples/README.md`](examples/README.md); it lists every runnable
-example with its command, required extras/packages, and environment variables.
-
-Use it to find examples for local mic/speaker bots, WebSocket and browser
-transports, WebRTC and WebTransport, Twilio Media Streams, provider swaps,
-agent bridges, function tools, session actions, turn-taking controls, custom
-providers, debug bundles, and journal inspection.
-
-### Quickstart: WebRTC in browser (fast path)
-1. Install extras:
-   `uv sync --extra webrtc --extra openai --extra openai-agents --group dev`
-2. Set your key and preflight:
-   `export OPENAI_API_KEY="your-api-key"`
-   `uv run easycat doctor`
-   If keys live in `.env`, use `uv run easycat doctor --env-file .env`.
-3. Run the server:
-   `uv run python examples/webrtc_server.py`
-   Or with `.env`: `uv run --env-file .env python examples/webrtc_server.py`
-4. Open:
-   `http://localhost:8080`
-   (auto-redirects to `webrtc_client.html` when using the bundled static client)
-
-If browser clients are remote (not localhost), run behind HTTPS and configure
-TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for NAT traversal.
-Set `WEBRTC_SIGNALING_TOKEN` when binding `SIGNALING_HOST` to a public address;
-the bundled client forwards `?token=...` as a bearer token. The public
-`/config` endpoint hides TURN credentials by default; set
-`WEBRTC_EXPOSE_ICE_CREDENTIALS=1` only for trusted demos or short-lived TURN
-credentials when browser-side relay candidates are required. The bundled
-browser client is served same-origin, so WebRTC signaling sends no wildcard
-CORS headers by default; if you host the browser UI elsewhere, pass explicit
-`cors_allowed_origins=("https://your-ui.example",)` to `WebRTCTransportConfig`.
-
-## Repo layout
-- src/easycat: library code
-- tests: unit/integration tests (some are skipped without API keys)
-- [CHANGELOG.md](CHANGELOG.md): release notes and the current unreleased changes
-
-## Factory APIs
-
-EasyCat supports two complementary factory styles:
-
-- String-based provider selection (`create_stt_provider` / `create_tts_provider`) for dynamic setups.
-- Config-object or provider-instance wiring via `EasyConfig` + `create_session`.
-
-Both styles now resolve provider classes through the same central registries in
-`easycat.stt.factory` and `easycat.tts.factory`, so adding providers only
-requires updating one mapping per domain.
+`from easycat import ...` names.
+
+Detailed routes:
+
+- [VoiceApp → EasyConfig → Session](docs/from-easyconfig-to-session.md) for
+  lifecycle ownership, typed event subscriptions, async turns, and postmortems.
+- [Runtime modes](docs/using-easycat/01-runtime-modes/) and the
+  [browser playground](docs/browser-playground.md) for local and server modes.
+- [Providers and voices](docs/using-easycat/02-providers-and-voices/) and
+  [provider authoring](docs/extending/) for hosted, local, and third-party stages.
+- [Tools and output processors](docs/using-easycat/04-tools-actions/) and
+  [agent bridges](docs/using-easycat/05-agent-bridges/).
+- [Telephony](docs/using-easycat/10-telephony/) and
+  [production servers](docs/deployment/production-servers.md).
+- [Observability](docs/observability.md), [testing and evals](docs/testing-and-evals.md),
+  and the [validation workflow](docs/validation.md).
+- [Runnable examples](examples/README.md) with exact extras, environment
+  variables, and commands.
+
+For the complete maintained map, run `uv run easycat docs` or open
+[docs/README.md](docs/README.md). Repository architecture lives in
+[CLAUDE.md](CLAUDE.md); contribution commands live in
+[CONTRIBUTING.md](CONTRIBUTING.md).

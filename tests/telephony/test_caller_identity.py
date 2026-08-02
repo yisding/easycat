@@ -330,6 +330,50 @@ def test_session_caller_id_message_off_returns_none() -> None:
     assert session._caller_id.private_identity.caller_number == "+15550000000"
 
 
+def test_session_caller_id_exposure_switches_without_losing_private_identity() -> None:
+    from easycat import Session, SessionConfig
+    from easycat.stubs import NoopAgent
+
+    identity = CallIdentity(caller_number="+15550000000", direction="inbound")
+    session = Session(
+        SessionConfig(
+            agent=NoopAgent(),
+            runtime_mode="text_session",
+            call_identity=identity,
+            caller_id_exposure="tools_only",
+        )
+    )
+
+    assert session.call_identity is identity
+    session.caller_id_exposure = "off"
+    assert session.call_identity is None
+    assert session._caller_id.private_identity is identity
+    session.caller_id_exposure = "system_message"
+    assert session.call_identity is identity
+
+
+def test_session_caller_id_exposure_mutation_is_atomic() -> None:
+    from easycat import Session, SessionConfig
+    from easycat.stubs import NoopAgent
+
+    identity = CallIdentity(caller_number="+15550000000", direction="inbound")
+    session = Session(
+        SessionConfig(
+            agent=NoopAgent(),
+            runtime_mode="text_session",
+            call_identity=identity,
+            caller_id_exposure="tools_only",
+        )
+    )
+
+    with pytest.raises(ValueError, match="caller_id_exposure"):
+        session.caller_id_exposure = "offf"  # type: ignore[assignment]
+
+    assert session.caller_id_exposure == "tools_only"
+    assert session.call_identity == identity
+    assert session._caller_id.private_identity is identity
+
+
 def test_session_caller_id_off_hides_from_llm_but_keeps_identity_internal() -> None:
     from easycat import Session, SessionConfig
     from easycat.stubs import NoopAgent

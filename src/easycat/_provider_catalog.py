@@ -13,6 +13,7 @@ from typing import Any
 
 from easycat._provider_domains import register_sensitive_api_domains
 from easycat._provider_helpers import has_usable_credential
+from easycat.errors import EasyCatError, EasyConfigError
 
 logger = logging.getLogger("easycat")
 
@@ -344,15 +345,24 @@ class ProviderCatalog:
             kwargs["api_key"] = api_key
         try:
             config = config_cls(**kwargs)
-        except TypeError as exc:
-            raise ValueError(
+        except EasyCatError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise EasyConfigError(
                 f"Invalid params for {provider!r} {self.kind} provider: {exc}"
             ) from exc
         if self.env_vars[name] is not None and not has_usable_credential(
             getattr(config, "api_key", None)
         ):
-            raise ValueError(f"API key is required for {self.kind} provider '{provider}'")
-        return provider_cls(inject_event_bus(config, event_bus))
+            raise EasyConfigError(f"API key is required for {self.kind} provider '{provider}'")
+        try:
+            return provider_cls(inject_event_bus(config, event_bus))
+        except EasyCatError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise EasyConfigError(
+                f"Could not construct {provider!r} {self.kind} provider: {exc}"
+            ) from exc
 
     def create_from_config(self, config: Any, event_bus: Any) -> Any:
         """Build a provider, injecting an event bus when its config declares one."""
@@ -366,8 +376,17 @@ class ProviderCatalog:
         if self.env_vars[provider_name] is not None and not has_usable_credential(
             getattr(config, "api_key", None)
         ):
-            raise ValueError(f"API key is required for {self.kind} provider {provider_name!r}")
-        return provider_cls(inject_event_bus(config, event_bus))
+            raise EasyConfigError(
+                f"API key is required for {self.kind} provider {provider_name!r}"
+            )
+        try:
+            return provider_cls(inject_event_bus(config, event_bus))
+        except EasyCatError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise EasyConfigError(
+                f"Could not construct {provider_name!r} {self.kind} provider: {exc}"
+            ) from exc
 
     def validate_name(self, provider: object) -> str:
         """Return a normalized registered name or raise ``EASYCAT_E104``."""

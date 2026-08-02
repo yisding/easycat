@@ -19,6 +19,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
     required_links = [
         "../README.md#choose-your-path",
         "../README.md#install",
+        "install.md",
         "teaching/",
         "teaching/PROGRESS.md",
         "teaching/00-hello-audio/",
@@ -36,6 +37,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "using-easycat/10-telephony/",
         "using-easycat/11-production-ops/",
         "../README.md#cli",
+        "cli.md",
         "../examples/README.md",
         "../CLAUDE.md",
         "../AGENTS.md",
@@ -125,6 +127,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
     expected_prefix = [
         "Start here",
         "Quickstart",
+        "Installation and extras",
         "CLI and scaffolds",
         "Docs map",
         "Teaching ladder",
@@ -192,7 +195,8 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     assert not missing, "easycat docs routes missing audience labels: " + ", ".join(missing)
     assert audiences["README.md#choose-your-path"] == "all readers"
     assert audiences["README.md#install"] == "new users"
-    assert audiences["README.md#cli"] == "app builders"
+    assert audiences["docs/install.md"] == "app builders"
+    assert audiences["docs/cli.md"] == "app builders"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
     assert audiences["docs/validation.md"] == "contributors"
@@ -257,6 +261,8 @@ def test_cli_docs_routes_declare_diataxis_categories() -> None:
 
     diataxis = {entry["path"]: entry["diataxis"] for entry in _DOCS_LINKS}
     assert diataxis["README.md#install"] == "tutorial"
+    assert diataxis["docs/install.md"] == "reference"
+    assert diataxis["docs/cli.md"] == "how-to"
     assert diataxis["docs/teaching/"] == "tutorial"
     assert diataxis["docs/using-easycat/"] == "tutorial"
     assert diataxis["docs/architecture.md"] == "explanation"
@@ -274,6 +280,8 @@ def test_cli_docs_routes_have_online_urls() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
 
     assert entries["README.md#install"]["url"].endswith("/blob/main/README.md#install")
+    assert entries["docs/install.md"]["url"].endswith("/blob/main/docs/install.md")
+    assert entries["docs/cli.md"]["url"].endswith("/blob/main/docs/cli.md")
     assert entries["docs/README.md"]["url"].endswith("/blob/main/docs/README.md")
     assert entries["docs/teaching/"]["url"].endswith("/tree/main/docs/teaching")
     assert entries["docs/teaching/PROGRESS.md"]["url"].endswith(

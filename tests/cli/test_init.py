@@ -48,6 +48,10 @@ def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
     assert "preflight check fix docs json schema run commands" in help_words
     assert "explain" in help_text
     assert "init-schema" in help_text
+    assert "--easycat-source" in result.stdout
+    assert "--easycat-git" in result.stdout
+    assert "--easycat-git-rev" in result.stdout
+    assert "mutually exclusive" in help_text
 
 
 def test_list_templates(cli: CliRunner) -> None:
@@ -1136,7 +1140,10 @@ def test_init_published_install_renders_no_sources_block(
     pyproject = (tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8")
     assert "$EASYCAT_SOURCES_BLOCK" not in pyproject
     assert "[tool.uv.sources]" not in pyproject
-    assert pyproject.endswith('target-version = "py311"\n')
+    assert pyproject.endswith(
+        '[tool.easycat.scaffold]\ntemplate = "text-chat"\n'
+        'required_env = ["OPENAI_API_KEY"]\noptional_env = []\n'
+    )
 
 
 def test_init_easycat_source_rejects_path_without_pyproject(
@@ -1192,3 +1199,216 @@ def test_init_json_easycat_source_is_null_for_published_install(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["easycat_source"] is None
+
+
+# ── portable Git source wiring ──────────────────────────────────────
+
+
+_EASYCAT_GIT_URL = "https://github.com/yisding/easycat.git"
+_EASYCAT_GIT_REV = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_init_easycat_git_flag_writes_portable_uv_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--easycat-git",
+            _EASYCAT_GIT_URL,
+            "--easycat-git-rev",
+            _EASYCAT_GIT_REV,
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    pyproject_text = (tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = tomllib.loads(pyproject_text)
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {
+        "git": _EASYCAT_GIT_URL,
+        "rev": _EASYCAT_GIT_REV,
+    }
+    assert str(REPO_ROOT) not in pyproject_text
+    assert "portable Git source" in result.stderr
+
+
+def test_init_config_easycat_git_writes_portable_uv_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "text-chat",
+            "easycat_git": "git@github.com:yisding/easycat.git",
+            "easycat_git_rev": "feature/portable-scaffold",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text())
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {
+        "git": "git@github.com:yisding/easycat.git",
+        "rev": "feature/portable-scaffold",
+    }
+
+
+def test_init_easycat_git_flag_overrides_config_git_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "text-chat",
+            "easycat_git": "https://example.com/old/easycat.git",
+            "easycat_git_rev": "old-revision",
+        }
+    )
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--easycat-git",
+            _EASYCAT_GIT_URL,
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text())
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {"git": _EASYCAT_GIT_URL}
+
+
+@pytest.mark.parametrize(
+    ("config_source", "extra_args"),
+    [
+        (
+            {"easycat_source": str(REPO_ROOT)},
+            ["--easycat-git", _EASYCAT_GIT_URL],
+        ),
+        (
+            {"easycat_git": _EASYCAT_GIT_URL},
+            ["--easycat-source", str(REPO_ROOT)],
+        ),
+        (
+            {"easycat_source": str(REPO_ROOT), "easycat_git": _EASYCAT_GIT_URL},
+            [],
+        ),
+    ],
+)
+def test_init_rejects_mixed_local_and_git_sources(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_source: dict[str, str],
+    extra_args: list[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat", **config_source})
+    result = cli.invoke(
+        app,
+        ["init", "demo", "--config", config, "--no-git", *extra_args],
+    )
+
+    assert result.exit_code == 4
+    assert "mutually exclusive" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_rejects_git_revision_without_url(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--easycat-git-rev",
+            "main",
+        ],
+    )
+
+    assert result.exit_code == 4
+    assert "revision requires --easycat-git" in " ".join(result.stderr.split())
+    assert not (tmp_path / "demo").exists()
+
+
+@pytest.mark.parametrize(
+    "git_url",
+    [
+        "",
+        "../easycat",
+        "file:///home/developer/easycat",
+        "https://token@example.com/yisding/easycat.git",
+        "https://github.com/yisding/easycat repo.git",
+    ],
+)
+def test_init_rejects_nonportable_or_credential_bearing_git_urls(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    git_url: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--easycat-git",
+            git_url,
+        ],
+    )
+
+    assert result.exit_code == 4
+    assert "invalid easycat Git source" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_json_reports_portable_git_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--json",
+            "--easycat-git",
+            _EASYCAT_GIT_URL,
+            "--easycat-git-rev",
+            _EASYCAT_GIT_REV,
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["easycat_source"] is None
+    assert payload["easycat_git"] == _EASYCAT_GIT_URL
+    assert payload["easycat_git_rev"] == _EASYCAT_GIT_REV

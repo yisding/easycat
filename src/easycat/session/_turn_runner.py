@@ -80,6 +80,7 @@ from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat.integrations.agents.base import AgentBridgeEvent
     from easycat.session._audio_router import AudioRouter
     from easycat.session._cancel_orchestrator import CancelOrchestrator
     from easycat.session._stt_committer import STTCommitter

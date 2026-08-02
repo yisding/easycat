@@ -1,4 +1,4 @@
-"""``easycat serve`` — launch a voice playground through ``VoiceApp``.
+"""``easycat serve`` — launch a playground or a manifest-backed VoiceServer.
 
 One command from zero to a talking page: ``serve`` constructs a
 :class:`~easycat.VoiceApp` with the bundled playground agent and drives it for
@@ -14,11 +14,16 @@ keeps its own pre-flight check so it can emit the exit-code-2 message contract.
 
 The wire protocol behind the playground page is documented in
 ``docs/browser-playground.md``.
+
+Passing ``--manifest`` selects the production-oriented declarative path and
+runs :meth:`easycat.VoiceServer.from_manifest`; host, port, auth, providers,
+and agent wiring then come from ``easycat.toml`` and the selected ``--profile``.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -196,8 +201,52 @@ def _run_voice_app(
     app.run(mode, host=host, port=port, serve_token=token)
 
 
+def _build_manifest_server(manifest: Path, *, profile: str) -> Any:
+    """Build the manifest-backed server (extracted for offline CLI tests)."""
+    from easycat.server import VoiceServer
+
+    return VoiceServer.from_manifest(manifest, profile=profile)
+
+
+def _announce_manifest_server(server: Any, *, manifest: Path, profile: str) -> None:
+    """Print the manifest-owned bind policy without exposing resolved secrets."""
+    config = server.config
+    host = _url_host(config.host)
+    stdout_console.print(
+        f"Serving manifest {manifest} (profile: {profile}) on http://{host}:{config.port}",
+        markup=False,
+        highlight=False,
+    )
+    stdout_console.print(
+        "Health, plan, manifest, metrics, and WebRTC routes use the HTTP port; "
+        "raw WebSocket sessions use the next port.",
+        markup=False,
+        highlight=False,
+    )
+
+
+def _run_manifest_server(server: Any) -> None:
+    """Run a VoiceServer until shutdown (extracted for tests)."""
+    server.run()
+
+
 @cli_command
 def serve(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Run a VoiceServer from easycat.toml. Manifest server/profile settings "
+            "replace the playground options."
+        ),
+        envvar="EASYCAT_MANIFEST",
+        show_envvar=True,
+    ),
+    profile: str = typer.Option(
+        "default",
+        "--profile",
+        help="Voice profile table to serve (for example, voice.default).",
+    ),
     mode: str = typer.Option(
         "browser",
         "--mode",
@@ -236,7 +285,20 @@ def serve(
         help="System-style guidance for the playground agent.",
     ),
 ) -> None:
-    """Serve the voice playground via VoiceApp (browser/WebRTC by default)."""
+    """Serve the playground, or use --manifest for a declarative VoiceServer."""
+    if manifest is not None:
+        server = _build_manifest_server(manifest, profile=profile)
+        _announce_manifest_server(server, manifest=manifest, profile=profile)
+        _run_manifest_server(server)
+        return
+    if profile != "default":
+        emit_command_error(
+            "serve",
+            "--profile requires --manifest (or EASYCAT_MANIFEST).",
+            json_output=False,
+        )
+        raise typer.Exit(2)
+
     if mode not in _SERVE_MODES:
         emit_command_error(
             "serve",

@@ -1,18 +1,19 @@
 """``easycat console`` — try EasyCat in your terminal, no API keys required.
 
-The command climbs a capability ladder based on what the machine has:
+The default is deliberately keyless and offline. Ambient credentials or audio
+devices never opt a user into provider traffic; live modes require ``--live``:
 
-1. **Keyless text** (default, no ``OPENAI_API_KEY``): an interactive
+1. **Keyless text** (default): an interactive
    stdin loop over :func:`easycat.create_text_session` with an echo
    agent. Text sessions are the real keyless path — every turn is
    journaled even though no audio flows.
 2. **Scripted voice demo** (``--voice-demo``): one no-key scripted turn
    through the full audio pipeline (transport → VAD → STT → agent →
    TTS), exactly like ``examples/journal_demo.py``.
-3. **Live voice** (``OPENAI_API_KEY`` + working microphone via
+3. **Live voice** (``--live`` + ``OPENAI_API_KEY`` + working microphone via
    doctor's ``check_microphone()``): a live OpenAI voice session.
-4. **Live text** (``OPENAI_API_KEY``, no microphone): the same stdin
-   loop backed by a live OpenAI agent.
+4. **Live text** (``--live`` + ``OPENAI_API_KEY``, no microphone): the same
+   stdin loop backed by a live OpenAI agent.
 
 Every mode runs with ``debug="light"`` and ``record_to=`` so the run
 always ends by printing the exported debug bundle path and a
@@ -48,28 +49,32 @@ _VOICE_DEMO_TIMEOUT_S = 15.0
 
 _MODE_BANNERS: dict[ConsoleMode, str] = {
     "keyless-text": (
-        "No OPENAI_API_KEY detected — starting the keyless echo console.\n"
-        "Every turn is journaled. Set OPENAI_API_KEY for a live agent, or run\n"
-        "easycat console --voice-demo for the full no-key audio pipeline."
+        "Starting the keyless, offline echo console. Ambient API keys are not used.\n"
+        "Every turn is journaled. Run easycat console --live to explicitly use a\n"
+        "live provider, or --voice-demo for the full no-key audio pipeline."
     ),
     "voice-demo": ("Running one scripted turn through the full audio pipeline — no API keys."),
     "live-voice": (
-        "OPENAI_API_KEY and a microphone detected — starting a live voice session.\n"
-        "Speak into your microphone; press Ctrl-C to end the session."
+        "Live provider mode enabled; OPENAI_API_KEY and a microphone detected.\n"
+        "This can incur provider charges. Speak into your microphone; press Ctrl-C to end."
     ),
     "live-text": (
-        "OPENAI_API_KEY detected but no working microphone — starting a live "
-        f"text session with {_LIVE_AGENT_MODEL}."
+        "Live provider mode enabled; no working microphone was detected. "
+        f"Starting a billable text session with {_LIVE_AGENT_MODEL}."
     ),
 }
 
 
-def _select_mode(*, voice_demo: bool) -> ConsoleMode:
-    """Pick the richest mode the current machine supports."""
+def _select_mode(*, voice_demo: bool, live: bool = False) -> ConsoleMode:
+    """Select an explicitly requested mode without ambient live opt-in."""
     if voice_demo:
         return "voice-demo"
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not live:
         return "keyless-text"
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise typer.BadParameter(
+            "--live requires OPENAI_API_KEY; set it or omit --live for the keyless console."
+        )
 
     from easycat.cli.diagnose.doctor import check_microphone
 
@@ -246,6 +251,14 @@ def console(
         "--voice-demo",
         help="Run one scripted no-key turn through the full audio pipeline.",
     ),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help=(
+            "Explicitly use the live OpenAI provider (may send data and incur charges); "
+            "uses voice when a microphone works, otherwise text."
+        ),
+    ),
     record_to: Path = typer.Option(
         Path(_DEFAULT_RECORD_DIR),
         "--record-to",
@@ -258,7 +271,9 @@ def console(
     exported bundle for machine-readable output: ``easycat replay PATH
     --json``.
     """
-    mode = _select_mode(voice_demo=voice_demo)
+    if voice_demo and live:
+        raise typer.BadParameter("--voice-demo and --live cannot be used together.")
+    mode = _select_mode(voice_demo=voice_demo, live=live)
     stderr_console.print(_MODE_BANNERS[mode])
     started_at = time.time() - 1.0  # 1s margin for filesystem clock granularity
     try:

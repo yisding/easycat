@@ -41,7 +41,11 @@ from easycat.server.routes import (
     register_plan_route,
 )
 from easycat.server.transports import CapacityGate, _await_with_hard_timeout
-from easycat.session_manager import SessionManager
+from easycat.session_manager import (
+    SessionManager,
+    SessionStopReport,
+    log_session_stop_failures,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -567,10 +571,11 @@ class VoiceServer:
         # retries it after the handler has unwound. Bound the sweep with
         # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
         # block server teardown.
+        sweep_task = asyncio.create_task(self._manager.stop_all(force=True))
         sweep_succeeded, swept = await self._attempt_cleanup(
             "SessionManager hard sweep",
             _await_with_hard_timeout(
-                self._manager.stop_all(force=True),
+                sweep_task,
                 timeout_s=self.config.force_shutdown_timeout_s,
             ),
             cleanup_errors,
@@ -578,6 +583,7 @@ class VoiceServer:
         if sweep_succeeded:
             self._record_incomplete_hard_sweep(
                 completed=swept,
+                report=sweep_task.result() if swept else None,
                 cleanup_errors=cleanup_errors,
             )
 
@@ -593,6 +599,7 @@ class VoiceServer:
         self,
         *,
         completed: bool,
+        report: SessionStopReport[int] | None,
         cleanup_errors: list[Exception],
     ) -> None:
         """Retain lifecycle ownership when the manager still owns sessions."""
@@ -605,9 +612,17 @@ class VoiceServer:
             cleanup_errors.append(timeout_error)
             return
         retained_keys = self._manager.active_keys()
-        if retained_keys:
+        report_failed = report is not None and log_session_stop_failures(
+            report,
+            context="VoiceServer hard sweep",
+            log=logger,
+        )
+        if retained_keys or report_failed:
+            retained_count = len(retained_keys)
+            if retained_count == 0 and report is not None:
+                retained_count = len(report.failures)
             retained_error = RuntimeError(
-                f"SessionManager retained {len(retained_keys)} session(s) after the hard sweep"
+                f"SessionManager retained {retained_count} session(s) after the hard sweep"
             )
             logger.warning("VoiceServer: %s", retained_error)
             cleanup_errors.append(retained_error)

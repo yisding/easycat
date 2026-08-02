@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -43,6 +45,7 @@ def stub_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(serve_mod, "_build_voice_app", fake_build)
     monkeypatch.setattr(serve_mod, "_run_voice_app", fake_run)
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    monkeypatch.delenv("EASYCAT_MANIFEST", raising=False)
     # ``serve`` eagerly validates the playground config before announcing, which
     # requires the OpenAI key; provide one so these tests exercise the happy path.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -55,6 +58,98 @@ def test_serve_help_describes_playground(cli: CliRunner, typer_app) -> None:
     assert "playground" in result.stdout.lower()
     assert "--token" in result.stdout
     assert "--mode" in result.stdout
+    assert "--manifest" in result.stdout
+    assert "--profile" in result.stdout
+
+
+def test_serve_manifest_builds_and_runs_voice_server(
+    cli: CliRunner,
+    typer_app,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text('[voice.staging]\ntransport = "websocket"\n', encoding="utf-8")
+    server = SimpleNamespace(
+        config=SimpleNamespace(host="127.0.0.1", port=9090),
+        run=lambda: None,
+    )
+    built: list[tuple[Path, str]] = []
+    ran: list[Any] = []
+
+    def fake_build(path: Path, *, profile: str) -> Any:
+        built.append((path, profile))
+        return server
+
+    monkeypatch.setattr(serve_mod, "_build_manifest_server", fake_build)
+    monkeypatch.setattr(serve_mod, "_run_manifest_server", ran.append)
+    monkeypatch.setattr(
+        serve_mod,
+        "_validate_playground_config",
+        lambda: pytest.fail("manifest serving must not build the OpenAI playground"),
+    )
+
+    result = cli.invoke(
+        typer_app,
+        ["serve", "--manifest", str(manifest), "--profile", "staging"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert built == [(manifest, "staging")]
+    assert ran == [server]
+    assert "Serving manifest" in result.stdout
+    assert "profile: staging" in result.stdout
+    assert "http://localhost:9090" in result.stdout
+
+
+def test_serve_manifest_reads_path_from_environment(
+    cli: CliRunner,
+    typer_app,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text('[voice.default]\ntransport = "websocket"\n', encoding="utf-8")
+    server = SimpleNamespace(
+        config=SimpleNamespace(host="127.0.0.1", port=8080),
+        run=lambda: None,
+    )
+    built: list[Path] = []
+    monkeypatch.setenv("EASYCAT_MANIFEST", str(manifest))
+    monkeypatch.setattr(
+        serve_mod,
+        "_build_manifest_server",
+        lambda path, *, profile: built.append(path) or server,
+    )
+    monkeypatch.setattr(serve_mod, "_run_manifest_server", lambda _server: None)
+
+    result = cli.invoke(typer_app, ["serve"])
+
+    assert result.exit_code == 0, result.output
+    assert built == [manifest]
+
+
+def test_serve_profile_requires_manifest(cli: CliRunner, typer_app) -> None:
+    result = cli.invoke(typer_app, ["serve", "--profile", "staging"])
+
+    assert result.exit_code == 2
+    assert "--profile requires --manifest" in result.output
+
+
+def test_serve_missing_manifest_uses_registered_guidance(
+    cli: CliRunner,
+    typer_app,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("EASYCAT_MANIFEST", raising=False)
+    missing = tmp_path / "missing.toml"
+
+    result = cli.invoke(typer_app, ["serve", "--manifest", str(missing)])
+
+    assert result.exit_code != 0
+    assert "EASYCAT_E601" in result.output
+    assert "--manifest" in result.output
 
 
 def test_serve_prints_open_url_and_runs_app(

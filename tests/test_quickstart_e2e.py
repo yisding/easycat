@@ -1,8 +1,8 @@
 """Documented happy-path smoke test.
 
-Walks the canonical quickstart flow advertised in README:
+Walks the runtime behind the canonical ``VoiceApp`` quickstart advertised in README:
 
-    EasyConfig(...) -> create_session -> start -> one turn -> stop -> export bundle
+    VoiceApp -> EasyConfig -> Session -> one turn -> stop -> export bundle
 
 If this test breaks, the README's quickstart is also broken — that is
 the entire point of having it. It uses the existing scripted-provider
@@ -67,7 +67,7 @@ _BRIDGE_DISPLAY_NAMES = {
     "RemoteResponsesAPIBridge": "Remote Responses API",
 }
 _QUICKSTART_BLOCK_RE = re.compile(
-    r"### Quickstart \(EasyConfig\).*?```python\n(?P<code>.*?)\n```",
+    r"### Quickstart\n.*?```python\n(?P<code>.*?)\n```",
     re.DOTALL,
 )
 
@@ -77,24 +77,43 @@ class EchoAgent:
         return f"You said: {text}"
 
 
-def _uses_run_easyconfig_mic(source: str) -> bool:
+def _is_voice_app_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "VoiceApp"
+    )
+
+
+def _assigned_voice_app_names(tree: ast.AST) -> set[str]:
+    app_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        if not _is_voice_app_call(node.value):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        app_names.update(target.id for target in targets if isinstance(target, ast.Name))
+    return app_names
+
+
+def _uses_voice_app_local(source: str) -> bool:
     tree = ast.parse(source)
+    app_names = _assigned_voice_app_names(tree)
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "run":
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "run":
             continue
-        if not node.args:
+        if not node.args or not isinstance(node.args[0], ast.Constant):
             continue
-        first_arg = node.args[0]
-        if (
-            isinstance(first_arg, ast.Call)
-            and isinstance(first_arg.func, ast.Attribute)
-            and first_arg.func.attr == "mic"
-            and isinstance(first_arg.func.value, ast.Name)
-            and first_arg.func.value.id == "EasyConfig"
-        ):
+        if node.args[0].value != "local":
+            continue
+        receiver = node.func.value
+        if isinstance(receiver, ast.Name) and receiver.id in app_names:
+            return True
+        if _is_voice_app_call(receiver):
             return True
 
     return False
@@ -103,7 +122,7 @@ def _uses_run_easyconfig_mic(source: str) -> bool:
 def _readme_quickstart_code() -> str:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     match = _QUICKSTART_BLOCK_RE.search(readme)
-    assert match is not None, "README.md Quickstart (EasyConfig) code block not found"
+    assert match is not None, "README.md canonical Quickstart code block not found"
     return match.group("code")
 
 
@@ -203,15 +222,14 @@ def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
             REPO_ROOT / "src/easycat/cli/scaffold/templates/openai-agents/agent.py"
         ).read_text(encoding="utf-8"),
     }
-    missing = sorted(
-        name for name, source in sources.items() if not _uses_run_easyconfig_mic(source)
-    )
+    missing = sorted(name for name, source in sources.items() if not _uses_voice_app_local(source))
 
     assert not missing, "Canonical quickstart shape drifted in: " + ", ".join(missing)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "the same one shown below" not in readme
-    assert "the same one shown above" in readme
+    assert "Quickstart (EasyConfig)" not in readme
+    assert "Quickstart (VoiceApp)" not in readme
+    assert 'same `VoiceApp(...).run("local")` shape' in readme
 
 
 def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
@@ -222,7 +240,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "No mic or API key yet": (
             "[Journal demo](examples/journal_demo.py)",
             "[hardware-free teaching spine](docs/teaching/#hardware-free-checkpoint-spine)",
-            "uv run easycat console",
+            "uv run easycat console --voice-demo",
             "uv run python examples/journal_demo.py",
             "uv run python docs/teaching/offline_spine.py --run --jobs 4",
         ),
@@ -271,54 +289,53 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
 
 
 def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None:
-    """The browser quickstart sits above the fold with all required extras."""
+    """One local VoiceApp quickstart leads and setup preserves existing secrets."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert readme.count("## Install") == 1
-    quickstart_index = readme.index("### Quickstart (EasyConfig)")
+    quickstart_index = readme.index("### Quickstart")
     install_index = readme.index("## Install")
     chooser_index = readme.index("## Choose Your Path")
     cli_index = readme.index("## CLI")
 
     assert quickstart_index < install_index < chooser_index < cli_index
-    assert "uv add 'easycat[quickstart,webrtc]'" in readme
-    assert 'dependencies = ["easycat[quickstart,webrtc]"]' in readme
+    assert 'dependencies = ["easycat[quickstart]"]' in readme
+    assert 'git = "https://github.com/yisding/easycat.git"' in readme
     assert "uv run easycat doctor" in readme
     assert "uv run python examples/openai_agents_voice.py" in readme
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in readme
 
-    voice_app_block = readme.split("### Quickstart (VoiceApp)", 1)[1].split(
-        "### Quickstart (EasyConfig)",
-        1,
-    )[0]
-    assert 'app.run("browser")' in voice_app_block
+    voice_app_block = readme.split("### Quickstart", 1)[1].split("## Install", 1)[0]
+    assert 'app.run("local")' in voice_app_block
+    assert "from easycat import VoiceApp" in voice_app_block
 
     repo_block = readme.split("For this repository, four commands", 1)[1]
     repo_commands = repo_block.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
     install_command = repo_commands[0]
     assert "--extra quickstart" in install_command
-    assert "--extra webrtc" in install_command
     assert repo_commands == [
-        "uv sync --extra quickstart --extra webrtc --group dev",
-        "echo 'OPENAI_API_KEY=your-api-key' > .env",
+        "uv sync --extra quickstart --group dev",
+        "test -e .env || cp .env.example .env",
         "uv run easycat doctor --env-file .env",
         "uv run --env-file .env python examples/openai_agents_voice.py",
     ]
+    assert "echo 'OPENAI_API_KEY" not in readme
+    assert "uv run easycat console --voice-demo" in readme
+
+    env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "OPENAI_API_KEY=" in env_example
+    assert "sk-" not in env_example
 
 
-def test_readme_webrtc_browser_fast_path_runs_doctor_preflight() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Quickstart: WebRTC in browser (fast path)", 1)[1].split(
-        "## Repo layout",
-        1,
-    )[0]
+def test_browser_playground_fast_path_runs_doctor_preflight() -> None:
+    section = (REPO_ROOT / "docs" / "browser-playground.md").read_text(encoding="utf-8")
 
     expected_order = (
-        "uv sync --extra webrtc --extra openai --extra openai-agents --group dev",
-        'export OPENAI_API_KEY="your-api-key"',
-        "uv run easycat doctor",
-        "uv run python examples/webrtc_server.py",
+        "uv sync --extra quickstart --extra webrtc --group dev",
+        "test -e .env || cp .env.example .env",
+        "uv run easycat doctor --env-file .env",
+        "uv run --env-file .env easycat serve",
         "http://localhost:8080",
     )
     cursor = -1
@@ -328,7 +345,7 @@ def test_readme_webrtc_browser_fast_path_runs_doctor_preflight() -> None:
         cursor = index
 
     assert "uv run easycat doctor --env-file .env" in section
-    assert "uv run --env-file .env python examples/webrtc_server.py" in section
+    assert "uv run --env-file .env easycat serve" in section
 
 
 def test_readme_pydantic_ai_v2_requirement_matches_pyproject() -> None:
@@ -337,9 +354,9 @@ def test_readme_pydantic_ai_v2_requirement_matches_pyproject() -> None:
     specs = [dep for dep in deps if dep.startswith("pydantic-ai>=")]
     assert len(specs) == 1
 
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "`pydantic-ai-v2` extra installs" in readme
-    assert specs[0] in readme
+    install_guide = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
+    assert "`pydantic-ai-v2` extra installs" in install_guide
+    assert specs[0] in install_guide
 
 
 def test_readme_intro_tracks_public_agent_bridge_surface() -> None:
@@ -384,9 +401,7 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     auto_detected_bridges.add("PydanticAIBridge")
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("## Bring your own agent", 1)[1].split(
-        "### Advanced: own the lifecycle", 1
-    )[0]
+    section = readme.split("## Build beyond the quickstart", 1)[1].split("Detailed routes:", 1)[0]
     normalized_section = re.sub(r"\s+", " ", section)
 
     missing_display_names = sorted(
@@ -396,130 +411,46 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     )
 
     assert not missing_display_names, (
-        "README Bring your own agent section missing auto-adapt labels: "
-        + ", ".join(missing_display_names)
+        "README advanced route missing auto-adapt labels: " + ", ".join(missing_display_names)
     )
     assert "OpenAI Agents SDK and PydanticAI objects" not in normalized_section
 
 
-# Retired manual-bridge API shapes that must stay out of the idiomatic
-# EasyConfig auto-adapt README sections.
-_STALE_BRIDGE_API_SHAPES = (
-    'openai_api_key="your-api-key"',
-    "from easycat import Session, SessionConfig",
-    "OpenAIAgentsBridge",
-    "PydanticAIBridge",
-    "Session(SessionConfig(",
-    "bridge =",
-)
-
-
-@pytest.mark.parametrize(
-    (
-        "heading",
-        "end_marker",
-        "sub_split_marker",
-        "must_contain",
-        "must_not_contain",
-        "full_section_must_contain",
-    ),
-    [
-        (
-            "### OpenAI Agents SDK (idiomatic)",
-            "### ",
-            None,
-            (
-                "from easycat import EasyConfig, create_session",
-                "session = create_session(config)",
-                "agent=agent",
-            ),
-            _STALE_BRIDGE_API_SHAPES,
-            (),
-        ),
-        (
-            "### PydanticAI (idiomatic)",
-            "### ",
-            None,
-            (
-                "from easycat import EasyConfig, create_session",
-                "session = create_session(config)",
-                "agent=pydantic_agent",
-            ),
-            _STALE_BRIDGE_API_SHAPES,
-            (),
-        ),
-        (
-            "### LangChain and LangGraph",
-            "### ",
-            None,
-            (
-                "EasyConfig(agent=...)",
-                "LangChainBridge",
-                "uv sync --extra langchain",
-                "LangGraphBridge",
-                "checkpointer",
-                "uv sync --extra langgraph",
-                "examples/langchain_voice.py",
-                "examples/langgraph_voice.py",
-            ),
-            (),
-            (),
-        ),
-        (
-            "### LlamaAgents / LlamaIndex Workflows",
-            "## Examples",
-            "To call a workflow mounted",
-            (
-                "from easycat import EasyConfig, create_session",
-                "agent=GreetingWorkflow()",
-                "session = create_session(",
-            ),
-            (
-                'openai_api_key="your-api-key"',
-                "from easycat.integrations.agents import LlamaAgentsBridge",
-                'input_key="message"',
-                "LlamaAgentsBridge(workflow=GreetingWorkflow()",
-            ),
-            ("LlamaAgentsBridge(base_url=",),
-        ),
-    ],
-)
-def test_readme_agent_snippet_sections_use_easyconfig_auto_adapt_surface(
-    heading: str,
-    end_marker: str,
-    sub_split_marker: str | None,
-    must_contain: tuple[str, ...],
-    must_not_contain: tuple[str, ...],
-    full_section_must_contain: tuple[str, ...],
-) -> None:
-    """Guard README agent-framework snippets against rotting to removed API shapes.
-
-    Covers the OpenAI Agents SDK, PydanticAI, LangChain/LangGraph, and LlamaAgents
-    sections, each checking the current EasyConfig auto-adapt surface is taught and
-    stale shapes (e.g. ``Session(SessionConfig(...))``) are not.
-    """
+def test_agent_bridge_guide_owns_framework_specific_guidance() -> None:
+    """Keep framework detail on one maintained page instead of duplicating the README."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split(heading, 1)[1].split(end_marker, 1)[0]
-    snippet = section.split(sub_split_marker, 1)[0] if sub_split_marker else section
+    guide = (REPO_ROOT / "docs" / "using-easycat" / "05-agent-bridges" / "README.md").read_text(
+        encoding="utf-8"
+    )
 
-    for term in must_contain:
-        assert term in snippet
-    for stale_term in must_not_contain:
-        assert stale_term not in snippet
-    for term in full_section_must_contain:
-        assert term in section
+    assert "[agent bridges](docs/using-easycat/05-agent-bridges/)" in readme
+    for term in (
+        "OpenAI Agents SDK",
+        "PydanticAI",
+        "LangChain",
+        "LangGraph",
+        "LlamaAgents",
+        "Remote Responses API",
+        "Auto-detection is the default path",
+        "Construct a bridge when you need bridge options",
+    ):
+        assert term in guide
+
+    assert 'openai_api_key="your-api-key"' not in guide
+    assert "Session(SessionConfig(" not in guide
 
 
 def test_readme_python_snippets_do_not_embed_placeholder_api_keys() -> None:
-    """README code should rely on the documented OPENAI_API_KEY setup."""
+    """README should keep provider keys out of snippets and shell history."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert 'export OPENAI_API_KEY="your-api-key"' in readme
+    assert 'export OPENAI_API_KEY="your-api-key"' not in readme
+    assert "test -e .env || cp .env.example .env" in readme
     assert 'openai_api_key="your-api-key"' not in readme
     assert 'openai_api_key="…"' not in readme
 
 
-def test_readme_cli_section_lists_registered_top_level_commands() -> None:
+def test_cli_reference_lists_registered_top_level_commands() -> None:
     from easycat.cli import _app
     from easycat.cli.debug.bundles import bundles_app
 
@@ -528,8 +459,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     command_names.update(group.name for group in _app.app.registered_groups)
     command_names.discard(None)
 
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    cli_section = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     cli_lines = set(cli_section.splitlines())
     normalized_cli_section = re.sub(r"\s+", " ", cli_section)
 
@@ -618,7 +548,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         if f"easycat {command_name}" not in cli_section
     )
 
-    assert not missing, "README.md CLI section missing commands: " + ", ".join(missing)
+    assert not missing, "docs/cli.md missing commands: " + ", ".join(missing)
 
     missing_bundle_commands = sorted(
         command.name
@@ -626,30 +556,27 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         if command.name is not None and f"easycat bundles {command.name}" not in cli_section
     )
 
-    assert not missing_bundle_commands, "README.md CLI section missing bundles commands: " + (
+    assert not missing_bundle_commands, "docs/cli.md missing bundles commands: " + (
         ", ".join(missing_bundle_commands)
     )
 
 
-def test_readme_cli_section_does_not_advertise_stale_bundle_commands() -> None:
+def test_cli_reference_does_not_advertise_stale_bundle_commands() -> None:
     from easycat.cli.debug.bundles import bundles_app
 
     command_names = {command.name for command in bundles_app.registered_commands}
     command_names.discard(None)
 
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    cli_section = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     advertised = set(
         re.findall(r"(?m)^easycat bundles (?P<command>[a-z][a-z0-9-]*)(?:\s|$)", cli_section)
     )
     stale = sorted(advertised - command_names)
 
-    assert not stale, "README.md CLI section advertises stale bundles commands: " + ", ".join(
-        stale
-    )
+    assert not stale, "docs/cli.md advertises stale bundles commands: " + ", ".join(stale)
 
 
-def test_readme_cli_section_does_not_advertise_stale_top_level_commands() -> None:
+def test_cli_reference_does_not_advertise_stale_top_level_commands() -> None:
     from easycat.cli import _app
 
     _app._register_commands()
@@ -657,12 +584,11 @@ def test_readme_cli_section_does_not_advertise_stale_top_level_commands() -> Non
     command_names.update(group.name for group in _app.app.registered_groups)
     command_names.discard(None)
 
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    cli_section = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     advertised = set(re.findall(r"(?m)^easycat (?P<command>[a-z][a-z0-9-]*)(?:\s|$)", cli_section))
     stale = sorted(advertised - command_names)
 
-    assert not stale, "README.md CLI section advertises stale commands: " + ", ".join(stale)
+    assert not stale, "docs/cli.md advertises stale commands: " + ", ".join(stale)
 
 
 def test_validation_workflow_doc_lists_registered_validate_commands() -> None:
@@ -705,45 +631,36 @@ def test_validation_workflow_doc_lists_registered_validate_commands() -> None:
     assert all(command.startswith("uv run easycat validate ") for command in commands)
 
 
-def test_readme_observability_section_teaches_stoppable_journal_tail() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    observability_section = readme.split("## Inspecting conversation flow", 1)[1].split(
-        "## ",
-        1,
-    )[0]
+def test_observability_guide_teaches_stoppable_journal_tail() -> None:
+    observability_section = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
 
     for term in (
-        "async def main() -> None:",
+        "async def run_and_tail(config: EasyConfig) -> None:",
         "async with create_session(config) as session:",
         "stop_tailing = asyncio.Event()",
         "session.journal.follow(stop=stop_tailing)",
         "stop_tailing.set()",
         "await tail_task",
-        "asyncio.run(main())",
         "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
     ):
         assert term in observability_section
     assert "asyncio.create_task(tail(session))" not in observability_section
 
 
-def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Local/open-source speech pipeline", 1)[1].split(
-        "## Inspecting conversation flow",
-        1,
-    )[0]
+def test_provider_guide_teaches_easyconfig_instance_injection() -> None:
+    section = (REPO_ROOT / "docs" / "extending" / "README.md").read_text(encoding="utf-8")
 
     for term in (
-        "from easycat import EasyConfig, create_session",
+        "from easycat import EasyConfig, run",
         "EasyConfig.mic(",
-        "stt=LocalSTTProvider(...)",
-        "tts=LocalTTSProvider(...)",
-        "agent=LocalAgent(...)",
-        "Provider instances are",
+        "stt=MySTT()",
+        "tts=MyTTS()",
+        "agent=my_agent",
+        "An instance",
         "`vad=`",
         "`noise_reduction=`",
         "`echo_cancellation=`",
-        "custom audio-processing stages",
+        "provider *instances*",
     ):
         assert term in section
 

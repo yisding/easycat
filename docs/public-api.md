@@ -16,7 +16,10 @@ route discovery or run `uv run easycat explain json-schema`.
 
 - The app-first entry point is `from easycat import VoiceApp`: one noun for a
   voice product that runs across `local`/`browser`/`websocket`/`twilio` modes.
-- The first-run path is `EasyConfig` plus `run`.
+- The first-run path is `VoiceApp(agent=...).run("local")`.
+- `EasyConfig` plus `run` is the explicit-configuration path when an app needs
+  provider, turn-taking, journal, or transport control. In applications that
+  already own an asyncio event loop, use `await arun(...)` instead.
 - Long-running applications should use `create_session` plus
   `easycat.helpers.run_session`, or `create_text_session`.
 - Advanced users who own concrete providers should prefer
@@ -51,12 +54,37 @@ route discovery or run `uv run easycat explain json-schema`.
 Use the smallest import that matches your use case:
 
 ```python
-from easycat import EasyConfig, run
+from easycat import VoiceApp
+
+
+VoiceApp(agent=agent).run("local")
 ```
 
+When provider or runtime choices need to be explicit, graduate to the config
+layer:
+
+```python
+from easycat import EasyConfig, run
+
+
+run(EasyConfig.mic(agent=agent, stt="deepgram/flux", debug="full"))
+```
+
+The same convenience lifecycle is available without nesting an event loop:
+
+```python
+from easycat import EasyConfig, arun
+
+
+async def main(agent) -> None:
+    await arun(EasyConfig.mic(agent=agent))
+```
+
+Calling synchronous `run(...)` from an active event loop fails immediately
+with an error that points to `await arun(...)`; no session is created first.
+
 For long-running apps that need event subscriptions, debugger setup, or other
-pre-start hooks, keep the same `EasyConfig` surface and run the prebuilt
-session:
+pre-start hooks, build and run the session directly:
 
 ```python
 from easycat import EasyConfig, STTFinal, create_session
@@ -71,6 +99,25 @@ def main(agent) -> None:
     finally:
         subscription.unsubscribe()
 ```
+
+The returned `EventSubscription` is the preferred unsubscribe handle: it
+retains the exact event type and handler and its `unsubscribe()` method is
+idempotent. `session.unsubscribe_event(event_type, handler)` remains available
+for code that already manages those pairs directly.
+
+Multi-session owners can inspect every best-effort teardown attempt instead of
+inferring partial failure from logs:
+
+```python
+report = await manager.stop_all(force=True)
+for failure in report.failures:
+    logger.error("session %r did not stop: %s", failure.key, failure.exception)
+```
+
+`report.ok`, `attempted_keys`, `stopped_keys`, `failed_keys`, and `failures`
+describe the sweep. Failed sessions remain registered so teardown can be
+retried. Import `SessionStopReport` and `SessionStopFailure` from
+`easycat.session_manager` when explicit annotations are useful.
 
 Use submodules for rare or implementation-specific names:
 
@@ -209,6 +256,7 @@ from easycat.integrations.agents import PydanticAIBridge
 - `create_session`
 - `create_text_session`
 - `run`
+- `arun`
 - `Session`
 - `SessionConfig`
 - `SessionActions`
@@ -351,10 +399,14 @@ for the complete composition.
 ### Debugging, Journals, And Errors
 
 - `EasyCatError`
+- `EasyConfigError`
 - `ErrorEntry`
 - `JournalRecordKind`
 - `RunBundle`
 - `export_debug_bundle`
+
+`EasyConfigError` is also a `ValueError`; catch `EasyCatError` to handle both
+configuration and coded provider/construction failures.
 
 ## Deprecation & Removal Policy
 

@@ -64,7 +64,7 @@ def plan(
     profile: str = typer.Option(
         "default",
         "--profile",
-        help="The [voice.<profile>] to plan.",
+        help="Voice profile table to plan (for example, voice.default).",
     ),
     json_output: bool = typer.Option(
         False,

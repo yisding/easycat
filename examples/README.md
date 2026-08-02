@@ -100,7 +100,7 @@ an additional third-party package to install in the same environment with
 
 | Example | Use When | Run | Install | Env |
 | --- | --- | --- | --- | --- |
-| [ws_server.py](ws_server.py) | Multi-session WebSocket server for raw PCM clients. | `uv run python examples/ws_server.py` | `uv sync --extra openai --extra openai-agents --group dev` | `OPENAI_API_KEY`; optional `EASYCAT_WS_TOKEN` |
+| [ws_server.py](ws_server.py) | Multi-session WebSocket server for raw PCM clients. | `uv run python examples/ws_server.py` | `uv sync --extra openai --extra openai-agents --group dev` | `OPENAI_API_KEY`; optional `EASYCAT_WS_TOKEN`, `EASYCAT_WS_ALLOW_QUERY_TOKEN` |
 | [ws_browser_example.py](ws_browser_example.py) | Browser mic/speaker over WebSocket with local static serving. | `uv run python examples/ws_browser_example.py` | `uv sync --extra openai --extra openai-agents --group dev` | `OPENAI_API_KEY` |
 | [ws_supervisor_server.py](ws_supervisor_server.py) | Browser caller plus passive supervisor listen-in. | `uv run python examples/ws_supervisor_server.py` | `uv sync --extra openai --extra openai-agents --group dev` | `OPENAI_API_KEY`, `EASYCAT_SUPERVISOR_TOKEN`; optional `EASYCAT_WS_CALLER_HOST`, `EASYCAT_WS_SUPERVISOR_HOST` |
 | [reconnecting_ws_client.py](reconnecting_ws_client.py) | Reconnecting client against `ws_server.py`. | `uv run python examples/reconnecting_ws_client.py` | `uv sync --extra openai --extra openai-agents --group dev`; run `ws_server.py` separately | None for client; `OPENAI_API_KEY` for paired `ws_server.py` |

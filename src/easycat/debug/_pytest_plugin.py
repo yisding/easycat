@@ -2,12 +2,13 @@
 
 Registered under ``[project.entry-points."pytest11"]`` so ``pytest``
 picks it up automatically as soon as ``easycat`` is installed in the
-test environment.  The plugin ships a single lightweight fixture,
-``easycat_bundle``, which proxies to :func:`easycat.debug.testing.load_bundle`.
+test environment. The plugin registers the ``contract`` marker used by the
+installable provider suites and ships a lightweight ``easycat_bundle`` fixture,
+which proxies to :func:`easycat.debug.testing.load_bundle`.
 
 Authors who want behavioural assertions import the helpers from
-:mod:`easycat.debug.testing` directly — the plugin's only job is to
-make bundle loading ergonomic (``def test_regression(easycat_bundle):``
+:mod:`easycat.debug.testing` directly. Beyond marker registration, the plugin
+only makes bundle loading ergonomic (``def test_regression(easycat_bundle):``
 instead of a boilerplate fixture in every test file).
 """
 
@@ -16,6 +17,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register markers required by EasyCat's installable testing surfaces."""
+    config.addinivalue_line(
+        "markers",
+        "contract: EasyCat provider, protocol, or bridge contract test",
+    )
 
 
 @pytest.fixture

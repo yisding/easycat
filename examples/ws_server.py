@@ -12,10 +12,24 @@ Setup:
 Connect clients streaming raw PCM16 audio to ws://localhost:8765.
 For non-local deployments, set EASYCAT_WS_TOKEN and send it as:
   Authorization: Bearer <token>
+The bundled browser client cannot set that header. For a loopback-only demo,
+set EASYCAT_WS_ALLOW_QUERY_TOKEN=1 and pass ?token=<token> in its URL.
 """
+
+import os
 
 from easycat import EasyConfig, require_env
 from easycat.server import run_websocket_config_server
+
+
+def _allow_query_token_from_env() -> bool:
+    """Return the explicit browser-demo opt-in; secure header auth stays default."""
+    return os.getenv("EASYCAT_WS_ALLOW_QUERY_TOKEN", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def main() -> None:
@@ -27,7 +41,10 @@ def main() -> None:
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         return EasyConfig(transport=transport, agent=agent)
 
-    run_websocket_config_server(config)
+    run_websocket_config_server(
+        config,
+        allow_query_token=_allow_query_token_from_env(),
+    )
 
 
 if __name__ == "__main__":

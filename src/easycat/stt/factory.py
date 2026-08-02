@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from easycat._provider_catalog import ProviderCatalog, ProviderSpec
+from easycat._provider_catalog import (
+    ProviderCapabilityResolver,
+    ProviderCatalog,
+    ProviderSpec,
+)
 from easycat.events import EventBus
 from easycat.stt.base import STTBase
 from easycat.stt.cartesia_provider import CartesiaSTT, CartesiaSTTConfig
@@ -120,8 +124,13 @@ def register_stt_provider(
     api_domains: tuple[str, ...] = (),
     probe_module: str | None = None,
     capabilities: frozenset[str] = frozenset(),
+    capability_resolver: ProviderCapabilityResolver | None = None,
 ) -> None:
-    """Register an STT provider and its optional credential/discovery metadata."""
+    """Register an STT provider and its credential, discovery, and capability metadata.
+
+    ``capability_resolver`` receives the concrete config (when available) and
+    selected model. Its result is combined with the static ``capabilities``.
+    """
     _CATALOG.register(
         name,
         provider_cls,
@@ -131,6 +140,7 @@ def register_stt_provider(
         api_domains=api_domains,
         probe_module=probe_module,
         capabilities=capabilities,
+        capability_resolver=capability_resolver,
     )
 
 

@@ -10,6 +10,7 @@ no-metric boundary guard.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -475,7 +476,9 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
     assert server._lifecycle_cleanup_error is None
 
 
-async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership() -> None:
+async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class FailingSession(_FakeSession):
         def __init__(self) -> None:
             super().__init__()
@@ -497,9 +500,11 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert server._gate.try_acquire()
     server._gate.track(key)
 
-    with pytest.raises(RuntimeError, match="retained 1 session"):
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="retained 1 session"):
         await server.stop(force=True)
 
+    assert "VoiceServer hard sweep failed to stop 1 of 1 session" in caplog.text
+    assert "session teardown failed" in caplog.text
     assert server._manager.get(key) is session
     assert server._active_session_objs == {key: session}
     assert isinstance(server._lifecycle_cleanup_error, RuntimeError)

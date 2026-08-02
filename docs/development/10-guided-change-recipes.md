@@ -138,7 +138,8 @@ emitting the new public event themselves.
 
 ### Implement
 
-1. Add one provider module with a typed config dataclass.
+1. Add one provider module with a typed config dataclass, then add that config
+   to the built-in `STTConfig` or `TTSConfig` typing union in its factory.
 2. Implement the protocol and `version_info()`.
 3. Normalize all outputs to `STTEvent` or `TTSEvent`.
 4. Implement prompt cancellation and resource teardown.

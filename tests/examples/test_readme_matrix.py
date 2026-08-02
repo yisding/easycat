@@ -29,7 +29,7 @@ from tests.examples._examples_helpers import (
     [
         ("openai_agents_voice.py", 7),
         ("pydantic_ai_voice.py", 8),
-        ("ws_server.py", 15),
+        ("ws_server.py", 23),
     ],
 )
 def test_canonical_local_voice_examples_keep_visible_code_budget(

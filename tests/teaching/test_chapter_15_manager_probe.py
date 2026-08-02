@@ -43,6 +43,18 @@ def test_manager_probe_exercises_registry_and_failure_rollback() -> None:
             "expected_error": "Failed to stop session sweep-failing: sweep-failing stop failed",
             "failed_slot_retained": True,
             "healthy_slot_released": True,
+            "report": {
+                "attempted_keys": ["sweep-healthy", "sweep-failing"],
+                "failed_keys": ["sweep-failing"],
+                "failures": [
+                    {
+                        "exception": "sweep-failing stop failed",
+                        "key": "sweep-failing",
+                    }
+                ],
+                "ok": False,
+                "stopped_keys": ["sweep-healthy"],
+            },
             "start_calls": {"sweep-failing": 1, "sweep-healthy": 1},
             "stop_calls": {"sweep-failing": 1, "sweep-healthy": 1},
         },

@@ -9,7 +9,7 @@ import pytest
 
 from easycat._provider_catalog import ProviderCatalog, ProviderSpec
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.errors import EasyCatError
+from easycat.errors import EasyCatError, EasyConfigError
 from easycat.events import (
     Event,
     STTEvent,
@@ -257,12 +257,15 @@ def test_provider_catalog_creates_named_provider():
 def test_provider_catalog_rejects_missing_key_and_invalid_params():
     catalog = ProviderCatalog(**_catalog_kwargs())
 
-    with pytest.raises(ValueError, match="API key is required"):
+    with pytest.raises(EasyConfigError, match="API key is required") as missing:
         catalog.create_provider("known")
-    with pytest.raises(ValueError, match="API key is required"):
+    assert isinstance(missing.value, EasyCatError)
+    with pytest.raises(EasyConfigError, match="API key is required"):
         catalog.create_provider("known", api_key=" \t ")
-    with pytest.raises(ValueError, match="Invalid params"):
+
+    with pytest.raises(EasyConfigError, match="Invalid params") as invalid:
         catalog.create_provider("known", params={"unknown": True})
+    assert isinstance(invalid.value, EasyCatError)
 
 
 def test_provider_catalog_parse_rejects_blank_override_and_environment(

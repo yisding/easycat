@@ -70,7 +70,7 @@ knobs and [observability](../observability.md) for the inspection tooling.
 
 Between start and stop, the session exposes turn-level controls:
 
-- `session.cancel_turn()` — cancel the in-flight turn (agent + TTS) without
+- `await session.cancel_turn()` — cancel the in-flight turn (agent + TTS) without
   stopping the session.
 - `await session.prompt_agent(text, role="system", speak=True)` — run a
   journaled application-initiated agent turn. Spoken prompts use the normal
@@ -81,8 +81,8 @@ Between start and stop, the session exposes turn-level controls:
   audio artifacts while leaving transcripts and journal events enabled. A
   callable consent policy remains authoritative; pass `None` to clear the
   runtime override.
-- `session.reset_state()` — clear turn state and conversation pointers.
-- `session.send_text(text)` — inject a user turn without audio (text-first
+- `await session.reset_state()` — clear turn state and conversation pointers.
+- `await session.send_text(text)` — inject a user turn without audio (text-first
   flows and tests).
 
 ## Related Pages
