@@ -400,6 +400,7 @@ async def test_silero_preserves_stereo_frames_split_across_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A split interleaved frame must be downmixed only after reassembly."""
+
     class _FakeOnnxModel:
         def reset_states(self) -> None:
             pass
