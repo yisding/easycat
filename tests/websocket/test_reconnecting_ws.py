@@ -586,6 +586,33 @@ class TestReconnectingWebSocket:
 
         assert candidate._sent == ["session.update", "audio.append"]
 
+    async def test_spawned_callback_task_loses_bypass_after_installation(self):
+        candidate = FakeWSConnection()
+        release_child = asyncio.Event()
+        child_result: asyncio.Task[object] | None = None
+
+        async def inspect_after_callback() -> object:
+            await release_child.wait()
+            return ws._reconnect_callback_connection()
+
+        async def prime_connection() -> None:
+            nonlocal child_result
+            await ws.send("session.update")
+            child_result = asyncio.create_task(inspect_after_callback())
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=0),
+            on_reconnect=prime_connection,
+        )
+        ws._ever_connected = True
+
+        await ws._install_connection(candidate, attempt=0, notify_reconnect=True)
+        assert child_result is not None
+        release_child.set()
+
+        assert await child_result is None
+
     async def test_send_times_out_if_reconnect_never_completes(self):
         ws = self._make_ws(base_delay=0.01, max_retries=2, jitter_factor=0.0)
         ws._ws = FakeWSConnection()

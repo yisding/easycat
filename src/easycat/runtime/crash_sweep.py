@@ -477,6 +477,14 @@ def _promote_one(root: Path, db_path: Path) -> bool:
     if _remove_journal(db_path):
         logger.info("Swept crashed journal %s -> %s", db_path, crash_path)
         return True
+    # If the source database itself remains, this promotion is only a duplicate
+    # snapshot. Keeping it would make every later startup reserve another
+    # numeric suffix for the same unremovable journal and grow disk usage
+    # without bound. If the main DB was removed and only sidecar cleanup failed,
+    # retain the dump because it is now the sole copy of the journal.
+    if db_path.exists():
+        assert crash_path is not None and artifact_root is not None
+        discard_crash_dump(crash_path, artifact_root)
     return False
 
 
