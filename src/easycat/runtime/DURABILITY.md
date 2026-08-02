@@ -208,9 +208,10 @@ retirement intent. After the dump owns its artifact snapshot, the sweep
 reclaims only blobs from that sealed epoch; a replacement epoch and unbound or
 unknown ownership remain conservative. Interrupted retirement resumes on a
 later sweep, including after the source journal is already gone. The sweep
-skips the journal the opening session owns, skips locked/live databases, skips
-cleanly-closed or empty files, and never raises into journal startup. Both the
-in-session promoter and the sweep share
+retains the source journal and old live epoch if any referenced artifact cannot
+be copied into the all-or-nothing snapshot. It skips the journal the opening
+session owns, skips locked/live databases, skips cleanly-closed or empty files,
+and never raises into journal startup. Both the in-session promoter and the sweep share
 `crash_sweep.py::_copy_journal_to_crash_dump`.
 
 Promoted crash dumps surface in `uv run easycat bundles list` with a `status`

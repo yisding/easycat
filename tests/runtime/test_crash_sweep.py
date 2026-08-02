@@ -105,6 +105,33 @@ def _crash_with_managed_artifacts(session_id: str, data_dir) -> tuple[str, str]:
     return committed_ref, orphan_ref
 
 
+def _crash_with_incomplete_artifact_snapshot(session_id: str, data_dir) -> tuple[str, str]:
+    journal = SqliteJournal(session_id, data_dir=data_dir)
+    store = FilesystemArtifactStore(session_id, data_dir=data_dir)
+    missing_ref = store.put(b"missing before sweep")
+    available_ref = store.put(b"must remain available")
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="ev",
+        session_id=session_id,
+        input_ref=missing_ref,
+        output_ref=available_ref,
+    )
+    with journal._lock:
+        journal._commit_transaction_locked(reopen=False)
+        journal._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(_dead_pid()),),
+        )
+        journal._conn.commit()
+        journal._conn.close()
+        journal._closed = True
+    journal._release_live_journal()
+    store._ref_path(missing_ref).unlink()
+    store.close()
+    return missing_ref, available_ref
+
+
 def test_sqlite_construction_skips_repeat_sweep_within_interval(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -299,11 +326,12 @@ def test_crash_dump_does_not_snapshot_artifacts_through_parent_symlink(tmp_path)
     except OSError:
         pytest.skip("symlinks are unavailable in this test environment")
 
-    assert sweep_crashed_journals(tmp_path) == 1
+    assert sweep_crashed_journals(tmp_path) == 0
 
     crash_path = tmp_path / "crash-dumps" / f"{session_id}.sqlite"
     copied = crash_dump_artifact_root(crash_path) / ref[:2] / f"{ref}.bin"
     assert not copied.exists()
+    assert (tmp_path / "journals" / f"{session_id}.sqlite").exists()
     assert outside_store.get(ref) == payload
 
 
@@ -329,13 +357,45 @@ def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
     target = tmp_path / "snapshot"
     target.mkdir()
 
-    snapshot_crash_dump_artifacts(
-        tmp_path,
-        tmp_path / "journals" / f"{session_id}.sqlite",
-        target,
+    assert (
+        snapshot_crash_dump_artifacts(
+            tmp_path,
+            tmp_path / "journals" / f"{session_id}.sqlite",
+            target,
+        )
+        is False
     )
 
     assert list(target.rglob("*.bin")) == []
+
+
+def test_incomplete_artifact_snapshot_keeps_source_and_remaining_live_blobs(tmp_path) -> None:
+    session_id = "partial-snapshot"
+    _, available_ref = _crash_with_incomplete_artifact_snapshot(session_id, tmp_path)
+
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert (tmp_path / "journals" / f"{session_id}.sqlite").exists()
+    assert not (tmp_path / "crash-dumps" / f"{session_id}.sqlite").exists()
+    store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    assert store.get(available_ref) == b"must remain available"
+
+
+def test_same_id_reopen_refuses_incomplete_artifact_snapshot(tmp_path) -> None:
+    session_id = "partial-same-id"
+    _, available_ref = _crash_with_incomplete_artifact_snapshot(session_id, tmp_path)
+
+    with pytest.raises(RuntimeError, match="snapshot was incomplete"):
+        SqliteJournal(session_id, data_dir=tmp_path)
+
+    db_path = tmp_path / "journals" / f"{session_id}.sqlite"
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM journal").fetchone() == (1,)
+    finally:
+        conn.close()
+    store = FilesystemArtifactStore(session_id, data_dir=tmp_path)
+    assert store.get(available_ref) == b"must remain available"
+    assert not (tmp_path / "crash-dumps" / f"{session_id}.sqlite").exists()
 
 
 def test_crash_copy_rejects_symlinked_wal_sidecar(

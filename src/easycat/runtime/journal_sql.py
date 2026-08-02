@@ -631,7 +631,17 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.close()
                 try:
                     _copy_journal_to_crash_dump(self._db_path, crash_path)
-                    snapshot_crash_dump_artifacts(self._root, self._db_path, artifact_root)
+                    if not snapshot_crash_dump_artifacts(
+                        self._root,
+                        self._db_path,
+                        artifact_root,
+                    ):
+                        discard_crash_dump(crash_path, artifact_root)
+                        self._conn = self._open_connection()
+                        raise RuntimeError(
+                            "Crash artifact snapshot was incomplete; "
+                            "refusing to truncate the source journal"
+                        )
                 except (OSError, sqlite3.Error):
                     discard_crash_dump(crash_path, artifact_root)
                     raise
