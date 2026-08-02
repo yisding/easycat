@@ -290,6 +290,34 @@ class TestIVRAgentDecision:
             nav.stop()
 
     @pytest.mark.asyncio
+    async def test_returned_exception_is_a_malformed_result_not_a_crash(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def mock_agent(ctx: dict) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return ValueError("returned rather than raised")
+
+        nav = IVRNavigator(
+            bus,
+            agent_callback=mock_agent,
+            config=IVRNavigatorConfig(agent_retry_delay_s=0.0),
+        )
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            assert call_count == 1
+            assert actions == []
+            assert nav.menu_depth == 0
+            assert nav._prompt_timeout_task is not None
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_timeout_retries_prompt(self) -> None:
         bus = EventBus()
         actions: list[IVRAction] = []

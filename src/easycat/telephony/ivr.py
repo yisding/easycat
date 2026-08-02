@@ -212,6 +212,11 @@ _AGENT_CALL_FAILED = object()
 _AGENT_CALL_TIMED_OUT = object()
 
 
+@dataclass(frozen=True)
+class _AgentCallbackRaised:
+    error: Exception
+
+
 class IVRNavigator:
     """Agent-driven IVR menu traversal.
 
@@ -422,7 +427,7 @@ class IVRNavigator:
             return _AGENT_CALL_FAILED
         if first_result is _AGENT_CALL_TIMED_OUT:
             logger.warning("IVR agent timed out, retrying after delay")
-        elif isinstance(first_result, Exception):
+        elif isinstance(first_result, _AgentCallbackRaised):
             logger.warning("IVR agent callback crashed, retrying after delay")
         else:
             return first_result
@@ -439,15 +444,15 @@ class IVRNavigator:
             logger.warning("IVR agent retry timed out")
             self._start_prompt_timeout(activation_epoch)
             return _AGENT_CALL_FAILED
-        if isinstance(retry_result, Exception):
+        if isinstance(retry_result, _AgentCallbackRaised):
             # Deterministic failure (e.g. a crashing callback) on the retry too:
             # escalate to hangup instead of pointlessly re-arming.
             logger.warning(
                 "IVR agent retry crashed; escalating to hangup",
                 exc_info=(
-                    type(retry_result),
-                    retry_result,
-                    retry_result.__traceback__,
+                    type(retry_result.error),
+                    retry_result.error,
+                    retry_result.error.__traceback__,
                 ),
             )
             await self._escalate_to_hangup(activation_epoch)
@@ -471,7 +476,7 @@ class IVRNavigator:
         except TimeoutError:
             result = _AGENT_CALL_TIMED_OUT
         except Exception as exc:
-            result = exc
+            result = _AgentCallbackRaised(exc)
         if not self._is_current_activation(activation_epoch):
             return _AGENT_CALL_FAILED
         return result
