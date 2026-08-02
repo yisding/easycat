@@ -1037,6 +1037,57 @@ class TestCrashRecovery:
             if j is not None:
                 j.close()
 
+    def test_private_file_helpers_fallback_without_fchmod(self, tmp_path, monkeypatch):
+        from easycat.runtime import _private_files as private_files
+
+        monkeypatch.setattr(private_files.os, "fchmod", None)
+        monkeypatch.setattr(private_files, "_SUPPORTS_DIRECTORY_HANDLES", False)
+        directory = tmp_path / "private"
+        path = directory / "secret"
+
+        private_files.mkdir_private(directory)
+        private_files.touch_private_file(path)
+
+        assert _mode(directory) == 0o700
+        assert _mode(path) == 0o600
+
+    def test_private_path_checks_fail_closed_on_metadata_error(self, tmp_path, monkeypatch):
+        from easycat.runtime import _private_files as private_files
+
+        guarded = tmp_path / "guarded"
+        guarded.mkdir()
+        real_lstat = type(guarded).lstat
+
+        def denied_lstat(path):
+            if path == guarded:
+                raise PermissionError(str(path))
+            return real_lstat(path)
+
+        monkeypatch.setattr(type(guarded), "lstat", denied_lstat)
+
+        assert private_files._path_is_link_or_reparse(guarded)
+
+    def test_private_copy_falls_back_without_descriptor_relative_io(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from easycat.runtime import _private_files as private_files
+
+        monkeypatch.setattr(private_files, "_SUPPORTS_DESCRIPTOR_PRIVATE_COPY", False)
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+        source_dir.mkdir()
+        target_dir.mkdir()
+        source = source_dir / "journal.sqlite"
+        target = target_dir / "journal.sqlite"
+        source.write_bytes(b"durable journal")
+
+        private_files.copy_private_file(source, target)
+
+        assert target.read_bytes() == b"durable journal"
+        assert _mode(target) == 0o600
+
     def test_crash_dump_files_are_private_under_permissive_umask(self, tmp_path):
         old_umask = os.umask(0o022)
         try:
@@ -1802,6 +1853,19 @@ class _FakeLibsqlModule:
         return self._conn
 
 
+class _BlockingOwnerDeleteConn(_LockProbeConn):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_started = threading.Event()
+        self.release_delete = threading.Event()
+
+    def execute(self, sql, params=None):
+        if "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')" in sql:
+            self.delete_started.set()
+            assert self.release_delete.wait(timeout=1)
+        return super().execute(sql, params)
+
+
 class TestLibsqlJournal:
     def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
         from easycat.runtime import LibsqlJournal
@@ -1938,6 +2002,27 @@ class TestLibsqlJournal:
                 LibsqlJournal("invalid-sync-environment", data_dir=tmp_path)
 
         assert not (tmp_path / "journals" / "invalid-sync-environment.sqlite").exists()
+
+    def test_rejects_replacement_writer_until_close_releases_claim(self, tmp_path: Path) -> None:
+        """A closing writer owns the path until marker cleanup completes."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _BlockingOwnerDeleteConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            first = LibsqlJournal("closing-writer", data_dir=tmp_path)
+            close_thread = threading.Thread(target=first.close)
+            close_thread.start()
+            try:
+                assert probe.delete_started.wait(timeout=1)
+                with pytest.raises(RuntimeError, match="Journal is already active"):
+                    LibsqlJournal("closing-writer", data_dir=tmp_path)
+            finally:
+                probe.release_delete.set()
+                close_thread.join(timeout=1)
+
+        assert not close_thread.is_alive()
 
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""
