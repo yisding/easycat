@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from dataclasses import replace
 
 import pytest
@@ -15,6 +16,7 @@ from easycat import (
     create_session,
 )
 from easycat.config import _factory as config_factory
+from easycat.runtime.artifacts import ArtifactWriteReceipt
 from easycat.session._types import CallIdentity
 from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
@@ -74,15 +76,44 @@ class _BlockingArtifactStore:
         self.started = threading.Event()
         self.release = threading.Event()
         self.refs: set[str] = set()
+        self._cleanup_token: str | None = None
+        self._lock = threading.Lock()
 
     def put(self, payload: bytes, *, artifact_class: str = "debug_verbose") -> str:
+        return self.put_with_cleanup_token(payload, artifact_class=artifact_class).ref
+
+    def put_with_cleanup_token(
+        self,
+        payload: bytes,
+        *,
+        artifact_class: str = "debug_verbose",
+    ) -> ArtifactWriteReceipt:
+        del payload, artifact_class
         self.started.set()
-        self.release.wait()
-        self.refs.add("blocked-ref")
-        return "blocked-ref"
+        if not self.release.wait(timeout=5):
+            raise AssertionError("timed out waiting to release artifact put")
+        with self._lock:
+            created = "blocked-ref" not in self.refs
+            self.refs.add("blocked-ref")
+            self._cleanup_token = uuid.uuid4().hex
+            return ArtifactWriteReceipt(
+                "blocked-ref",
+                created=created,
+                cleanup_token=self._cleanup_token,
+            )
 
     def delete(self, ref: str) -> None:
-        self.refs.discard(ref)
+        with self._lock:
+            self.refs.discard(ref)
+            self._cleanup_token = None
+
+    def delete_if_cleanup_token(self, ref: str, cleanup_token: str) -> bool:
+        with self._lock:
+            if cleanup_token != self._cleanup_token:
+                return False
+            self.refs.discard(ref)
+            self._cleanup_token = None
+            return True
 
 
 @pytest.mark.asyncio

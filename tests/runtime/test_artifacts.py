@@ -5,6 +5,12 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import subprocess
+import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -43,6 +49,16 @@ class TestInMemoryArtifactStore:
         store.delete(ref)
         assert not store.has(ref)
         assert store.get(ref) is None
+
+    def test_conditional_cleanup_token_is_invalidated_by_later_put(self):
+        store = InMemoryArtifactStore()
+        receipt = store.put_with_cleanup_token(b"shared")
+        assert receipt.created is True
+        assert receipt.cleanup_token is not None
+
+        assert store.put(b"shared") == receipt.ref
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert store.has(receipt.ref)
 
     def test_refuses_new_writes_past_cap(self):
         """Once the byte cap is reached, new artifacts are refused (return "")
@@ -145,6 +161,112 @@ class TestFilesystemArtifactStore:
         expected = hashlib.sha256(b"hello fs").hexdigest()
         assert ref == expected
         assert store.get(ref) == b"hello fs"
+
+    def test_external_claim_wait_does_not_hold_instance_lock(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        waiting_ref = "a" * 64
+        unrelated_ref = "b" * 64
+        waiting = threading.Event()
+        release = threading.Event()
+        unrelated_claimed = threading.Event()
+        errors: list[BaseException] = []
+
+        @contextmanager
+        def controlled_claim(
+            target_path: Path,
+            *,
+            blocking: bool,
+            namespace: str,
+        ) -> Iterator[bool]:
+            del blocking, namespace
+            if str(target_path).endswith(waiting_ref):
+                waiting.set()
+                if not release.wait(timeout=5):
+                    raise AssertionError("timed out releasing external claim")
+            yield True
+
+        monkeypatch.setattr(artifacts_module, "path_file_claim", controlled_claim)
+
+        def take_claim(ref: str, entered: threading.Event | None = None) -> None:
+            try:
+                with store._write_claim(ref):
+                    if entered is not None:
+                        entered.set()
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=take_claim, args=(waiting_ref,))
+        second = threading.Thread(
+            target=take_claim,
+            args=(unrelated_ref, unrelated_claimed),
+        )
+        first.start()
+        try:
+            assert waiting.wait(timeout=5)
+            second.start()
+            assert unrelated_claimed.wait(timeout=5)
+        finally:
+            release.set()
+            first.join(timeout=5)
+            if second.ident is not None:
+                second.join(timeout=5)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert errors == []
+
+    def test_cleanup_token_is_invalidated_by_cross_process_put(self, tmp_path):
+        payload = b"cross-process token"
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(payload)
+        assert receipt.created is True
+        assert receipt.cleanup_token is not None
+
+        script = """
+import sys
+from easycat.runtime.artifacts import FilesystemArtifactStore
+
+store = FilesystemArtifactStore("sess", data_dir=sys.argv[1])
+print(store.put(b"cross-process token"), flush=True)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path)],
+            check=False,
+            capture_output=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(
+                        None,
+                        (
+                            str(Path(__file__).parents[2] / "src"),
+                            os.environ.get("PYTHONPATH"),
+                        ),
+                    )
+                ),
+            },
+            text=True,
+            timeout=5,
+        )
+
+        assert completed.returncode == 0, (
+            f"stdout: {completed.stdout!r}\nstderr: {completed.stderr!r}"
+        )
+        assert completed.stdout.strip() == receipt.ref
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is False
+        assert store.get(receipt.ref) == payload
+
+    def test_cleanup_token_deletes_when_no_later_put_exists(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"owned")
+        assert receipt.cleanup_token is not None
+
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token) is True
+        assert not store.has(receipt.ref)
 
     def test_path_fallback_remains_usable_without_descriptor_relative_io(
         self,

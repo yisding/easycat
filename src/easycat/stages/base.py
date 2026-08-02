@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.runtime.artifacts import FilesystemArtifactStore
+from easycat.runtime.artifacts import ArtifactWriteReceipt, FilesystemArtifactStore
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import append_journal_record_async
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
@@ -25,6 +24,7 @@ from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import JournalRecordKind
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 if TYPE_CHECKING:
     # Annotation-only imports.  ``ReplaySpec`` and ``ReplayCassette`` appear
@@ -234,11 +234,13 @@ def put_artifact(
     ):
         return None
     capture_epoch = _capture_epoch(ctx)
-    artifact_preexisted = _artifact_preexists(ctx.artifact_store, payload)
-    ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
+    store = ctx.artifact_store
+    receipt = _put_with_cleanup_receipt(store, payload, artifact_class)
+    ref = receipt.ref if receipt is not None else store.put(payload, artifact_class=artifact_class)
     if ref and not _capture_write_is_current(ctx, capture_epoch):
-        if not artifact_preexisted:
-            ctx.artifact_store.delete(ref)
+        cleanup = _receipt_cleanup(receipt)
+        if cleanup is not None:
+            store.delete_if_cleanup_token(*cleanup)
         return None
     return ref or None
 
@@ -264,9 +266,10 @@ async def put_artifact_async(
     thread hop there is pure overhead (executor queue contention, GIL
     ping-pong, an extra loop wakeup) at ~50 fps across every capture site.
 
-    Either way the write completes before this coroutine returns, so a
-    journal record appended afterwards never references an artifact that
-    was not written.
+    Either way the write settles before this coroutine returns. If the
+    caller cancels a blocking write, this helper waits for the worker and,
+    when the store supports conditional cleanup tokens, removes an artifact
+    created by that write before propagating cancellation.
     """
     if (
         ctx.artifact_store is None
@@ -280,20 +283,161 @@ async def put_artifact_async(
         return None
     capture_epoch = _capture_epoch(ctx)
     store = ctx.artifact_store
-    artifact_preexisted = _artifact_preexists(store, payload)
     if _writes_block(store):
-        ref = await asyncio.to_thread(store.put, payload, artifact_class=artifact_class)
-        if ref and not _capture_write_is_current(ctx, capture_epoch):
-            if not artifact_preexisted:
-                await asyncio.to_thread(store.delete, ref)
-            return None
-        return ref or None
-    ref = store.put(payload, artifact_class=artifact_class)
+        return await _put_blocking_artifact(
+            ctx,
+            store,
+            payload,
+            artifact_class,
+            capture_epoch,
+        )
+    receipt = _put_with_cleanup_receipt(store, payload, artifact_class)
+    ref = receipt.ref if receipt is not None else store.put(payload, artifact_class=artifact_class)
     if ref and not _capture_write_is_current(ctx, capture_epoch):
-        if not artifact_preexisted:
-            store.delete(ref)
+        cleanup = _receipt_cleanup(receipt)
+        if cleanup is not None:
+            store.delete_if_cleanup_token(*cleanup)
         return None
     return ref or None
+
+
+async def _put_blocking_artifact(
+    ctx: RunContext,
+    store: Any,
+    payload: bytes,
+    artifact_class: Literal["replay_critical", "debug_verbose"],
+    capture_epoch: int | None,
+) -> str | None:
+    put_with_token = getattr(store, "put_with_cleanup_token", None)
+    delete_with_token = getattr(store, "delete_if_cleanup_token", None)
+    if callable(put_with_token) and callable(delete_with_token):
+        put = put_with_token
+        owns_cleanup = True
+    else:
+        put = store.put
+        owns_cleanup = False
+    put_operation = asyncio.create_task(
+        asyncio.to_thread(put, payload, artifact_class=artifact_class)
+    )
+    result, cancellation = await _await_artifact_put(
+        put_operation,
+        token_aware=owns_cleanup,
+    )
+    if owns_cleanup and not isinstance(result, ArtifactWriteReceipt):
+        if cancellation is not None:
+            raise cancellation
+        raise TypeError("put_with_cleanup_token() must return ArtifactWriteReceipt")
+    receipt = result if isinstance(result, ArtifactWriteReceipt) else None
+    ref = receipt.ref if receipt is not None else result
+    if cancellation is not None:
+        cleanup = _receipt_cleanup(receipt)
+        if cleanup is not None:
+            try:
+                await _delete_blocking_artifact(store, *cleanup)
+            except BaseException:
+                # Cancellation remains the caller-visible outcome, but retain
+                # diagnostics if a custom store could not clean up.
+                logger.warning(
+                    "Artifact cleanup failed after cancellation for ref=%s",
+                    ref,
+                    exc_info=True,
+                )
+        raise cancellation
+    if ref and not _capture_write_is_current(ctx, capture_epoch):
+        cleanup = _receipt_cleanup(receipt)
+        if cleanup is not None:
+            delete_cancellation = await _delete_blocking_artifact(store, *cleanup)
+            if delete_cancellation is not None:
+                raise delete_cancellation
+        return None
+    return ref or None
+
+
+async def _await_artifact_put(
+    operation: asyncio.Task[Any],
+    *,
+    token_aware: bool,
+) -> tuple[Any, asyncio.CancelledError | None]:
+    """Settle a blocking put while preserving its non-raising contract."""
+    try:
+        return await _await_owned_artifact_io(operation)
+    except Exception:
+        # ArtifactStore.put is a non-raising boundary. Keep a custom blocking
+        # store that violates that contract from aborting the calling stage.
+        logger.warning("Artifact write failed", exc_info=True)
+        fallback = (
+            ArtifactWriteReceipt("", created=False, cleanup_token=None) if token_aware else ""
+        )
+        return fallback, None
+
+
+async def _await_owned_artifact_io(
+    operation: asyncio.Task[_T],
+) -> tuple[_T, asyncio.CancelledError | None]:
+    """Wait for thread-backed artifact I/O without abandoning its worker."""
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        return await asyncio.shield(operation), None
+    except asyncio.CancelledError as exc:
+        if operation.cancelled():
+            raise
+        cancellation = exc
+
+    settled = asyncio.Event()
+    operation.add_done_callback(lambda _operation: settled.set())
+    while not operation.done():
+        try:
+            await settled.wait()
+        except asyncio.CancelledError:
+            # Repeated cancellation must not detach the worker or its cleanup.
+            continue
+
+    try:
+        return operation.result(), cancellation
+    except BaseException:
+        if cancellation is not None:
+            # The caller already cancelled this operation. Retrieve the worker
+            # failure above, then keep cancellation as the observable result.
+            raise cancellation from None
+        raise
+
+
+async def _delete_blocking_artifact(
+    store: Any,
+    ref: str,
+    cleanup_token: str,
+) -> asyncio.CancelledError | None:
+    """Delete a ref while retaining ownership through repeated cancellation."""
+    delete_operation = asyncio.create_task(
+        asyncio.to_thread(
+            store.delete_if_cleanup_token,
+            ref,
+            cleanup_token,
+        )
+    )
+    _, cancellation = await _await_owned_artifact_io(delete_operation)
+    return cancellation
+
+
+def _put_with_cleanup_receipt(
+    store: Any,
+    payload: bytes,
+    artifact_class: Literal["replay_critical", "debug_verbose"],
+) -> ArtifactWriteReceipt | None:
+    put_with_token = getattr(store, "put_with_cleanup_token", None)
+    delete_with_token = getattr(store, "delete_if_cleanup_token", None)
+    if not callable(put_with_token) or not callable(delete_with_token):
+        return None
+    receipt = put_with_token(payload, artifact_class=artifact_class)
+    if not isinstance(receipt, ArtifactWriteReceipt):
+        raise TypeError("put_with_cleanup_token() must return ArtifactWriteReceipt")
+    return receipt
+
+
+def _receipt_cleanup(receipt: ArtifactWriteReceipt | None) -> tuple[str, str] | None:
+    if receipt is None or not receipt.ref or not receipt.created or receipt.cleanup_token is None:
+        return None
+    return receipt.ref, receipt.cleanup_token
 
 
 def _journal_is_degraded(ctx: RunContext) -> bool:
@@ -319,13 +463,6 @@ def _capture_write_is_current(ctx: RunContext, started_epoch: int | None) -> boo
         or ctx.audio_capture_epoch is None
         or ctx.audio_capture_epoch() == started_epoch
     )
-
-
-def _artifact_preexists(store: Any, payload: bytes) -> bool:
-    has = getattr(store, "has", None)
-    if not callable(has):
-        return False
-    return bool(has(hashlib.sha256(payload).hexdigest()))
 
 
 def _writes_block(store: Any) -> bool:
