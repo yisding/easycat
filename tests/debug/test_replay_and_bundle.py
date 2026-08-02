@@ -569,6 +569,23 @@ class TestBundleExport:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
 
+    def test_export_rejects_missing_referenced_artifact(self, tmp_path):
+        ref = hashlib.sha256(b"missing").hexdigest()
+        path = tmp_path / "missing-artifact.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(
+                _FakeSession(
+                    debug="full",
+                    journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
+                ),
+                path,
+            )
+
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+        assert ref in str(exc_info.value)
+        assert not path.exists()
+
     def test_export_pages_journal_in_bounded_reads(self, tmp_path):
         class _PagedJournal:
             def __init__(self):
@@ -728,17 +745,18 @@ class TestBundleExport:
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         path = tmp_path / "linked-artifact.zip"
 
-        export_debug_bundle(
-            _FakeSession(
-                debug="full",
-                journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
-                artifact_store=store,
-            ),
-            path,
-        )
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(
+                _FakeSession(
+                    debug="full",
+                    journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
+                    artifact_store=store,
+                ),
+                path,
+            )
 
-        with zipfile.ZipFile(path) as zf:
-            assert f"artifacts/{ref}.bin" not in zf.namelist()
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+        assert not path.exists()
         assert outside_path.read_bytes() == payload
 
     def test_export_does_not_read_artifacts_through_data_dir_symlink(self, tmp_path):
@@ -758,17 +776,18 @@ class TestBundleExport:
             _dir = linked_data / "artifacts" / "sess"
 
         path = tmp_path / "linked-data-artifact.zip"
-        export_debug_bundle(
-            _FakeSession(
-                debug="full",
-                journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
-                artifact_store=_LinkedFilesystemStore(),
-            ),
-            path,
-        )
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(
+                _FakeSession(
+                    debug="full",
+                    journal=_FakeJournal([{"sequence": 1, "input_ref": ref}]),
+                    artifact_store=_LinkedFilesystemStore(),
+                ),
+                path,
+            )
 
-        with zipfile.ZipFile(path) as zf:
-            assert f"artifacts/{ref}.bin" not in zf.namelist()
+        assert exc_info.value.reason_code == "MISSING_ARTIFACT"
+        assert not path.exists()
         assert outside_path.read_bytes() == payload
 
     def test_inline_export_streams_sharded_files(self, tmp_path):
