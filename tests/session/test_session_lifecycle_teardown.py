@@ -744,6 +744,93 @@ async def test_cancel_turn_barge_in_emits_interruption():
 
 
 @pytest.mark.asyncio
+async def test_cancel_turn_reclaims_late_context_for_captured_manager_turn():
+    class BlockingClearTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clear_entered = asyncio.Event()
+            self.release_clear = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.clear_entered.set()
+            await self.release_clear.wait()
+
+    transport = BlockingClearTransport()
+    session = Session(_full_config(transport=transport))
+    await session._turn_manager.start_turn()
+    manager_token = session._turn_manager.cancel_token
+    assert manager_token is not None
+    assert session._turn is None
+
+    cancel_task = asyncio.create_task(session.cancel_turn())
+    try:
+        await asyncio.wait_for(transport.clear_entered.wait(), timeout=1)
+        late_turn = TurnContext("late-turn", manager_token)
+        session._turn = late_turn
+        session._turn_generation = late_turn.generation
+
+        transport.release_clear.set()
+        await cancel_task
+
+        assert session._turn is None
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        transport.release_clear.set()
+        if not cancel_task.done():
+            await cancel_task
+
+
+@pytest.mark.asyncio
+async def test_stale_cancel_turn_cleanup_preserves_barge_in_successor():
+    class BlockingFirstClearTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_clear_entered = asyncio.Event()
+            self.release_first_clear = asyncio.Event()
+
+        async def clear_audio(self) -> None:
+            self.clear_calls += 1
+            if self.clear_calls == 1:
+                self.first_clear_entered.set()
+                await self.release_first_clear.wait()
+
+    transport = BlockingFirstClearTransport()
+    session = Session(_full_config(transport=transport))
+    session._is_running = True
+    old_turn = TurnContext("old-turn", CancelToken())
+    session._turn = old_turn
+    session._turn_generation = old_turn.generation
+    session._turn_manager.begin_application_turn(old_turn.id, old_turn.cancel_token)
+    await session._turn_manager.bot_started_speaking()
+    cancel_task = asyncio.create_task(session.cancel_turn())
+
+    try:
+        await asyncio.wait_for(transport.first_clear_entered.wait(), timeout=1)
+        await session._turn_manager._handle_speech_start()  # noqa: SLF001
+
+        successor = session._turn
+        successor_stt_task = session._stt_committer.stt_task
+        assert successor is not None and successor is not old_turn
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+        assert successor_stt_task is not None and not successor_stt_task.done()
+
+        transport.release_first_clear.set()
+        await cancel_task
+
+        assert session._turn is successor
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+        assert session._stt_committer.stt_task is successor_stt_task
+        assert not successor_stt_task.done()
+    finally:
+        transport.release_first_clear.set()
+        if not cancel_task.done():
+            await cancel_task
+        await session._stt_committer.cancel(session._turn)
+        session._turn_manager.reset()
+        session._is_running = False
+
+
+@pytest.mark.asyncio
 async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
     """WS3 T3.8: a barge-in must dispatch an InterruptSignal through
     every stage, producing one ControlSignalRecord per stage in the
