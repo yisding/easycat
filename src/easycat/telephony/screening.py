@@ -34,7 +34,7 @@ from easycat.events import (
     STTPartial,
     VoicemailDetected,
 )
-from easycat.telephony.call_state import _CallBoundaryAcceptor
+from easycat.telephony.voicemail import _CallBoundaryAcceptor
 
 logger = logging.getLogger(__name__)
 

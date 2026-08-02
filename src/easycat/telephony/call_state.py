@@ -349,9 +349,6 @@ class ClassificationGate:
                 self._started = False
 
 
-_CallBoundaryAcceptor = Callable[[str, str], bool]
-
-
 class OutboundCallStateMachine:
     """Coordinates all detection signals into a unified call disposition.
 
