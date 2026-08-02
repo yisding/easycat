@@ -228,7 +228,50 @@ class _CancellationResistantPromptBridge(_TestBridgeBase):
             yield AgentBridgeEvent(kind="done")
 
 
-def _prompt_session(agent: _TestBridgeBase) -> Session:
+class _CancellationIgnoringPromptBridge(_TestBridgeBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        self.started.set()
+        await self.release.wait()
+        yield AgentBridgeEvent(kind="text_delta", text="stale delta")
+        yield AgentBridgeEvent(kind="done", text="stale final")
+
+
+class _CancellationIgnoringToolPromptBridge(_TestBridgeBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="tool_started", tool_name="write", call_id="call-1")
+        await self.release.wait()
+        yield AgentBridgeEvent(kind="tool_delta", text="working", call_id="call-1")
+        yield AgentBridgeEvent(kind="tool_result", result="written", call_id="call-1")
+        yield AgentBridgeEvent(kind="text_delta", text="stale delta")
+        yield AgentBridgeEvent(kind="done", text="stale final")
+
+
+def _prompt_session(
+    agent: _TestBridgeBase,
+    *,
+    journal: InMemoryRingBuffer | None = None,
+) -> Session:
     return Session(
         SessionConfig(
             transport=FakeTransport(),
@@ -237,6 +280,7 @@ def _prompt_session(agent: _TestBridgeBase) -> Session:
             agent=agent,
             tts=FakeTTS(),
             noise_reducer=FakeNoiseReducer(),
+            journal=journal,
         )
     )
 
@@ -313,6 +357,76 @@ async def test_voice_barge_in_does_not_wait_for_resistant_prompt_cleanup():
     bridge.release_cleanup.set()
     await asyncio.gather(prompt, return_exceptions=True)
     await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_silent_prompt_suppresses_late_raw_bridge_output():
+    bridge = _CancellationIgnoringPromptBridge()
+    session = _prompt_session(bridge)
+    emitted: list[Event] = []
+    session.event_bus.subscribe(AgentDelta, emitted.append)
+    session.event_bus.subscribe(AgentFinal, emitted.append)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
+        token = session.cancel_token
+        assert token is not None
+        token.cancel()
+        bridge.release.set()
+
+        assert await asyncio.wait_for(prompt, timeout=1) == ""
+        assert emitted == []
+        assert session._agent_stage._history == []
+    finally:
+        bridge.release.set()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_silent_prompt_drains_inflight_tool_without_stale_journal_output():
+    bridge = _CancellationIgnoringToolPromptBridge()
+    journal = InMemoryRingBuffer(capacity=100)
+    session = _prompt_session(bridge, journal=journal)
+    tool_started = asyncio.Event()
+    lifecycle: list[Event] = []
+
+    def record_event(event: Event) -> None:
+        lifecycle.append(event)
+        if isinstance(event, ToolCallStarted):
+            tool_started.set()
+
+    for event_type in (ToolCallStarted, ToolCallDelta, ToolCallResult, AgentDelta, AgentFinal):
+        session.event_bus.subscribe(event_type, record_event)
+
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+    try:
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        token = session.cancel_token
+        assert token is not None
+        token.cancel()
+        bridge.release.set()
+
+        assert await asyncio.wait_for(prompt, timeout=1) == ""
+        assert [type(event) for event in lifecycle] == [
+            ToolCallStarted,
+            ToolCallDelta,
+            ToolCallResult,
+        ]
+        agent_deltas = [record for record in journal.read() if record.name == "agent_delta"]
+        assert [record.data["type"] for record in agent_deltas] == [
+            "TOOL_STARTED",
+            "TOOL_RESULT",
+        ]
+        complete = next(record for record in journal.read() if record.name == "stage_complete")
+        assert complete.data["response"] == ""
+    finally:
+        bridge.release.set()
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio
