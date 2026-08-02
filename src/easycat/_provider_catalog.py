@@ -133,31 +133,32 @@ class ProviderCatalog:
             raise ValueError(
                 f"{self.kind} provider {normalized!r} env_var must be non-empty or None."
             )
-        existing = self.providers.get(normalized)
-        if existing is not None:
-            same_metadata = (
-                self.env_vars[normalized] == env_var
-                and self.extras.get(normalized, "") == (extra or "")
-                and self.api_domains.get(normalized, ()) == tuple(api_domains)
-                and self.probe_modules.get(normalized) == probe_module
-                and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
-                and self.capability_resolvers.get(normalized) is capability_resolver
-            )
-            if existing == (provider_cls, config_cls) and same_metadata:
-                return
-            raise ValueError(
-                f"{self.kind} provider {normalized!r} is already registered "
-                f"with a different provider/config/env_var."
-            )
-        self.providers[normalized] = (provider_cls, config_cls)
-        self.env_vars[normalized] = env_var
-        self.extras[normalized] = extra or ""
-        self.api_domains[normalized] = tuple(api_domains)
-        self.probe_modules[normalized] = probe_module
-        self.capabilities[normalized] = frozenset(capabilities)
-        self.capability_resolvers[normalized] = capability_resolver
-        self.config_to_provider[config_cls] = provider_cls
-        register_sensitive_api_domains(api_domains)
+        with self._discovery_lock:
+            existing = self.providers.get(normalized)
+            if existing is not None:
+                same_metadata = (
+                    self.env_vars[normalized] == env_var
+                    and self.extras.get(normalized, "") == (extra or "")
+                    and self.api_domains.get(normalized, ()) == tuple(api_domains)
+                    and self.probe_modules.get(normalized) == probe_module
+                    and self.capabilities.get(normalized, frozenset()) == frozenset(capabilities)
+                    and self.capability_resolvers.get(normalized) is capability_resolver
+                )
+                if existing == (provider_cls, config_cls) and same_metadata:
+                    return
+                raise ValueError(
+                    f"{self.kind} provider {normalized!r} is already registered "
+                    f"with a different provider/config/env_var."
+                )
+            self.providers[normalized] = (provider_cls, config_cls)
+            self.env_vars[normalized] = env_var
+            self.extras[normalized] = extra or ""
+            self.api_domains[normalized] = tuple(api_domains)
+            self.probe_modules[normalized] = probe_module
+            self.capabilities[normalized] = frozenset(capabilities)
+            self.capability_resolvers[normalized] = capability_resolver
+            self.config_to_provider[config_cls] = provider_cls
+            register_sensitive_api_domains(api_domains)
 
     def discover(self) -> None:
         """Load entry-point registration callbacks once, logging failures."""
@@ -171,7 +172,8 @@ class ProviderCatalog:
                 return
             object.__setattr__(self, "_discovery_owner", owner)
             try:
-                for entry_point in importlib.metadata.entry_points(group=self.entry_point_group):
+                entry_points = importlib.metadata.entry_points(group=self.entry_point_group)
+                for entry_point in entry_points:
                     try:
                         register = entry_point.load()
                         register()
@@ -183,12 +185,24 @@ class ProviderCatalog:
                             self.entry_point_group,
                             exc_info=True,
                         )
-            finally:
+            except Exception:
+                # Metadata enumeration can fail independently of any one
+                # callback. Do not publish a partial catalog as discovered;
+                # a later call must be able to retry the whole enumeration.
+                logger.warning(
+                    "Failed to enumerate %s provider entry points from group %r",
+                    self.kind,
+                    self.entry_point_group,
+                    exc_info=True,
+                )
+                return
+            else:
                 # Completion is published only after every registration
                 # callback finishes, so the lock-free fast path cannot observe
                 # partially populated catalog dictionaries.
-                object.__setattr__(self, "_discovery_owner", None)
                 object.__setattr__(self, "_discovered", True)
+            finally:
+                object.__setattr__(self, "_discovery_owner", None)
 
     def available_names(self) -> list[str]:
         """Return every registered provider name, sorted."""

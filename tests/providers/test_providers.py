@@ -348,3 +348,119 @@ def test_provider_catalog_discovery_is_atomic_across_threads(
     assert errors == []
     assert results == [("api.plugin.test",), ("api.plugin.test",)]
     assert catalog.api_domains["plugin"] == ("api.plugin.test",)
+
+
+def test_provider_catalog_direct_registration_waits_for_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callback_started = ThreadEvent()
+    release_callback = ThreadEvent()
+    registration_started = ThreadEvent()
+    registration_finished = ThreadEvent()
+    catalog = ProviderCatalog(
+        specs={},
+        kind="Test",
+        entry_point_group="easycat.test_providers",
+    )
+
+    class _EntryPoint:
+        name = "slow"
+
+        def load(self):
+            def register() -> None:
+                callback_started.set()
+                assert release_callback.wait(timeout=2)
+                catalog.register("discovered", _CatalogProvider, _CatalogConfig)
+
+            return register
+
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda **_kwargs: [_EntryPoint()])
+
+    discovery = Thread(target=catalog.discover)
+
+    def register_directly() -> None:
+        registration_started.set()
+        catalog.register("direct", _CatalogProvider, _CatalogConfig)
+        registration_finished.set()
+
+    registration = Thread(target=register_directly)
+    discovery.start()
+    assert callback_started.wait(timeout=1)
+    registration.start()
+    assert registration_started.wait(timeout=1)
+    assert not registration_finished.wait(timeout=0.1)
+
+    release_callback.set()
+    discovery.join(timeout=2)
+    registration.join(timeout=2)
+
+    assert not discovery.is_alive()
+    assert not registration.is_alive()
+    assert set(catalog.providers) == {"direct", "discovered"}
+
+
+def test_provider_catalog_discovery_is_reentrant_on_owner_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = ProviderCatalog(
+        specs={},
+        kind="Test",
+        entry_point_group="easycat.test_providers",
+    )
+    callback_calls = 0
+
+    class _EntryPoint:
+        name = "recursive"
+
+        def load(self):
+            def register() -> None:
+                nonlocal callback_calls
+                callback_calls += 1
+                catalog.discover()
+                catalog.register("plugin", _CatalogProvider, _CatalogConfig)
+
+            return register
+
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda **_kwargs: [_EntryPoint()])
+
+    catalog.discover()
+    catalog.discover()
+
+    assert callback_calls == 1
+    assert catalog.providers["plugin"] == (_CatalogProvider, _CatalogConfig)
+    assert catalog._discovered is True
+
+
+def test_provider_catalog_retries_entry_point_enumeration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = ProviderCatalog(
+        specs={},
+        kind="Test",
+        entry_point_group="easycat.test_providers",
+    )
+    attempts = 0
+
+    class _EntryPoint:
+        name = "retry"
+
+        def load(self):
+            return lambda: catalog.register("plugin", _CatalogProvider, _CatalogConfig)
+
+    def entry_points(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("metadata unavailable")
+        return [_EntryPoint()]
+
+    monkeypatch.setattr("importlib.metadata.entry_points", entry_points)
+
+    catalog.discover()
+    assert catalog._discovered is False
+    assert catalog.providers == {}
+
+    catalog.discover()
+    assert attempts == 2
+    assert catalog._discovered is True
+    assert catalog.providers["plugin"] == (_CatalogProvider, _CatalogConfig)
