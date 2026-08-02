@@ -743,6 +743,14 @@ class Session:
     ) -> EventSubscription:
         """Subscribe one Session-owned handler with correlation isolation."""
 
+        scoped_handler = self._scope_event_handler(handler)
+        subscription = self.event_bus.subscribe(event_type, scoped_handler)
+        self._event_subscriptions.append(subscription)
+        return subscription
+
+    def _scope_event_handler(self, handler: EventHandler) -> EventHandler:
+        """Wrap a session-level handler with this Session's correlation gate."""
+
         @wraps(handler)
         def _scoped_handler(event: Any) -> Any:
             if not self._accept_owned_event(event):
@@ -753,9 +761,17 @@ class Session:
         # shared bus from app-level observers without retaining another strong
         # reference beyond the wrapper's existing closure over this Session.
         cast(Any, _scoped_handler)._easycat_event_owner = self._event_subscription_owner
-        subscription = self.event_bus.subscribe(event_type, _scoped_handler)
-        self._event_subscriptions.append(subscription)
-        return subscription
+        return cast(EventHandler, _scoped_handler)
+
+    def _subscribe_scoped_handler(
+        self,
+        event_type: type,
+        handler: EventHandler,
+    ) -> EventHandler:
+        """Subscribe a public convenience handler and return its bus wrapper."""
+        scoped_handler = self._scope_event_handler(handler)
+        self.event_bus.subscribe(event_type, scoped_handler)
+        return scoped_handler
 
     def _commit_event_bus_ownership(self) -> None:
         """Mark a bus shared only after this Session constructed successfully."""
@@ -831,8 +847,8 @@ class Session:
         ):
             if handler is None:
                 continue
-            self.event_bus.subscribe(event_type, handler)
-            registrations.append((event_type, handler))
+            scoped_handler = self._subscribe_scoped_handler(event_type, handler)
+            registrations.append((event_type, scoped_handler))
 
         return registrations
 
@@ -900,8 +916,8 @@ class Session:
             if cb is None:
                 continue
             handler = wrap(cb)
-            self.event_bus.subscribe(event_type, handler)
-            registrations.append((event_type, handler))
+            scoped_handler = self._subscribe_scoped_handler(event_type, handler)
+            registrations.append((event_type, scoped_handler))
         return registrations
 
     def unsubscribe_handlers(self, registrations: list[tuple[type, EventHandler]]) -> None:
