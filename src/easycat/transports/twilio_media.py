@@ -60,7 +60,7 @@ def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
     """Parse one Twilio WebSocket message and require a JSON object."""
     try:
         msg = json.loads(raw)
-    except json.JSONDecodeError:
+    except (RecursionError, ValueError):
         logger.warning("Ignoring invalid JSON from Twilio")
         return None
     if not isinstance(msg, dict):

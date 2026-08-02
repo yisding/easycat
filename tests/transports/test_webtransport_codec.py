@@ -38,6 +38,14 @@ class TestControlCodec:
         good = _ControlCodec.encode({"type": "ready"})
         assert codec.feed(bad + good) == [{"type": "ready"}]
 
+    def test_large_integer_json_is_skipped(self) -> None:
+        codec = _ControlCodec()
+        body = b'{"type":' + b"9" * 5000 + b"}"
+        bad = struct.pack(">I", len(body)) + body
+        good = _ControlCodec.encode({"type": "ready"})
+
+        assert codec.feed(bad + good) == [{"type": "ready"}]
+
     def test_oversized_length_prefix_poisons_codec(self) -> None:
         """A malicious uint32 length prefix must not pin a multi-GB buffer."""
         codec = _ControlCodec()
