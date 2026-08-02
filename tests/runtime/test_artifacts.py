@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import errno
+import gc
 import hashlib
+import json
 import os
+import queue
+import signal
 import subprocess
 import sys
 import threading
+import time
+import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -123,8 +129,6 @@ class TestInMemoryArtifactStore:
 
     def test_large_payload_stored_by_ref_keeps_record_small(self):
         """A 1MB artifact lives in the store; the record only carries a ref."""
-        import json
-
         store = InMemoryArtifactStore()
         journal = InMemoryRingBuffer(capacity=100)
 
@@ -171,11 +175,11 @@ class TestFilesystemArtifactStore:
         monkeypatch,
     ) -> None:
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
-        waiting_ref = "a" * 64
-        unrelated_ref = "b" * 64
         waiting = threading.Event()
         release = threading.Event()
         unrelated_claimed = threading.Event()
+        claim_counter_lock = threading.Lock()
+        claim_count = 0
         errors: list[BaseException] = []
 
         @contextmanager
@@ -185,8 +189,12 @@ class TestFilesystemArtifactStore:
             blocking: bool,
             namespace: str,
         ) -> Iterator[bool]:
-            del blocking, namespace
-            if str(target_path).endswith(waiting_ref):
+            nonlocal claim_count
+            del target_path, blocking, namespace
+            with claim_counter_lock:
+                call_index = claim_count
+                claim_count += 1
+            if call_index == 0:
                 waiting.set()
                 if not release.wait(timeout=5):
                     raise AssertionError("timed out releasing external claim")
@@ -194,19 +202,16 @@ class TestFilesystemArtifactStore:
 
         monkeypatch.setattr(artifacts_module, "path_file_claim", controlled_claim)
 
-        def take_claim(ref: str, entered: threading.Event | None = None) -> None:
+        def take_claim(entered: threading.Event | None = None) -> None:
             try:
-                with store._write_claim(ref):
+                with store._write_claim():
                     if entered is not None:
                         entered.set()
             except BaseException as exc:
                 errors.append(exc)
 
-        first = threading.Thread(target=take_claim, args=(waiting_ref,))
-        second = threading.Thread(
-            target=take_claim,
-            args=(unrelated_ref, unrelated_claimed),
-        )
+        first = threading.Thread(target=take_claim)
+        second = threading.Thread(target=take_claim, args=(unrelated_claimed,))
         first.start()
         try:
             assert waiting.wait(timeout=5)
@@ -497,6 +502,9 @@ print(store.put(b"cross-process token"), flush=True)
         tmp_path,
         monkeypatch,
     ):
+        session_dir = tmp_path / "artifacts" / "sess"
+        session_dir.mkdir(parents=True, mode=0o777)
+        os.chmod(session_dir, 0o777)
         monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
 
@@ -506,6 +514,9 @@ print(store.put(b"cross-process token"), flush=True)
         assert store.has(ref)
         assert store.get(ref) == b"portable artifact"
         assert store.get_head_tail(ref, byte_cap=4) == b"portfact"
+        if os.name != "nt":
+            assert session_dir.stat().st_mode & 0o777 == 0o700
+            assert store._accounting_path().stat().st_mode & 0o777 == 0o600
         store.delete(ref)
         assert store.has(ref) is False
 
@@ -528,6 +539,9 @@ print(store.put(b"cross-process token"), flush=True)
         assert not (outside / f"{ref}.bin").exists()
 
     def test_path_fallback_detects_windows_reparse_points(self, tmp_path, monkeypatch):
+        reparse_flag = getattr(artifacts_module.stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if not reparse_flag:
+            pytest.skip("reparse-point metadata is unavailable")
         junction = tmp_path / "junction"
         junction.mkdir()
         real_lstat = type(junction).lstat
@@ -536,13 +550,70 @@ print(store.put(b"cross-process token"), flush=True)
             if path == junction:
                 return SimpleNamespace(
                     st_mode=artifacts_module.stat.S_IFDIR,
-                    st_file_attributes=artifacts_module.stat.FILE_ATTRIBUTE_REPARSE_POINT,
+                    st_file_attributes=reparse_flag,
                 )
             return real_lstat(path)
 
         monkeypatch.setattr(type(junction), "lstat", lstat_with_reparse)
 
         assert artifacts_module._path_is_link_or_reparse(junction)
+
+    def test_path_fallback_scan_skips_descendant_windows_reparse_directory(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        reparse_flag = getattr(artifacts_module.stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if not reparse_flag:
+            pytest.skip("reparse-point metadata is unavailable")
+        session_dir = tmp_path / "artifacts" / "sess"
+        junction = session_dir / "junction"
+        junction.mkdir(parents=True)
+        (junction / "ignored.bin").write_bytes(b"outside")
+        original_scandir = artifacts_module.os.scandir
+
+        class ReparseEntry:
+            def __init__(self, entry):
+                self._entry = entry
+                self.name = entry.name
+                self.path = entry.path
+
+            def stat(self, *, follow_symlinks=True):
+                metadata = self._entry.stat(follow_symlinks=follow_symlinks)
+                return SimpleNamespace(
+                    st_mode=metadata.st_mode,
+                    st_file_attributes=reparse_flag,
+                )
+
+        class ReparseScandir:
+            def __init__(self, entries):
+                self._entries = entries
+
+            def __enter__(self):
+                self._entries.__enter__()
+                return self
+
+            def __iter__(self):
+                return iter(
+                    ReparseEntry(entry) if entry.name == junction.name else entry
+                    for entry in self._entries
+                )
+
+            def __exit__(self, *args):
+                return self._entries.__exit__(*args)
+
+        def marked_scandir(path):
+            entries = original_scandir(path)
+            if Path(path) == session_dir:
+                return ReparseScandir(entries)
+            return entries
+
+        monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        monkeypatch.setattr(artifacts_module.os, "scandir", marked_scandir)
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store._current_bytes == 0
 
     def test_path_fallback_treats_metadata_errors_as_unsafe(self, tmp_path, monkeypatch):
         guarded = tmp_path / "guarded"
@@ -757,6 +828,8 @@ print(store.put(b"cross-process token"), flush=True)
 
         monkeypatch.setattr(os, "O_BINARY", binary, raising=False)
         flags = artifacts_module._artifact_file_open_flags()
+        write_flags = artifacts_module._artifact_file_write_flags()
+        accounting_flags = artifacts_module._artifact_accounting_open_flags()
         monkeypatch.setattr(artifacts_module, "_FILE_OPEN_FLAGS", flags)
         monkeypatch.setattr(artifacts_module.os, "open", fail_open)
 
@@ -764,7 +837,115 @@ print(store.put(b"cross-process token"), flush=True)
             artifacts_module._open_regular_at(1, "binary.bin")
 
         assert flags & binary
+        assert write_flags & binary
+        assert accounting_flags & binary
         assert seen_flags & binary
+
+    def test_put_reuses_one_validated_session_descriptor(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        opened: list[tuple[Path, bool]] = []
+        original_open_directory_chain = artifacts_module._open_directory_chain
+
+        def count_open_directory_chain(path: Path, *, create: bool) -> int:
+            opened.append((path, create))
+            return original_open_directory_chain(path, create=create)
+
+        monkeypatch.setattr(
+            artifacts_module,
+            "_open_directory_chain",
+            count_open_directory_chain,
+        )
+
+        assert store.put(b"one descriptor")
+
+        assert opened == [
+            (store._artifacts_dir, True),
+            (store._dir, True),
+        ]
+
+    def test_delete_reuses_one_validated_session_descriptor(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(b"one delete descriptor")
+        opened: list[tuple[Path, bool]] = []
+        original_open_directory_chain = artifacts_module._open_directory_chain
+
+        def count_open_directory_chain(path: Path, *, create: bool) -> int:
+            opened.append((path, create))
+            return original_open_directory_chain(path, create=create)
+
+        monkeypatch.setattr(
+            artifacts_module,
+            "_open_directory_chain",
+            count_open_directory_chain,
+        )
+
+        store.delete(ref)
+
+        assert opened == [
+            (store._artifacts_dir, True),
+            (store._dir, True),
+        ]
+
+    def test_conditional_delete_reuses_one_validated_session_descriptor(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        receipt = store.put_with_cleanup_token(b"one conditional delete descriptor")
+        assert receipt.cleanup_token is not None
+        opened: list[tuple[Path, bool]] = []
+        original_open_directory_chain = artifacts_module._open_directory_chain
+
+        def count_open_directory_chain(path: Path, *, create: bool) -> int:
+            opened.append((path, create))
+            return original_open_directory_chain(path, create=create)
+
+        monkeypatch.setattr(
+            artifacts_module,
+            "_open_directory_chain",
+            count_open_directory_chain,
+        )
+
+        assert store.delete_if_cleanup_token(receipt.ref, receipt.cleanup_token)
+
+        assert opened == [
+            (store._artifacts_dir, True),
+            (store._dir, True),
+        ]
+
+    def test_reused_session_descriptor_is_thread_local(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(b"thread local descriptor")
+        worker_opened = threading.Event()
+        original_open_directory_chain = artifacts_module._open_directory_chain
+
+        def track_open_directory_chain(path: Path, *, create: bool) -> int:
+            if threading.current_thread() is not threading.main_thread():
+                worker_opened.set()
+            return original_open_directory_chain(path, create=create)
+
+        monkeypatch.setattr(
+            artifacts_module,
+            "_open_directory_chain",
+            track_open_directory_chain,
+        )
+
+        with store._write_claim(), store._reuse_session_fd_locked(create=True):
+            worker = threading.Thread(target=store.has, args=(ref,))
+            worker.start()
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert worker_opened.is_set()
 
     def test_failed_partial_write_removes_temporary_file(self, tmp_path, monkeypatch):
         def fail_after_partial_write(fd: int, payload: bytes) -> None:
@@ -819,8 +1000,10 @@ print(store.put(b"cross-process token"), flush=True)
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"secret data")
         path = tmp_path / "artifacts" / "sess" / ref[:2] / f"{ref}.bin"
+        accounting_path = tmp_path / "artifacts" / "sess" / artifacts_module._ACCOUNTING_FILENAME
         assert path.stat().st_mode & 0o777 == 0o600
         assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert accounting_path.stat().st_mode & 0o777 == 0o600
 
     def test_max_bytes_refuses_new_writes_past_cap(self, tmp_path):
         """Once the byte cap is reached, new artifacts are refused (return "")
@@ -849,6 +1032,905 @@ print(store.put(b"cross-process token"), flush=True)
             store.put(b"y" * 50)  # refused again, but no second warning
         cap_warnings = [r for r in caplog.records if "reached max_bytes" in r.getMessage()]
         assert len(cap_warnings) == 1
+
+    def test_repeated_cap_refusals_reuse_the_reconciled_total(self, tmp_path, monkeypatch):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 10)
+        scans = 0
+        writes = 0
+        original_scan = store._stored_bytes
+        original_write = store._write_accounting_locked
+
+        def count_scan() -> int:
+            nonlocal scans
+            scans += 1
+            return original_scan()
+
+        def count_write(accounting):
+            nonlocal writes
+            writes += 1
+            return original_write(accounting)
+
+        monkeypatch.setattr(store, "_stored_bytes", count_scan)
+        monkeypatch.setattr(store, "_write_accounting_locked", count_write)
+
+        assert store.put(b"b") == ""
+        assert store.put(b"c") == ""
+        assert scans == 1
+        assert writes == 0
+
+        FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10).delete(ref)
+
+        assert store.put(b"d")
+        assert scans == 1
+        assert writes == 1
+
+    def test_two_stale_instances_share_one_byte_cap(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        second = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert first.put(b"a" * 6)
+        assert second.put(b"b" * 6) == ""
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        assert reopened._current_bytes == 6
+
+    def test_cap_rejection_cache_uses_accounting_revision_to_avoid_aba(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        second = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        old_ref = first.put(b"a" * 10)
+        assert old_ref
+        assert first.put(b"over-cap") == ""
+        cached = first._cap_rejected_accounting
+        assert cached is not None
+        assert cached[1] == 10
+
+        second.delete(old_ref)
+        monkeypatch.setattr(second, "_put_new_locked", lambda _ref, _payload: False)
+        assert second.put(b"b" * 10) == ""
+
+        stranded = artifacts_module._ArtifactAccounting.from_bytes(
+            second._accounting_path().read_bytes()
+        )
+        assert stranded.total_bytes == 10
+        assert stranded.revision > cached[0]
+        assert second._stored_bytes() == 0
+
+        assert first.put(b"c" * 5)
+        assert first._current_bytes == 5
+
+    def test_accounting_revision_increments_for_transitions_and_reconciliation(
+        self,
+        tmp_path,
+    ):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 6)
+        after_put = artifacts_module._ArtifactAccounting.from_bytes(
+            store._accounting_path().read_bytes()
+        )
+
+        with store._write_claim():
+            accounting = store._load_accounting_locked(persist_missing=False)
+            pending = store._begin_pending_delete_locked(accounting, ref, 6)
+            assert pending.revision == after_put.revision + 1
+            store._delete_ref_locked(ref)
+            completed = store._complete_pending_delete_locked(pending)
+            assert completed.revision == pending.revision + 1
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        reconciled = artifacts_module._ArtifactAccounting.from_bytes(
+            reopened._accounting_path().read_bytes()
+        )
+
+        assert reconciled.revision == completed.revision + 1
+        assert reconciled.total_bytes == 0
+
+    def test_stale_delete_does_not_undercount_another_instances_put(self, tmp_path):
+        seed = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        old_ref = seed.put(b"a" * 6)
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        stale = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert first.put(b"b" * 4)
+        stale.delete(old_ref)
+
+        assert stale._current_bytes == 4
+        assert stale.put(b"c" * 7) == ""
+
+    def test_concurrent_processes_share_one_byte_cap(self, tmp_path):  # noqa: C901
+        script = """
+import sys
+from easycat.runtime.artifacts import FilesystemArtifactStore
+
+store = FilesystemArtifactStore("sess", data_dir=sys.argv[1], max_bytes=10)
+print("ready", flush=True)
+sys.stdin.readline()
+print(store.put(sys.argv[2].encode("ascii")), flush=True)
+"""
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, str(tmp_path), payload],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": os.pathsep.join(
+                        filter(
+                            None,
+                            (
+                                str(Path(__file__).parents[2] / "src"),
+                                os.environ.get("PYTHONPATH"),
+                            ),
+                        )
+                    ),
+                },
+                text=True,
+            )
+            for payload in ("a" * 6, "b" * 6)
+        ]
+        ready_lines: queue.Queue[tuple[int, str]] = queue.Queue()
+        ready_threads: list[threading.Thread] = []
+        communicated: set[int] = set()
+
+        def read_ready(index: int, process: subprocess.Popen[str]) -> None:
+            assert process.stdout is not None
+            ready_lines.put((index, process.stdout.readline().strip()))
+
+        for index, process in enumerate(processes):
+            thread = threading.Thread(
+                target=read_ready,
+                args=(index, process),
+                daemon=True,
+            )
+            thread.start()
+            ready_threads.append(thread)
+        try:
+            deadline = time.monotonic() + 5
+            readiness: dict[int, str] = {}
+            while len(readiness) < len(processes):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    pytest.fail("timed out waiting for artifact worker readiness")
+                try:
+                    index, line = ready_lines.get(timeout=remaining)
+                except queue.Empty:
+                    pytest.fail("timed out waiting for artifact worker readiness")
+                readiness[index] = line
+            assert readiness == {0: "ready", 1: "ready"}
+            for process in processes:
+                assert process.stdin is not None
+                process.stdin.write("\n")
+                process.stdin.close()
+                process.stdin = None
+            results: list[str] = []
+            for index, process in enumerate(processes):
+                stdout, stderr = process.communicate(timeout=5)
+                communicated.add(index)
+                assert process.returncode == 0, f"stdout: {stdout!r}\nstderr: {stderr!r}"
+                results.append(stdout.strip())
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+            for thread in ready_threads:
+                thread.join(timeout=5)
+            for index, process in enumerate(processes):
+                if index not in communicated:
+                    process.communicate(timeout=5)
+
+        assert sum(bool(result) for result in results) == 1
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        assert reopened._current_bytes == 6
+
+    @pytest.mark.parametrize("publish_blob", [False, True])
+    def test_reserved_put_is_reclaimed_under_cap_pressure(self, tmp_path, publish_blob):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        payload = b"a" * 6
+        ref = hashlib.sha256(payload).hexdigest()
+        with store._write_claim():
+            accounting = store._load_accounting_locked(persist_missing=False)
+            assert store._reserve_new_payload_locked(
+                accounting,
+                payload_size=len(payload),
+            )
+            if publish_blob:
+                assert store._put_new_locked(ref, payload)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == (len(payload) if publish_blob else 0)
+        if publish_blob:
+            assert reopened.put(b"b" * 5) == ""
+        else:
+            assert reopened.put(b"b" * 10)
+
+    def test_unique_put_writes_accounting_once_before_blob_publish(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        events: list[str] = []
+        original_write_accounting = store._write_accounting_locked
+        original_replace = FilesystemArtifactStore._replace_file_at
+
+        def record_accounting(accounting):
+            written = original_write_accounting(accounting)
+            events.append("accounting-complete")
+            return written
+
+        def record_replace(
+            directory_fd: int,
+            name: str,
+            payload: bytes,
+        ) -> None:
+            if name.endswith(".bin"):
+                events.append("blob-publish")
+            original_replace(directory_fd, name, payload)
+
+        monkeypatch.setattr(store, "_write_accounting_locked", record_accounting)
+        monkeypatch.setattr(
+            FilesystemArtifactStore,
+            "_replace_file_at",
+            staticmethod(record_replace),
+        )
+
+        payload = b"a" * 6
+        ref = store.put(payload)
+        assert ref
+        assert store.put(payload) == ref
+
+        assert events == ["accounting-complete", "blob-publish"]
+
+    @pytest.mark.parametrize("unlink_before_crash", [False, True])
+    def test_pending_delete_is_recovered_after_interruption(
+        self,
+        tmp_path,
+        unlink_before_crash,
+    ):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 10)
+        assert store.put(b"over-cap") == ""
+        assert store._cap_rejected_accounting is not None
+        assert store._cap_rejected_accounting[1] == 10
+        with store._write_claim():
+            accounting = store._load_accounting_locked(persist_missing=False)
+            before_bytes = store._ref_stored_bytes_locked(ref)
+            store._begin_pending_delete_locked(accounting, ref, before_bytes)
+            if unlink_before_crash:
+                store._delete_ref_locked(ref)
+
+        assert store.put(b"b" * 10)
+        assert store._current_bytes == 10
+        assert store._cap_rejected_accounting is None
+        assert not store.has(ref)
+
+    def test_constructor_recount_retains_blob_despite_stale_pending_delete(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 10)
+        with store._write_claim():
+            accounting = store._load_accounting_locked(persist_missing=False)
+            before_bytes = store._ref_stored_bytes_locked(ref)
+            pending = store._begin_pending_delete_locked(accounting, ref, before_bytes)
+            stale_pending = store._accounting_path().read_bytes()
+            store._delete_ref_locked(ref)
+            store._complete_pending_delete_locked(pending)
+        assert store.put(b"a" * 10) == ref
+        store._accounting_path().write_bytes(stale_pending)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == 10
+        assert reopened.get(ref) == b"a" * 10
+        persisted = artifacts_module._ArtifactAccounting.from_bytes(
+            reopened._accounting_path().read_bytes()
+        )
+        assert persisted.total_bytes == 10
+        assert persisted.pending_delete_ref is None
+
+    @pytest.mark.parametrize("ledger_total", [1, 10])
+    def test_constructor_recounts_valid_under_or_overcounted_ledger(
+        self,
+        tmp_path,
+        ledger_total,
+    ):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = store.put(b"a" * 6)
+        with store._write_claim():
+            store._write_accounting_locked(
+                artifacts_module._ArtifactAccounting(total_bytes=ledger_total)
+            )
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == 6
+        assert reopened.get(ref) == b"a" * 6
+        persisted = artifacts_module._ArtifactAccounting.from_bytes(
+            reopened._accounting_path().read_bytes()
+        )
+        assert persisted.total_bytes == 6
+
+    def test_constructor_recount_repairs_low_clean_ledger_before_cap_check(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        first_ref = store.put(b"a" * 4)
+        saved_low_ledger = store._accounting_path().read_bytes()
+        second_ref = store.put(b"b" * 4)
+        store._accounting_path().write_bytes(saved_low_ledger)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == 8
+        assert reopened.has(first_ref)
+        assert reopened.has(second_ref)
+        assert reopened.put(b"c" * 3) == ""
+
+    def test_constructor_metadata_error_retries_recount_before_mutation(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        seed = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = seed.put(b"a" * 6)
+        with seed._write_claim():
+            accounting = seed._load_accounting_locked(persist_missing=False)
+            seed._write_accounting_locked(
+                artifacts_module._ArtifactAccounting(
+                    total_bytes=0,
+                    revision=accounting.revision,
+                )
+            )
+        original_lstat = Path.lstat
+        errored = False
+
+        def fail_once(path, *args, **kwargs):
+            nonlocal errored
+            if path == seed._dir and not errored:
+                errored = True
+                raise PermissionError(path)
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", fail_once)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._needs_open_reconciliation is True
+        assert reopened._current_bytes == 0
+        assert reopened.put(b"b" * 5) == ""
+        assert reopened._needs_open_reconciliation is False
+        assert reopened._current_bytes == 6
+        assert reopened.get(ref) == b"a" * 6
+
+    def test_persistent_constructor_metadata_error_makes_mutations_fail_closed(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        seed = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = seed.put(b"a" * 6)
+        with seed._write_claim():
+            accounting = seed._load_accounting_locked(persist_missing=False)
+            seed._write_accounting_locked(
+                artifacts_module._ArtifactAccounting(
+                    total_bytes=0,
+                    revision=accounting.revision,
+                )
+            )
+        original_lstat = Path.lstat
+
+        def deny_session_metadata(path, *args, **kwargs):
+            if path == seed._dir:
+                raise PermissionError(path)
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", deny_session_metadata)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._needs_open_reconciliation is True
+        assert reopened.put(b"b" * 5) == ""
+        reopened.delete(ref)
+        assert reopened._needs_open_reconciliation is True
+        assert reopened.get(ref) == b"a" * 6
+
+    def test_corrupt_accounting_metadata_is_rebuilt_from_artifacts(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = first.put(b"a" * 6)
+        first._accounting_path().write_bytes(b"not-json")
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == 6
+        assert reopened.get(ref) == b"a" * 6
+        assert reopened.put(b"b" * 5) == ""
+
+    def test_valid_json_with_torn_total_and_stale_checksum_is_rebuilt(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = first.put(b"a" * 6)
+        torn = json.loads(first._accounting_path().read_text(encoding="ascii"))
+        torn["total_bytes"] = 1
+        first._accounting_path().write_text(
+            json.dumps(torn, separators=(",", ":"), sort_keys=True) + "\n",
+            encoding="ascii",
+        )
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened._current_bytes == 6
+        assert reopened.get(ref) == b"a" * 6
+        assert reopened.put(b"b" * 5) == ""
+
+    def test_incomplete_accounting_rebuild_fails_closed(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = first.put(b"a" * 6)
+        first._accounting_path().write_bytes(b"not-json")
+        original_open = artifacts_module._open_regular_at
+
+        def deny_artifact_open(directory_fd: int, name: str) -> int:
+            if name.endswith(".bin"):
+                raise PermissionError(name)
+            return original_open(directory_fd, name)
+
+        monkeypatch.setattr(artifacts_module, "_open_regular_at", deny_artifact_open)
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened.put(b"b") == ""
+        assert first._accounting_path().read_bytes() == b"not-json"
+        assert first._ref_path(ref).read_bytes() == b"a" * 6
+
+    def test_unknown_accounting_version_fails_closed(self, tmp_path):
+        first = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        ref = first.put(b"a" * 6)
+        first._accounting_path().write_text(
+            '{"future_field":true,"version":2}\n',
+            encoding="ascii",
+        )
+
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+
+        assert reopened.has(ref)
+        assert reopened.put(b"b") == ""
+        assert '"version":2' in first._accounting_path().read_text(encoding="ascii")
+
+    def test_existing_accounting_updates_keep_a_stable_inode(self, tmp_path):
+        if os.name == "nt":
+            pytest.skip("inode identity is not portable on Windows")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        accounting_path = store._accounting_path()
+        inode = accounting_path.stat().st_ino
+
+        assert store.put(b"b" * 10)
+
+        assert accounting_path.stat().st_ino == inode
+
+    def test_cached_accounting_descriptor_tracks_path_replacement(self, tmp_path):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        cached = store._accounting_fd
+        assert cached is not None
+        cached_fd = cached[1][0]
+        accounting_path = store._accounting_path()
+        old_inode = os.fstat(cached_fd).st_ino
+        replacement = accounting_path.with_name("replacement-accounting")
+        replacement.write_bytes(accounting_path.read_bytes())
+        os.chmod(replacement, 0o600)
+        os.replace(replacement, accounting_path)
+
+        assert store.put(b"c" * 10)
+
+        refreshed = store._accounting_fd
+        assert refreshed is not None
+        assert os.fstat(refreshed[1][0]).st_ino == accounting_path.stat().st_ino
+        assert os.fstat(refreshed[1][0]).st_ino != old_inode
+
+    def test_cached_accounting_descriptor_is_reused_between_puts(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        cached = store._accounting_fd
+        assert cached is not None
+        original_open = artifacts_module.os.open
+
+        def reject_accounting_reopen(path, *args, **kwargs):
+            if path == artifacts_module._ACCOUNTING_FILENAME:
+                raise AssertionError("accounting descriptor was reopened")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(artifacts_module.os, "open", reject_accounting_reopen)
+
+        assert store.put(b"c" * 10)
+        assert store._accounting_fd == cached
+
+    def test_close_releases_cached_accounting_descriptor(self, tmp_path):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        cached = store._accounting_fd
+        assert cached is not None
+        cached_fd = cached[1][0]
+
+        store.close()
+
+        assert store._accounting_fd is None
+        with pytest.raises(OSError):
+            os.fstat(cached_fd)
+
+    def test_dropped_store_releases_cached_accounting_descriptor(self, tmp_path):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        cached = store._accounting_fd
+        assert cached is not None
+        cached_fd = cached[1][0]
+        store_ref = weakref.ref(store)
+
+        del store
+        gc.collect()
+
+        assert store_ref() is None
+        with pytest.raises(OSError):
+            os.fstat(cached_fd)
+
+    def test_fork_child_does_not_close_reused_foreign_descriptor(self, tmp_path):
+        if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("fork and descriptor-relative artifact I/O are required")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        cached = store._accounting_fd
+        assert cached is not None
+        cached_fd = cached[1][0]
+        child_pid = os.fork()
+        if child_pid == 0:
+            signal.alarm(5)
+            try:
+                os.fstat(cached_fd)
+            except OSError:
+                pass
+            else:
+                os._exit(2)
+            replacement = os.open(os.devnull, os.O_RDONLY)
+            if replacement != cached_fd:
+                os.dup2(replacement, cached_fd)
+                os.close(replacement)
+            if not store.put(b"c" * 10):
+                os._exit(3)
+            if not artifacts_module.stat.S_ISCHR(os.fstat(cached_fd).st_mode):
+                os._exit(4)
+            store.close()
+            if not artifacts_module.stat.S_ISCHR(os.fstat(cached_fd).st_mode):
+                os._exit(5)
+            os._exit(0)
+        _, status = os.waitpid(child_pid, 0)
+
+        assert os.waitstatus_to_exitcode(status) == 0
+
+    def test_fork_child_close_resets_inherited_locked_mutex(self, tmp_path):
+        if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("fork and descriptor-relative artifact I/O are required")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        locked = threading.Event()
+        release = threading.Event()
+
+        def hold_store_lock() -> None:
+            with store._lock:
+                locked.set()
+                release.wait(timeout=5)
+
+        holder = threading.Thread(target=hold_store_lock)
+        holder.start()
+        assert locked.wait(timeout=5)
+        child_pid = os.fork()
+        if child_pid == 0:
+            signal.alarm(5)
+            store.close()
+            os._exit(0)
+        try:
+            _, status = os.waitpid(child_pid, 0)
+        finally:
+            release.set()
+            holder.join(timeout=5)
+
+        assert not holder.is_alive()
+        assert os.waitstatus_to_exitcode(status) == 0
+
+    def test_fork_child_hook_does_not_close_fd_reused_by_earlier_hook(self, tmp_path):
+        if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("fork and descriptor-relative artifact I/O are required")
+        script = r"""
+import os
+import signal
+import stat
+import sys
+
+owned = {}
+
+def replace_before_easycat_cleanup():
+    fd = owned["fd"]
+    os.close(fd)
+    replacement = os.open(os.devnull, os.O_RDONLY)
+    if replacement != fd:
+        os.dup2(replacement, fd)
+        os.close(replacement)
+
+os.register_at_fork(after_in_child=replace_before_easycat_cleanup)
+
+from easycat.runtime.artifacts import FilesystemArtifactStore
+
+store = FilesystemArtifactStore("sess", data_dir=sys.argv[1], max_bytes=100)
+assert store.put(b"a" * 10)
+assert store.put(b"b" * 10)
+cached = store._accounting_fd
+assert cached is not None
+owned["fd"] = cached[1][0]
+child = os.fork()
+if child == 0:
+    signal.alarm(5)
+    if not stat.S_ISCHR(os.fstat(owned["fd"]).st_mode):
+        os._exit(2)
+    if not store.put(b"c" * 10):
+        os._exit(3)
+    if not stat.S_ISCHR(os.fstat(owned["fd"]).st_mode):
+        os._exit(4)
+    os._exit(0)
+_, status = os.waitpid(child, 0)
+store.close()
+raise SystemExit(os.waitstatus_to_exitcode(status))
+"""
+        data_dir = tmp_path / "earlier-hook"
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(data_dir)],
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(
+                        None,
+                        (
+                            str(Path(__file__).parents[2] / "src"),
+                            os.environ.get("PYTHONPATH"),
+                        ),
+                    )
+                ),
+            },
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+        assert completed.returncode == 0, (
+            f"stdout: {completed.stdout!r}\nstderr: {completed.stderr!r}"
+        )
+
+    def test_same_thread_fork_unwind_does_not_close_fd_reused_by_earlier_hook(
+        self,
+        tmp_path,
+    ):
+        if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("fork and descriptor-relative artifact I/O are required")
+        script = r"""
+import os
+import signal
+import stat
+import sys
+
+owned = {}
+
+def replace_before_easycat_cleanup():
+    fd = owned["fd"]
+    os.close(fd)
+    replacement = os.open(os.devnull, os.O_RDONLY)
+    if replacement != fd:
+        os.dup2(replacement, fd)
+        os.close(replacement)
+
+os.register_at_fork(after_in_child=replace_before_easycat_cleanup)
+
+from easycat.runtime.artifacts import FilesystemArtifactStore
+
+store = FilesystemArtifactStore("sess", data_dir=sys.argv[1], max_bytes=100)
+child_mode = False
+with store._reuse_session_fd_locked(create=True):
+    owned["fd"] = next(iter(store._active_session_fds.values()))[0]
+    child = os.fork()
+    if child == 0:
+        signal.alarm(5)
+        child_mode = True
+    else:
+        _, status = os.waitpid(child, 0)
+        if os.waitstatus_to_exitcode(status) != 0:
+            raise SystemExit(os.waitstatus_to_exitcode(status))
+if child_mode:
+    if not stat.S_ISCHR(os.fstat(owned["fd"]).st_mode):
+        os._exit(2)
+    os._exit(0)
+"""
+        data_dir = tmp_path / "same-thread-unwind"
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(data_dir)],
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(
+                        None,
+                        (
+                            str(Path(__file__).parents[2] / "src"),
+                            os.environ.get("PYTHONPATH"),
+                        ),
+                    )
+                ),
+            },
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+        assert completed.returncode == 0, (
+            f"stdout: {completed.stdout!r}\nstderr: {completed.stderr!r}"
+        )
+
+    def test_fork_child_closes_session_fd_owned_by_another_thread(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("fork and descriptor-relative artifact I/O are required")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        entered = threading.Event()
+        release = threading.Event()
+        active_fd: list[int] = []
+        original_load = store._load_accounting_locked
+
+        def pause_with_active_session_fd(*, persist_missing=True):
+            active_fd.append(next(iter(store._active_session_fds.values()))[0])
+            entered.set()
+            if not release.wait(timeout=5):
+                raise AssertionError("timed out releasing active session fd")
+            return original_load(persist_missing=persist_missing)
+
+        monkeypatch.setattr(
+            store,
+            "_load_accounting_locked",
+            pause_with_active_session_fd,
+        )
+        writer = threading.Thread(target=store.put, args=(b"b" * 10,))
+        writer.start()
+        assert entered.wait(timeout=5)
+        child_pid = os.fork()
+        if child_pid == 0:
+            signal.alarm(5)
+            try:
+                os.fstat(active_fd[0])
+            except OSError:
+                os._exit(0)
+            os._exit(2)
+        try:
+            _, status = os.waitpid(child_pid, 0)
+        finally:
+            release.set()
+            writer.join(timeout=5)
+
+        assert not writer.is_alive()
+        assert os.waitstatus_to_exitcode(status) == 0
+
+    def test_close_waits_for_concurrent_put_before_releasing_accounting_fd(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        store.close()
+        assert store._accounting_fd is None
+        entered = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+        original_load = store._load_accounting_locked
+
+        def pause_before_accounting_load(*, persist_missing=True):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise AssertionError("timed out releasing accounting load")
+            return original_load(persist_missing=persist_missing)
+
+        monkeypatch.setattr(store, "_load_accounting_locked", pause_before_accounting_load)
+        writer = threading.Thread(target=store.put, args=(b"b" * 10,))
+        writer.start()
+        assert entered.wait(timeout=5)
+        closer = threading.Thread(target=lambda: (store.close(), closed.set()))
+        closer.start()
+        assert not closed.wait(timeout=0.1)
+
+        release.set()
+        writer.join(timeout=5)
+        closer.join(timeout=5)
+
+        assert not writer.is_alive()
+        assert not closer.is_alive()
+        assert closed.is_set()
+        assert store._accounting_fd is None
+
+    @pytest.mark.parametrize("use_fallback", [False, True])
+    def test_hardlinked_accounting_refuses_rewrite(
+        self,
+        tmp_path,
+        monkeypatch,
+        use_fallback,
+    ):
+        if not use_fallback and not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        if use_fallback:
+            monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        assert store.put(b"a" * 10)
+        accounting_path = store._accounting_path()
+        external = tmp_path / "outside-accounting"
+        try:
+            os.link(accounting_path, external)
+        except OSError:
+            pytest.skip("hard links are unavailable in this test environment")
+        original = external.read_bytes()
+        payload = b"b" * 10
+
+        assert store.put(payload) == ""
+
+        assert external.read_bytes() == original
+        assert not store.has(hashlib.sha256(payload).hexdigest())
+
+    def test_accounting_write_failure_refuses_new_artifact(self, tmp_path, monkeypatch):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        payload = b"new"
+
+        def fail_accounting_write(_accounting):
+            raise OSError("accounting unavailable")
+
+        monkeypatch.setattr(store, "_write_accounting_locked", fail_accounting_write)
+
+        assert store.put(payload) == ""
+        assert not store.has(hashlib.sha256(payload).hexdigest())
+
+    def test_accounting_scan_runs_for_initial_seed_and_each_reopen(self, tmp_path, monkeypatch):
+        scans = 0
+        original = FilesystemArtifactStore._stored_bytes
+
+        def count_scan(store):
+            nonlocal scans
+            scans += 1
+            return original(store)
+
+        monkeypatch.setattr(FilesystemArtifactStore, "_stored_bytes", count_scan)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+
+        assert store.put(b"a" * 10)
+        assert store.put(b"b" * 10)
+        reopened = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+
+        assert reopened._current_bytes == 20
+        assert scans == 2
 
     def test_dedup_does_not_double_count_against_cap(self, tmp_path):
         """Re-putting identical content already on disk does not consume cap
