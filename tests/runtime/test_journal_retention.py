@@ -278,7 +278,7 @@ def test_archive_session_symlink_returns_failure_sentinel(tmp_path):
     linked = journals / "linked.sqlite"
     linked.symlink_to(target)
 
-    assert retention_module._archive_session(tmp_path, linked) is None
+    assert journal_retention_module._archive_session(tmp_path, linked) is None
     assert linked.is_symlink()
     assert target.exists()
     assert not (tmp_path / "archive").exists()
