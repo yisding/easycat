@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
 from easycat.runtime import SqliteJournal, run_retention
-from easycat.runtime import journal_retention as retention_module
+from easycat.runtime import journal_retention as journal_retention_module
+from easycat.runtime._journal_lock import _LOCK_BUCKET_COUNT, journal_file_claim
 from easycat.runtime.records import JournalRecordKind
 
 
@@ -97,7 +100,11 @@ def test_failed_source_removal_does_not_accumulate_duplicate_archives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = _seed_journal(tmp_path, "stuck")
-    monkeypatch.setattr(retention_module, "_remove_session", lambda _root, _path: False)
+    monkeypatch.setattr(
+        journal_retention_module,
+        "_remove_session",
+        lambda _root, _path: False,
+    )
 
     for _ in range(2):
         assert (
@@ -271,7 +278,7 @@ def test_archive_session_symlink_returns_failure_sentinel(tmp_path):
     linked = journals / "linked.sqlite"
     linked.symlink_to(target)
 
-    assert retention_module._archive_session(tmp_path, linked) is None
+    assert journal_retention_module._archive_session(tmp_path, linked) is None
     assert linked.is_symlink()
     assert target.exists()
     assert not (tmp_path / "archive").exists()
@@ -391,6 +398,91 @@ def test_retention_still_removes_genuinely_stale_clean_journal(tmp_path):
 
     assert removed == 1
     assert not stale.exists()
+
+
+def test_retention_rechecks_liveness_after_acquiring_journal_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A newly opened journal must not be archived or removed mid-startup."""
+    db_path = _seed_journal(tmp_path, "victim")
+    _backdate(db_path, age_days=30)
+    entered_claim = threading.Event()
+    release_claim = threading.Event()
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def delayed_claim(path, *, blocking):
+        if path == db_path and not blocking:
+            entered_claim.set()
+            assert release_claim.wait(2)
+        with original_claim(path, blocking=blocking) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", delayed_claim)
+    removed: list[int] = []
+    retention_thread = threading.Thread(
+        target=lambda: removed.append(run_retention(tmp_path, max_age_days=14, mode="archive")),
+    )
+    retention_thread.start()
+    assert entered_claim.wait(2)
+
+    live = SqliteJournal("victim", data_dir=tmp_path)
+    try:
+        release_claim.set()
+        retention_thread.join(2)
+        assert not retention_thread.is_alive()
+        assert removed == [0]
+        assert db_path.exists()
+        live.append(kind=JournalRecordKind.EVENT, name="live", session_id="victim")
+    finally:
+        release_claim.set()
+        retention_thread.join(2)
+        live.close()
+
+
+def test_retention_stops_when_another_sweep_holds_oldest_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oldest = _seed_journal(tmp_path, "oldest")
+    newest = _seed_journal(tmp_path, "newest")
+    _backdate(oldest, age_days=2)
+    _backdate(newest, age_days=1)
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def contend_oldest(path, *, blocking):
+        if path == oldest and not blocking:
+            yield False
+            return
+        with original_claim(path, blocking=blocking) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", contend_oldest)
+
+    removed = run_retention(
+        tmp_path,
+        max_sessions=1,
+        max_age_days=10**9,
+        mode="delete",
+    )
+
+    assert removed == 0
+    assert oldest.exists()
+    assert newest.exists()
+
+
+def test_journal_claim_lock_namespace_is_bounded(tmp_path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+
+    for index in range(_LOCK_BUCKET_COUNT * 2):
+        with journal_file_claim(journals / f"session-{index}.sqlite", blocking=True) as claimed:
+            assert claimed is True
+
+    lock_files = list(journals.glob(".easycat-journal-*.lock"))
+    assert 1 <= len(lock_files) <= _LOCK_BUCKET_COUNT
 
 
 def test_retention_never_sweeps_callers_own_db_even_if_oldest(tmp_path):

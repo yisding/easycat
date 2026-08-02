@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import mkdir_private, private_tar_filter
 from easycat.runtime.crash_sweep import is_journal_live
 
@@ -94,6 +95,7 @@ class _RetentionSweep:
         self._total_bytes = 0
         self._files: list[Path] = []
         self._protected_count = 0
+        self._claim_contended = False
         for file in files:
             size = _session_bytes(root, file)
             if size is None:
@@ -128,7 +130,7 @@ class _RetentionSweep:
 
     def prune_older_than(self, cutoff: float) -> None:
         """Prune any prunable journal older than *cutoff*, regardless of caps."""
-        while self._files:
+        while self._files and not self._claim_contended:
             oldest = self._files[0]
             try:
                 mtime = oldest.stat().st_mtime
@@ -142,9 +144,13 @@ class _RetentionSweep:
 
     def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
-        while self._files and (
-            len(self._files) + self._protected_count > max_sessions
-            or self._total_bytes > max_bytes
+        while (
+            self._files
+            and not self._claim_contended
+            and (
+                len(self._files) + self._protected_count > max_sessions
+                or self._total_bytes > max_bytes
+            )
         ):
             self._prune_oldest()
 
@@ -162,29 +168,54 @@ class _RetentionSweep:
         if unavailable:
             self._total_bytes -= fsize
             return False
+        with journal_file_claim(oldest, blocking=False) as claimed:
+            if not claimed:
+                # Another retention/crash sweep may be acting on this same
+                # snapshot. Stop this pass instead of treating the transient
+                # contention as one permanently protected session and
+                # deleting a different candidate to satisfy the stale caps.
+                self._claim_contended = True
+                return False
+            if self._is_protected(oldest):
+                self._protected_count += 1
+                return False
+            try:
+                unavailable = oldest.is_symlink() or not oldest.exists()
+            except OSError:
+                unavailable = True
+            if unavailable:
+                self._total_bytes -= fsize
+                return False
+            if not self._archive_and_remove(oldest):
+                return False
+
+        self._total_bytes -= fsize
+        self.removed += 1
+        return True
+
+    def _archive_and_remove(self, oldest: Path) -> bool:
+        """Archive if configured, then remove without retaining duplicate copies."""
         archive_path: Path | None = None
         if self._mode == "archive":
             archive_path = _archive_session(self._root, oldest)
             if archive_path is None:
                 return False
-        if not _remove_session(self._root, oldest):
-            # If the source DB itself remains, the archive is only a duplicate.
-            # Remove it so every later retention pass cannot allocate another
-            # numeric suffix for the same permanently unremovable session.
-            # When the main DB is already gone, retain the archive because it
-            # is the sole durable copy and only sidecar cleanup failed.
-            if archive_path is not None and oldest.exists():
-                try:
-                    archive_path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning(
-                        "Failed to remove duplicate archive %s", archive_path, exc_info=True
-                    )
-            return False
+        if _remove_session(self._root, oldest):
+            return True
 
-        self._total_bytes -= fsize
-        self.removed += 1
-        return True
+        # If the source DB remains, the archive is only a duplicate. Remove it
+        # so repeated sweeps cannot reserve unbounded suffixes. Retain it when
+        # only sidecar cleanup failed: it is then the sole durable DB copy.
+        if archive_path is not None and oldest.exists():
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Failed to remove duplicate archive %s",
+                    archive_path,
+                    exc_info=True,
+                )
+        return False
 
 
 def _journal_files_oldest_first(journals_dir: Path) -> list[Path]:
