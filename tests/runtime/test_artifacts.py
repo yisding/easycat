@@ -746,6 +746,26 @@ print(store.put(b"cross-process token"), flush=True)
 
         assert seen_flags & nonblocking
 
+    def test_artifact_candidates_are_opened_in_binary_mode_when_available(self, monkeypatch):
+        binary = 1 << 28
+        seen_flags = 0
+
+        def fail_open(name, flags, **kwargs):
+            nonlocal seen_flags
+            seen_flags = flags
+            raise OSError(errno.ENXIO, str(name))
+
+        monkeypatch.setattr(os, "O_BINARY", binary, raising=False)
+        flags = artifacts_module._artifact_file_open_flags()
+        monkeypatch.setattr(artifacts_module, "_FILE_OPEN_FLAGS", flags)
+        monkeypatch.setattr(artifacts_module.os, "open", fail_open)
+
+        with pytest.raises(OSError):
+            artifacts_module._open_regular_at(1, "binary.bin")
+
+        assert flags & binary
+        assert seen_flags & binary
+
     def test_failed_partial_write_removes_temporary_file(self, tmp_path, monkeypatch):
         def fail_after_partial_write(fd: int, payload: bytes) -> None:
             os.write(fd, payload[:1])
