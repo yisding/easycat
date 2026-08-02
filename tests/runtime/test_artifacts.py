@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
+from types import SimpleNamespace
 
 import pytest
 
 from easycat.runtime import InMemoryRingBuffer
+from easycat.runtime import artifacts as artifacts_module
 from easycat.runtime.artifacts import (
     FilesystemArtifactStore,
     InMemoryArtifactStore,
@@ -142,6 +146,72 @@ class TestFilesystemArtifactStore:
         assert ref == expected
         assert store.get(ref) == b"hello fs"
 
+    def test_path_fallback_remains_usable_without_descriptor_relative_io(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        ref = store.put(b"portable artifact")
+
+        assert ref
+        assert store.has(ref)
+        assert store.get(ref) == b"portable artifact"
+        assert store.get_head_tail(ref, byte_cap=4) == b"portfact"
+        store.delete(ref)
+        assert store.has(ref) is False
+
+    def test_path_fallback_rejects_symlinked_shard(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(artifacts_module, "_SUPPORTS_DESCRIPTOR_ARTIFACT_IO", False)
+        payload = b"portable artifact"
+        ref = hashlib.sha256(payload).hexdigest()
+        session_dir = tmp_path / "artifacts" / "sess"
+        session_dir.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        try:
+            (session_dir / ref[:2]).symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are unavailable in this test environment")
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(payload) == ""
+        assert not (outside / f"{ref}.bin").exists()
+
+    def test_path_fallback_detects_windows_reparse_points(self, tmp_path, monkeypatch):
+        junction = tmp_path / "junction"
+        junction.mkdir()
+        real_lstat = type(junction).lstat
+
+        def lstat_with_reparse(path):
+            if path == junction:
+                return SimpleNamespace(
+                    st_mode=artifacts_module.stat.S_IFDIR,
+                    st_file_attributes=artifacts_module.stat.FILE_ATTRIBUTE_REPARSE_POINT,
+                )
+            return real_lstat(path)
+
+        monkeypatch.setattr(type(junction), "lstat", lstat_with_reparse)
+
+        assert artifacts_module._path_is_link_or_reparse(junction)
+
+    def test_path_fallback_treats_metadata_errors_as_unsafe(self, tmp_path, monkeypatch):
+        guarded = tmp_path / "guarded"
+        guarded.mkdir()
+        real_lstat = type(guarded).lstat
+
+        def denied_lstat(path):
+            if path == guarded:
+                raise PermissionError(str(path))
+            return real_lstat(path)
+
+        monkeypatch.setattr(type(guarded), "lstat", denied_lstat)
+
+        assert artifacts_module._path_is_link_or_reparse(guarded)
+
     def test_file_created(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"data")
@@ -273,6 +343,52 @@ class TestFilesystemArtifactStore:
         assert victim.read_bytes() == b"keep me"
         assert (shard / f"{ref}.bin").read_bytes() == payload
 
+    def test_artifact_candidates_are_opened_nonblocking(self, monkeypatch):
+        nonblocking = getattr(os, "O_NONBLOCK", 0)
+        if not nonblocking:
+            pytest.skip("O_NONBLOCK is unavailable")
+        seen_flags = 0
+
+        def fail_open(name, flags, **kwargs):
+            nonlocal seen_flags
+            seen_flags = flags
+            raise OSError(errno.ENXIO, str(name))
+
+        monkeypatch.setattr(artifacts_module.os, "open", fail_open)
+
+        with pytest.raises(OSError):
+            artifacts_module._open_regular_at(1, "fifo.bin")
+
+        assert seen_flags & nonblocking
+
+    def test_failed_partial_write_removes_temporary_file(self, tmp_path, monkeypatch):
+        def fail_after_partial_write(fd: int, payload: bytes) -> None:
+            os.write(fd, payload[:1])
+            raise OSError(errno.ENOSPC, "disk full")
+
+        monkeypatch.setattr(artifacts_module, "_write_all_fd", fail_after_partial_write)
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        assert store.put(b"partial payload") == ""
+
+        session_dir = tmp_path / "artifacts" / "sess"
+        assert not list(session_dir.rglob("*.tmp"))
+
+    def test_reading_existing_shard_does_not_chmod_it(self, tmp_path, monkeypatch):
+        if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            pytest.skip("descriptor-relative artifact I/O is unavailable")
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        payload = b"read-only artifact"
+        ref = store.put(payload)
+
+        def fail_fchmod(fd: int, mode: int) -> None:
+            raise OSError(errno.EROFS, "read-only filesystem")
+
+        monkeypatch.setattr(artifacts_module.os, "fchmod", fail_fchmod)
+
+        assert store.has(ref)
+        assert store.get(ref) == payload
+
     def test_get_head_tail_reads_bounded_window(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         payload = b"a" * 10 + b"middle" * 20 + b"z" * 10
@@ -283,6 +399,16 @@ class TestFilesystemArtifactStore:
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"small")
         assert store.get_head_tail(ref, byte_cap=10) == b"small"
+
+    def test_get_head_tail_treats_unsupported_io_as_missing(self, tmp_path, monkeypatch):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+
+        def unsupported(_ref: str) -> int:
+            raise NotImplementedError
+
+        monkeypatch.setattr(store, "_open_ref_fd", unsupported)
+
+        assert store.get_head_tail("0" * 64, byte_cap=10) is None
 
     def test_permissions(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
