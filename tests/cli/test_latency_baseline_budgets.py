@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -424,6 +425,33 @@ def test_latency_runner_reports_deeply_nested_baseline(tmp_path: Path) -> None:
         failure for failure in report["failures"] if failure["name"] == "latency.baseline"
     ]
     assert baseline_failures[0]["failure_class"] == "latency_baseline_error"
+
+
+def test_latency_runner_reports_oversized_integer_baseline(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    digit_limit = sys.int_info.str_digits_check_threshold
+    baseline_path.write_text('{"oversized":' + "9" * (digit_limit + 1) + "}")
+    previous_limit = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(digit_limit)
+    try:
+        result = run_latency_validation(
+            LatencyMode.SWEEP,
+            artifacts_dir=tmp_path,
+            command_runner=_baseline_aware_command_runner(1000.0),
+            baseline_path=baseline_path,
+            started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+        )
+    finally:
+        sys.set_int_max_str_digits(previous_limit)
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["tool_exit_codes"]["latency_baseline"] == 1
+    baseline_failures = [
+        failure for failure in report["failures"] if failure["name"] == "latency.baseline"
+    ]
+    assert baseline_failures[0]["failure_class"] == "latency_baseline_error"
+    assert baseline_failures[0]["message"].startswith("invalid latency baseline JSON")
 
 
 def test_latency_runner_reports_non_utf8_baseline(tmp_path: Path) -> None:
