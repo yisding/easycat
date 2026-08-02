@@ -861,6 +861,39 @@ async def test_cancel_preemptive_generation_ignores_preexisting_cancellation_cou
 
 
 @pytest.mark.asyncio
+async def test_cancel_preemptive_generation_propagates_cancellation_pending_before_entry() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    started = asyncio.Event()
+
+    async def block() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    owned = session._runtime_scope.create_task(TurnRunner._PREEMPTIVE_TASK_NAME, block())
+    runner._preemptive_task = owned
+    await started.wait()
+
+    async def cancel_with_pending_cancellation() -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await runner.cancel_preemptive_generation()
+
+    caller = asyncio.create_task(cancel_with_pending_cancellation())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert caller.done()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert runner._preemptive_task is owned
+    owned.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await owned
+
+
+@pytest.mark.asyncio
 async def test_empty_transcript_drain_propagates_turn_task_cancellation() -> None:
     """A barge-in's hard cancel of the turn task must survive the empty-transcript drain."""
     agent = _SlowUnwindAgent()
