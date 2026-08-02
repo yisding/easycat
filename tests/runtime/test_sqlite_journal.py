@@ -1806,12 +1806,18 @@ class _LockProbeConn:
         self.journal = None
         self.violations: list[str] = []
         self.sync_threads: set[str] = set()
+        self.live_owner_present = False
+        self.synced_live_owner_states: list[bool] = []
         self.rollbacks = 0
 
     def executescript(self, sql):
         return None
 
     def execute(self, sql, params=None):
+        if "VALUES ('live_pid', ?)" in sql:
+            self.live_owner_present = True
+        elif "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')" in sql:
+            self.live_owner_present = False
         return _LockProbeCursor()
 
     def commit(self):
@@ -1826,6 +1832,7 @@ class _LockProbeConn:
     def sync(self):
         import threading
 
+        self.synced_live_owner_states.append(self.live_owner_present)
         journal = self.journal
         if journal is None:
             # __init__/thread-start race before the test wires us up.
@@ -1844,6 +1851,19 @@ class _FakeLibsqlModule:
 
     def connect(self, **kwargs):
         return self._conn
+
+
+class _BlockingOwnerDeleteConn(_LockProbeConn):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_started = threading.Event()
+        self.release_delete = threading.Event()
+
+    def execute(self, sql, params=None):
+        if "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')" in sql:
+            self.delete_started.set()
+            assert self.release_delete.wait(timeout=1)
+        return super().execute(sql, params)
 
 
 class TestLibsqlJournal:
@@ -1904,6 +1924,62 @@ class TestLibsqlJournal:
             journal.close()
 
         assert probe.violations == []
+
+    def test_close_syncs_live_owner_marker_removal(self, tmp_path: Path) -> None:
+        """The remote replica must not retain an owner after local close."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            journal = LibsqlJournal("close-owner", data_dir=tmp_path)
+            probe.journal = journal
+            assert probe.live_owner_present is True
+
+            journal.close()
+
+        assert probe.synced_live_owner_states[-1] is False
+
+    def test_rejects_second_live_writer_for_same_local_replica(self, tmp_path: Path) -> None:
+        """A second local libSQL writer would reuse the same sequence counter."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            first = LibsqlJournal("single-writer", data_dir=tmp_path)
+            try:
+                with pytest.raises(RuntimeError, match="Journal is already active"):
+                    LibsqlJournal("single-writer", data_dir=tmp_path)
+            finally:
+                first.close()
+
+            # Releasing the first owner permits a later replica instance.
+            reopened = LibsqlJournal("single-writer", data_dir=tmp_path)
+            reopened.close()
+
+    def test_rejects_replacement_writer_until_close_releases_claim(self, tmp_path: Path) -> None:
+        """A closing writer owns the path until marker cleanup completes."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _BlockingOwnerDeleteConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            first = LibsqlJournal("closing-writer", data_dir=tmp_path)
+            close_thread = threading.Thread(target=first.close)
+            close_thread.start()
+            try:
+                assert probe.delete_started.wait(timeout=1)
+                with pytest.raises(RuntimeError, match="Journal is already active"):
+                    LibsqlJournal("closing-writer", data_dir=tmp_path)
+            finally:
+                probe.release_delete.set()
+                close_thread.join(timeout=1)
+
+        assert not close_thread.is_alive()
 
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""

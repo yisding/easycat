@@ -62,10 +62,11 @@ from easycat.validation.redaction import RedactionPolicy, validate_redaction_pol
 
 logger = logging.getLogger(__name__)
 
-_LIVE_SQLITE_JOURNALS_LOCK = threading.Lock()
-_LIVE_SQLITE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = (
-    weakref.WeakValueDictionary()
-)
+# SqliteJournal and LibsqlJournal both write a local SQLite-format replica.
+# Keep one process-local claim registry so backend choice cannot bypass the
+# sequence-writer exclusivity invariant for a shared path.
+_LIVE_JOURNALS_LOCK = threading.Lock()
+_LIVE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = weakref.WeakValueDictionary()
 _CRASH_SWEEP_INTERVAL_SECONDS = 60.0
 _CRASH_SWEEP_RETRY_SECONDS = 1.0
 _CRASH_SWEEP_MAX_ROOTS = 128
@@ -486,8 +487,8 @@ class SqliteJournal(_SqlJournalBase):
     def _claim_live_journal(self) -> None:
         """Reject a second live writer for this process/path identity."""
         key = (os.getpid(), self._db_path.absolute())
-        with _LIVE_SQLITE_JOURNALS_LOCK:
-            current = _LIVE_SQLITE_JOURNALS.get(key)
+        with _LIVE_JOURNALS_LOCK:
+            current = _LIVE_JOURNALS.get(key)
             if current is not None and not current._closed:
                 raise RuntimeError(f"Journal is already active: {self._db_path}")
 
@@ -501,13 +502,13 @@ class SqliteJournal(_SqlJournalBase):
                     live_pid = 0
                 if live_pid != os.getpid() and _has_live_pid(self._conn):
                     raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
-            _LIVE_SQLITE_JOURNALS[key] = self
+            _LIVE_JOURNALS[key] = self
 
     def _release_live_journal(self) -> None:
         key = (os.getpid(), self._db_path.absolute())
-        with _LIVE_SQLITE_JOURNALS_LOCK:
-            if _LIVE_SQLITE_JOURNALS.get(key) is self:
-                _LIVE_SQLITE_JOURNALS.pop(key, None)
+        with _LIVE_JOURNALS_LOCK:
+            if _LIVE_JOURNALS.get(key) is self:
+                _LIVE_JOURNALS.pop(key, None)
 
     def _initialize_live_journal(self, session_id: str, *, existed: bool) -> None:
         prior_count = self._reconcile_prior_session(session_id) if existed else 0
@@ -1253,7 +1254,9 @@ class LibsqlJournal(_SqlJournalBase):
         journals_dir = root / "journals"
         mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
-        touch_private_file(self._db_path)
+        self._lock = threading.Lock()
+        self._degraded = False
+        self._closed = False
 
         url = sync_url or os.environ.get("EASYCAT_LIBSQL_URL", "")
         token = auth_token or os.environ.get("EASYCAT_LIBSQL_AUTH_TOKEN", "")
@@ -1264,51 +1267,21 @@ class LibsqlJournal(_SqlJournalBase):
         if token:
             connect_kwargs["auth_token"] = token
 
-        self._conn = libsql.connect(**connect_kwargs)
-        harden_sqlite_files(self._db_path)
-        self._conn.executescript(_SQLITE_SCHEMA)
-        _ensure_journal_schema(self._conn)
-
-        # Handle session-id reuse: mirror only SqliteJournal's *clean-reuse*
-        # truncation.  libSQL does NOT implement crash recovery — there is no
-        # crash-dump promotion, no RecoveredSessionMarker, and no _recovered
-        # flag.  An unclean reuse continues appending into the prior table with
-        # a continued sequence counter.  This divergence from the SqliteJournal
-        # contract is documented in DURABILITY.md ("Backend support").
-        row = self._conn.execute(
-            "SELECT value FROM session_state WHERE key = 'clean_close'"
-        ).fetchone()
-        prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
-        prior_count = prior_count_row[0] if prior_count_row else 0
-
-        truncated = row is not None and prior_count > 0
-        if truncated:
-            # Clean reuse — the prior (cleanly closed) journal is discarded, so
-            # its persisted ``degraded`` marker would be stale.  Clear both the
-            # ``clean_close`` and ``degraded`` keys alongside the truncation.
-            self._conn.execute("DELETE FROM journal")
-            self._conn.execute("DELETE FROM journal_tags")
-            self._conn.execute(
-                "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
-            )
-        else:
-            # Unclean reuse — prior rows are retained (libSQL has no crash
-            # recovery), including any ``JournalDegraded`` row.  Only clear the
-            # ``clean_close`` marker; preserve ``degraded`` so file/bundle
-            # inspection stays consistent with the retained history.
-            self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
-
-        # Unclean reuse retains prior rows, so pre-v2 files must be
-        # backfilled here (post-truncation) for stage/tag queries to see them.
-        _ensure_index_backfill(self._conn)
-
-        # Recover sequence counter from any remaining records.
-        row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
-        self._seq = row[0] if row and row[0] is not None else 0
-
-        self._lock = threading.Lock()
-        self._degraded = False
-        self._closed = False
+        # Serialize startup until the durable live-owner marker is committed.
+        # The local replica has the same sequence primary key as SqliteJournal,
+        # so two live writers would otherwise begin from the same ``MAX`` and
+        # permanently degrade the loser on its first duplicate insert.
+        with journal_file_claim(self._db_path, blocking=True) as claimed:
+            assert claimed
+            touch_private_file(self._db_path)
+            self._conn = libsql.connect(**connect_kwargs)
+            harden_sqlite_files(self._db_path)
+            try:
+                self._initialize_live_replica(session_id)
+            except BaseException:
+                self._release_live_journal()
+                self._conn.close()
+                raise
 
         # Periodic sync configuration.
         self._sync_interval = sync_interval_s
@@ -1332,6 +1305,93 @@ class LibsqlJournal(_SqlJournalBase):
             self._sync_interval,
             self._db_path,
         )
+
+    def _initialize_live_replica(self, session_id: str) -> None:
+        self._conn.executescript(_SQLITE_SCHEMA)
+        _ensure_journal_schema(self._conn)
+        self._claim_live_journal()
+
+        # Handle session-id reuse: mirror only SqliteJournal's *clean-reuse*
+        # truncation. libSQL does NOT implement crash recovery — there is no
+        # crash-dump promotion, no RecoveredSessionMarker, and no _recovered
+        # flag. An unclean reuse continues appending into the prior table with
+        # a continued sequence counter. This divergence from the SqliteJournal
+        # contract is documented in DURABILITY.md ("Backend support").
+        row = self._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
+        prior_count = prior_count_row[0] if prior_count_row else 0
+
+        truncated = row is not None and prior_count > 0
+        if truncated:
+            # Clean reuse — the prior (cleanly closed) journal is discarded,
+            # so its persisted ``degraded`` marker would be stale. Clear both
+            # the ``clean_close`` and ``degraded`` keys alongside truncation.
+            self._conn.execute("DELETE FROM journal")
+            self._conn.execute("DELETE FROM journal_tags")
+            self._conn.execute(
+                "DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')"
+            )
+        else:
+            # Unclean reuse — prior rows are retained (libSQL has no crash
+            # recovery), including any ``JournalDegraded`` row. Only clear the
+            # ``clean_close`` marker; preserve ``degraded`` so file/bundle
+            # inspection stays consistent with the retained history.
+            self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
+
+        # Unclean reuse retains prior rows, so pre-v2 files must be backfilled
+        # here (post-truncation) for stage/tag queries to see them.
+        _ensure_index_backfill(self._conn)
+
+        # Recover sequence counter from any remaining records.
+        row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
+        self._seq = row[0] if row and row[0] is not None else 0
+        self._restore_live_owner_marker()
+        self._conn.commit()
+
+    def _claim_live_journal(self) -> None:
+        """Reject a second live writer for this local replica path."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_JOURNALS_LOCK:
+            current = _LIVE_JOURNALS.get(key)
+            # ``close()`` marks the instance closed before it removes the
+            # persisted owner marker. Keep the in-process claim exclusive
+            # until teardown reaches ``_release_live_journal()``.
+            if current is not None:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+
+            row = self._conn.execute(
+                "SELECT value FROM session_state WHERE key = 'live_pid'"
+            ).fetchone()
+            if row is not None and row[0] not in (None, ""):
+                try:
+                    live_pid = int(row[0])
+                except (TypeError, ValueError):
+                    live_pid = 0
+                if live_pid != os.getpid() and _has_live_pid(self._conn):
+                    raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
+            _LIVE_JOURNALS[key] = self
+
+    def _release_live_journal(self) -> None:
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_JOURNALS_LOCK:
+            if _LIVE_JOURNALS.get(key) is self:
+                _LIVE_JOURNALS.pop(key, None)
+
+    def _restore_live_owner_marker(self) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(os.getpid()),),
+        )
+        process_birth = _process_birth_identity(os.getpid())
+        if process_birth is not None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+                (process_birth,),
+            )
+        else:
+            self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid_start'")
 
     # ── ExecutionJournal interface ───────────────────────────────
     # append(), read(), slice(), latest_sequence, degraded, db_path, and
@@ -1383,17 +1443,31 @@ class LibsqlJournal(_SqlJournalBase):
         # started just before ``_closed`` was set.  Unlike the periodic sync
         # path, this used to touch the connection without the writer lock,
         # allowing teardown to close it underneath an in-flight commit.
-        with self._lock:
-            try:
-                self._conn.sync()
-                harden_sqlite_files(self._db_path)
-            except Exception:
-                logger.debug("libsql final sync failed on close", exc_info=True)
+        try:
+            with self._lock:
+                try:
+                    self._conn.execute(
+                        "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                    )
+                    self._conn.commit()
+                except Exception:
+                    logger.debug("libsql live-owner marker cleanup failed", exc_info=True)
 
-            try:
-                self._conn.close()
-            except Exception:
-                pass
+                # Remove the local owner marker before the final remote sync.
+                # Syncing first would publish the live marker and then close
+                # with its deletion only committed to the local replica.
+                try:
+                    self._conn.sync()
+                    harden_sqlite_files(self._db_path)
+                except Exception:
+                    logger.debug("libsql final sync failed on close", exc_info=True)
+
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+        finally:
+            self._release_live_journal()
 
     # ── Internals ────────────────────────────────────────────────
 
