@@ -302,6 +302,7 @@ async def test_funasr_preserves_stereo_frames_split_across_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A split interleaved frame must be downmixed only after reassembly."""
+
     def _initialize(self: FunASROnnxVAD) -> None:
         self._numpy = object()
         self._model = object()
