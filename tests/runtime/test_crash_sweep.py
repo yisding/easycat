@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import select
 import shutil
@@ -14,6 +15,7 @@ import time
 import pytest
 
 from easycat.runtime import SqliteJournal, sweep_crashed_journals
+from easycat.runtime import crash_sweep as crash_sweep_module
 from easycat.runtime import journal_sql as journal_sql_module
 from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
@@ -24,6 +26,7 @@ from easycat.runtime.crash_sweep import (
     _process_start_token,
     crash_dump_artifact_root,
     is_journal_live,
+    snapshot_crash_dump_artifacts,
 )
 from easycat.runtime.records import JournalRecordKind
 
@@ -122,6 +125,65 @@ def test_crash_dump_snapshots_artifacts_away_from_reused_session(tmp_path) -> No
     # that cannot make this crash dump's post-mortem blobs disappear.
     shutil.rmtree(tmp_path / "artifacts" / session_id)
     assert copied.read_bytes() == payload
+
+
+def test_artifact_snapshot_rejects_symlinked_source_ancestor(tmp_path) -> None:
+    session_id = "linked-artifacts"
+    payload = b"outside payload"
+    ref = hashlib.sha256(payload).hexdigest()
+    _crash_one(session_id, tmp_path, input_ref=ref)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    outside = tmp_path / "outside"
+    shard = outside / ref[:2]
+    shard.mkdir(parents=True)
+    (shard / f"{ref}.bin").write_bytes(payload)
+    try:
+        (artifacts / session_id).symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+    target = tmp_path / "snapshot"
+    target.mkdir()
+
+    with pytest.raises(OSError):
+        snapshot_crash_dump_artifacts(
+            tmp_path,
+            tmp_path / "journals" / f"{session_id}.sqlite",
+            target,
+        )
+
+    assert list(target.rglob("*.bin")) == []
+
+
+def test_crash_copy_rejects_symlinked_wal_sidecar(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    source.write_bytes(b"journal")
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"private")
+    sidecar = tmp_path / "source.sqlite-wal"
+    try:
+        sidecar.symlink_to(victim)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this test environment")
+
+    class _Connection:
+        def execute(self, _query: str) -> None:
+            raise sqlite3.OperationalError("skip checkpoint")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(crash_sweep_module.sqlite3, "connect", lambda *_a, **_k: _Connection())
+    target = tmp_path / "target.sqlite"
+
+    with pytest.raises(OSError):
+        _copy_journal_to_crash_dump(source, target)
+
+    assert victim.read_bytes() == b"private"
+    assert not (tmp_path / "target.sqlite-wal").exists()
 
 
 def test_repeated_crashes_for_reused_session_id_keep_each_dump(tmp_path) -> None:
