@@ -757,11 +757,11 @@ class TestStageExecuteRecording:
         await stream.aclose()
 
         records = journal.read()
-        delta = next(
-            r for r in records if r.name == "agent_delta" and r.data.get("type") == "TEXT_DELTA"
-        )
         complete = next(r for r in records if r.name == "stage_complete")
-        assert delta.data["text"] == "dropped"
+        assert not any(
+            record.name == "agent_delta" and record.data.get("type") == "TEXT_DELTA"
+            for record in records
+        )
         assert complete.data["response"] == ""
         assert stage._history == []
 

@@ -315,12 +315,9 @@ def test_latency_runner_reports_deeply_nested_samples_without_crashing(tmp_path:
 
     report = json.loads(result.report_path.read_text())
     assert result.exit_code == 1
-    assert report["tool_exit_codes"] == {
-        "latency_samples": 1,
-        "pytest": 0,
-        "required_latency_samples": 1,
-    }
-    assert report["failures"][0]["failure_class"] == "latency_artifact_error"
+    assert report["tool_exit_codes"] == {"artifact_redaction": 1, "pytest": 0}
+    assert report["failures"][0]["name"] == "artifact_redaction.samples"
+    assert report["failures"][0]["failure_class"] == "artifact_redaction_error"
 
 
 @pytest.mark.parametrize("non_finite", ["NaN", "Infinity", "-Infinity"])
@@ -547,5 +544,6 @@ def test_latency_runner_reports_deeply_nested_reliability_samples_without_crashi
 
     report = json.loads(result.report_path.read_text())
     assert result.exit_code == 1
-    assert report["tool_exit_codes"] == {"pytest": 0, "reliability_samples": 1}
-    assert report["failures"][0]["failure_class"] == "reliability_artifact_error"
+    assert report["tool_exit_codes"] == {"artifact_redaction": 1, "pytest": 0}
+    assert report["failures"][0]["name"] == "artifact_redaction.reliability"
+    assert report["failures"][0]["failure_class"] == "artifact_redaction_error"
