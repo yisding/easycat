@@ -364,6 +364,8 @@ class Session:
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
         self._turn_manager.bind_session(self.session_id)
+        for event_producer in (self.transport, *cfg.telephony_helpers):
+            self._maybe_bind_session_id(event_producer)
 
         # ── Assemble collaborators ───────────────────────────────
         # The builder constructs the 7 stages, the shared RunContext, the
@@ -740,6 +742,18 @@ class Session:
     ) -> EventSubscription:
         """Subscribe one Session-owned handler with correlation isolation."""
 
+        existing_owners = {
+            owner
+            for candidate in self.event_bus.subscribers(event_type)
+            if (owner := getattr(candidate, "_easycat_event_owner", None)) is not None
+        }
+        if any(owner is not self._event_subscription_owner for owner in existing_owners):
+            # Once two live Sessions have shared this bus, a later bare event
+            # is never safe to attribute by process of elimination. A stopped
+            # peer can still have a delayed transport/provider callback in
+            # flight, so this marker is deliberately monotonic.
+            cast(Any, self.event_bus)._easycat_was_shared_by_sessions = True
+
         @wraps(handler)
         def _scoped_handler(event: Any) -> Any:
             if not self._accept_owned_event(event_type, event):
@@ -768,14 +782,11 @@ class Session:
             return turn_ref is self._turn
 
         # Preserve the historical convenience of emitting bare events on a
-        # private Session bus. Once multiple Sessions own handlers for this
-        # event type, however, an unscoped event has no safe recipient.
-        owners = {
-            owner
-            for candidate in self.event_bus.subscribers(event_type)
-            if (owner := getattr(candidate, "_easycat_event_owner", None)) is not None
-        }
-        return owners == {self._event_subscription_owner}
+        # bus that has only ever been owned by this Session. Once the bus has
+        # been shared concurrently, explicit correlation remains mandatory
+        # even after a peer unsubscribes because late callbacks can still be
+        # in flight from that peer's transport or providers.
+        return not getattr(self.event_bus, "_easycat_was_shared_by_sessions", False)
 
     def _unsubscribe_session_event_handlers(self) -> None:
         """Release only handlers installed by Session collaborator wiring."""
@@ -1664,7 +1675,6 @@ class Session:
             self._turn = None
             self._finalize_debug_backends()
             self._mark_closed()
-            self._unsubscribe_session_event_handlers()
             # Drop this session's armed emergency-export exporter from the
             # process-wide registry now that it has stopped cleanly. Otherwise
             # the exporter closure (which strongly references this Session)
@@ -1683,6 +1693,12 @@ class Session:
         finally:
             owns_stop = self._stop_task is current_task
             if owns_stop:
+                # Whether teardown completed or failed, this owner has made
+                # the Session unavailable for new work. Release its EventBus
+                # handlers so an abandoned failed stop cannot retain or keep
+                # mutating the Session. A superseded graceful owner skips this
+                # block; the force owner performs the eventual release.
+                self._unsubscribe_session_event_handlers()
                 self._stop_task = None
                 self._stop_force = False
                 if self._closed:
@@ -2097,6 +2113,24 @@ class Session:
                     provider,
                     exc_info=True,
                 )
+
+    def _maybe_bind_session_id(self, provider: Any) -> None:
+        """Give an EasyCat-event producer this Session's correlation id."""
+        set_session_id = getattr(provider, "set_session_id", None)
+        if not callable(set_session_id):
+            return
+        try:
+            result = set_session_id(self.session_id)
+            if inspect.isawaitable(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise TypeError("set_session_id() must be synchronous")
+        except Exception:
+            logger.warning(
+                "Provider %r rejected set_session_id(); its events may lack correlation",
+                provider,
+                exc_info=True,
+            )
 
     # ── Text mode ──────────────────────────────────────────────
 

@@ -202,6 +202,22 @@ async def test_shared_event_bus_scopes_session_owned_turn_handlers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shared_event_bus_stays_ambiguous_after_peer_stops() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    survivor = Session(_full_config(event_bus=bus, session_id="survivor-session"))
+    peer = Session(_full_config(event_bus=bus, session_id="peer-session"))
+    survivor._is_running = True
+
+    await peer.stop(force=True)
+    try:
+        await bus.emit(TurnStarted(turn_id="late-peer-turn"))
+
+        assert survivor.current_turn is None
+    finally:
+        await survivor.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_session_stop_releases_only_session_owned_event_handlers() -> None:
     bus = EventBus(handler_error_policy="raise")
     observed: list[TurnStarted] = []
@@ -237,6 +253,35 @@ async def test_session_stop_releases_only_session_owned_event_handlers() -> None
     event = TurnStarted(session_id="another-session", turn_id="another-turn")
     await bus.emit(event)
     assert observed == [event]
+
+
+@pytest.mark.asyncio
+async def test_failed_session_stop_releases_owned_event_handlers() -> None:
+    class FailingDisconnectTransport(ReportingTransport):
+        async def disconnect(self) -> None:
+            raise RuntimeError("disconnect failed")
+
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[TurnStarted] = []
+
+    def observe(event: TurnStarted) -> None:
+        observed.append(event)
+
+    external = bus.subscribe(TurnStarted, observe)
+    session = Session(
+        _full_config(
+            event_bus=bus,
+            session_id="failed-stop-session",
+            transport=FailingDisconnectTransport(),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await session.stop(force=True)
+
+    assert external.active is True
+    assert bus.subscribers(TurnStarted) == [observe]
+    assert session._event_subscriptions == []
 
 
 def test_begin_turn_exposes_coherent_test_and_replay_seam() -> None:
