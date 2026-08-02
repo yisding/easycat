@@ -13,6 +13,56 @@ from typing import Any, cast
 _LOCK_BUCKET_COUNT = 256
 
 
+def _canonical_lock_target(target_path: Path) -> Path:
+    """Return *target_path* beside its resolved physical parent.
+
+    Resolving the parent makes spelling aliases such as an existing directory
+    symlink converge on one lock-file directory.  The final component is kept
+    lexical: resolving a target-file symlink here could move the lock-file
+    write outside the caller's intended parent before the caller has rejected
+    that unsafe target.
+    """
+    absolute = target_path.absolute()
+    try:
+        physical_parent = absolute.parent.resolve(strict=False)
+    except RuntimeError as exc:
+        raise OSError(f"Could not resolve lock parent: {absolute.parent}") from exc
+    return physical_parent / absolute.name
+
+
+def _normalized_lock_identity(canonical: Path) -> bytes:
+    """Return a conservative filesystem-alias identity for *canonical*.
+
+    Windows ignores case and trailing spaces or periods in ordinary path
+    components.  ``normcase`` also normalizes Windows separators.  Applying
+    the same folds on every host can serialize a few distinct paths on a
+    case-sensitive filesystem, which is safe; allowing two aliases to select
+    different lock files is not.
+    """
+    target_name = canonical.name.rstrip(" .")
+    identity_path = os.path.join(os.fspath(canonical.parent), target_name)
+    normalized = os.path.normcase(os.path.normpath(identity_path))
+    return os.fsencode(normalized.casefold())
+
+
+def _lock_identity(target_path: Path) -> bytes:
+    """Resolve *target_path* once and return its normalized lock identity."""
+    return _normalized_lock_identity(_canonical_lock_target(target_path))
+
+
+def _validate_namespace(namespace: str) -> None:
+    if not namespace.isascii() or not namespace.isalnum():
+        raise ValueError("lock namespace must contain only ASCII letters and digits")
+
+
+def _legacy_lock_path(target_path: Path, *, namespace: str = "journal") -> Path:
+    """Return the pre-normalization lock path used by older EasyCat binaries."""
+    _validate_namespace(namespace)
+    digest = hashlib.sha256(os.fsencode(str(target_path.absolute()))).digest()
+    bucket = int.from_bytes(digest[:2], "big") % _LOCK_BUCKET_COUNT
+    return target_path.parent / f".easycat-{namespace}-{bucket:03d}.lock"
+
+
 def _lock_path(target_path: Path, *, namespace: str = "journal") -> Path:
     """Return a stable lock bucket for one durable target path.
 
@@ -20,11 +70,22 @@ def _lock_path(target_path: Path, *, namespace: str = "journal") -> Path:
     inodes. Hashing target paths into a fixed namespace keeps that safety
     property without leaking one inode for every historical session id.
     """
-    if not namespace.isascii() or not namespace.isalnum():
-        raise ValueError("lock namespace must contain only ASCII letters and digits")
-    digest = hashlib.sha256(os.fsencode(str(target_path.absolute()))).digest()
+    _validate_namespace(namespace)
+    canonical = _canonical_lock_target(target_path)
+    digest = hashlib.sha256(_normalized_lock_identity(canonical)).digest()
     bucket = int.from_bytes(digest[:2], "big") % _LOCK_BUCKET_COUNT
-    return target_path.parent / f".easycat-{namespace}-{bucket:03d}.lock"
+    return canonical.parent / f".easycat-{namespace}-{bucket:03d}.lock"
+
+
+def _claim_lock_paths(target_path: Path, *, namespace: str) -> tuple[Path, ...]:
+    """Return de-duplicated legacy and canonical lock paths in global order."""
+    legacy = _legacy_lock_path(target_path, namespace=namespace)
+    canonical = _lock_path(target_path, namespace=namespace)
+    by_physical_path: dict[bytes, Path] = {}
+    for lock_path in (legacy, canonical):
+        identity = _lock_identity(lock_path)
+        by_physical_path.setdefault(identity, lock_path)
+    return tuple(by_physical_path[identity] for identity in sorted(by_physical_path))
 
 
 def _acquire_lock(fd: int, *, blocking: bool) -> None:
@@ -63,6 +124,40 @@ def _release_lock(fd: int) -> None:
     fcntl.flock(fd, fcntl.LOCK_UN)
 
 
+def _open_and_claim_lock(lock_path: Path, *, blocking: bool) -> int:
+    """Open and claim one validated regular lock file."""
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError(f"Lock is not a regular file: {lock_path}")
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        _acquire_lock(fd, blocking=blocking)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    return fd
+
+
+def _release_claims(fds: list[int]) -> None:
+    """Release acquired lock descriptors in reverse global order."""
+    while fds:
+        fd = fds.pop()
+        try:
+            _release_lock(fd)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 @contextmanager
 def path_file_claim(
     target_path: Path,
@@ -75,36 +170,28 @@ def path_file_claim(
     Lock files deliberately persist after a claim ends: deleting a lock path
     would race another opener. The bounded bucket namespace limits their
     count while the advisory lock is released when its descriptor closes.
+
+    Claims take both the legacy spelling-sensitive bucket and the canonical
+    alias-stable bucket so a concurrently running older binary using the exact
+    same target spelling still contends. An older binary using a different
+    alias remains outside this migration bridge because it never opens the
+    canonical bucket.
     """
-    lock_path = _lock_path(target_path, namespace=namespace)
-    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-    fd = -1
-    claimed = False
+    fds: list[int] = []
     try:
         try:
-            fd = os.open(lock_path, flags, 0o600)
-            opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode):
-                raise OSError(f"Lock is not a regular file: {lock_path}")
-            if hasattr(os, "fchmod"):
-                os.fchmod(fd, 0o600)
-            _acquire_lock(fd, blocking=blocking)
+            for lock_path in _claim_lock_paths(target_path, namespace=namespace):
+                fds.append(_open_and_claim_lock(lock_path, blocking=blocking))
         except OSError:
+            _release_claims(fds)
             if blocking:
                 raise
             yield False
             return
 
-        claimed = True
         yield True
     finally:
-        if claimed:
-            try:
-                _release_lock(fd)
-            except OSError:
-                pass
-        if fd >= 0:
-            os.close(fd)
+        _release_claims(fds)
 
 
 @contextmanager
