@@ -34,7 +34,37 @@ _DIRECTORY_OPEN_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
-_FILE_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+_FILE_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+)
+_DIR_FD_FUNCTIONS = getattr(os, "supports_dir_fd", set())
+_FD_FUNCTIONS = getattr(os, "supports_fd", set())
+_NOFOLLOW_FUNCTIONS = getattr(os, "supports_follow_symlinks", set())
+_SUPPORTS_DESCRIPTOR_ARTIFACT_IO = (
+    hasattr(os, "fchmod")
+    and all(
+        function in _DIR_FD_FUNCTIONS
+        for function in (os.open, os.mkdir, os.rename, os.stat, os.unlink)
+    )
+    and os.scandir in _FD_FUNCTIONS
+    and os.stat in _NOFOLLOW_FUNCTIONS
+)
+
+
+def _path_is_link_or_reparse(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(reparse_flag and getattr(metadata, "st_file_attributes", 0) & reparse_flag)
 
 
 def _open_directory_chain(path: Path, *, create: bool) -> int:
@@ -313,45 +343,48 @@ class FilesystemArtifactStore:
                     )
                 return ""
             try:
-                session_fd = _open_directory_chain(self._dir, create=True)
-                try:
-                    os.fchmod(session_fd, 0o700)
-                    shard_fd = self._open_shard(session_fd, ref, create=True)
+                if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                    self._put_with_paths(ref, payload)
+                else:
+                    session_fd = _open_directory_chain(self._dir, create=True)
                     try:
-                        tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
-                        tmp_fd = os.open(
-                            tmp_name,
-                            os.O_WRONLY
-                            | os.O_CREAT
-                            | os.O_EXCL
-                            | getattr(os, "O_CLOEXEC", 0)
-                            | getattr(os, "O_NOFOLLOW", 0),
-                            0o600,
-                            dir_fd=shard_fd,
-                        )
+                        os.fchmod(session_fd, 0o700)
+                        shard_fd = self._open_shard(session_fd, ref, create=True)
                         try:
-                            _write_all_fd(tmp_fd, payload)
-                            os.fchmod(tmp_fd, 0o600)
-                        finally:
-                            os.close(tmp_fd)
-                        try:
-                            os.replace(
+                            tmp_name = f".{ref}.{uuid.uuid4().hex}.tmp"
+                            tmp_fd = os.open(
                                 tmp_name,
-                                f"{ref}.bin",
-                                src_dir_fd=shard_fd,
-                                dst_dir_fd=shard_fd,
+                                os.O_WRONLY
+                                | os.O_CREAT
+                                | os.O_EXCL
+                                | getattr(os, "O_CLOEXEC", 0)
+                                | getattr(os, "O_NOFOLLOW", 0),
+                                0o600,
+                                dir_fd=shard_fd,
                             )
-                        except BaseException:
                             try:
-                                os.unlink(tmp_name, dir_fd=shard_fd)
-                            except OSError:
-                                pass
-                            raise
+                                try:
+                                    _write_all_fd(tmp_fd, payload)
+                                    os.fchmod(tmp_fd, 0o600)
+                                finally:
+                                    os.close(tmp_fd)
+                                os.replace(
+                                    tmp_name,
+                                    f"{ref}.bin",
+                                    src_dir_fd=shard_fd,
+                                    dst_dir_fd=shard_fd,
+                                )
+                            except BaseException:
+                                try:
+                                    os.unlink(tmp_name, dir_fd=shard_fd)
+                                except OSError:
+                                    pass
+                                raise
+                        finally:
+                            os.close(shard_fd)
                     finally:
-                        os.close(shard_fd)
-                finally:
-                    os.close(session_fd)
-            except OSError:
+                        os.close(session_fd)
+            except (NotImplementedError, OSError):
                 logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
                 return ""
             self._current_bytes += len(payload)
@@ -360,11 +393,11 @@ class FilesystemArtifactStore:
     def get(self, ref: str) -> bytes | None:
         try:
             fd = self._open_ref_fd(ref)
-        except OSError:
+        except (NotImplementedError, OSError):
             return None
         try:
             return _read_all_fd(fd)
-        except OSError:
+        except (NotImplementedError, OSError):
             return None
         finally:
             os.close(fd)
@@ -373,7 +406,7 @@ class FilesystemArtifactStore:
         """Read a bounded head/tail window without materializing the whole file."""
         try:
             fd = self._open_ref_fd(ref)
-        except OSError:
+        except (NotImplementedError, OSError):
             return None
         try:
             size = os.fstat(fd).st_size
@@ -383,7 +416,7 @@ class FilesystemArtifactStore:
             os.lseek(fd, -byte_cap, os.SEEK_END)
             tail = os.read(fd, byte_cap)
             return head + tail
-        except OSError:
+        except (NotImplementedError, OSError):
             return None
         finally:
             os.close(fd)
@@ -391,7 +424,7 @@ class FilesystemArtifactStore:
     def has(self, ref: str) -> bool:
         try:
             fd = self._open_ref_fd(ref)
-        except OSError:
+        except (NotImplementedError, OSError):
             return False
         os.close(fd)
         return True
@@ -400,9 +433,12 @@ class FilesystemArtifactStore:
         if not _is_sha256_ref(ref):
             return
         with self._lock:
+            if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+                self._delete_with_paths(ref)
+                return
             try:
                 session_fd = _open_directory_chain(self._dir, create=False)
-            except OSError:
+            except (NotImplementedError, OSError):
                 return
             try:
                 try:
@@ -429,12 +465,15 @@ class FilesystemArtifactStore:
             except FileExistsError:
                 pass
         shard_fd = os.open(ref[:2], _DIRECTORY_OPEN_FLAGS, dir_fd=session_fd)
-        os.fchmod(shard_fd, 0o700)
+        if create:
+            os.fchmod(shard_fd, 0o700)
         return shard_fd
 
     def _open_ref_fd(self, ref: str) -> int:
         if not _is_sha256_ref(ref):
             raise FileNotFoundError(ref)
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._open_ref_with_paths(ref)
         session_fd = _open_directory_chain(self._dir, create=False)
         try:
             try:
@@ -474,10 +513,12 @@ class FilesystemArtifactStore:
             return
         self._current_bytes = max(0, self._current_bytes - size)
 
-    def _stored_bytes(self) -> int:  # noqa: PLR0912 - no-follow traversal is intentionally explicit
+    def _stored_bytes(self) -> int:  # noqa: C901, PLR0912 - explicit no-follow traversal
+        if not _SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
+            return self._stored_bytes_with_paths()
         try:
             session_fd = _open_directory_chain(self._dir, create=False)
-        except OSError:
+        except (NotImplementedError, OSError):
             return 0
         total = 0
         try:
@@ -517,3 +558,93 @@ class FilesystemArtifactStore:
             return total
         finally:
             os.close(session_fd)
+
+    def _ref_path(self, ref: str) -> Path:
+        return self._dir / ref[:2] / f"{ref}.bin"
+
+    def _legacy_ref_path(self, ref: str) -> Path:
+        return self._dir / f"{ref}.bin"
+
+    @staticmethod
+    def _path_has_link_or_reparse(path: Path) -> bool:
+        absolute = path.absolute()
+        return any(
+            _path_is_link_or_reparse(candidate) for candidate in (absolute, *absolute.parents)
+        )
+
+    def _open_ref_with_paths(self, ref: str) -> int:
+        for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
+            try:
+                if self._path_has_link_or_reparse(path):
+                    continue
+                fd = os.open(path, _FILE_OPEN_FLAGS)
+            except OSError:
+                continue
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    return fd
+            except BaseException:
+                os.close(fd)
+                raise
+            os.close(fd)
+        raise FileNotFoundError(ref)
+
+    def _put_with_paths(self, ref: str, payload: bytes) -> None:
+        # Descriptor-less platforms cannot close an external ancestor-swap
+        # race with Python's path APIs. This compatibility path assumes the
+        # configured data directory is caller-controlled, while rejecting any
+        # link/reparse point or metadata error visible at each checkpoint.
+        path = self._ref_path(ref)
+        if self._path_has_link_or_reparse(path):
+            raise OSError(f"Refusing symlinked artifact path: {path}")
+        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self._dir, 0o700)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        if self._path_has_link_or_reparse(path):
+            raise OSError(f"Refusing symlinked artifact path: {path}")
+        tmp = path.with_name(f".{ref}.{uuid.uuid4().hex}.tmp")
+        try:
+            with tmp.open("xb") as stream:
+                if stream.write(payload) != len(payload):
+                    raise OSError("Artifact write was incomplete")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _delete_with_paths(self, ref: str) -> None:
+        for path in (self._ref_path(ref), self._legacy_ref_path(ref)):
+            size = 0
+            try:
+                if self._path_has_link_or_reparse(path):
+                    if _path_is_link_or_reparse(path):
+                        path.unlink()
+                    continue
+                size = path.stat().st_size
+                if not path.is_file():
+                    continue
+                path.unlink()
+            except OSError:
+                continue
+            self._current_bytes = max(0, self._current_bytes - size)
+
+    def _stored_bytes_with_paths(self) -> int:
+        if self._path_has_link_or_reparse(self._dir) or not self._dir.is_dir():
+            return 0
+        total = 0
+        try:
+            for path in self._dir.rglob("*.bin"):
+                try:
+                    if self._path_has_link_or_reparse(path) or not path.is_file():
+                        continue
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return total
+        return total
