@@ -1377,6 +1377,14 @@ class Session:
             if cleanup_error is not None:
                 self._lifecycle_cleanup_error = cleanup_error
                 self._stopping = True
+                # Incomplete rollback can leave a provider retaining the
+                # caller-owned bus after SessionManager drops this Session.
+                # Release our handlers and require explicit correlation so a
+                # replacement cannot claim the abandoned provider's late
+                # bare callbacks. Successful rollback remains retryable and
+                # keeps its subscriptions.
+                cast(Any, self.event_bus)._easycat_was_shared_by_sessions = True
+                self._unsubscribe_session_event_handlers()
                 raise startup_error from cleanup_error
             raise
 

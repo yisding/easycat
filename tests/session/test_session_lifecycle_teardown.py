@@ -13,8 +13,10 @@ from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
+    EventBus,
     Interruption,
     TTSAudio,
+    TurnStarted,
     VADStartSpeaking,
 )
 from easycat.runtime import InMemoryRingBuffer
@@ -99,7 +101,10 @@ async def test_start_preserves_warmup_error_and_blocks_restart_after_failed_roll
             self.disconnected = True
 
     transport = FailingRollbackTransport()
-    session = Session(_full_config(transport=transport))
+    bus = EventBus(handler_error_policy="raise")
+    observed: list[TurnStarted] = []
+    external = bus.subscribe(TurnStarted, observed.append)
+    session = Session(_full_config(transport=transport, event_bus=bus))
 
     with pytest.raises(OSError, match="transport warmup failed") as exc_info:
         await session.start()
@@ -110,6 +115,10 @@ async def test_start_preserves_warmup_error_and_blocks_restart_after_failed_roll
     assert transport.connect_calls == 1
     assert session._stopping is True
     assert isinstance(session._lifecycle_cleanup_error, RuntimeError)
+    assert session._event_subscriptions == []
+    assert external.active is True
+    assert bus.subscribers(TurnStarted) == [observed.append]
+    assert getattr(bus, "_easycat_was_shared_by_sessions", False)
 
     with pytest.raises(RuntimeError, match="cleanup is incomplete"):
         await session.start()
