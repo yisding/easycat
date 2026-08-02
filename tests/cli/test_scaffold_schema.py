@@ -71,6 +71,32 @@ def test_parse_config_requires_closed_json_object() -> None:
         parse_config(_config_json(extra=True))
 
 
+def test_parse_config_wraps_oversized_integer_decoder_error() -> None:
+    raw = '{"schema_version":' + ("9" * 5000) + ',"template":"text-chat"}'
+
+    with pytest.raises(EasyCatError) as exc_info:
+        parse_config(raw)
+
+    assert exc_info.value.code == "EASYCAT_E102"
+    assert "not valid JSON" in exc_info.value.message
+
+
+def test_parse_config_wraps_excessive_nesting_decoder_error() -> None:
+    raw = (
+        '{"schema_version":1,"template":"text-chat","tools":'
+        + ("[" * 10_000)
+        + '"lookup"'
+        + ("]" * 10_000)
+        + "}"
+    )
+
+    with pytest.raises(EasyCatError) as exc_info:
+        parse_config(raw)
+
+    assert exc_info.value.code == "EASYCAT_E102"
+    assert "maximum nesting depth exceeded" in exc_info.value.message
+
+
 def test_parse_config_distinguishes_required_field_presence_and_type() -> None:
     with pytest.raises(EasyCatError, match="missing required key 'template'"):
         parse_config(json.dumps({"schema_version": 1}))

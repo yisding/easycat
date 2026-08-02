@@ -268,6 +268,38 @@ def test_init_error_envelope(
     assert payload["exit_code"] == 4
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        '{"schema_version":' + ("9" * 5000) + ',"template":"text-chat"}',
+        (
+            '{"schema_version":1,"template":"text-chat","tools":'
+            + ("[" * 10_000)
+            + '"lookup"'
+            + ("]" * 10_000)
+            + "}"
+        ),
+    ],
+    ids=["oversized-integer", "excessive-nesting"],
+)
+def test_init_decoder_resource_errors_use_error_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--json"])
+
+    assert result.exit_code == 4
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "init", status="error")
+    assert payload["code"] == "EASYCAT_E102"
+    assert "not valid JSON" in payload["message"]
+    assert payload["exit_code"] == 4
+
+
 def test_init_usage_error_envelope(cli: CliRunner) -> None:
     result = cli.invoke(app, ["init", "--json"])
     assert result.exit_code == 2

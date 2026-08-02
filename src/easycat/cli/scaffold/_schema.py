@@ -118,6 +118,12 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         _reject(f"not valid JSON ({exc.msg} at column {exc.colno})")
+    except RecursionError:
+        _reject("not valid JSON (maximum nesting depth exceeded)")
+    except ValueError as exc:
+        # CPython raises a plain ValueError, rather than JSONDecodeError,
+        # when a JSON integer exceeds its configured digit limit.
+        _reject(f"not valid JSON ({exc})")
 
     if not isinstance(payload, dict):
         _reject("top-level value must be a JSON object")
