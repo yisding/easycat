@@ -288,6 +288,27 @@ class TestClassificationGate:
             gate.stop()
 
     @pytest.mark.asyncio
+    async def test_gate_flushes_empty_buffer_to_stop_hold_audio(self) -> None:
+        """An early classification still needs the flush callback's cleanup."""
+        bus = EventBus()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0, hold_audio="hold.wav")
+        flushed: list[list[TTSAudio]] = []
+
+        async def _flush(events: list[TTSAudio]) -> None:
+            flushed.append(events)
+
+        gate.set_flush_async_callback(_flush)
+        gate.start()
+        try:
+            gate.close()
+            await gate.flush_and_release()
+
+            assert flushed == [[]]
+            assert not gate.is_buffering
+        finally:
+            gate.stop()
+
+    @pytest.mark.asyncio
     async def test_gate_disabled_no_buffering(self) -> None:
         from easycat.audio_format import AudioChunk, AudioFormat
 

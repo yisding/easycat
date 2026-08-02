@@ -336,6 +336,41 @@ class TestOutboundAudioAecReference:
         assert not source._emit_queue
 
     @pytest.mark.asyncio
+    async def test_aclose_hard_bounds_cancellation_resistant_delivery_subscriber(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(OutboundAudioSource, "_ACLOSE_TIMEOUT_S", 0.01)
+        source = OutboundAudioSource()
+        bus = EventBus()
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _handler(_event):
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+        chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+        source._queue_delivery_events([(chunk, None, None, None)])
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+        closing = asyncio.create_task(source.aclose())
+        try:
+            await asyncio.wait_for(asyncio.shield(closing), timeout=0.1)
+            assert cancelled.is_set()
+            assert not source._emit_tasks
+        finally:
+            release.set()
+            if not closing.done():
+                await asyncio.wait_for(asyncio.shield(closing), timeout=0.5)
+
+    @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_disconnect_drains_outbound_emit_tasks(self):
         """WebRTCTransport.disconnect() must drain the outbound source's own

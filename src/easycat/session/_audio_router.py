@@ -38,6 +38,7 @@ from easycat.events import (
     PlaybackMarkAck,
     TransportAudioDelivered,
     TransportDegraded,
+    VADStopSpeaking,
 )
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
@@ -871,17 +872,28 @@ class AudioRouter:
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
         # Stage 3: VAD (optional) via VADStage.
+        deferred_vad_events: list[Any] = []
         if self._enable_vad():
             vad_events = await self._vad_stage.execute(chunk, self._run_ctx, turn)
-            for vad_event in vad_events:
-                vad_event = self._with_correlation(vad_event)
-                await self._emit(vad_event)
-                await self._turn_manager.on_vad_event(vad_event)
+            deferred_vad_events = await self._route_vad_events_before_stt(vad_events)
 
         # TurnManager always sees raw audio frames for pre-roll buffering
         self._turn_manager.on_audio_frame(chunk)
 
         # Stage 4: Feed audio to STT (if listening)
+        try:
+            await self._send_chunk_to_stt(chunk)
+        finally:
+            # Apply the VAD provider's already-observed state transition even
+            # when STT rejects the boundary frame. Once a stop is deferred,
+            # replay every later event after the send attempt so the original
+            # provider ordering is preserved.
+            for vad_event in deferred_vad_events:
+                await self._emit(vad_event)
+                await self._turn_manager.on_vad_event(vad_event)
+
+    async def _send_chunk_to_stt(self, chunk: AudioChunk) -> None:
+        """Start auto-turn STT when needed and send one active-turn frame."""
         started_turn_from_chunk = False
         if self._auto_turn_from_stt_final() and not self._is_stt_active():
             if self._turn_manager.state == TurnManagerState.IDLE:
@@ -901,7 +913,29 @@ class AudioRouter:
             active_turn = self._current_turn()
             if active_turn is not None:
                 active_turn.stt_has_uncommitted_audio = True
-            await self._stt_stage.execute(chunk, self._run_ctx, active_turn or self._no_turn)
+            await self._stt_stage.execute(
+                chunk,
+                self._run_ctx,
+                active_turn or self._no_turn,
+            )
+
+    async def _route_vad_events_before_stt(self, vad_events: list[Any]) -> list[Any]:
+        """Emit events before the first stop, then defer the remaining suffix."""
+        deferred_events: list[Any] = []
+        deferring = False
+        for vad_event in vad_events:
+            vad_event = self._with_correlation(vad_event)
+            # The stop-producing frame must reach STT before a pause can
+            # schedule commit_segment() or end_stream(). Otherwise a
+            # zero-delay commit/end command can overlap the provider's
+            # send_audio() for that final frame.
+            if deferring or isinstance(vad_event, VADStopSpeaking):
+                deferring = True
+                deferred_events.append(vad_event)
+                continue
+            await self._emit(vad_event)
+            await self._turn_manager.on_vad_event(vad_event)
+        return deferred_events
 
     # ── Internal: outbound drain ───────────────────────────────
 

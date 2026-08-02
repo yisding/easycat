@@ -105,6 +105,59 @@ async def test_user_turn_completion_emits_one_correlated_event_with_reason(
     assert ended[0].turn_id == started[0].turn_id
 
 
+@pytest.mark.asyncio
+async def test_stale_smart_turn_timer_cannot_end_a_later_pause() -> None:
+    """A detector that suppresses cancellation must not affect a new pause."""
+
+    class CancellationResistantDetector:
+        def __init__(self) -> None:
+            self.started = [asyncio.Event(), asyncio.Event()]
+            self.release = [asyncio.Event(), asyncio.Event()]
+            self.cancel_seen = asyncio.Event()
+            self.calls = 0
+
+        async def detect(self, _audio: list[AudioChunk]) -> SmartTurnResult:
+            index = self.calls
+            self.calls += 1
+            self.started[index].set()
+            try:
+                await self.release[index].wait()
+            except asyncio.CancelledError:
+                self.cancel_seen.set()
+                await self.release[index].wait()
+            return SmartTurnResult(prediction=0, probability=0.0)
+
+    detector = CancellationResistantDetector()
+    manager = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(end_of_turn_silence_ms=0, endpoint_detector=detector),
+    )
+    try:
+        await manager.on_vad_event(VADStartSpeaking())
+        manager.on_audio_frame(_chunk())
+        await manager.on_vad_event(VADStopSpeaking())
+        await detector.started[0].wait()
+
+        await manager.on_vad_event(VADStartSpeaking())
+        await detector.cancel_seen.wait()
+        await manager.on_vad_event(VADStopSpeaking())
+        await detector.started[1].wait()
+
+        detector.release[0].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert manager.state == TurnManagerState.USER_PAUSED
+
+        detector.release[1].set()
+        timer = manager._silence_timer_task
+        assert timer is not None
+        await timer
+    finally:
+        for release in detector.release:
+            release.set()
+        await manager.shutdown()
+
+
 def test_default_endpointing_outlasts_vad_restart_confirmation() -> None:
     """The default turn grace must stay above the VAD restart-confirmation gate.
 

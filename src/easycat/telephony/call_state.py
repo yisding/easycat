@@ -227,8 +227,10 @@ class ClassificationGate:
         self._hold_audio_playing = False
         buffered = list(self._buffer)
         self._buffer.clear()
-        # Replay while gate is still closed.
-        if self._on_flush_async and buffered:
+        # Replay while gate is still closed.  Invoke the callback even when
+        # the buffer is empty: session wiring uses it to cancel hold audio
+        # that was synthesized while classification was pending.
+        if self._on_flush_async:
             await self._on_flush_async(buffered)
         # Drain frames that arrived during the async flush (e.g. TTS
         # produced by CallStateChanged subscribers while the gate was

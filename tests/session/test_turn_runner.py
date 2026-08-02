@@ -590,6 +590,204 @@ async def test_handle_end_of_speech_empty_transcript_resets() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pending_stt_timeout_closes_stream_before_successor_start() -> None:
+    """A timed-out pending final cannot leave the old stream open."""
+
+    class StrictSTT(FakeSTT):
+        async def start_stream(self) -> None:
+            if self.stream_open:
+                raise RuntimeError("second start while prior stream is open")
+            await super().start_stream()
+
+    stt = StrictSTT(transcript="")
+    session = Session(_config(stt=stt, timeout_config=TimeoutConfig(stt_timeout=0.01)))
+    session._is_running = True
+    runner = session._turn_runner
+
+    await runner.on_turn_started(TurnStarted(turn_id="first"))
+    first = session._turn
+    assert first is not None
+    assert stt.stream_open
+    first.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
+
+    await runner.handle_end_of_speech(turn=first)
+
+    assert session._turn is None
+    assert not stt.stream_open
+    assert stt.end_stream_calls == 1
+    assert session._stt_committer.stt_task is None
+
+    await runner.on_turn_started(TurnStarted(turn_id="second"))
+    assert session._turn is not None
+    await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa: C901
+    """A zero-delay segment commit cannot overlap the stop frame's input write."""
+
+    class ScriptVAD:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def process(self, _chunk: AudioChunk) -> AsyncIterator[Event]:
+            self.calls += 1
+            if self.calls == 1:
+                yield VADStartSpeaking()
+            elif self.calls == 2:
+                yield VADStopSpeaking()
+
+        def configure(self, **_kwargs: object) -> None:
+            pass
+
+    class RaceSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.send_count = 0
+            self.send_busy = False
+            self.send_started = asyncio.Event()
+            self.release_send = asyncio.Event()
+            self.commit_raced = asyncio.Event()
+
+        async def send_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_count += 1
+            if self.send_count == 2:
+                self.send_busy = True
+                self.send_started.set()
+                await self.release_send.wait()
+                self.send_busy = False
+
+        async def commit_segment(self) -> bool:
+            if self.send_busy:
+                self.commit_raced.set()
+            return False
+
+    stt = RaceSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            vad=ScriptVAD(),
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=10_000,
+                stt_segment_silence_ms=0,
+            ),
+        )
+    )
+    session._is_running = True
+    chunk = _chunk()
+    processing_stop: asyncio.Task[None] | None = None
+    try:
+        await session._audio_router._process_chunk(chunk)
+        processing_stop = asyncio.create_task(session._audio_router._process_chunk(chunk))
+        await asyncio.wait_for(stt.send_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert not stt.commit_raced.is_set()
+
+        stt.release_send.set()
+        await processing_stop
+    finally:
+        stt.release_send.set()
+        if processing_stop is not None and not processing_stop.done():
+            await processing_stop
+        await session._stt_committer.cancel(session._turn)
+        await session._turn_manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_vad_stop_updates_turn_state_when_stop_frame_stt_send_fails() -> None:
+    class FailSecondSendSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.send_calls = 0
+
+        async def send_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_calls += 1
+            if self.send_calls == 2:
+                raise RuntimeError("STT send_audio failed")
+
+    stt = FailSecondSendSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=10_000,
+                stt_segment_silence_ms=10_000,
+            ),
+        )
+    )
+    session._is_running = True
+    stops: list[VADStopSpeaking] = []
+    session.event_bus.subscribe(VADStopSpeaking, stops.append)
+    chunk = _chunk()
+
+    try:
+        await session._audio_router._process_chunk(chunk)
+        with pytest.raises(RuntimeError, match="STT send_audio failed"):
+            await session._audio_router._process_chunk(chunk)
+
+        assert len(stops) == 1
+        assert session._turn_manager.state is TurnManagerState.USER_PAUSED
+    finally:
+        await session._stt_committer.cancel(session._turn)
+        await session._turn_manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_vad_events_after_stop_preserve_order_behind_stt_send() -> None:
+    class StopThenStartVAD:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def process(self, _chunk: AudioChunk) -> AsyncIterator[Event]:
+            self.calls += 1
+            if self.calls == 1:
+                yield VADStartSpeaking()
+            elif self.calls == 2:
+                yield VADStopSpeaking()
+                yield VADStartSpeaking()
+
+        def configure(self, **_kwargs: object) -> None:
+            pass
+
+    order: list[str] = []
+
+    class OrderingSTT(FakeSTT):
+        async def send_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            order.append("send")
+
+    session = Session(
+        _config(
+            stt=OrderingSTT(transcript=""),
+            vad=StopThenStartVAD(),
+            turn_manager_config=TurnManagerConfig(
+                end_of_turn_silence_ms=10_000,
+                stt_segment_silence_ms=10_000,
+            ),
+        )
+    )
+    session._is_running = True
+    session.event_bus.subscribe(VADStopSpeaking, lambda _event: order.append("stop"))
+    session.event_bus.subscribe(VADStartSpeaking, lambda _event: order.append("start"))
+    chunk = _chunk()
+
+    try:
+        await session._audio_router._process_chunk(chunk)
+        order.clear()
+
+        await session._audio_router._process_chunk(chunk)
+
+        assert order == ["send", "stop", "start"]
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+    finally:
+        await session._stt_committer.cancel(session._turn)
+        await session._turn_manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
     """A non-empty transcript should produce AgentFinal via the streaming path."""
     session = Session(_config())

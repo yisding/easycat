@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 import pytest
 from hypothesis import example, given
@@ -204,6 +205,20 @@ def test_redact_runtime_secrets_without_secrets_matches_redact_text(
 ) -> None:
     # With no explicit secrets, it reduces to the base regex redaction.
     assert redact_runtime_secrets(value, None) == redact_text(value)
+
+
+def test_runtime_secret_redacts_xml_escaped_junit_spelling(tmp_path: Path) -> None:
+    secret = 'token&value<with>"quotes"'
+    escaped = xml_escape(secret, {'"': "&quot;", "'": "&apos;"})
+    path = tmp_path / "junit.xml"
+    path.write_text(f"<failure>{escaped}</failure>", encoding="utf-8")
+
+    assert redact_runtime_secrets_in_file(path, (secret,), artifact_format="text")
+
+    redacted = path.read_text(encoding="utf-8")
+    assert secret not in redacted
+    assert escaped not in redacted
+    assert REDACTED_SECRET in redacted
 
 
 @pytest.mark.parametrize("artifact_format", ["json", "jsonl"])
