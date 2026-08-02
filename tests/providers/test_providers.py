@@ -489,6 +489,8 @@ def test_provider_catalog_retries_entry_point_enumeration_failure(
     assert attempts == 2
     assert catalog._discovered is True
     assert catalog.providers["plugin"] == (_CatalogProvider, _CatalogConfig)
+
+
 @pytest.mark.parametrize("api_key", ["", " \t "])
 def test_provider_catalog_rejects_unusable_key_from_concrete_config(api_key: str) -> None:
     catalog = ProviderCatalog(**_catalog_kwargs())
