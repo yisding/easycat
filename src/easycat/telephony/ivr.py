@@ -188,11 +188,20 @@ class DTMFDelivery:
             logger.exception("DTMF delivery failed for call %s", self._call_sid)
             return False
 
-    async def send_dtmf_with_retry(self, digits: str) -> bool:
+    async def send_dtmf_with_retry(
+        self,
+        digits: str,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> bool:
         """Send DTMF with retry and fallback to speech."""
+        if should_continue is not None and not should_continue():
+            return False
         success = await self.send_dtmf(digits)
-        if not success:
+        if not success and (should_continue is None or should_continue()):
             await asyncio.sleep(0.5)
+            if should_continue is not None and not should_continue():
+                return False
             success = await self.send_dtmf(digits)
         return success
 
@@ -200,6 +209,12 @@ class DTMFDelivery:
 # Type alias for the agent callback.
 AgentCallback = Callable[[dict[str, object]], Awaitable[Mapping[str, object]]]
 _AGENT_CALL_FAILED = object()
+_AGENT_CALL_TIMED_OUT = object()
+
+
+@dataclass(frozen=True)
+class _AgentCallbackRaised:
+    error: Exception
 
 
 class IVRNavigator:
@@ -228,6 +243,11 @@ class IVRNavigator:
         self._config = config or IVRNavigatorConfig()
         self._dtmf_delivery = dtmf_delivery
         self._active = False
+        # Every inactive -> active transition starts a distinct ownership
+        # epoch. Agent callbacks and delivery retries may outlive a call-state
+        # transition, so active state alone cannot distinguish old work from a
+        # newly activated call.
+        self._activation_epoch = 0
         self._started = False
         self._menu_depth = 0
         self._history: list[tuple[str, dict[str, str]]] = []
@@ -258,21 +278,32 @@ class IVRNavigator:
         if not self._started:
             return
         self._event_bus.unsubscribe(STTFinal, self._on_stt_final)
-        self._cancel_prompt_timeout()
+        self.deactivate()
         self._started = False
 
     def activate(self) -> None:
+        if self._active:
+            return
+        self._activation_epoch += 1
         self._active = True
 
     def deactivate(self) -> None:
+        # Invalidate work before publishing the inactive state. A later
+        # activate receives another epoch, so old callbacks stay stale even
+        # after navigation becomes active again for a different call.
+        self._activation_epoch += 1
         self._active = False
         self._cancel_prompt_timeout()
+
+    def _is_current_activation(self, activation_epoch: int) -> bool:
+        return self._active and self._activation_epoch == activation_epoch
 
     # ── STT handler ───────────────────────────────────────────────
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         if not self._active:
             return
+        activation_epoch = self._activation_epoch
 
         self._cancel_prompt_timeout()
         self._in_hold = False
@@ -281,6 +312,8 @@ class IVRNavigator:
         # even when no digits were sent (e.g. agent chose "wait"), so this check
         # does not require menu_depth > 0.
         if detect_human_after_ivr(event.text):
+            if not self._is_current_activation(activation_epoch):
+                return
             await self._event_bus.emit(
                 IVRAction(type=IVRActionType.HUMAN_DETECTED, menu_depth=self._menu_depth)
             )
@@ -296,36 +329,70 @@ class IVRNavigator:
             "history": [{"prompt": p, "action": a} for p, a in self._history],
         }
 
-        result = await self._call_agent_with_retry(context)
+        result = await self._call_agent_with_retry(context, activation_epoch)
         if result is _AGENT_CALL_FAILED:
             # Retry path already handled escalation (hangup) or re-arm (wait).
             return
+        if not self._is_current_activation(activation_epoch):
+            return
 
-        await self._apply_agent_decision(event.text, parse_ivr_agent_decision(result))
+        await self._apply_agent_decision(
+            event.text,
+            parse_ivr_agent_decision(result),
+            activation_epoch,
+        )
 
-    async def _apply_agent_decision(self, prompt: str, decision: IVRAgentDecision) -> None:
+    async def _apply_agent_decision(
+        self,
+        prompt: str,
+        decision: IVRAgentDecision,
+        activation_epoch: int,
+    ) -> None:
+        if not self._is_current_activation(activation_epoch):
+            return
         if decision.advances_menu:
-            await self._advance_menu(prompt, decision)
+            await self._advance_menu(prompt, decision, activation_epoch)
         elif decision.type is IVRActionType.HANGUP:
-            await self._escalate_to_hangup()
+            await self._escalate_to_hangup(activation_epoch)
         else:
-            self._start_prompt_timeout()
+            self._start_prompt_timeout(activation_epoch)
 
-    async def _advance_menu(self, prompt: str, decision: IVRAgentDecision) -> None:
+    async def _advance_menu(
+        self,
+        prompt: str,
+        decision: IVRAgentDecision,
+        activation_epoch: int,
+    ) -> None:
+        if not self._is_current_activation(activation_epoch):
+            return
         self._history.append((prompt, decision.history_entry()))
         self._menu_depth += 1
         if self._menu_depth > self._config.max_depth:
-            await self._escalate_to_hangup()
+            await self._escalate_to_hangup(activation_epoch)
             return
 
         await self._event_bus.emit(decision.to_event(menu_depth=self._menu_depth))
-        self._start_prompt_timeout()
-        await self._deliver_dtmf_or_fallback(decision)
-
-    async def _deliver_dtmf_or_fallback(self, decision: IVRAgentDecision) -> None:
-        if decision.type is not IVRActionType.DTMF or self._dtmf_delivery is None:
+        if not self._is_current_activation(activation_epoch):
             return
-        if await self._dtmf_delivery.send_dtmf_with_retry(decision.payload):
+        self._start_prompt_timeout(activation_epoch)
+        await self._deliver_dtmf_or_fallback(decision, activation_epoch)
+
+    async def _deliver_dtmf_or_fallback(
+        self,
+        decision: IVRAgentDecision,
+        activation_epoch: int,
+    ) -> None:
+        if (
+            not self._is_current_activation(activation_epoch)
+            or decision.type is not IVRActionType.DTMF
+            or self._dtmf_delivery is None
+        ):
+            return
+        delivered = await self._dtmf_delivery.send_dtmf_with_retry(
+            decision.payload,
+            should_continue=lambda: self._is_current_activation(activation_epoch),
+        )
+        if not self._is_current_activation(activation_epoch) or delivered:
             return
         await self._event_bus.emit(
             IVRAction(
@@ -335,7 +402,11 @@ class IVRNavigator:
             )
         )
 
-    async def _call_agent_with_retry(self, context: dict[str, object]) -> object:
+    async def _call_agent_with_retry(
+        self,
+        context: dict[str, object],
+        activation_epoch: int,
+    ) -> object:
         """Call the agent callback with one delayed retry.
 
         Returns the agent's raw result on success. Returns a private sentinel
@@ -351,41 +422,72 @@ class IVRNavigator:
         delay; only the second attempt's outcome decides re-arm vs hangup.
         """
         assert self._agent_callback is not None  # guarded by caller
-        try:
-            return await asyncio.wait_for(
-                self._agent_callback(context),
-                timeout=self._config.agent_timeout_s,
-            )
-        except TimeoutError:
+        first_result = await self._call_agent_once(context, activation_epoch)
+        if first_result is _AGENT_CALL_FAILED:
+            return _AGENT_CALL_FAILED
+        if first_result is _AGENT_CALL_TIMED_OUT:
             logger.warning("IVR agent timed out, retrying after delay")
-        except Exception:
+        elif isinstance(first_result, _AgentCallbackRaised):
             logger.warning("IVR agent callback crashed, retrying after delay")
+        else:
+            return first_result
 
         await asyncio.sleep(self._config.agent_retry_delay_s)
-        try:
-            return await asyncio.wait_for(
-                self._agent_callback(context),
-                timeout=self._config.agent_timeout_s,
-            )
-        except TimeoutError:
+        if not self._is_current_activation(activation_epoch):
+            return _AGENT_CALL_FAILED
+        retry_result = await self._call_agent_once(context, activation_epoch)
+        if retry_result is _AGENT_CALL_FAILED:
+            return _AGENT_CALL_FAILED
+        if retry_result is _AGENT_CALL_TIMED_OUT:
             # Transient: the agent is slow/unreachable. Re-arm the prompt
             # timeout and wait for the next prompt rather than hanging up.
             logger.warning("IVR agent retry timed out")
-            self._start_prompt_timeout()
+            self._start_prompt_timeout(activation_epoch)
             return _AGENT_CALL_FAILED
-        except Exception:
+        if isinstance(retry_result, _AgentCallbackRaised):
             # Deterministic failure (e.g. a crashing callback) on the retry too:
             # escalate to hangup instead of pointlessly re-arming.
-            logger.exception("IVR agent retry crashed; escalating to hangup")
-            await self._escalate_to_hangup()
+            logger.warning(
+                "IVR agent retry crashed; escalating to hangup",
+                exc_info=(
+                    type(retry_result.error),
+                    retry_result.error,
+                    retry_result.error.__traceback__,
+                ),
+            )
+            await self._escalate_to_hangup(activation_epoch)
             return _AGENT_CALL_FAILED
+        return retry_result
 
-    async def _escalate_to_hangup(self) -> None:
+    async def _call_agent_once(
+        self,
+        context: dict[str, object],
+        activation_epoch: int,
+    ) -> object:
+        """Run one fenced callback attempt and classify its outcome."""
+        assert self._agent_callback is not None  # guarded by caller
+        if not self._is_current_activation(activation_epoch):
+            return _AGENT_CALL_FAILED
+        try:
+            result: object = await asyncio.wait_for(
+                self._agent_callback(context),
+                timeout=self._config.agent_timeout_s,
+            )
+        except TimeoutError:
+            result = _AGENT_CALL_TIMED_OUT
+        except Exception as exc:
+            result = _AgentCallbackRaised(exc)
+        if not self._is_current_activation(activation_epoch):
+            return _AGENT_CALL_FAILED
+        return result
+
+    async def _escalate_to_hangup(self, activation_epoch: int) -> None:
         """Deactivate navigation and emit a terminal HANGUP action."""
-        self._active = False
-        await self._event_bus.emit(
-            IVRAction(type=IVRActionType.HANGUP, menu_depth=self._menu_depth)
-        )
+        if not self._is_current_activation(activation_epoch):
+            return
+        menu_depth = self._menu_depth
+        self.deactivate()
+        await self._event_bus.emit(IVRAction(type=IVRActionType.HANGUP, menu_depth=menu_depth))
 
     # ── Hold detection ─────────────────────────────────────────────
 
@@ -399,22 +501,24 @@ class IVRNavigator:
 
     # ── Timeout ───────────────────────────────────────────────────
 
-    def _start_prompt_timeout(self) -> None:
+    def _start_prompt_timeout(self, activation_epoch: int) -> None:
+        if not self._is_current_activation(activation_epoch):
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._prompt_timeout_task = loop.create_task(self._prompt_timeout_coro())
+        self._prompt_timeout_task = loop.create_task(self._prompt_timeout_coro(activation_epoch))
 
     def _cancel_prompt_timeout(self) -> None:
         if self._prompt_timeout_task and not self._prompt_timeout_task.done():
             self._prompt_timeout_task.cancel()
             self._prompt_timeout_task = None
 
-    async def _prompt_timeout_coro(self) -> None:
+    async def _prompt_timeout_coro(self, activation_epoch: int) -> None:
         try:
             await asyncio.sleep(self._config.prompt_timeout_s)
-            if self._active:
+            if self._is_current_activation(activation_epoch):
                 await self._event_bus.emit(
                     IVRAction(type=IVRActionType.WAIT, menu_depth=self._menu_depth)
                 )

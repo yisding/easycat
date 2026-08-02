@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -118,6 +118,80 @@ class TestIVRNavigator:
 
 class TestIVRAgentDecision:
     @pytest.mark.asyncio
+    async def test_deactivate_discards_blocked_agent_decision(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        callback_started = asyncio.Event()
+        release_callback = asyncio.Event()
+        delivery = MagicMock(spec=DTMFDelivery)
+        delivery.send_dtmf_with_retry = AsyncMock(return_value=True)
+
+        async def blocked_agent(ctx: dict) -> dict:
+            callback_started.set()
+            await release_callback.wait()
+            return {"action": "dtmf", "digits": "9"}
+
+        nav = IVRNavigator(bus, agent_callback=blocked_agent, dtmf_delivery=delivery)
+        nav.start()
+        nav.activate()
+        emit_task = asyncio.create_task(bus.emit(STTFinal(text="Press 9 for support")))
+        try:
+            await asyncio.wait_for(callback_started.wait(), timeout=1.0)
+            nav.deactivate()
+            release_callback.set()
+            await asyncio.wait_for(emit_task, timeout=1.0)
+
+            assert actions == []
+            assert nav.menu_depth == 0
+            assert nav.history == []
+            assert nav._prompt_timeout_task is None
+            delivery.send_dtmf_with_retry.assert_not_awaited()
+        finally:
+            release_callback.set()
+            if not emit_task.done():
+                await emit_task
+            nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_reactivate_does_not_adopt_blocked_prior_activation_decision(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        callback_started = asyncio.Event()
+        release_callback = asyncio.Event()
+        delivery = MagicMock(spec=DTMFDelivery)
+        delivery.send_dtmf_with_retry = AsyncMock(return_value=True)
+
+        async def blocked_agent(ctx: dict) -> dict:
+            callback_started.set()
+            await release_callback.wait()
+            return {"action": "dtmf", "digits": "9"}
+
+        nav = IVRNavigator(bus, agent_callback=blocked_agent, dtmf_delivery=delivery)
+        nav.start()
+        nav.activate()
+        emit_task = asyncio.create_task(bus.emit(STTFinal(text="Press 9 for support")))
+        try:
+            await asyncio.wait_for(callback_started.wait(), timeout=1.0)
+            nav.deactivate()
+            nav.activate()
+            release_callback.set()
+            await asyncio.wait_for(emit_task, timeout=1.0)
+
+            assert nav._active is True
+            assert actions == []
+            assert nav.menu_depth == 0
+            assert nav.history == []
+            assert nav._prompt_timeout_task is None
+            delivery.send_dtmf_with_retry.assert_not_awaited()
+        finally:
+            release_callback.set()
+            if not emit_task.done():
+                await emit_task
+            nav.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_returns_dtmf_action(self) -> None:
         bus = EventBus()
         actions: list[IVRAction] = []
@@ -209,6 +283,34 @@ class TestIVRAgentDecision:
         nav.activate()
         try:
             await bus.emit(STTFinal(text="Press 1 for sales"))
+            assert actions == []
+            assert nav.menu_depth == 0
+            assert nav._prompt_timeout_task is not None
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_returned_exception_is_a_malformed_result_not_a_crash(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        call_count = 0
+
+        async def mock_agent(ctx: dict) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return ValueError("returned rather than raised")
+
+        nav = IVRNavigator(
+            bus,
+            agent_callback=mock_agent,
+            config=IVRNavigatorConfig(agent_retry_delay_s=0.0),
+        )
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            assert call_count == 1
             assert actions == []
             assert nav.menu_depth == 0
             assert nav._prompt_timeout_task is not None
