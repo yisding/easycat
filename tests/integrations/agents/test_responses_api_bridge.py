@@ -981,6 +981,36 @@ class TestGracefulDegradation:
         error_records = [r for r in records if r.name == "framework_error"]
         assert len(error_records) >= 1
 
+    @pytest.mark.parametrize(
+        "response",
+        [
+            [],
+            {"error": []},
+            {"error": {"message": []}},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_malformed_failure_event_raises_protocol_error(self, response: object) -> None:
+        bridge = await _make_static_sse_bridge(
+            [
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "response.failed",
+                        "response": response,
+                    }
+                )
+            ]
+        )
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        with pytest.raises(RuntimeError, match="Responses API failed: unknown error"):
+            async for _ in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder(journal)):
+                pass
+
+        assert any(record.name == "framework_error" for record in journal.read())
+        await bridge.aclose()
+
     @pytest.mark.asyncio
     async def test_cancelled_tool_drain_still_raises_terminal_failure(self):
         lines = [
