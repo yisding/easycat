@@ -336,6 +336,35 @@ class TurnIdResolver(Protocol):
     def __call__(self, turn_id: str | None = None) -> str | None: ...
 
 
+def _artifact_store_writes_block(store: ArtifactStore | None) -> bool:
+    if store is None:
+        return False
+    declared = getattr(store, "writes_block", None)
+    return bool(declared) or (declared is None and isinstance(store, FilesystemArtifactStore))
+
+
+async def _await_owned_write(operation: asyncio.Task[None]) -> None:
+    try:
+        await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        # A synchronous artifact write cannot be stopped once its worker
+        # starts. Keep ownership of the entire write-and-reference unit
+        # until its journal row commits, so cancellation cannot leave a
+        # detached write behind or expose an unreferenced artifact.
+        while not operation.done():
+            try:
+                await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                continue
+        try:
+            operation.result()
+        except BaseException:
+            # Cancellation remains caller-visible, but retrieving the result
+            # prevents a detached operation exception warning.
+            pass
+        raise
+
+
 @dataclass(slots=True)
 class SessionJournalSink:
     """Write session activity to an execution journal."""
@@ -448,41 +477,52 @@ class SessionJournalSink:
         if journal is None:
             return
         validate_builtin_record(name=name, kind=kind, data=data)
-
-        async def _store(
-            payload: bytes | None,
-            artifact_class: ArtifactClass,
-        ) -> str | None:
-            if payload is None or self.artifact_store is None or journal.degraded:
-                return None
-            store = self.artifact_store
-            writes_block = getattr(store, "writes_block", None)
-            if bool(writes_block) or (
-                writes_block is None and isinstance(store, FilesystemArtifactStore)
-            ):
-                ref = await asyncio.to_thread(
-                    store.put,
-                    payload,
-                    artifact_class=artifact_class,
-                )
-                return ref or None
-            ref = store.put(payload, artifact_class=artifact_class)
-            return ref or None
-
-        input_ref = await _store(input_bytes, input_artifact_class)
-        output_ref = await _store(output_bytes, output_artifact_class)
-        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
-        await append_journal_record_async(
-            journal,
-            kind=kind,
-            name=name,
-            session_id=self.session_id,
-            turn_id=resolved_turn_id,
-            data=data,
-            tags=tags,
-            input_ref=input_ref,
-            output_ref=output_ref,
+        artifact_store = self.artifact_store
+        blocking_artifact_write = (
+            artifact_store is not None
+            and not journal.degraded
+            and (input_bytes is not None or output_bytes is not None)
+            and _artifact_store_writes_block(artifact_store)
         )
+
+        async def _write_artifacts_and_record() -> None:
+            async def _store(
+                payload: bytes | None,
+                artifact_class: ArtifactClass,
+            ) -> str | None:
+                if payload is None or artifact_store is None or journal.degraded:
+                    return None
+                if blocking_artifact_write:
+                    ref = await asyncio.to_thread(
+                        artifact_store.put,
+                        payload,
+                        artifact_class=artifact_class,
+                    )
+                    return ref or None
+                ref = artifact_store.put(payload, artifact_class=artifact_class)
+                return ref or None
+
+            input_ref = await _store(input_bytes, input_artifact_class)
+            output_ref = await _store(output_bytes, output_artifact_class)
+            resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+            await append_journal_record_async(
+                journal,
+                kind=kind,
+                name=name,
+                session_id=self.session_id,
+                turn_id=resolved_turn_id,
+                data=data,
+                tags=tags,
+                input_ref=input_ref,
+                output_ref=output_ref,
+            )
+
+        if not blocking_artifact_write:
+            await _write_artifacts_and_record()
+            return
+
+        operation = asyncio.create_task(_write_artifacts_and_record())
+        await _await_owned_write(operation)
 
     def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
