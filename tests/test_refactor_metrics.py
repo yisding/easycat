@@ -22,6 +22,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 METRICS_DIR = REPO_ROOT / "plan" / "metrics"
 FIXTURE_COMPLETION = parse_utc("2026-03-02T00:00:00Z")
 FIXTURE_AS_OF = parse_utc("2026-05-02T00:00:00Z")
+WS2_REQUIRED_COMMANDS = [
+    (
+        "uv run pytest tests/runtime/test_scope.py "
+        "tests/session/test_session_lifecycle_teardown.py "
+        "tests/integration/test_session_lifecycle_e2e.py -q"
+    ),
+    "just check",
+]
+REQUIRED_INCIDENT_SEARCHES = [
+    "issues",
+    "regression_prs",
+    "reverts",
+    "release_blocking_ci",
+]
+REQUIRED_GITHUB_CHECKS = ["CodeRabbit", "GitGuardian Security Checks"]
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -71,6 +86,33 @@ def _classification(
         "rationale": "fixture adjudication",
         "reviewer": "fixture-reviewer",
         "reviewed_at": "2026-05-02T00:00:00Z",
+    }
+
+
+def _pending_incidents() -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "rubric_version": 1,
+        "required_verification": {
+            "commands": WS2_REQUIRED_COMMANDS,
+            "github_checks": REQUIRED_GITHUB_CHECKS,
+            "incident_searches": REQUIRED_INCIDENT_SEARCHES,
+        },
+        "vertical_slice_gate": {
+            "status": "pending",
+            "completion_sha": None,
+            "completion_date": None,
+            "review": {
+                "status": "pending",
+                "reviewer": None,
+                "reviewed_at": None,
+                "commands": [],
+                "github_checks": [],
+                "incident_searches": [],
+                "evidence": [],
+            },
+        },
+        "incidents": [],
     }
 
 
@@ -142,13 +184,7 @@ def _fixture_inputs() -> tuple[
         ],
         "recurrence_adjudications": [],
     }
-    incidents = {
-        "schema_version": 1,
-        "rubric_version": 1,
-        "soak_window_days": 14,
-        "soak": {"status": "pending"},
-        "incidents": [],
-    }
+    incidents = _pending_incidents()
     history = [
         _commit(1, "2025-12-31T23:59:59Z", "src/easycat/member_a.py"),
         _commit(2, "2026-01-01T00:00:00Z", "src/easycat/member_a.py"),
@@ -258,24 +294,7 @@ def test_refactor_metric_review_inputs_start_empty_and_versioned() -> None:
         "commit_classifications": [],
         "recurrence_adjudications": [],
     }
-    assert incidents == {
-        "schema_version": 1,
-        "rubric_version": 1,
-        "soak_window_days": 14,
-        "soak": {
-            "status": "pending",
-            "completion_sha": None,
-            "completion_date": None,
-            "window": None,
-            "review": {
-                "status": "pending",
-                "reviewer": None,
-                "reviewed_at": None,
-                "evidence": [],
-            },
-        },
-        "incidents": [],
-    }
+    assert incidents == _pending_incidents()
 
 
 def test_report_uses_exact_windows_migration_exclusions_and_group_assignment() -> None:
@@ -438,79 +457,118 @@ def test_report_json_and_markdown_are_stable_for_normalized_input_order() -> Non
     assert render_report_markdown(first) == render_report_markdown(second)
 
 
-def test_soak_requires_completed_review_and_applies_attribution_rubric() -> None:
+def test_vertical_slice_gate_requires_acceptance_evidence_and_applies_incident_rubric() -> None:
     manifest: dict[str, Any] = {"method": {}, "cohorts": []}
-    pending = {
-        "soak_window_days": 14,
-        "soak": {"status": "pending"},
-        "incidents": [],
-    }
+    pending = _pending_incidents()
     assert (
-        build_report(manifest, {}, pending, [], as_of=FIXTURE_AS_OF)["vertical_slice_soak"][
+        build_report(manifest, {}, pending, [], as_of=FIXTURE_AS_OF)["vertical_slice_gate"][
             "result"
         ]
         == "insufficient_data"
     )
 
-    active = {
-        "soak_window_days": 14,
-        "soak": {
-            "status": "active",
-            "completion_sha": _sha(20),
-            "completion_date": "2026-01-01T00:00:00Z",
-            "window": {
-                "start": "2026-01-01T00:00:00Z",
-                "end": "2026-01-15T00:00:00Z",
-            },
-            "review": {
-                "status": "pending",
-                "reviewer": None,
-                "reviewed_at": None,
-                "evidence": [],
-            },
+    active = _pending_incidents()
+    active["vertical_slice_gate"] = {
+        "status": "active",
+        "completion_sha": _sha(20),
+        "completion_date": "2026-01-01T00:00:00Z",
+        "review": {
+            "status": "pending",
+            "reviewer": None,
+            "reviewed_at": None,
+            "commands": [],
+            "github_checks": [],
+            "incident_searches": [],
+            "evidence": [],
         },
-        "incidents": [],
     }
-    soak_history = [_commit(20, "2026-01-01T00:00:00Z")]
-    review_pending = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
+    gate_history = [_commit(20, "2026-01-01T00:00:00Z")]
+    review_pending = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
     ]
     assert review_pending["result"] == "insufficient_data"
-    assert "soak_review_incomplete" in review_pending["reasons"]
+    assert "vertical_slice_review_incomplete" in review_pending["reasons"]
 
-    active["soak"]["review"] = {
+    active["vertical_slice_gate"]["review"] = {
         "status": "complete",
         "reviewer": "fixture-reviewer",
-        "reviewed_at": "2026-01-15T00:00:00Z",
-        "evidence": ["issue and release-blocking CI searches"],
+        "reviewed_at": "2026-01-01T00:00:00Z",
+        "commands": WS2_REQUIRED_COMMANDS,
+        "github_checks": [
+            {
+                "name": "CodeRabbit",
+                "conclusion": "success",
+                "url": "https://example.test/check/1",
+            },
+            {
+                "name": "GitGuardian Security Checks",
+                "conclusion": "success",
+                "url": "https://example.test/check/2",
+            },
+        ],
+        "incident_searches": REQUIRED_INCIDENT_SEARCHES,
+        "evidence": ["merge-anchor review"],
     }
-    reviewed_empty = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
+    reviewed_empty = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
     ]
     assert reviewed_empty["result"] == "pass"
+
+    review = active["vertical_slice_gate"]["review"]
+    review["commands"] = WS2_REQUIRED_COMMANDS[:-1]
+    missing_command = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
+    ]
+    assert "vertical_slice_required_commands_missing" in missing_command["reasons"]
+    review["commands"] = WS2_REQUIRED_COMMANDS
+
+    review["github_checks"][0]["conclusion"] = "failure"
+    failed_check = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
+    ]
+    assert "vertical_slice_github_checks_incomplete" in failed_check["reasons"]
+    review["github_checks"][0]["conclusion"] = "success"
+
+    review["incident_searches"] = REQUIRED_INCIDENT_SEARCHES[:-1]
+    missing_search = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
+    ]
+    assert "vertical_slice_incident_searches_missing" in missing_search["reasons"]
+    review["incident_searches"] = REQUIRED_INCIDENT_SEARCHES
+
+    active["vertical_slice_gate"]["completion_date"] = "2026-01-01T00:00:01Z"
+    mismatched_anchor = build_report(
+        manifest,
+        {},
+        active,
+        gate_history,
+        as_of=FIXTURE_AS_OF,
+    )["vertical_slice_gate"]
+    assert "vertical_slice_anchor_date_mismatch" in mismatched_anchor["reasons"]
+    active["vertical_slice_gate"]["completion_date"] = "2026-01-01T00:00:00Z"
 
     incident = {
         "id": "fixture-incident",
         "severity": "P2",
         "cohort_id": "fixture_cohort",
         "slice": "WS2.1a",
-        "occurred_at": "2026-01-02T00:00:00Z",
+        "occurred_at": "2026-01-01T00:00:00Z",
         "source": "fixture issue",
         "evidence": ["fixture reproduction"],
         "attribution": "attributable",
         "rationale": "introduced by fixture slice",
         "reviewer": "fixture-reviewer",
-        "reviewed_at": "2026-01-15T00:00:00Z",
+        "reviewed_at": "2026-01-01T00:00:00Z",
     }
     active["incidents"] = [incident]
-    attributable = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
+    attributable = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
     ]
     assert attributable["result"] == "fail"
 
     incident["attribution"] = "disputed"
-    disputed = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
+    disputed = build_report(manifest, {}, active, gate_history, as_of=FIXTURE_AS_OF)[
+        "vertical_slice_gate"
     ]
     assert disputed["result"] == "insufficient_data"
     assert "incident_disputed:fixture-incident" in disputed["reasons"]
@@ -522,16 +580,16 @@ def test_checked_report_artifacts_have_a_versioned_schema_and_do_not_drift() -> 
     markdown = (METRICS_DIR / "report.md").read_text(encoding="utf-8")
 
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert schema["properties"]["schema_version"] == {"const": 1}
+    assert schema["properties"]["schema_version"] == {"const": 2}
     assert set(schema["required"]) == {
         "schema_version",
         "as_of",
         "cohorts",
-        "vertical_slice_soak",
+        "vertical_slice_gate",
     }
     assert set(report) == set(schema["required"])
     assert markdown.startswith("# Refactor outcome report\n")
-    assert "## Fourteen-day vertical-slice soak" in markdown
+    assert "## WS2.1a vertical-slice acceptance gate" in markdown
     assert (
         main(
             [

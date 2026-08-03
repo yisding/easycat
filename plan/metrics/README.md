@@ -11,7 +11,7 @@ passed:
   completion anchors;
 - `adjudications.json` owns the human classifications used by fix-density and
   recurrence calculations; and
-- `incidents.json` owns the 14-day vertical-slice soak record;
+- `incidents.json` owns the merge-anchored WS2.1a acceptance record;
 - `report.schema.json` owns the generated JSON output contract; and
 - `report.json` and `report.md` are the checked generated views.
 
@@ -168,25 +168,42 @@ unreachable anchor, membership change after treatment start, force-pushed
 history, unresolved reviewer dispute, or missing migration SHA yields
 `insufficient_data` and stops the corresponding gate.
 
-## Fourteen-day vertical-slice soak
+## WS2.1a vertical-slice acceptance gate
 
-The soak starts at the merge timestamp of WS2.1's first vertical slice and is
-the half-open interval `[D,D+14d)`. `incidents.json` accepts linked issues,
-regression PRs, reverts, and release-blocking CI failures.
+There is deliberately no elapsed-time requirement. A calendar soak without a
+defined production exposure floor cannot distinguish a safe change from an
+unused one; the pre-registered A60 outcome gate is the mechanism that measures
+production-history outcomes. WS2.1a instead has a deterministic acceptance
+gate anchored to its immutable merge SHA/date.
+
+Gate schema v2 replaced the original 14-day rule on 2026-08-03, before WS2.1a
+merged or acquired a production anchor. The change therefore does not rewrite
+observed treatment data. To pass, the named reviewer records:
+
+- successful runs of the exact WS2 lifecycle command frozen in
+  `required_verification.commands` and `just check`;
+- links and successful conclusions for every GitHub check whose exact name is
+  frozen in `required_verification.github_checks`; and
+- evidence that issues, regression PRs, reverts, and release-blocking CI were
+  searched and adjudicated through the rubric below.
+
+The gate may be decided as soon as those facts are true for the merge anchor.
+`incidents.json` accepts linked issues, regression PRs, reverts, and
+release-blocking CI failures.
 
 - **P1:** security or cross-session corruption, irreversible data loss, or
   service-wide unavailability.
 - **P2:** a supported lifecycle path hangs, leaks owned work, misroutes state,
   or requires a hotfix, rollback, or release block.
 - **Below threshold:** does not satisfy P1 or P2; it remains recorded but does
-  not fail the soak.
+  not fail the gate.
 
 Each incident records severity, affected cohort/slice, source link, evidence,
 and attribution as `attributable`, `not_attributable`, or `disputed`, with the
 named reviewer and UTC review time. Attribution requires evidence that the
 slice introduced or exposed the incident and that it would not occur absent
-the treatment. An attributable P1/P2 fails the soak. A disputed or unreviewed
-P1/P2 makes it `insufficient_data`. After the window closes, the named reviewer
-must also complete `soak.review` with evidence of the issue, regression-PR,
-revert, and release-blocking-CI search. An empty incident list without that
-attestation is `insufficient_data`; silence never counts as a pass.
+the treatment. An attributable P1/P2 fails the gate. A disputed or unreviewed
+P1/P2 makes it `insufficient_data`. The named reviewer completes
+`vertical_slice_gate.review` with command, check, search, and supporting
+evidence. An empty incident list without that attestation is
+`insufficient_data`; silence never counts as a pass.

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 _RESULTS = {"pass", "fail", "insufficient_data"}
 
 
@@ -634,9 +634,38 @@ def _cohort_report(
     }
 
 
-def _validate_soak_incident(
+def _incident_timing_reasons(
+    identifier: Any,
+    occurred_at: datetime,
+    reviewed_at_value: Any,
+    *,
+    review_time: datetime | None,
+    as_of: datetime,
+) -> list[str]:
+    reasons: list[str] = []
+    try:
+        incident_reviewed_at = parse_utc(reviewed_at_value)
+    except (TypeError, ValueError):
+        reasons.append(f"incident_invalid_reviewed_at:{identifier}")
+    else:
+        if incident_reviewed_at < occurred_at:
+            reasons.append(f"incident_review_before_occurrence:{identifier}")
+        if incident_reviewed_at > as_of:
+            reasons.append(f"incident_review_after_as_of:{identifier}")
+        if review_time is not None and incident_reviewed_at > review_time:
+            reasons.append(f"incident_review_after_gate_review:{identifier}")
+    if occurred_at > as_of:
+        reasons.append(f"incident_after_as_of:{identifier}")
+    if review_time is not None and occurred_at > review_time:
+        reasons.append(f"incident_after_gate_review:{identifier}")
+    return reasons
+
+
+def _validate_vertical_slice_incident(
     incident: dict[str, Any],
-    window: dict[str, str],
+    *,
+    review_time: datetime | None,
+    as_of: datetime,
 ) -> tuple[list[str], bool]:
     identifier = incident.get("id")
     required = (
@@ -658,13 +687,13 @@ def _validate_soak_incident(
         occurred_at = parse_utc(incident["occurred_at"])
     except (TypeError, ValueError):
         return [f"incident_invalid_timestamp:{identifier}"], False
-    reasons: list[str] = []
-    try:
-        parse_utc(incident["reviewed_at"])
-    except (TypeError, ValueError):
-        reasons.append(f"incident_invalid_reviewed_at:{identifier}")
-    if not _window_contains(window, occurred_at):
-        reasons.append(f"incident_outside_window:{identifier}")
+    reasons = _incident_timing_reasons(
+        identifier,
+        occurred_at,
+        incident["reviewed_at"],
+        review_time=review_time,
+        as_of=as_of,
+    )
     if incident["severity"] not in {"P1", "P2", "below_threshold"}:
         reasons.append(f"incident_invalid_severity:{identifier}")
     if incident["attribution"] not in {"attributable", "not_attributable", "disputed"}:
@@ -676,81 +705,186 @@ def _validate_soak_incident(
     return reasons, failed
 
 
-def _validated_soak_incidents(
+def _validated_vertical_slice_incidents(
     incidents: dict[str, Any],
-    window: dict[str, str],
+    *,
+    review_time: datetime | None,
+    as_of: datetime,
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
-    rendered = sorted(incidents.get("incidents", []), key=lambda item: item.get("id", ""))
+    raw_incidents = incidents.get("incidents", [])
+    if not isinstance(raw_incidents, list) or any(
+        not isinstance(incident, dict) for incident in raw_incidents
+    ):
+        return [], ["vertical_slice_incidents_invalid"], False
+    rendered = sorted(raw_incidents, key=lambda item: str(item.get("id", "")))
     reasons: list[str] = []
     failed = False
     for incident in rendered:
-        incident_reasons, incident_failed = _validate_soak_incident(incident, window)
+        incident_reasons, incident_failed = _validate_vertical_slice_incident(
+            incident,
+            review_time=review_time,
+            as_of=as_of,
+        )
         reasons.extend(incident_reasons)
         failed = failed or incident_failed
     return [dict(incident) for incident in rendered], reasons, failed
 
 
-def _soak_review_reasons(
-    review: dict[str, Any],
-    window: dict[str, str],
-    as_of: datetime,
-) -> list[str]:
-    if review.get("status") != "complete" or not all(
-        review.get(field) for field in ("reviewer", "reviewed_at", "evidence")
+def _nonempty_string_set(value: Any) -> set[str] | None:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
     ):
-        return ["soak_review_incomplete"]
+        return None
+    return set(value)
+
+
+def _review_timestamp_reasons(
+    reviewed_at_value: Any,
+    completion: datetime,
+    as_of: datetime,
+) -> tuple[list[str], datetime | None]:
     try:
-        reviewed_at = parse_utc(review["reviewed_at"])
+        reviewed_at = parse_utc(reviewed_at_value)
     except (TypeError, ValueError):
-        return ["soak_review_invalid_timestamp"]
+        return ["vertical_slice_review_invalid_timestamp"], None
     reasons: list[str] = []
-    if reviewed_at < parse_utc(window["end"]):
-        reasons.append("soak_review_before_window_close")
+    if reviewed_at < completion:
+        reasons.append("vertical_slice_review_before_merge")
     if reviewed_at > as_of:
-        reasons.append("soak_review_after_as_of")
-    return reasons
+        reasons.append("vertical_slice_review_after_as_of")
+    return reasons, reviewed_at
 
 
-def _soak_report(
+def _required_check_evidence_complete(
+    checks: Any,
+    required_checks: set[str] | None,
+) -> bool:
+    if not isinstance(checks, list) or required_checks is None:
+        return False
+    check_index: dict[str, dict[str, Any]] = {}
+    for check in checks:
+        if not isinstance(check, dict) or any(
+            not isinstance(check.get(field), str) or not check[field]
+            for field in ("name", "conclusion", "url")
+        ):
+            return False
+        if check["name"] in check_index:
+            return False
+        check_index[check["name"]] = check
+    return all(
+        name in check_index and check_index[name]["conclusion"] == "success"
+        for name in required_checks
+    )
+
+
+def _vertical_slice_review_reasons(
+    review: dict[str, Any],
+    completion: datetime,
+    as_of: datetime,
+    required_verification: dict[str, Any],
+) -> tuple[list[str], datetime | None]:
+    if review.get("status") != "complete" or not all(
+        review.get(field)
+        for field in (
+            "reviewer",
+            "reviewed_at",
+            "commands",
+            "github_checks",
+            "incident_searches",
+            "evidence",
+        )
+    ):
+        return ["vertical_slice_review_incomplete"], None
+    reasons, reviewed_at = _review_timestamp_reasons(
+        review["reviewed_at"],
+        completion,
+        as_of,
+    )
+    if reviewed_at is None:
+        return reasons, None
+
+    required_commands = _nonempty_string_set(required_verification.get("commands"))
+    required_checks = _nonempty_string_set(required_verification.get("github_checks"))
+    required_searches = _nonempty_string_set(required_verification.get("incident_searches"))
+    if required_commands is None or required_checks is None or required_searches is None:
+        reasons.append("vertical_slice_required_verification_invalid")
+
+    passed_commands = _nonempty_string_set(review.get("commands"))
+    if (
+        required_commands is None
+        or passed_commands is None
+        or not required_commands <= passed_commands
+    ):
+        reasons.append("vertical_slice_required_commands_missing")
+
+    if not _required_check_evidence_complete(review.get("github_checks"), required_checks):
+        reasons.append("vertical_slice_github_checks_incomplete")
+
+    completed_searches = _nonempty_string_set(review.get("incident_searches"))
+    if (
+        required_searches is None
+        or completed_searches is None
+        or not required_searches <= completed_searches
+    ):
+        reasons.append("vertical_slice_incident_searches_missing")
+    return reasons, reviewed_at
+
+
+def _vertical_slice_gate_report(
     incidents: dict[str, Any],
     as_of: datetime,
     history: list[CommitRecord],
 ) -> dict[str, Any]:
-    soak = incidents.get("soak", {})
-    status = soak.get("status", "pending")
+    gate = incidents.get("vertical_slice_gate", {})
+    status = gate.get("status", "pending")
     if status != "active":
         return {
             "result": "insufficient_data",
             "status": status,
-            "reasons": ["soak_pending"],
-            "window": None,
+            "reasons": ["vertical_slice_gate_pending"],
+            "anchor": None,
             "incidents": [],
         }
     reasons: list[str] = []
     try:
-        completion = parse_utc(soak["completion_date"])
+        completion = parse_utc(gate["completion_date"])
     except (KeyError, TypeError, ValueError):
         return {
             "result": "insufficient_data",
             "status": status,
-            "reasons": ["soak_invalid_completion_date"],
-            "window": None,
+            "reasons": ["vertical_slice_invalid_completion_date"],
+            "anchor": None,
             "incidents": [],
         }
-    expected_window = _window(
-        completion,
-        completion + timedelta(days=incidents["soak_window_days"]),
+    if completion > as_of:
+        reasons.append("vertical_slice_completion_after_as_of")
+    completion_sha = gate.get("completion_sha")
+    sha_is_valid = (
+        isinstance(completion_sha, str)
+        and len(completion_sha) == 40
+        and all(character in "0123456789abcdef" for character in completion_sha)
     )
-    if soak.get("window") != expected_window:
-        reasons.append("soak_window_mismatch")
-    if as_of < parse_utc(expected_window["end"]):
-        reasons.append("soak_window_open")
-    if soak.get("completion_sha") not in {commit.sha for commit in history}:
-        reasons.append("soak_anchor_unreachable")
-    reasons.extend(_soak_review_reasons(soak.get("review", {}), expected_window, as_of))
-    rendered_incidents, incident_reasons, failed = _validated_soak_incidents(
+    if not sha_is_valid:
+        reasons.append("vertical_slice_invalid_completion_sha")
+    else:
+        anchor_commit = next((commit for commit in history if commit.sha == completion_sha), None)
+        if anchor_commit is None:
+            reasons.append("vertical_slice_anchor_unreachable")
+        elif format_utc(anchor_commit.committed_at) != format_utc(completion):
+            reasons.append("vertical_slice_anchor_date_mismatch")
+    review_reasons, review_time = _vertical_slice_review_reasons(
+        gate.get("review", {}),
+        completion,
+        as_of,
+        incidents.get("required_verification", {}),
+    )
+    reasons.extend(review_reasons)
+    rendered_incidents, incident_reasons, failed = _validated_vertical_slice_incidents(
         incidents,
-        expected_window,
+        review_time=review_time,
+        as_of=as_of,
     )
     reasons.extend(incident_reasons)
     reasons = sorted(set(reasons))
@@ -762,12 +896,19 @@ def _soak_report(
         decision_reasons = ["attributable_p1_p2_incident"]
     else:
         result = "pass"
-        decision_reasons = ["completed_review_found_no_attributable_p1_p2"]
+        decision_reasons = ["vertical_slice_acceptance_evidence_complete"]
     return {
         "result": result,
         "status": status,
         "reasons": decision_reasons,
-        "window": expected_window,
+        "anchor": (
+            {
+                "completion_sha": completion_sha,
+                "completion_date": format_utc(completion),
+            }
+            if sha_is_valid
+            else None
+        ),
         "incidents": rendered_incidents,
     }
 
@@ -786,15 +927,15 @@ def build_report(
         _cohort_report(manifest, cohort, adjudications, history, normalized_as_of)
         for cohort in manifest["cohorts"]
     ]
-    soak = _soak_report(incidents, normalized_as_of, history)
+    vertical_slice_gate = _vertical_slice_gate_report(incidents, normalized_as_of, history)
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "as_of": format_utc(normalized_as_of),
         "cohorts": cohorts,
-        "vertical_slice_soak": soak,
+        "vertical_slice_gate": vertical_slice_gate,
     }
     assert all(cohort["result"] in _RESULTS for cohort in cohorts)
-    assert soak["result"] in _RESULTS
+    assert vertical_slice_gate["result"] in _RESULTS
     return report
 
 
@@ -837,14 +978,14 @@ def render_report_markdown(report: dict[str, Any]) -> str:
                 ]
             )
         lines.append("")
-    soak = report["vertical_slice_soak"]
+    vertical_slice_gate = report["vertical_slice_gate"]
     lines.extend(
         [
-            "## Fourteen-day vertical-slice soak",
+            "## WS2.1a vertical-slice acceptance gate",
             "",
-            f"- Status: `{soak['status']}`",
-            f"- Result: **{soak['result']}**",
-            f"- Reasons: {', '.join(f'`{reason}`' for reason in soak['reasons'])}",
+            f"- Status: `{vertical_slice_gate['status']}`",
+            f"- Result: **{vertical_slice_gate['result']}**",
+            "- Reasons: " + ", ".join(f"`{reason}`" for reason in vertical_slice_gate["reasons"]),
             "",
         ]
     )
