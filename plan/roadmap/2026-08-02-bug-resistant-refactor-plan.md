@@ -989,6 +989,18 @@ rewrite a no-op, preserving both prior history and an active response-id chain;
 normal current-turn assistant rewrites retain their existing behavior. WS3.1d3
 driver wiring remains pending in the next PR.
 
+WS3.1d3 result: a credential-free controlled `RunResultStreaming` driver now
+runs all five required OpenAI Agents scenarios on every PR. Its close-aware SDK
+iterator injects an unknown future run item before valid text, gates a function
+result across `after_turn` cancellation, verifies hard close calls immediate
+run cancellation and closes the delegated iterator, balances the agent cursor
+while a tool is pending, and snapshots an empty current turn with its user
+boundary before applying interruption. The normalized driver observes only
+user/assistant history and counts both live SDK work and pending interruption
+metadata as transient state. Every row proves JSON-safe snapshots and empty
+post-reset state. The execution registry advances to five wired bridges and
+two pending drivers: PydanticAI and Llama Agents.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
