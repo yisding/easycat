@@ -182,4 +182,30 @@ _register(
 
 LAZY_EXPORTS: LazyExportMap = MappingProxyType(_LAZY_EXPORTS)
 
-__all__ = ["LAZY_EXPORTS", "LazyExportMap"]
+# Explicit classification of the dataclass configuration surface in
+# ``LAZY_EXPORTS``. Keep this independent from name filtering: ``ICEServer`` is
+# configuration despite its name, and a future non-config export ending in
+# ``Config`` must not silently join security-sensitive repr coverage.
+PUBLIC_CONFIG_EXPORTS: frozenset[str] = frozenset(
+    {
+        "EasyConfig",
+        "ICEServer",
+        "LocalTransportConfig",
+        "NoiseReducerConfig",
+        "OutboundCallConfig",
+        "STTProviderConfig",
+        "SessionConfig",
+        "SmartTurnConfig",
+        "TTSProviderConfig",
+        "TelephonyConfig",
+        "TurnManagerConfig",
+        "TwilioSessionActionConfig",
+        "VADConfig",
+        "VoicemailDetectionConfig",
+        "WebRTCTransportConfig",
+        "WebSocketTransportConfig",
+        "WebTransportTransportConfig",
+    }
+)
+
+__all__ = ["LAZY_EXPORTS", "PUBLIC_CONFIG_EXPORTS", "LazyExportMap"]
