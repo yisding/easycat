@@ -489,10 +489,14 @@ bookkeeping intentionally remain live.
   never mutate voice-turn identity. If this cannot preserve the compatibility
   contract, making public events observation-only is a separately approved
   **[behavior change]**, not hidden in this PR.
-- **d. Migrate synchronous predicates (Tier A).** Convert
-  `_tts_scheduler.py`, `_stt_committer.py`, and synchronous
-  `_turn_runner.py` predicates to identity and/or activity leases as their
-  semantics require. Null-object checks stay null-object checks.
+- **d1. Synchronous predicate inventory + guard (Tier A).** Freeze and
+  classify identity pointer/generation, activity, cancellation, token-owner,
+  phase-latch, and null-object predicates in `_tts_scheduler.py`,
+  `_stt_committer.py`, and `_turn_runner.py` before migration.
+- **d2. Migrate synchronous predicates (Tier A).** Convert the classified
+  identity/activity predicates to leases as their semantics require.
+  Null-object, cancellation, token-owner, and phase-latch checks retain their
+  distinct meanings.
 - **e. Commit guards and phase latches (Tier A).** Inventory every await-to-
   effect edge and guard immediately before each liveness-sensitive commit.
   Scope cancellation never substitutes for this guard. Preserve
@@ -553,6 +557,16 @@ two observation markers, two public producer sites, and two subscriptions; no
 public producer remains an identity command. Ordering contracts prove existing
 global and exact observers see voice identity installed and STT active, while a
 running text session's TurnStarted observation never installs voice identity.
+
+WS1.2d1 inventory result: 73 synchronous predicate sites are frozen across the
+three turn collaborators — eight identity-pointer checks, nine legacy identity-
+generation checks, nine activity-state checks, fourteen cancellation checks,
+three token-owner checks, twenty-nine null/no-turn checks, and one explicit
+preemptive phase latch. The location-free AST ratchet distinguishes all seven
+semantics and rejects structural replacement drift. WS1.2d2 must remove the
+pointer/generation/activity liveness mechanisms through lease adoption while
+leaving cancellation, token ownership, null-object semantics, and the one-way
+phase latch independently visible.
 
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
