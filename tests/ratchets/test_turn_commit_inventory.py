@@ -47,6 +47,7 @@ GUARD_POLICIES = frozenset(
         "correlated_observation",
         "identity",
         "identity_activity",
+        "identity_activity_pause",
         "identity_phase",
         "phase_latch",
         "publication_scope",
@@ -243,11 +244,12 @@ def _guard_policy(site: TurnCommitSite) -> str:
             else "identity_activity"
         )
     elif site.category == "provider_commit":
-        policy = (
-            "identity_phase"
-            if qualname.endswith("_prepare_preemptive_response")
-            else "identity_activity"
-        )
+        if qualname.endswith("_prepare_preemptive_response"):
+            policy = "identity_phase"
+        elif qualname.endswith("_commit_segment_after"):
+            policy = "identity_activity_pause"
+        else:
+            policy = "identity_activity"
     elif site.category == "turn_field_commit":
         policy = "identity" if "start_event_loop._consume" in qualname else "identity_activity"
     elif site.category == "public_observation_commit":

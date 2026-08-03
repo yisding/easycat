@@ -650,6 +650,17 @@ replacement drift. Structural guards also pin the cancellation-resistant
 smart-turn timer race and the delayed segment-final race, proving that neither
 an old timer nor an old future correlation may shorten a later pause.
 
+WS1.3b migration result: TurnManager now owns a dedicated `Epoch[None]` and
+opens each pause before `VADStopSpeaking` becomes observable. The silence
+timer and STT commit path carry exact `Lease[None]` values; segment futures
+retain their originating lease until the matching final or cleanup consumes
+it. Seven commit guards reject stale timers, provider continuations, failed-
+commit recovery, and punctuation hints. The public integer generation seam
+and integer future map are gone. The evolved location-free inventory freezes
+27 epoch, capture, carrier, guard, and correlation sites, while end-to-end
+audio-router evidence proves a zero-delay commit both follows the boundary
+audio write and captures the newly opened pause.
+
 ### WS1.4 — Transport connection epochs [M per transport] (Tier B; peer-gated)
 
 After the peer-set decision and Tier-A outcome gate, one PR per retained

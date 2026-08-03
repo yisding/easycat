@@ -143,7 +143,7 @@ of truth.
 
 - state transitions and their reasons;
 - pre-roll and bounded active-turn audio;
-- silence timers and pause generations;
+- silence timers and pause epochs;
 - VAD versus push-to-talk mode;
 - optional semantic endpoint detection; and
 - identifying speech during processing/playback as barge-in.
@@ -197,7 +197,7 @@ A VAD stop opens a pause. Three related timers/decisions may then occur:
 
 ```mermaid
 flowchart TD
-    PAUSE["VADStopSpeaking\npause generation N"]
+    PAUSE["VADStopSpeaking\nnew pause epoch lease"]
     SEG["STT segment silence\ncommit current segment"]
     SMART["smart-turn decision"]
     PUNCT["punctuated final hint"]
@@ -220,15 +220,18 @@ flowchart TD
   surface but consumed by the session collaborator.
 - `end_of_turn_silence_ms` controls the conversational fallback endpoint.
 - A terminally punctuated STT final can shorten the fixed timer only for the
-  same pause generation.
+  exact pause whose lease accompanied that final.
 - A smart-turn complete verdict ends promptly.
 - A smart-turn incomplete or error verdict gets the full fallback grace
   **after** the decision. Detector latency is not subtracted, and semantic
   incompleteness takes precedence over punctuation.
 
-The pause generation prevents a delayed final from an earlier pause from
-shortening a later pause. This is a general asynchronous design pattern:
-associate delayed evidence with the state generation that requested it.
+TurnManager advances a dedicated pause epoch before publishing
+`VADStopSpeaking`. Its silence timer and the STT segment future carry leases
+captured from that epoch. A delayed final from an earlier pause therefore
+cannot shorten a later pause: its exact lease no longer guards successfully.
+This is a general asynchronous design pattern—associate delayed evidence with
+the identity that requested it and re-check that identity at the effect.
 
 ## 3.7 STT Commitment
 
@@ -349,7 +352,7 @@ this evidence into history mutation.
 1. Why is `AudioChunk.format` more authoritative than provider defaults?
 2. Why does AEC run before noise reduction?
 3. What is the difference between an STT segment commit and a turn endpoint?
-4. How does a pause generation prevent stale punctuation from ending a turn?
+4. How does a pause lease prevent stale punctuation from ending a turn?
 5. Why is `DROP_NEWEST` preferable to `DROP_OLDEST` for queued bot speech?
 6. Which fact is stronger: transport acceptance or playback-mark
    acknowledgement?

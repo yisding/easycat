@@ -240,17 +240,17 @@ async def test_commit_now_rejects_same_state_activity_republication() -> None:
 
 @pytest.mark.asyncio
 async def test_commit_now_uncommitted_reset_when_provider_returns_false() -> None:
-    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+    committer, _stt, _emitted, _no_turn, tm = _make_committer(
         stt=_RecordingSTT(commit_result=False)
     )
     committer.mark_active()
     turn = _new_turn()
 
-    await committer.commit_now(turn, pause_generation=1)
+    await committer.commit_now(turn, pause=tm.capture_pause())
 
     assert turn.stt_has_uncommitted_audio is True
     assert turn.pending_stt_segment_futures == []  # future was popped
-    assert committer._pause_generation_by_future == {}
+    assert committer._pause_by_future == {}
 
 
 @pytest.mark.asyncio
@@ -867,7 +867,7 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
     try:
         await tm.on_vad_event(VADStartSpeaking())
         await tm.on_vad_event(VADStopSpeaking())
-        first_pause = tm.pause_generation
+        first_pause = tm.capture_pause()
         committer.schedule(VADStopSpeaking(), turn=turn)
         assert committer._pause_commit_task is not None
         await committer._pause_commit_task
@@ -877,13 +877,14 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
         committer.cancel_scheduled(VADStartSpeaking(), turn=turn)
         turn.stt_has_uncommitted_audio = True
         await tm.on_vad_event(VADStopSpeaking())
-        second_pause = tm.pause_generation
+        second_pause = tm.capture_pause()
         committer.schedule(VADStopSpeaking(), turn=turn)
         assert committer._pause_commit_task is not None
         await committer._pause_commit_task
         await committer.await_inflight_commit()
 
-        assert second_pause > first_pause
+        assert not first_pause.guard()
+        assert second_pause.guard()
         assert len(turn.pending_stt_segment_futures) == 2
 
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Old segment."))
@@ -892,7 +893,7 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
 
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Current segment."))
         await asyncio.wait_for(tm._punctuated_transcript_event.wait(), timeout=1.0)
-        assert committer._pause_generation_by_future == {}
+        assert committer._pause_by_future == {}
     finally:
         await committer.cancel(turn)
         await tm.shutdown()

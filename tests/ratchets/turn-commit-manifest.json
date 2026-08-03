@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2e2 classifies all frozen effects and records exact commit-time liveness boundaries",
+  "update_rationale": "WS1.3b adds exact pause ownership to the delayed STT provider commit boundary",
   "counts": {
     "categories": {
       "activity_commit": 5,
@@ -15,7 +15,8 @@
       "admission": 3,
       "correlated_observation": 11,
       "identity": 4,
-      "identity_activity": 33,
+      "identity_activity": 32,
+      "identity_activity_pause": 1,
       "identity_phase": 1,
       "phase_latch": 1,
       "publication_scope": 6,
@@ -52,7 +53,7 @@
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tpost_await call self._turn.set\ta099c6d4e21b147f\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tadmission",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
     "phase_latch_commit\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tsynchronous assign self._preemptive_finalized_generation\tf4fd4370a6efb2a3\t0\tphase_latch\tCloses the one-way preemptive take phase for a turn.\tphase_latch",
-    "provider_commit\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tawaited call self._start_segment_commit\t4b096326382d6c38\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
+    "provider_commit\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tawaited call self._start_segment_commit\t19096d18a7667276\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity_pause",
     "provider_commit\tsession/_stt_committer.py\tSTTCommitter.commit_now\tawaited call commit_segment\t5f142347156b93bf\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
     "provider_commit\tsession/_tts_scheduler.py\tTTSScheduler.begin_synthesis_with_bot_start\tsynchronous call self._synth.synthesize\te626179473bb88e6\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
     "provider_commit\tsession/_tts_scheduler.py\tTTSScheduler.synthesize_bypass\tawaited call self._synth.synthesize\td09712c8ab86e85b\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tsession_scope",

@@ -757,6 +757,7 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
         def __init__(self) -> None:
             super().__init__(transcript="")
             self.send_count = 0
+            self.commit_calls = 0
             self.send_busy = False
             self.send_started = asyncio.Event()
             self.release_send = asyncio.Event()
@@ -772,6 +773,7 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
                 self.send_busy = False
 
         async def commit_segment(self) -> bool:
+            self.commit_calls += 1
             if self.send_busy:
                 self.commit_raced.set()
             return False
@@ -800,6 +802,13 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
 
         stt.release_send.set()
         await processing_stop
+        pause_commit = session._stt_committer._pause_commit_task
+        assert pause_commit is not None
+        await pause_commit
+        await session._stt_committer.await_inflight_commit()
+
+        assert stt.commit_calls == 1
+        assert not stt.commit_raced.is_set()
     finally:
         stt.release_send.set()
         if processing_stop is not None and not processing_stop.done():

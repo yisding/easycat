@@ -1,4 +1,4 @@
-"""Freeze pause-generation writers, readers, and future correlation."""
+"""Freeze pause-identity owners, leases, and future correlation."""
 
 from __future__ import annotations
 
@@ -22,23 +22,37 @@ SOURCE_ROOT = REPO_ROOT / "src" / "easycat"
 MANIFEST_PATH = Path(__file__).with_name("pause-generation-manifest.json")
 
 ROLE_BY_CATEGORY = {
+    "api_capture": "borrower",
     "api_read": "borrower",
+    "epoch_bump": "pause_owner",
+    "epoch_owner": "pause_owner",
     "future_map_owner": "correlation_owner",
     "future_map_take": "correlation_owner",
     "future_map_write": "correlation_owner",
     "generation_handoff": "carrier",
     "generation_receiver": "carrier",
+    "lease_guard": "borrower",
+    "lease_handoff": "carrier",
+    "lease_receiver": "carrier",
+    "owner_capture": "pause_owner",
     "owner_read": "pause_owner",
     "owner_write": "pause_owner",
 }
 
 RATIONALE_BY_CATEGORY = {
+    "api_capture": "Borrows the exact current pause lease through TurnManager's public seam.",
     "api_read": "Borrows the current pause generation through TurnManager's public seam.",
+    "epoch_bump": "Advances pause identity at the VAD-stop linearization point.",
+    "epoch_owner": "Owns TurnManager's exact pause identity epoch.",
     "future_map_owner": "Owns future-to-pause correlation storage in STTCommitter.",
     "future_map_take": "Consumes one future's pause correlation at completion or cleanup.",
     "future_map_write": "Binds one pending STT future to its originating pause.",
     "generation_handoff": "Carries pause identity across one call boundary.",
     "generation_receiver": "Receives pause identity for a timer, provider commit, or final.",
+    "lease_guard": "Rejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_handoff": "Carries an exact pause lease across one call boundary.",
+    "lease_receiver": "Receives an exact pause lease for a timer, provider commit, or final.",
+    "owner_capture": "Captures the exact current lease from TurnManager's pause epoch.",
     "owner_read": "Reads TurnManager's private integer pause identity.",
     "owner_write": "Initializes or advances TurnManager's private pause identity.",
 }
@@ -69,42 +83,45 @@ def test_pause_generation_manifest_is_a_classified_source_bijection(
     assert manifest["counts"] == _counts(entries)
 
 
-def test_scanner_classifies_owner_carrier_and_future_map_sites(tmp_path: Path) -> None:
+def test_scanner_classifies_epoch_lease_and_future_map_sites(tmp_path: Path) -> None:
     source_root = tmp_path / "src" / "easycat"
     _write_module(
         source_root,
         "turn_manager.py",
         """
 class TurnManager:
-    def check(self, pause_generation):
-        self._pause_generation = 0
-        self._pause_generation += 1
-        return pause_generation == self._pause_generation
+    def check(self, pause):
+        self._pause_epoch = Epoch(None)
+        self._pause_epoch.bump(None)
+        current = self._pause_epoch.capture()
+        return pause.guard()
 """,
     )
     _write_module(
         source_root,
         "session/_stt_committer.py",
         """
-async def commit(self, pause_generation):
-    self._pause_generation_by_future = {}
-    self._pause_generation_by_future[future] = pause_generation
-    value = self._pause_generation_by_future.pop(future, None)
-    sink(pause_generation=value)
-    return self._turn_manager.pause_generation
+async def commit(self, pause):
+    self._pause_by_future = {}
+    self._pause_by_future[future] = pause
+    value = self._pause_by_future.pop(future, None)
+    sink(pause=value)
+    return self._turn_manager.capture_pause()
 """,
     )
 
     counts = Counter(finding.site.category for finding in scan_pause_generation(source_root))
     assert counts == {
-        "api_read": 1,
+        "api_capture": 1,
+        "epoch_bump": 1,
+        "epoch_owner": 1,
         "future_map_owner": 1,
         "future_map_take": 1,
         "future_map_write": 1,
-        "generation_handoff": 1,
-        "generation_receiver": 2,
-        "owner_read": 1,
-        "owner_write": 2,
+        "lease_guard": 1,
+        "lease_handoff": 1,
+        "lease_receiver": 2,
+        "owner_capture": 1,
     }
 
 
@@ -133,7 +150,8 @@ class TurnManager:
 
     assert before == moved
     added, removed = inventory_delta(before, changed)
-    assert added == []
+    assert len(added) == 1
+    assert added[0].category == "epoch_owner"
     assert len(removed) == 1
 
 
@@ -146,6 +164,14 @@ def test_stale_pause_race_contracts_are_present() -> None:
         REPO_ROOT / "tests" / "session" / "test_stt_committer.py": (
             "test_delayed_final_cannot_shorten_a_later_pause",
             {"committer.schedule", "stt._queue.put", "tm.on_vad_event"},
+        ),
+        REPO_ROOT / "tests" / "session" / "test_turn_runner.py": (
+            "test_vad_stop_commit_waits_for_stop_frame_stt_send",
+            {
+                "session._audio_router._process_chunk",
+                "session._stt_committer.await_inflight_commit",
+                "stt.release_send.set",
+            },
         ),
     }
     for path, (name, required_calls) in contracts.items():

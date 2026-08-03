@@ -1,4 +1,4 @@
-"""Location-free inventory of pause-generation ownership and correlation."""
+"""Location-free inventory of pause identity ownership and correlation."""
 
 from __future__ import annotations
 
@@ -107,12 +107,12 @@ def format_delta(
     sections: list[str] = []
     if added:
         sections.append(
-            "new pause-generation sites:\n  "
+            "new pause-identity sites:\n  "
             + "\n  ".join(_format_site(site, line=lines.get(site)) for site in added)
         )
     if removed:
         sections.append(
-            "removed or structurally changed pause-generation sites:\n  "
+            "removed or structurally changed pause-identity sites:\n  "
             + "\n  ".join(_format_site(site) for site in removed)
         )
     return "\n".join(sections)
@@ -175,10 +175,24 @@ class _PauseGenerationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
+        call_path = _expression_path(node.func)
+        if call_path == "self._pause_epoch.bump":
+            self._record("epoch_bump", "advance pause epoch", node)
+        elif call_path == "self._pause_epoch.capture":
+            self._record("owner_capture", "capture pause lease", node)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "capture_pause":
+            self._record("api_capture", "capture pause through public seam", node)
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "guard"
+            and _expression_path(node.func.value) == "pause"
+        ):
+            self._record("lease_guard", "guard exact pause lease", node)
         if (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "pop"
-            and _expression_path(node.func.value) == "self._pause_generation_by_future"
+            and _expression_path(node.func.value)
+            in {"self._pause_by_future", "self._pause_generation_by_future"}
         ):
             self._record("future_map_take", "pop future correlation", node)
         self.generic_visit(node)
@@ -186,6 +200,8 @@ class _PauseGenerationVisitor(ast.NodeVisitor):
     def visit_keyword(self, node: ast.keyword) -> None:
         if node.arg == "pause_generation":
             self._record("generation_handoff", "keyword pause_generation", node)
+        elif node.arg == "pause":
+            self._record("lease_handoff", "keyword pause lease", node)
         self.generic_visit(node)
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -193,6 +209,8 @@ class _PauseGenerationVisitor(ast.NodeVisitor):
         for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
             if argument.arg == "pause_generation":
                 self._record("generation_receiver", "parameter pause_generation", argument)
+            elif argument.arg == "pause":
+                self._record("lease_receiver", "parameter pause lease", argument)
         self.generic_visit(node)
         self._scope.pop()
 
@@ -200,12 +218,14 @@ class _PauseGenerationVisitor(ast.NodeVisitor):
         path = _expression_path(target)
         if path == "self._pause_generation":
             self._record("owner_write", "assign self._pause_generation", surrounding)
-        elif path == "self._pause_generation_by_future":
+        elif path == "self._pause_epoch":
+            self._record("epoch_owner", "assign pause epoch", surrounding)
+        elif path in {"self._pause_by_future", "self._pause_generation_by_future"}:
             self._record("future_map_owner", "assign future correlation map", surrounding)
-        elif (
-            isinstance(target, ast.Subscript)
-            and _expression_path(target.value) == "self._pause_generation_by_future"
-        ):
+        elif isinstance(target, ast.Subscript) and _expression_path(target.value) in {
+            "self._pause_by_future",
+            "self._pause_generation_by_future",
+        }:
             self._record("future_map_write", "store future correlation", surrounding)
 
     def _record(self, category: str, construct: str, node: ast.AST) -> None:
