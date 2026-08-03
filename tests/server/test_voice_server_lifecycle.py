@@ -40,6 +40,54 @@ def _idle_server(**kwargs: object) -> VoiceServer:
     return VoiceServer(config, session_factory=lambda _t: _FakeSession())
 
 
+async def test_cancel_ws_handler_tasks_ignores_requested_cancellation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+
+    async def wait_for_socket() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    server = _idle_server()
+    handler = asyncio.create_task(wait_for_socket(), name="test-websocket-handler")
+    server._ws_handler_tasks.add(handler)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks()
+
+    assert handler.cancelled()
+    assert "test-websocket-handler" not in caplog.text
+
+
+async def test_cancel_ws_handler_tasks_logs_unexpected_finalizer_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+
+    async def fail_during_cancellation() -> None:
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            raise RuntimeError("websocket finalizer failed")
+
+    server = _idle_server()
+    handler = asyncio.create_task(
+        fail_during_cancellation(),
+        name="test-failing-websocket-handler",
+    )
+    server._ws_handler_tasks.add(handler)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks()
+
+    assert "test-failing-websocket-handler" in caplog.text
+    assert "websocket finalizer failed" in caplog.text
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 
