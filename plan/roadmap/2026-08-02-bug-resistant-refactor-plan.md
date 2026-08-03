@@ -980,6 +980,15 @@ snapshots, and empty post-reset state. The execution registry advances from two
 to four wired bridges; OpenAI Agents, PydanticAI, and Llama Agents remain the
 three explicit pending drivers.
 
+WS3.1d3 prerequisite fix result: the OpenAI Agents history-isolation probe
+reproduced an empty-current-turn corruption: both interruption rewriting and
+post-processing scanned backward past the latest user entry and edited the
+prior assistant reply. Both reverse scans now treat that user entry as the
+current-turn boundary. Reaching it before an assistant message makes the
+rewrite a no-op, preserving both prior history and an active response-id chain;
+normal current-turn assistant rewrites retain their existing behavior. WS3.1d3
+driver wiring remains pending in the next PR.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork

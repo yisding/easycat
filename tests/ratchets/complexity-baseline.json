@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "WS3.1d2 extracts LangGraph event routing below the branch threshold",
+  "rationale": "WS3.1d3 extracts shared OpenAI Agents history rewriting below the branch threshold",
   "counts": {
-    "C901": 59,
+    "C901": 58,
     "PLR0912": 31,
     "PLR0915": 26
   },
@@ -58,7 +58,6 @@
     "src/easycat/integrations/agents/llama_agents.py\tPLR0912\tLlamaAgentsBridge._invoke_remote",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0915\tLlamaAgentsBridge._invoke_local",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0915\tLlamaAgentsBridge._invoke_remote",
-    "src/easycat/integrations/agents/openai_agents.py\tC901\tOpenAIAgentsBridge._apply_planned_mutation",
     "src/easycat/integrations/agents/openai_agents.py\tC901\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0912\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0915\tOpenAIAgentsBridge.invoke",
