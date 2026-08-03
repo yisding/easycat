@@ -33,6 +33,16 @@ from collections.abc import Awaitable, Callable, Hashable, Iterable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
+from easycat._concurrency import (
+    HardTimeoutStatus,
+    OwnedTask,
+    OwnedTaskMetadata,
+    OwnerState,
+    RuntimeSupervisor,
+    SurvivorRegistry,
+    hard_timeout,
+    start_owned,
+)
 from easycat._numeric import is_finite_number
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 
@@ -124,6 +134,8 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         *,
         manager: Any,
         max_sessions: int,
+        runtime_supervisor: RuntimeSupervisor,
+        runtime_id: str,
         session_factory: Callable[
             [ConnectionT],
             SessionT | None | Awaitable[SessionT | None],
@@ -131,9 +143,21 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         runtime_feedback: bool = False,
         capacity_reason: str = "Server is at the configured session limit",
         on_session: Callable[[SessionT], Callable[[], None] | None] | None = None,
+        survivor_capacity: int = 1,
     ) -> None:
         self.manager = manager
         self.gate: CapacityGate[int] = CapacityGate(max_sessions)
+        self._survivor_registry = SurvivorRegistry(
+            supervisor=runtime_supervisor,
+            root_id=runtime_id,
+            capacity=survivor_capacity,
+        )
+        self._listener_wait_attempt = 0
+        self._listener_wait_owner_id: str | None = None
+        self._listener_wait_owned: OwnedTask[object] | None = None
+        self._listener_wait_completed = False
+        self._listener_wait_terminal_state = OwnerState.OPEN
+        self._listener_wait_cancel_requested = False
         self._session_factory = session_factory
         self._runtime_feedback = runtime_feedback
         self._capacity_reason = capacity_reason
@@ -141,6 +165,27 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         self._sessions: dict[int, SessionT] = {}
         self._connections: dict[int, ConnectionT] = {}
         self._handler_tasks: set[asyncio.Task[object]] = set()
+
+    @property
+    def survivor_registry(self) -> SurvivorRegistry:
+        """Return the lifecycle-root registry shared by child cleanup scopes."""
+        return self._survivor_registry
+
+    @property
+    def listener_cleanup_state(self) -> OwnerState:
+        """Return whether the adopted listener cleanup is observably clean."""
+        if self._listener_wait_completed:
+            return OwnerState.CLOSED
+        if self._listener_wait_owner_id is None:
+            return self._listener_wait_terminal_state
+        return self._survivor_registry.owner_state(self._listener_wait_owner_id)
+
+    @property
+    def listener_cleanup_metadata(self) -> tuple[OwnedTaskMetadata, ...]:
+        """Return retained listener-cleanup metadata for postmortem inspection."""
+        if self._listener_wait_owner_id is None:
+            return ()
+        return self._survivor_registry.reservations(self._listener_wait_owner_id)
 
     async def handle(self, connection: ConnectionT) -> None:
         """Build and run one session, deferring teardown while draining."""
@@ -241,9 +286,9 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             self._handler_tasks,
             timeout_s=_remaining_timeout(force_deadline),
         )
-        await self._bounded_cleanup(
-            server.wait_closed(),  # type: ignore[attr-defined]
-            timeout_s=_remaining_timeout(force_deadline),
+        await self._bounded_listener_wait(
+            server.wait_closed,  # type: ignore[attr-defined]
+            deadline=force_deadline,
             label="WebSocket server handlers",
         )
         sweep_completed, sweep_result = await self._bounded_cleanup(
@@ -290,6 +335,74 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
             return False, None
         return True, future.result()
+
+    async def _bounded_listener_wait(
+        self,
+        factory: Callable[[], Awaitable[object]],
+        *,
+        deadline: float,
+        label: str,
+    ) -> tuple[bool, object | None]:
+        """Run or retry the one WS0.1b-owned listener cleanup stage."""
+        if self._listener_wait_completed:
+            return True, None
+        while True:
+            owned = self._listener_wait_owned
+            if owned is None:
+                if self._listener_wait_owner_id is None:
+                    self._listener_wait_attempt += 1
+                    self._listener_wait_terminal_state = OwnerState.OPEN
+                    self._listener_wait_owner_id = (
+                        f"{self._survivor_registry.root_id}:listener_wait_closed:"
+                        f"{self._listener_wait_attempt}"
+                    )
+
+                async def wait_closed() -> object:
+                    return await factory()
+
+                owned = await start_owned(
+                    wait_closed,
+                    registry=self._survivor_registry,
+                    owner_id=self._listener_wait_owner_id,
+                    task_name="websocket.listener_wait_closed",
+                )
+                self._listener_wait_owned = owned
+
+            try:
+                outcome = await hard_timeout(owned, deadline)
+            except asyncio.CancelledError:
+                self._listener_wait_cancel_requested = True
+                raise
+            if outcome.status is not HardTimeoutStatus.COMPLETED:
+                self._listener_wait_cancel_requested = True
+                logger.warning(
+                    "%s did not close before the force deadline (%s)",
+                    label,
+                    outcome.status.value,
+                )
+                return False, None
+
+            owner_id = self._listener_wait_owner_id
+            assert owner_id is not None
+            self._survivor_registry.close_owner(owner_id)
+            self._listener_wait_terminal_state = OwnerState.CLOSED
+            self._listener_wait_owned = None
+            self._listener_wait_owner_id = None
+            expected_cancel = self._listener_wait_cancel_requested and isinstance(
+                outcome.error,
+                asyncio.CancelledError,
+            )
+            self._listener_wait_cancel_requested = False
+            if expected_cancel:
+                # The prior hard deadline requested this cancellation. The
+                # legacy caller treated that as an incomplete cleanup rather
+                # than a listener failure, so retry the factory under a fresh
+                # owner attempt instead of changing exception policy.
+                continue
+            if outcome.error is not None:
+                raise outcome.error
+            self._listener_wait_completed = True
+            return True, owned.task.result()
 
 
 class CapacityGate(Generic[KeyT]):

@@ -17,7 +17,7 @@ from easycat import (
     create_session,
     require_env,
 )
-from easycat.server.transports import WebSocketSessionRuntime
+from easycat.server.transports import RuntimeSupervisor, WebSocketSessionRuntime
 from easycat.telephony import (
     reconstruct_public_url,
     twilio_webhook_idempotency_key,
@@ -105,6 +105,8 @@ def create_app() -> FastAPI:
     runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=max_sessions,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="twilio-scaffold-media-server",
         session_factory=build_session,
         capacity_reason="Too many active Twilio sessions",
     )

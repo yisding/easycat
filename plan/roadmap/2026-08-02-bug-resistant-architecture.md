@@ -374,6 +374,12 @@ ratchet lands, one complete `server/transports.py` caller migrates end to end.
 The other callers and legacy global stay grandfathered until their WS2.5 slice;
 the proving PR does not claim partial ledger retirement. It proves owner-drop
 anchoring, both quota levels, exception policy, cancellation, and journaling.
+The selected proving caller is `WebSocketSessionRuntime`'s
+`server.wait_closed` stage: it receives an application-runtime supervisor,
+owns a named root registry, converts the shared force deadline once, and
+retries an existing parked listener task rather than starting a concurrent
+cleanup. Its manager/connection/handler paths deliberately remain on the
+grandfathered helper and ledger in this slice.
 
 Plus a teardown-budget manifest that classifies every timeout found inside
 lifecycle-symbol closures. Lifecycle defaults centralize in

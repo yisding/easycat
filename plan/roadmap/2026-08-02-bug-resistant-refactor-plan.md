@@ -193,6 +193,17 @@ cancellation, hard timeout, never-finishing survivor, owner drop, journal
 attribution, and both quota levels. If the slice needs caller-specific escape
 hatches, revise WS0.1a before freezing it.
 
+Implementation target: the proving caller is
+`WebSocketSessionRuntime`'s `server.wait_closed` stage. Application entry
+points inject one explicit `RuntimeSupervisor`; the runtime creates one named
+root registry and exposes it for later child scopes. A timed-out or externally
+cancelled listener wait is retried through the same `OwnedTask`, so the
+listener factory is never invoked concurrently. Cooperative cancellation
+requested by the hard deadline remains an incomplete cleanup to retry, while
+independent listener exceptions retain the legacy propagate policy. The
+manager sweep, connection close, handler cancellation, `_safe_await`, and
+`_BACKGROUND_TIMEOUT_TASKS` remain unchanged and grandfathered.
+
 ### WS0.2 — teardown-budget manifest and defaults [M]
 
 Create `teardown_budgets.py` plus a checked-in manifest classifying every

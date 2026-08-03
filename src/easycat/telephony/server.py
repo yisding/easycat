@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import websockets
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
 from easycat.server.transports import WebSocketSessionRuntime
@@ -359,6 +360,8 @@ async def serve_twilio_voice_app(
     runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=config.max_sessions,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="twilio-media-server",
         session_factory=build_session,
         runtime_feedback=True,
     )

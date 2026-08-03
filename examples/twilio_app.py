@@ -40,7 +40,7 @@ from easycat import (
     create_session,
     require_env,
 )
-from easycat.server.transports import WebSocketSessionRuntime
+from easycat.server.transports import RuntimeSupervisor, WebSocketSessionRuntime
 from easycat.telephony import (
     TwilioCallSessionIndex,
     TwilioWebhookSignatureError,
@@ -105,6 +105,8 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     runtime: WebSocketSessionRuntime[ServerConnection, Session] = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=settings.max_sessions,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="twilio-example-media-server",
         session_factory=build_session,
         runtime_feedback=True,
         capacity_reason="Too many active Twilio sessions",
