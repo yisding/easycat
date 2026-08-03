@@ -55,7 +55,7 @@ migration obligations, and the owner/date for any deferred removal. A vague
 ```
 WS6.1a manifest/rubric ──→ Tier-A implementation begins
 WS0.1a ──→ WS0.1b ──→ WS0.3a ──→ WS0.3b                  [Tier A]
-WS0.2a ──→ WS0.2b                                        [Tier A]
+WS0.2a ──→ WS0.2b1 ──→ WS0.2b2 ──→ WS0.2b3 ──→ WS0.2b4 [Tier A]
 WS0 (all slices) ──→ WS1.1 ──→ WS1.2a-e + WS1.3         [Tier A]
 WS2.7a, WS3.1, WS4.1, WS5.2, WS6.1b                     [Tier A]
                   │
@@ -235,24 +235,55 @@ Acceptance: manifest/source bijection, deliberate additions fail the ratchet,
 line insertion preserves fingerprints, regeneration preserves reviewed
 classifications, and no entry has an empty classification or rationale.
 
-### WS0.2b — central lifecycle-budget defaults [M]
+### WS0.2b1 — central agent lifecycle-budget defaults [S]
 
-Create `teardown_budgets.py` and centralize the WS0.2a `lifecycle_budget`
-defaults without changing values. Configurable server deadlines retain public
-configuration but draw their defaults from this module; protocol-local bounds
-remain with their protocols, and `not_teardown` entries do not migrate.
+Create `teardown_budgets.py` and move the three concrete agent cleanup
+defaults identified by WS0.2a: post-`done` stream drain, Llama post-cancel
+await, and completed Remote Responses stream drain. Import aliases preserve
+the local semantic names and call shapes while leaving one canonical value.
+
+Acceptance: all three values and behaviors are unchanged, focused agent
+cancellation/drain tests pass, and the manifest moves the three declarations
+without changing classification totals.
+
+### WS0.2b2 — central Session lifecycle-budget defaults [M]
+
+Move the concrete Session/audio/turn cleanup defaults, including force-start
+lock and superseded-stop waits, barge-in cutoff, outbound audio drain, inline
+send cancellation grace, and application-prompt drain. Keep the configurable
+STT timeout source in `TimeoutConfig`; its lifecycle call sites consume that
+policy but do not define a second numeric default.
+
+Acceptance: Session teardown, prompt cancellation, audio drain, stalled-send,
+and barge-in behavior retain their exact values and focused regressions pass.
+
+### WS0.2b3 — central runtime and transport lifecycle-budget defaults [M]
+
+Move the concrete journal, WebRTC audio/offer, and WebTransport close/reap
+cleanup defaults. Protocol-local sends, handshakes, idle bounds, and
+acknowledgements remain with their protocols.
+
+Acceptance: close/cancel/drain behavior and values are unchanged across each
+runtime and transport, and their focused lifecycle suites pass.
+
+### WS0.2b4 — central configurable server lifecycle defaults [M]
+
+Move the remaining server lifecycle defaults and make configurable voice,
+WebSocket, WebRTC, WebTransport, and Twilio server fields draw unchanged
+defaults from `teardown_budgets.py`. Public configuration remains authoritative
+at every call site. `reap(..., timeout=None)` remains a sentinel meaning no
+default deadline, rather than inventing a concrete policy value.
 
 The 159-site inventory showed that combining discovery, classification, and
-all default migrations would exceed this plan's review-size limit. Migrate in
-review-sized domain groups if WS0.2b would otherwise touch more than roughly
-10 source files; each child slice updates the manifest in the same PR and
-preserves the WS0.2a classification counts except where its reviewed rationale
-explicitly reclassifies a site. This remains default consolidation until WS2.1
-consumes lifecycle entries as named phase/policy budgets.
+these migrations would exceed this plan's review-size limit. Each child slice
+updates the manifest in the same PR and preserves the WS0.2a classification
+totals except where its reviewed rationale explicitly reclassifies a site.
+This remains default consolidation until WS2.1 consumes lifecycle entries as
+named phase/policy budgets.
 
-Acceptance: every lifecycle default has one canonical definition, public
-configuration behavior and values are unchanged, protocol-local values remain
-local, and the WS0.2a manifest/source bijection stays green.
+Acceptance: every concrete lifecycle default has one canonical definition,
+public configuration behavior and values are unchanged, protocol-local values
+remain local, and the WS0.2a manifest/source bijection stays green.
 
 ### WS0.3a — Enforcement: structural call-site ratchets [M]
 

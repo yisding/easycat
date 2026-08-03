@@ -39,11 +39,13 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.runtime.records import ErrorInfo
+from easycat.teardown_budgets import (
+    AGENT_POST_DONE_STREAM_DRAIN_TIMEOUT_S as _POST_DONE_STREAM_DRAIN_TIMEOUT_S,
+)
 from easycat.timeouts import AgentTimeoutError
 
 logger = logging.getLogger(__name__)
 
-_POST_DONE_STREAM_DRAIN_TIMEOUT_S = 0.01
 _T = TypeVar("_T")
 
 
