@@ -39,6 +39,7 @@ from easycat.events import (
     TTSAudio,
     TTSEvent,
     TTSEventType,
+    TurnEnded,
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
@@ -1426,6 +1427,7 @@ async def test_stale_tts_settlement_preserves_successor_turn() -> None:
     state = _StreamingTtsState(
         turn=old_turn,
         identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
         token=old_turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -1455,6 +1457,7 @@ async def test_stale_tts_settlement_rejects_same_object_republication() -> None:
     state = _StreamingTtsState(
         turn=turn,
         identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
         token=turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -1469,6 +1472,55 @@ async def test_stale_tts_settlement_rejects_same_object_republication() -> None:
 
     assert session._turn is turn
     assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_stale_tts_settlement_rejects_same_state_activity_republication() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-activity-reissued", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = True
+    state.agent_output_settled.set()
+
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is turn
+    assert session._turn_manager.state is TurnManagerState.BOT_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_on_turn_ended_rejects_same_state_activity_republication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-processing-reissued", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    identity = runner._turn.capture_identity()
+    activity = session._turn_manager.capture_activity()
+    handle_end_of_speech = AsyncMock()
+    monkeypatch.setattr(runner, "handle_end_of_speech", handle_end_of_speech)
+
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    await runner.on_turn_ended(
+        TurnEnded(turn_id=turn.id),
+        identity,
+        activity,
+    )
+
+    handle_end_of_speech.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2142,6 +2194,7 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
     state = _StreamingTtsState(
         turn=turn,
         identity=session._turn_runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
         token=turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -2153,8 +2206,9 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
         *,
         is_active: object,
         lifecycle_ready: asyncio.Future[bool] | None = None,
+        activity_started: object = None,
     ) -> asyncio.Task[TTSSynthResult]:
-        _ = is_active, lifecycle_ready
+        _ = is_active, lifecycle_ready, activity_started
 
         async def _blocked_provider() -> TTSSynthResult:
             provider_started.set()

@@ -221,6 +221,21 @@ async def test_commit_now_skips_when_turn_cancelled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_commit_now_rejects_same_state_activity_republication() -> None:
+    committer, stt, _emitted, _no_turn, manager = _make_committer()
+    committer.mark_active()
+    turn = _new_turn()
+    manager._state = TurnManagerState.USER_PAUSED
+    activity = manager.capture_activity()
+
+    manager._state = TurnManagerState.USER_PAUSED
+    await committer.commit_now(turn, activity=activity)
+
+    assert stt.commit_calls == 0
+    assert turn.stt_has_uncommitted_audio is True
+
+
+@pytest.mark.asyncio
 async def test_commit_now_uncommitted_reset_when_provider_returns_false() -> None:
     committer, _stt, _emitted, _no_turn, _tm = _make_committer(
         stt=_RecordingSTT(commit_result=False)

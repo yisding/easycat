@@ -27,7 +27,7 @@ from easycat.stages.transport import TransportStage
 from easycat.stages.tts import TTSStage
 from easycat.stages.vad import VADStage
 from easycat.tts.input import TTSInput, TTSInputPolicy
-from easycat.turn_manager import TurnManager, TurnManagerConfig
+from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 from tests.session._wiring_helpers import make_wiring
 
 # ── Test doubles ─────────────────────────────────────────────
@@ -369,6 +369,7 @@ async def test_begin_synthesis_overlaps_provider_with_bot_start_handlers() -> No
     handler_started = asyncio.Event()
     release_handler = asyncio.Event()
     order: list[str] = []
+    activities = []
 
     async def _slow_bot_started(_event: BotStartedSpeaking) -> None:
         assert tts.started.is_set()
@@ -384,6 +385,7 @@ async def test_begin_synthesis_overlaps_provider_with_bot_start_handlers() -> No
             TTSInput("hello"),
             None,
             is_active=lambda: True,
+            activity_started=activities.append,
         )
     )
     await asyncio.wait_for(tts.started.wait(), timeout=0.5)
@@ -401,6 +403,9 @@ async def test_begin_synthesis_overlaps_provider_with_bot_start_handlers() -> No
 
     assert result.audio_produced is True
     assert order == ["bot_started", "tts_audio"]
+    assert len(activities) == 1
+    assert activities[0].is_current()
+    assert activities[0].value is TurnManagerState.BOT_SPEAKING
 
 
 @pytest.mark.asyncio
@@ -741,6 +746,33 @@ async def test_finalize_speaking_turn_rejects_same_object_republication() -> Non
     assert await finalizer is False
     assert ctx["current_turn"]() is turn
     assert turn_manager.state.value == "bot_speaking"
+
+
+@pytest.mark.asyncio
+async def test_finalize_speaking_turn_rejects_same_state_activity_republication() -> None:
+    """A BOT_SPEAKING re-publication must fence the prior finalizer lease."""
+    drain_entered = asyncio.Event()
+    release_drain = asyncio.Event()
+
+    async def _drain() -> bool:
+        drain_entered.set()
+        await release_drain.wait()
+        return False
+
+    scheduler, ctx = _build_scheduler(tts=_RecordingTTS(), drain_session_actions=_drain)
+    turn = TurnContext("activity-reissued", CancelToken())
+    ctx["set_current_turn"](turn)
+    turn_manager = ctx["turn_manager"]
+    await turn_manager.bot_started_speaking()
+
+    finalizer = asyncio.create_task(scheduler.finalize_speaking_turn(turn))
+    await drain_entered.wait()
+    turn_manager._state = TurnManagerState.BOT_SPEAKING
+    release_drain.set()
+
+    assert await finalizer is False
+    assert ctx["current_turn"]() is turn
+    assert turn_manager.state is TurnManagerState.BOT_SPEAKING
 
 
 @pytest.mark.asyncio

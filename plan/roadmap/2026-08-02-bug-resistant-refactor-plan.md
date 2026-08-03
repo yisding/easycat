@@ -581,6 +581,18 @@ the nine activity checks remain deliberately frozen for WS1.2d2b, alongside
 the independent cancellation, token-owner, null-object, and phase-latch
 semantics.
 
+WS1.2d2b migration result: delayed segment commits re-guard the captured pause
+activity immediately before provider dispatch; `TurnEnded` captures processing
+activity beside identity and carries both through end-of-speech; and the
+manager returns the exact bot-speaking/idle leases published by its playback
+transitions so TTS admission and finalization never reconstruct state from a
+live read. Same-state pause, processing, and bot-speaking republication
+contracts prove those bumps fence stale commits and settlement independently of
+identity. The refreshed 46-site predicate manifest has zero manager-state,
+zero identity-pointer, and zero legacy identity-generation liveness reads; only
+the explicitly independent cancellation, token-owner, null-object, and phase-
+latch predicates remain.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

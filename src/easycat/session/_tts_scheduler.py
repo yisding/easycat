@@ -40,7 +40,7 @@ from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.tts import TTSStage
 from easycat.timeouts import TimeoutConfig
 from easycat.tts.input import TTSInput, resolve_tts_input_policy, strip_ssml_tags
-from easycat.turn_manager import TurnManager
+from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
     from easycat._epoch import Lease
@@ -188,6 +188,7 @@ class TTSScheduler:
         turn: TurnContext | None,
         *,
         identity: Lease[TurnContext | None] | None = None,
+        activity: Lease[TurnManagerState] | None = None,
     ) -> bool:
         """Run the end-of-turn drain → stop → drain → clear sequence.
 
@@ -204,35 +205,52 @@ class TTSScheduler:
         audio is drained afterwards so the router can still record sent
         bytes and emit playback marks.
 
-        The turn pointer is only cleared while the identity lease captured
-        for this finalizer remains current. A turn that was replaced
-        (barge-in) or re-published under the same object identity must not be
-        cleared here.
+        The turn pointer is only cleared while the captured identity remains
+        current and the exact bot-speaking transition still owns the manager
+        activity. Replacement or same-object/state republication fences the
+        stale finalizer.
 
         Returns ``True`` if a drained session action signalled that the
         session should stop.
         """
         identity = identity or self._capture_identity()
+        activity = activity or self._turn_manager.capture_activity()
         should_stop = await self._drain_session_actions()
+        settled_activity: Lease[TurnManagerState] | None = None
         try:
-            if not self._turn_is_current(turn, identity):
+            if not self._turn_is_current(turn, identity) or not self._activity_is_current(
+                activity, TurnManagerState.BOT_SPEAKING
+            ):
                 return should_stop
             if should_stop:
                 await self._audio_router.await_drain()
-                if self._turn_is_current(turn, identity):
-                    await self._turn_manager.bot_stopped_speaking()
+                if self._turn_is_current(turn, identity) and self._activity_is_current(
+                    activity, TurnManagerState.BOT_SPEAKING
+                ):
+                    settled_activity = await self._turn_manager.bot_stopped_speaking()
             else:
-                await self._turn_manager.bot_stopped_speaking()
-                if self._turn_is_current(turn, identity):
+                settled_activity = await self._turn_manager.bot_stopped_speaking()
+                if (
+                    self._turn_is_current(turn, identity)
+                    and settled_activity is not None
+                    and self._activity_is_current(settled_activity, TurnManagerState.IDLE)
+                ):
                     await self._audio_router.await_drain()
         finally:
             actions = self._session_actions()
             if actions is not None:
                 actions.clear_no_interrupt()
-        turn_still_current = self._turn_is_current(turn, identity)
+        turn_still_current = (
+            self._turn_is_current(turn, identity)
+            and settled_activity is not None
+            and self._activity_is_current(settled_activity, TurnManagerState.IDLE)
+        )
         if turn_still_current:
+            assert settled_activity is not None
             await self._audio_router.flush_trailing_playback_mark(turn)
-            turn_still_current = self._turn_is_current(turn, identity)
+            turn_still_current = self._turn_is_current(
+                turn, identity
+            ) and self._activity_is_current(settled_activity, TurnManagerState.IDLE)
             if turn_still_current:
                 self._clear_turn()
         return should_stop
@@ -244,6 +262,14 @@ class TTSScheduler:
     ) -> bool:
         """Whether a finalizer's captured identity still owns ``turn``."""
         return identity.value is turn and identity.guard()
+
+    @staticmethod
+    def _activity_is_current(
+        activity: Lease[TurnManagerState],
+        state: TurnManagerState,
+    ) -> bool:
+        """Whether a finalizer still owns the expected manager activity."""
+        return activity.value is state and activity.guard()
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.
@@ -260,6 +286,7 @@ class TTSScheduler:
         *,
         is_active: Callable[[], bool] | None,
         lifecycle_ready: asyncio.Future[bool] | None = None,
+        activity_started: Callable[[Lease[TurnManagerState]], None] | None = None,
     ) -> asyncio.Task[TTSSynthResult]:
         """Start provider work while dispatching ``BotStartedSpeaking``.
 
@@ -292,7 +319,9 @@ class TTSScheduler:
                     barrier.set()
                     await asyncio.gather(task, return_exceptions=True)
                     return task
-            await self._turn_manager.bot_started_speaking()
+            activity = await self._turn_manager.bot_started_speaking()
+            if activity is not None and activity_started is not None:
+                activity_started(activity)
         except BaseException:
             task.cancel()
             barrier.set()

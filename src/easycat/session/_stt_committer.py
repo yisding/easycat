@@ -47,6 +47,7 @@ from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_na
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._epoch import Lease
     from easycat._turn_context import TurnContext
     from easycat.session._wiring import SessionWiringContext
     from easycat.turn_manager import TurnManager
@@ -223,11 +224,13 @@ class STTCommitter:
     async def _commit_segment_after(self, delay_s: float, turn: TurnContext | None) -> None:
         if delay_s > 0:
             await asyncio.sleep(delay_s)
-        if self._turn_manager.state != TurnManagerState.USER_PAUSED:
+        activity = self._turn_manager.capture_activity()
+        if not self._activity_is_current(activity, TurnManagerState.USER_PAUSED):
             return
         await self._start_segment_commit(
             turn=turn,
             pause_generation=self._turn_manager.pause_generation,
+            activity=activity,
         )
 
     async def _start_segment_commit(
@@ -235,6 +238,7 @@ class STTCommitter:
         turn: TurnContext | None = None,
         *,
         pause_generation: int | None = None,
+        activity: Lease[TurnManagerState] | None = None,
     ) -> None:
         if (
             turn is None
@@ -242,12 +246,20 @@ class STTCommitter:
             or turn.cancel_token.is_cancelled
             or not self._active
             or not turn.stt_has_uncommitted_audio
+            or (
+                activity is not None
+                and not self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+            )
         ):
             return
         if self._segment_commit_task is not None and not self._segment_commit_task.done():
             return
         self._segment_commit_task = self._runtime_scope.create_journaled_task(
-            self.commit_now(turn=turn, pause_generation=pause_generation),
+            self.commit_now(
+                turn=turn,
+                pause_generation=pause_generation,
+                activity=activity,
+            ),
             name="stt_segment_commit",
             journal_sink=self._journal_sink,
             turn_id=turn.id,
@@ -259,6 +271,7 @@ class STTCommitter:
         turn: TurnContext | None,
         *,
         pause_generation: int | None = None,
+        activity: Lease[TurnManagerState] | None = None,
     ) -> None:
         owner_task = asyncio.current_task()
         commit_segment = getattr(self._stt_getter(), "commit_segment", None)
@@ -268,6 +281,10 @@ class STTCommitter:
             or not callable(commit_segment)
             or turn.cancel_token.is_cancelled
             or not turn.stt_has_uncommitted_audio
+            or (
+                activity is not None
+                and not self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+            )
         ):
             return
 
@@ -320,6 +337,14 @@ class STTCommitter:
                     future.set_result("")
             if self._segment_commit_task is owner_task:
                 self._segment_commit_task = None
+
+    @staticmethod
+    def _activity_is_current(
+        activity: Lease[TurnManagerState],
+        state: TurnManagerState,
+    ) -> bool:
+        """Whether a delayed segment commit still owns the pause activity."""
+        return activity.value is state and activity.guard()
 
     async def await_pending(self, turn: TurnContext | None) -> bool:
         if turn is None or turn is self._no_turn:

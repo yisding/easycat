@@ -229,9 +229,10 @@ async def test_easycat_timed_span_covers_end_of_speech_transition(
         turn=None,
         *,
         identity=None,
+        activity=None,
     ) -> None:
         transcripts.append(turn.transcript_text if turn is not None else "")
-        await original(self, turn=turn, identity=identity)
+        await original(self, turn=turn, identity=identity, activity=activity)
 
     monkeypatch.setattr(TurnRunner, "handle_end_of_speech", _spy)
 

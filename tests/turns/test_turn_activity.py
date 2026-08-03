@@ -56,9 +56,12 @@ async def test_bot_stopped_idle_transition_invalidates_bot_activity() -> None:
     manager._state = TurnManagerState.BOT_SPEAKING
     speaking = manager.capture_activity()
 
-    await manager.bot_stopped_speaking()
+    published_idle = await manager.bot_stopped_speaking()
 
     idle = manager.capture_activity()
+    assert published_idle is not None
+    assert published_idle.is_current()
+    assert published_idle.value is TurnManagerState.IDLE
     assert not speaking.is_current()
     assert idle.is_current()
     assert idle.value is manager.state is TurnManagerState.IDLE

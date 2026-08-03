@@ -887,36 +887,39 @@ class TurnManager:
 
     # ── Bot speaking lifecycle ──────────────────────────────────
 
-    async def bot_started_speaking(self) -> None:
-        """Called when TTS playback begins."""
+    async def bot_started_speaking(self) -> Lease[TurnManagerState] | None:
+        """Enter bot playback and return the exact published activity lease."""
         if self._state in (TurnManagerState.USER_SPEAKING, TurnManagerState.USER_PAUSED):
             logger.warning(
                 "bot_started_speaking called in unexpected state %s, ignoring",
                 self._state.value,
             )
-            return
+            return None
         # Defensive cleanup: there should be no pending silence timer once a
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
         self._cancel_silence_timer()
-        self._transition(
+        activity = self._transition(
             TurnManagerState.BOT_SPEAKING,
             reason="bot_started",
         )
         await self._event_bus.emit(
             BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
         )
+        return activity
 
-    async def bot_stopped_speaking(self) -> None:
-        """Called when TTS playback completes."""
+    async def bot_stopped_speaking(self) -> Lease[TurnManagerState] | None:
+        """Leave bot playback and return the exact published activity lease."""
         if self._state == TurnManagerState.BOT_SPEAKING:
-            self._transition(
+            activity = self._transition(
                 TurnManagerState.IDLE,
                 reason="bot_done",
             )
             await self._event_bus.emit(
                 BotStoppedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
             )
+            return activity
+        return None
 
     # ── State management ────────────────────────────────────────
 

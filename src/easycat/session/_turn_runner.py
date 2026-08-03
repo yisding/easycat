@@ -113,6 +113,7 @@ class _StreamingTtsState:
 
     turn: TurnContext
     identity: Lease[TurnContext | None]
+    activity: Lease[TurnManagerState]
     token: CancelToken | None
     queue: asyncio.Queue[TTSInput | None]
     #: Released after first-payload lifecycle dispatch (or a no-audio terminal
@@ -459,9 +460,10 @@ class TurnRunner:
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
         identity = self._turn.capture_identity()
+        activity = self._turn_manager.capture_activity()
         turn_token = bind_turn(event.turn_id)
         try:
-            turn_ended = self.on_turn_ended(event, identity)
+            turn_ended = self.on_turn_ended(event, identity, activity)
             if self._journal_enabled:
                 new_task = self._runtime_scope.create_journaled_task(
                     turn_ended,
@@ -480,20 +482,25 @@ class TurnRunner:
         self,
         event: TurnEnded,
         identity: Lease[TurnContext | None],
+        activity: Lease[TurnManagerState],
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
         turn_token = bind_turn(event.turn_id)
         try:
-            if not identity.guard():
+            if not identity.guard() or not self._activity_is_current(
+                activity, TurnManagerState.PROCESSING
+            ):
                 return
             turn = identity.value
             if turn and turn.cancel_token.is_cancelled:
                 return
-            if self._turn_manager.state != TurnManagerState.PROCESSING:
-                return
             if turn:
                 turn.end_time = event.timestamp
-            await self.handle_end_of_speech(turn=turn, identity=identity)
+            await self.handle_end_of_speech(
+                turn=turn,
+                identity=identity,
+                activity=activity,
+            )
         finally:
             reset_turn(turn_token)
 
@@ -504,6 +511,7 @@ class TurnRunner:
         turn: TurnContext | None = None,
         *,
         identity: Lease[TurnContext | None] | None = None,
+        activity: Lease[TurnManagerState] | None = None,
     ) -> None:
         """Finalize STT, run the agent, synthesize TTS.
 
@@ -511,6 +519,7 @@ class TurnRunner:
         compatibility; internal callers always pass it explicitly.
         """
         identity = identity or self._turn.capture_identity()
+        activity = activity or self._turn_manager.capture_activity()
         if turn is None:
             turn = identity.value
         token = turn.cancel_token if turn else None
@@ -529,7 +538,7 @@ class TurnRunner:
 
         if not transcript or (token and token.is_cancelled):
             await self.cancel_preemptive_generation()
-            if self._identity_owns_turn(identity, turn):
+            if self._identity_owns_turn(identity, turn) and activity.guard():
                 self._reset_turn_state()
             if stt_close_task is not None:
                 await asyncio.shield(stt_close_task)
@@ -547,7 +556,7 @@ class TurnRunner:
             # during it, cancelling/replacing this turn. Never fall through to the
             # confirmed invocation for an abandoned transcript: even a cancelled
             # AgentRunner records its user message before it observes the token.
-            if not self._is_active_voice_turn(turn, token, identity):
+            if not self._is_active_voice_turn(turn, token, identity, activity):
                 return
             await self.run_streaming_agent(
                 transcript,
@@ -555,6 +564,7 @@ class TurnRunner:
                 turn=turn,
                 prepared_response=prepared_response,
                 identity=identity,
+                activity=activity,
             )
         finally:
             if stt_close_task is not None:
@@ -601,12 +611,14 @@ class TurnRunner:
         turn: TurnContext | None,
         token: CancelToken | None,
         identity: Lease[TurnContext | None],
+        activity: Lease[TurnManagerState],
     ) -> bool:
         """Whether a post-await voice turn still owns its captured identity."""
         return bool(
             turn is not None
             and not (token and token.is_cancelled)
             and self._identity_owns_turn(identity, turn)
+            and activity.guard()
         )
 
     @staticmethod
@@ -616,6 +628,14 @@ class TurnRunner:
     ) -> bool:
         """Guard one atomically captured identity against its turn payload."""
         return identity.value is turn and identity.guard()
+
+    @staticmethod
+    def _activity_is_current(
+        activity: Lease[TurnManagerState],
+        state: TurnManagerState,
+    ) -> bool:
+        """Guard one atomically captured manager activity and expected state."""
+        return activity.value is state and activity.guard()
 
     async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
@@ -760,6 +780,7 @@ class TurnRunner:
         *,
         turn: TurnContext | None = None,
         identity: Lease[TurnContext | None] | None = None,
+        activity: Lease[TurnManagerState] | None = None,
         prepared_response: PreparedAgentResponse | None = None,
         system_prefix_override: str | None = None,
         input_role: Literal["system", "user"] = "user",
@@ -774,12 +795,14 @@ class TurnRunner:
         ``_record_streaming_interruption`` (barge-in accounting).
         """
         identity = identity or self._turn.capture_identity()
+        activity = activity or self._turn_manager.capture_activity()
         if turn is None:
             turn = identity.value
         assert turn is not None
         st = _StreamingTtsState(
             turn=turn,
             identity=identity,
+            activity=activity,
             token=token,
             # Bounded so a fast agent against a slow/stalled TTS consumer
             # applies natural backpressure via consume_agent_stream's awaited
@@ -880,9 +903,11 @@ class TurnRunner:
         self._record_voice_total_latency(turn)
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
+        current_activity = self._turn_manager.capture_activity()
         if (
             self._identity_owns_turn(st.identity, turn)
-            and self._turn_manager.state != TurnManagerState.IDLE
+            and current_activity.guard()
+            and current_activity.value is not TurnManagerState.IDLE
         ):
             self._reset_turn_state()
         return accumulated_text
@@ -903,7 +928,7 @@ class TurnRunner:
             or (st.token and st.token.is_cancelled)
             or self._tts.is_playback_suppressed
             or not self._identity_owns_turn(st.identity, st.turn)
-            or self._turn_manager.state != TurnManagerState.PROCESSING
+            or not self._activity_is_current(st.activity, TurnManagerState.PROCESSING)
         ):
             return
         await self._speak_agent_failure_fallback(st, error)
@@ -1050,7 +1075,9 @@ class TurnRunner:
                         if self._is_gated()
                         else lambda: (
                             not self._tts.is_playback_suppressed
-                            and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                            and self._activity_is_current(
+                                st.activity, TurnManagerState.BOT_SPEAKING
+                            )
                         )
                     ),
                 )
@@ -1088,13 +1115,14 @@ class TurnRunner:
             st.token,
             is_active=lambda: (
                 not self._tts.is_playback_suppressed
-                and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                and self._activity_is_current(st.activity, TurnManagerState.BOT_SPEAKING)
             ),
             lifecycle_ready=lifecycle_ready,
+            activity_started=lambda activity: setattr(st, "activity", activity),
         )
         if lifecycle_started is not None:
             lifecycle_started.set()
-        st.playback_started = self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+        st.playback_started = self._activity_is_current(st.activity, TurnManagerState.BOT_SPEAKING)
         return await self._await_owned_first_synthesis(task)
 
     @staticmethod
@@ -1118,12 +1146,15 @@ class TurnRunner:
         # Cancellation can unwind this old consumer while barge-in has already
         # installed a successor turn. Never finalize or reset shared turn state
         # on behalf of a stale generation.
-        if not self._identity_owns_turn(st.identity, st.turn):
+        if not self._identity_owns_turn(st.identity, st.turn) or not st.activity.guard():
             return
-        if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+        if st.synth_started and self._activity_is_current(
+            st.activity, TurnManagerState.BOT_SPEAKING
+        ):
             st.should_stop = await self._tts.finalize_speaking_turn(
                 st.turn,
                 identity=st.identity,
+                activity=st.activity,
             )
         elif st.synth_started and not st.playback_started:
             if st.gated:
@@ -1419,7 +1450,8 @@ class TurnRunner:
             await self.cancel_application_prompt()
             if not admit():
                 raise RuntimeError("Session is stopping")
-            if self._turn_manager.state is not TurnManagerState.IDLE:
+            activity = self._turn_manager.capture_activity()
+            if activity.guard() and activity.value is not TurnManagerState.IDLE:
                 # VAD/PTT can acquire turn ownership after Session.prompt_agent()
                 # performs its first cancellation. Re-cancel at the actual
                 # admission point, then reserve the application turn without
@@ -1541,6 +1573,7 @@ class TurnRunner:
                 token,
                 turn=turn,
                 identity=publication.identity,
+                activity=publication.activity,
                 system_prefix_override=system_prefix,
                 input_role=role,
             )
