@@ -1208,23 +1208,31 @@ class TurnRunner:
         return st.activity.guard() or self._adopt_gated_playback_activity(st)
 
     def _adopt_gated_playback_activity(self, st: _StreamingTtsState) -> bool:
-        """Follow the BOT_SPEAKING transition published by the gate's replay.
+        """Claim the playback activity the gate's replay published for this turn.
 
         A gated first payload is synthesized into the classification buffer, so
         ``begin_synthesis_with_bot_start`` never runs for it and no
         ``activity_started`` callback refreshes ``st.activity``. Playback for
         the *same* turn starts later, when the application flushes the gate
-        through ``Session.replay_gated_audio`` and ``AudioRouter.gated_replay``
-        publishes BOT_SPEAKING. The caller has already guarded identity, so
-        that publication belongs to this turn and this streaming state must
-        follow it instead of fencing itself off from its own playback.
+        through ``Session.replay_gated_audio``.
+
+        Polling the manager cannot recover that publication: the replay's
+        BOT_SPEAKING → IDLE window closes as soon as the queue drains, which a
+        short replay can do before this turn reaches its next commit boundary.
+        AudioRouter therefore retains every activity it published on the
+        replay's behalf, and the turn claims the current one.
+
+        ``_streaming_turn_is_current`` calls this only after its own identity
+        guard passed and ``st.activity`` went stale, so a retained lease that
+        still guards is necessarily this turn's own newer publication — a
+        superseded generation can never become current again.
         """
-        if not st.gated or st.gated_playback_adopted:
+        if not st.gated:
             return False
-        activity = self._turn_manager.capture_activity()
-        if not self._activity_is_current(activity, TurnManagerState.BOT_SPEAKING):
+        published = self._audio.gated_playback_activity()
+        if published is None or not published.guard():
             return False
-        st.activity = activity
+        st.activity = published
         st.gated_playback_adopted = True
         return True
 

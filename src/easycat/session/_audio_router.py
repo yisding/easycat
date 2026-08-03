@@ -70,6 +70,7 @@ from easycat.teardown_budgets import (
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._epoch import Lease
     from easycat._turn_context import TurnContext
     from easycat.session._wiring import SessionWiringContext
 
@@ -250,6 +251,11 @@ class AudioRouter:
 
         # Gated replay
         self._replay_chunks_pending: int = 0
+        # The most recent manager activity this router published on behalf of a
+        # gated replay. The streaming turn that produced the buffered audio is
+        # suspended elsewhere while this happens, so it cannot capture the
+        # transition itself; it claims this lease instead.
+        self._gated_playback_activity: Lease[TurnManagerState] | None = None
 
         # Outbound send-failure streak.  A transient ``send_audio`` failure
         # is expected to be swallowed (a turn must still complete after one
@@ -565,6 +571,23 @@ class AudioRouter:
     def reset_replay_chunks(self) -> None:
         """Zero the gated-replay pending counter (Session calls this on turn reset)."""
         self._replay_chunks_pending = 0
+        self._gated_playback_activity = None
+
+    def _record_gated_playback_activity(self, activity: Lease[TurnManagerState] | None) -> None:
+        """Retain a playback transition this router published for a gated turn."""
+        if activity is not None:
+            self._gated_playback_activity = activity
+
+    def gated_playback_activity(self) -> Lease[TurnManagerState] | None:
+        """Return the newest playback activity published for the gated replay.
+
+        The gated turn's streaming state captured its activity before the
+        application flushed the classification gate, so it cannot observe the
+        replay's BOT_SPEAKING → IDLE window by polling: a short replay can
+        drain before the turn reaches its next commit boundary. Handing the
+        published lease over keeps the transfer exact instead of racy.
+        """
+        return self._gated_playback_activity
 
     def discard_pending_capture_audio(self) -> None:
         """Discard raw far-end frames queued before capture became allowed."""
@@ -590,7 +613,9 @@ class AudioRouter:
         if chunks:
             self._replay_chunks_pending += len(chunks)
             if not already_replaying:
-                await self._turn_manager.bot_started_speaking()
+                self._record_gated_playback_activity(
+                    await self._turn_manager.bot_started_speaking()
+                )
             for chunk in chunks:
                 # Tag each replay chunk so the drain loop only decrements
                 # ``_replay_chunks_pending`` (and only fires
@@ -1047,7 +1072,7 @@ class AudioRouter:
             self._replay_chunks_pending = 0
             replay_pending_finished = True
         if replay_pending_finished and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-            await self._turn_manager.bot_stopped_speaking()
+            self._record_gated_playback_activity(await self._turn_manager.bot_stopped_speaking())
 
     async def flush_trailing_playback_mark(self, turn: TurnContext | None = None) -> None:
         """Emit a playback mark for queued tail bytes that missed the throttle interval."""
