@@ -262,7 +262,11 @@ class _RaceWebSocketTransport(WebSocketTransport):
         self.release_old_receive = asyncio.Event()
         self.release_new_receive = asyncio.Event()
 
-    async def _receive_loop(self, ws: object) -> None:
+    async def _receive_loop(
+        self,
+        ws: object,
+        _connection_generation: int | None = None,
+    ) -> None:
         if ws is self.old_ws:
             self.old_receive_entered.set()
             await self.release_old_receive.wait()
