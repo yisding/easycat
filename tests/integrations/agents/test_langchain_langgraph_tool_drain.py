@@ -13,7 +13,7 @@ from easycat.integrations.agents.langchain import LangChainBridge
 from easycat.integrations.agents.langgraph import LangGraphBridge
 from easycat.testing import RecordingAgentRecorder
 
-from ._langchain_bridge_support import _MockAIMessageChunk
+from ._langchain_bridge_support import _content_of_history_item, _MockAIMessageChunk
 from ._langgraph_bridge_support import (
     _content,
     _MockCompiledGraph,
@@ -130,10 +130,10 @@ async def test_langchain_cancel_drains_pending_tool_result_before_done() -> None
     assert kinds == ["text_delta", "tool_started", "tool_result", "done"]
     assert recorder.tool_phases() == ["start", "result"]
     assert events.closed
-    assert bridge._message_history[-1]["content"] == delivered
+    assert _content_of_history_item(bridge._message_history[-1]) == delivered
     bridge.apply_interruption(delivered, CancellationMode.IMMEDIATE_STOP)
-    assert bridge._message_history[1]["content"] == "prior answer"
-    assert bridge._message_history[-1]["content"] == delivered + "..."
+    assert _content_of_history_item(bridge._message_history[1]) == "prior answer"
+    assert _content_of_history_item(bridge._message_history[-1]) == delivered + "..."
 
 
 @pytest.mark.asyncio
