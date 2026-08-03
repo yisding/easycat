@@ -1001,6 +1001,20 @@ metadata as transient state. Every row proves JSON-safe snapshots and empty
 post-reset state. The execution registry advances to five wired bridges and
 two pending drivers: PydanticAI and Llama Agents.
 
+WS3.1d4 result: a credential-free PydanticAI `agent.iter()` driver now runs all
+five required scenarios on every PR. Controlled `ModelRequestNode` and
+`CallToolsNode` streams inject an unknown future event before valid text, gate
+a function result across cancellation while suppressing later text, expose
+exact inner context close state, and snapshot SDK-shaped current-turn messages
+on consumer close. The recorder row closes with a tool pending; the history row
+cancels after the current user message and exercises PydanticAI's existing
+user-boundary guard without touching the prior response. Per-test fake message
+modules keep the driver deterministic without the optional package, while the
+real bridge's dynamic message imports and full `agent.iter()` choreography are
+still exercised. Every row proves balanced cursors, zero live run/stream state,
+JSON-safe snapshots, and empty post-reset history. The execution registry
+advances to six wired bridges with only Llama Agents pending.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork

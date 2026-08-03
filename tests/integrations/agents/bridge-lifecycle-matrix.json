@@ -54,8 +54,8 @@
   },
   "driver_execution": {
     "counts": {
-      "pending": 2,
-      "wired": 5
+      "pending": 1,
+      "wired": 6
     },
     "bridges": {
       "generic_workflow": {
@@ -107,9 +107,15 @@
         ]
       },
       "pydantic_ai": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_pydantic_ai.py::TestPydanticAIBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "remote_responses_api": {
         "status": "wired",
