@@ -52,6 +52,60 @@
     "reset_isolation": "reset() clears state introduced by the scenario",
     "snapshot_json_safe": "snapshot_state() remains JSON-serializable after the scenario"
   },
+  "driver_execution": {
+    "counts": {
+      "pending": 5,
+      "wired": 2
+    },
+    "bridges": {
+      "generic_workflow": {
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_credential_free.py::TestGenericWorkflowBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain"
+        ]
+      },
+      "langchain": {
+        "status": "pending",
+        "suite_node": null,
+        "scenarios": []
+      },
+      "langgraph": {
+        "status": "pending",
+        "suite_node": null,
+        "scenarios": []
+      },
+      "llama_agents": {
+        "status": "pending",
+        "suite_node": null,
+        "scenarios": []
+      },
+      "openai_agents": {
+        "status": "pending",
+        "suite_node": null,
+        "scenarios": []
+      },
+      "pydantic_ai": {
+        "status": "pending",
+        "suite_node": null,
+        "scenarios": []
+      },
+      "remote_responses_api": {
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_credential_free.py::TestRemoteResponsesAPIBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
+      }
+    }
+  },
   "counts": {
     "applicability": {
       "not_applicable": 2,

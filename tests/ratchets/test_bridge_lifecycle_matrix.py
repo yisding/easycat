@@ -79,6 +79,25 @@ def test_bridge_lifecycle_matrix_is_a_complete_classified_cross_product() -> Non
         "coverage": dict(sorted(coverage.items())),
     }
 
+    execution = manifest["driver_execution"]
+    assert set(execution["bridges"]) == BRIDGES
+    statuses: Counter[str] = Counter()
+    for bridge, driver in execution["bridges"].items():
+        required = {
+            scenario
+            for scenario, cell in cells[bridge].items()
+            if cell["applicability"] == "required"
+        }
+        assert driver["status"] in {"pending", "wired"}, bridge
+        if driver["status"] == "wired":
+            assert set(driver["scenarios"]) == required, bridge
+            _assert_suite_exists(driver["suite_node"])
+        else:
+            assert driver["scenarios"] == [], bridge
+            assert driver["suite_node"] is None, bridge
+        statuses[driver["status"]] += 1
+    assert execution["counts"] == dict(sorted(statuses.items()))
+
 
 def _load_manifest() -> dict[str, Any]:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -112,3 +131,19 @@ def _assert_test_exists(node_id: str) -> None:
                 f"evidence leaf is not a test: {node_id}"
             )
             assert node.name.startswith("test_"), f"evidence leaf is not a test: {node_id}"
+
+
+def _assert_suite_exists(node_id: str) -> None:
+    parts = node_id.split("::")
+    assert len(parts) == 2, f"invalid lifecycle suite node id: {node_id}"
+    path = REPO_ROOT / parts[0]
+    assert path.is_relative_to(REPO_ROOT / "tests"), f"suite escapes tests/: {node_id}"
+    assert path.is_file(), f"missing lifecycle suite file: {node_id}"
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    suite = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == parts[1]),
+        None,
+    )
+    assert suite is not None, f"missing lifecycle suite class: {node_id}"
+    assert suite.name.startswith("Test"), f"lifecycle suite is not collected: {node_id}"

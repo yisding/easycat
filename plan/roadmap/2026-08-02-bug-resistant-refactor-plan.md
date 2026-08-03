@@ -889,6 +889,13 @@ Deliver WS3.1 as four one-concern PRs:
 - **d. Built-in capability drivers.** Wire each applicable built-in cell,
   close every gap in (a), and produce the required-extras or exact-candidate-
   SHA nightly evidence. Bridge defects discovered here remain separate PRs.
+  Deliver this as framework-bounded child slices: **d1** Generic Workflow plus
+  Remote Responses and the matrix-to-suite binding; **d2** the
+  LangChain/LangGraph event-stream family; **d3** OpenAI Agents; **d4**
+  PydanticAI; **d5** Llama Agents; and **d6** the zero-pending matrix ratchet
+  plus exact-candidate-SHA extras artifact. Each child updates the same
+  execution registry, and a production bridge fix interrupts the sequence as
+  its own PR.
 
 WS3.1a inventory result: the checked-in 7-by-5 matrix freezes 35 cells. Thirty-
 three are required and two are not applicable: generic workflows have no
@@ -926,6 +933,23 @@ shipped factories satisfy the rows. The five optional-SDK classes remain the
 WS3.1d extras-matrix responsibility; when the extras are absent they skip
 explicitly under `integration_external`. No built-in bridge implementation or
 public import was changed.
+
+WS3.1d1 result: the execution registry is now a second, progress-bearing layer
+of the checked-in matrix. It derives each wired suite's scenario set from the
+same required/not-applicable cells, verifies the pytest suite class exists, and
+keeps all unwired bridges explicitly `pending`; the discovery-time
+`coverage` counts remain preserved as the audit baseline. Generic Workflow's
+four applicable rows and Remote Responses' five rows are wired, leaving five
+bridge drivers pending. The shared tool observation now splits recorder phases
+before and after cancellation, so a deep generic workflow can prove a gated
+tool result drained even though its portable stream exposes text rather than
+`tool_*` events. History isolation compares the normalized prior-turn
+projection, allowing a framework to retain current user input without changing
+the prior assistant message. Controlled workflow and SSE innermost streams
+prove exact close propagation, balanced cursors, purged transient state,
+delivered-text history, unknown-event tolerance for Responses, and reset/
+snapshot postconditions. Generic's sole skipped row is the matrix-declared
+unknown-event non-applicability; no required row skips.
 
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 

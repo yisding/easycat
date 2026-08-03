@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol, TypeVar
+from typing import Any, ClassVar, Literal, Protocol, TypeVar
 
 import pytest
 
@@ -25,6 +25,22 @@ from easycat.integrations.agents.base import AgentBridgeEvent, FrameworkStateSna
 from easycat.testing.contracts import ContractSuite
 
 _ObservationT = TypeVar("_ObservationT")
+BridgeLifecycleScenario = Literal[
+    "interruption_prior_turn_isolation",
+    "recorder_transient_cleanup",
+    "stream_close_cleanup",
+    "tool_inflight_cancellation_drain",
+    "unknown_event_tolerance",
+]
+ALL_BRIDGE_LIFECYCLE_SCENARIOS: frozenset[BridgeLifecycleScenario] = frozenset(
+    {
+        "interruption_prior_turn_isolation",
+        "recorder_transient_cleanup",
+        "stream_close_cleanup",
+        "tool_inflight_cancellation_drain",
+        "unknown_event_tolerance",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -57,7 +73,8 @@ class ToolCancellationObservation:
 
     events_before_cancel: tuple[AgentBridgeEvent, ...]
     events_after_cancel: tuple[AgentBridgeEvent, ...]
-    tool_phases: tuple[str, ...]
+    tool_phases_before_cancel: tuple[str, ...]
+    tool_phases_after_cancel: tuple[str, ...]
     committed_assistant_text: str
     inner_stream_close_calls: int
 
@@ -84,8 +101,8 @@ class RecorderCleanupObservation:
 class HistoryIsolationObservation:
     """History projection before and after an empty current turn is interrupted."""
 
-    history_before: tuple[NormalizedHistoryEntry, ...]
-    history_after: tuple[NormalizedHistoryEntry, ...]
+    prior_history_before: tuple[NormalizedHistoryEntry, ...]
+    prior_history_after: tuple[NormalizedHistoryEntry, ...]
 
 
 class BridgeLifecycleScenarioDriver(Protocol):
@@ -125,6 +142,9 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
     pytestmark: ClassVar[list[Any]] = [pytest.mark.contract]
 
     driver_factory: ClassVar[Callable[[], BridgeLifecycleScenarioDriver] | None] = None
+    applicable_scenarios: ClassVar[frozenset[BridgeLifecycleScenario]] = (
+        ALL_BRIDGE_LIFECYCLE_SCENARIOS
+    )
     valid_text: ClassVar[str] = "valid response after unknown input"
     delivered_text: ClassVar[str] = "delivered partial"
     prior_user_text: ClassVar[str] = "prior question"
@@ -148,6 +168,7 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
         return factory()
 
     async def test_unknown_event_tolerance(self, driver: BridgeLifecycleScenarioDriver) -> None:
+        self._require_scenario("unknown_event_tolerance")
         observation = await self._observe(
             driver.observe_unknown_event_tolerance(valid_text=self.valid_text),
             scenario="unknown_event_tolerance",
@@ -161,23 +182,30 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
     async def test_tool_inflight_cancellation_drain(
         self, driver: BridgeLifecycleScenarioDriver
     ) -> None:
+        self._require_scenario("tool_inflight_cancellation_drain")
         observation = await self._observe(
             driver.observe_tool_inflight_cancellation(delivered_text=self.delivered_text),
             scenario="tool_inflight_cancellation_drain",
         )
 
-        assert [event.kind for event in observation.events_before_cancel] == [
-            "text_delta",
-            "tool_started",
-        ]
-        assert observation.events_before_cancel[0].text == self.delivered_text
-        assert [event.kind for event in observation.events_after_cancel] == ["tool_result"]
-        assert observation.tool_phases == ("start", "result")
+        before_text = "".join(
+            event.text for event in observation.events_before_cancel if event.kind == "text_delta"
+        )
+        assert before_text == self.delivered_text
+        assert all(event.kind != "done" for event in observation.events_before_cancel)
+        assert all(event.kind != "text_delta" for event in observation.events_after_cancel)
+        assert observation.tool_phases_before_cancel
+        assert observation.tool_phases_before_cancel[0] == "start"
+        assert "result" not in observation.tool_phases_before_cancel
+        assert observation.tool_phases_after_cancel
+        assert observation.tool_phases_after_cancel[-1] == "result"
+        assert all(phase in {"delta", "result"} for phase in observation.tool_phases_after_cancel)
         assert observation.committed_assistant_text == self.delivered_text
         assert observation.inner_stream_close_calls == 1
         self._assert_postconditions(driver)
 
     async def test_stream_close_cleanup(self, driver: BridgeLifecycleScenarioDriver) -> None:
+        self._require_scenario("stream_close_cleanup")
         observation = await self._observe(
             driver.observe_stream_close_cleanup(),
             scenario="stream_close_cleanup",
@@ -188,6 +216,7 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
         self._assert_postconditions(driver)
 
     async def test_recorder_transient_cleanup(self, driver: BridgeLifecycleScenarioDriver) -> None:
+        self._require_scenario("recorder_transient_cleanup")
         observation = await self._observe(
             driver.observe_recorder_transient_cleanup(),
             scenario="recorder_transient_cleanup",
@@ -202,6 +231,7 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
     async def test_interruption_prior_turn_isolation(
         self, driver: BridgeLifecycleScenarioDriver
     ) -> None:
+        self._require_scenario("interruption_prior_turn_isolation")
         observation = await self._observe(
             driver.observe_interruption_history_isolation(
                 prior_user_text=self.prior_user_text,
@@ -214,9 +244,13 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
             NormalizedHistoryEntry(role="assistant", text=self.prior_assistant_text),
         )
 
-        assert observation.history_before == expected
-        assert observation.history_after == expected
+        assert observation.prior_history_before == expected
+        assert observation.prior_history_after == expected
         self._assert_postconditions(driver)
+
+    def _require_scenario(self, scenario: BridgeLifecycleScenario) -> None:
+        if scenario not in self.applicable_scenarios:
+            pytest.skip(f"bridge lifecycle matrix marks {scenario} not applicable")
 
     async def _observe(
         self, awaitable: Awaitable[_ObservationT], *, scenario: str

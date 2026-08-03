@@ -304,6 +304,7 @@ class _OfflineLifecycleDriver:
         recorder = RecordingAgentRecorder()
         stream = self.bridge.invoke(AgentTurnInput.from_text("use a tool"), recorder, token)
         before_cancel = (await stream.__anext__(), await stream.__anext__())
+        phases_before_cancel = tuple(recorder.tool_phases())
         assert self.bridge.last_inner_stream is not None
         pending_result = asyncio.create_task(stream.__anext__())
         await self.bridge.last_inner_stream.waiting.wait()
@@ -323,7 +324,8 @@ class _OfflineLifecycleDriver:
         return ToolCancellationObservation(
             events_before_cancel=before_cancel,
             events_after_cancel=tuple(after_cancel),
-            tool_phases=tuple(recorder.tool_phases()),
+            tool_phases_before_cancel=phases_before_cancel,
+            tool_phases_after_cancel=tuple(recorder.tool_phases())[len(phases_before_cancel) :],
             committed_assistant_text=assistant_entries[-1],
             inner_stream_close_calls=self.bridge.last_inner_stream.close_calls,
         )
@@ -403,8 +405,8 @@ class _OfflineLifecycleDriver:
             recorder=recorder,
         )
         return HistoryIsolationObservation(
-            history_before=before,
-            history_after=tuple(self.bridge.history),
+            prior_history_before=before,
+            prior_history_after=tuple(self.bridge.history),
         )
 
     def normalized_state(self) -> NormalizedLifecycleState:
