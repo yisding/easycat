@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "update_rationale": "WS1.3a freezes pause identity ownership, call carriers, and future correlation before Epoch migration",
+  "counts": {
+    "categories": {
+      "api_read": 1,
+      "future_map_owner": 1,
+      "future_map_take": 4,
+      "future_map_write": 1,
+      "generation_handoff": 3,
+      "generation_receiver": 4,
+      "owner_read": 5,
+      "owner_write": 2
+    },
+    "roles": {
+      "borrower": 1,
+      "carrier": 7,
+      "correlation_owner": 6,
+      "pause_owner": 7
+    }
+  },
+  "entries": [
+    "api_read\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tself._turn_manager.pause_generation\t00ee8455d0536666\t0\tborrower\tBorrows the current pause generation through TurnManager's public seam.",
+    "future_map_owner\tsession/_stt_committer.py\tSTTCommitter.__init__\tassign future correlation map\t95503b0c0b741daa\t0\tcorrelation_owner\tOwns future-to-pause correlation storage in STTCommitter.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter._take_next_pause_generation\tpop future correlation\t575b921d742c053b\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.await_pending\tpop future correlation\td7086a840b0e5dde\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.commit_now\tpop future correlation\td7086a840b0e5dde\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.resolve_pending\tpop future correlation\td7086a840b0e5dde\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_write\tsession/_stt_committer.py\tSTTCommitter.commit_now\tstore future correlation\tc9cb59d23093a797\t0\tcorrelation_owner\tBinds one pending STT future to its originating pause.",
+    "generation_handoff\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tkeyword pause_generation\t6f1960f3cbbb0e1f\t0\tcarrier\tCarries pause identity across one call boundary.",
+    "generation_handoff\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tkeyword pause_generation\t36bf4c7b74b4dc79\t0\tcarrier\tCarries pause identity across one call boundary.",
+    "generation_handoff\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tkeyword pause_generation\t36bf4c7b74b4dc79\t0\tcarrier\tCarries pause identity across one call boundary.",
+    "generation_receiver\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tparameter pause_generation\t6c43487b674072c8\t0\tcarrier\tReceives pause identity for a timer, provider commit, or final.",
+    "generation_receiver\tsession/_stt_committer.py\tSTTCommitter.commit_now\tparameter pause_generation\t6c43487b674072c8\t0\tcarrier\tReceives pause identity for a timer, provider commit, or final.",
+    "generation_receiver\tturn_manager.py\tTurnManager._silence_timeout\tparameter pause_generation\t57da8cbe1ed365d7\t0\tcarrier\tReceives pause identity for a timer, provider commit, or final.",
+    "generation_receiver\tturn_manager.py\tTurnManager.on_stt_final\tparameter pause_generation\t57da8cbe1ed365d7\t0\tcarrier\tReceives pause identity for a timer, provider commit, or final.",
+    "owner_read\tturn_manager.py\tTurnManager._handle_speech_stop\tself._pause_generation\t693f1dae18196a2f\t0\tpause_owner\tReads TurnManager's private integer pause identity.",
+    "owner_read\tturn_manager.py\tTurnManager._silence_timeout\tself._pause_generation\t693f1dae18196a2f\t0\tpause_owner\tReads TurnManager's private integer pause identity.",
+    "owner_read\tturn_manager.py\tTurnManager._silence_timeout\tself._pause_generation\t693f1dae18196a2f\t1\tpause_owner\tReads TurnManager's private integer pause identity.",
+    "owner_read\tturn_manager.py\tTurnManager.on_stt_final\tself._pause_generation\t693f1dae18196a2f\t0\tpause_owner\tReads TurnManager's private integer pause identity.",
+    "owner_read\tturn_manager.py\tTurnManager.pause_generation\tself._pause_generation\t693f1dae18196a2f\t0\tpause_owner\tReads TurnManager's private integer pause identity.",
+    "owner_write\tturn_manager.py\tTurnManager.__init__\tassign self._pause_generation\t98b85e86a68c9ee4\t0\tpause_owner\tInitializes or advances TurnManager's private pause identity.",
+    "owner_write\tturn_manager.py\tTurnManager._handle_speech_stop\tincrement self._pause_generation\t22de429bf4a7246c\t0\tpause_owner\tInitializes or advances TurnManager's private pause identity."
+  ]
+}

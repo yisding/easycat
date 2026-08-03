@@ -640,6 +640,16 @@ than a catch-all counter.
 `_pause_generation_by_future` plumbing in `_stt_committer.py:104` become an
 Epoch owned by TurnManager with leases carried by the futures.
 
+WS1.3 is split into WS1.3a inventory and WS1.3b migration so integer/future
+correlation discovery is independently reviewable from the Epoch conversion.
+WS1.3a freezes 21 sites: two owner writes and five private owner reads in
+TurnManager, one public generation read in STTCommitter, four receivers and
+three call-boundary handoffs, plus one future-map owner, one correlation write,
+and four correlation takes. Location-free fingerprints reject structural
+replacement drift. Structural guards also pin the cancellation-resistant
+smart-turn timer race and the delayed segment-final race, proving that neither
+an old timer nor an old future correlation may shorten a later pause.
+
 ### WS1.4 — Transport connection epochs [M per transport] (Tier B; peer-gated)
 
 After the peer-set decision and Tier-A outcome gate, one PR per retained
