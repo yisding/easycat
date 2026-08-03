@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "preregistered_at": "2026-08-02",
+  "method": {
+    "history": "first_parent",
+    "diff_parent": "first_parent",
+    "timestamp": "committer_timestamp_utc",
+    "window_boundary": "[start,end)",
+    "pre_window_days": 60,
+    "post_window_days": 60,
+    "recurrence_window_days": 7,
+    "migration_exclusion": "exact_sha_only",
+    "control_pooling": "deduplicate_commit_sha",
+    "zero_denominator_result": "insufficient_data",
+    "incomplete_adjudication_result": "insufficient_data"
+  },
+  "bug_classes": [
+    {
+      "id": "lifecycle_cancellation",
+      "name": "Lifecycle and cancellation ownership",
+      "criterion": "Owned work hangs, leaks, outlives its lifecycle, loses an exception, or resolves cancellation with the wrong precedence."
+    },
+    {
+      "id": "staleness_fencing",
+      "name": "Staleness and fencing",
+      "criterion": "Work captured under an earlier turn, connection, call, or activity phase commits an effect after that identity is stale."
+    },
+    {
+      "id": "peer_fix_divergence",
+      "name": "Repeated peer-family fix",
+      "criterion": "One logical lifecycle fix is implemented in separate peer modules instead of once in a shared primitive or engine."
+    }
+  ],
+  "cohorts": [
+    {
+      "id": "tier_a_session_lifecycle_staleness",
+      "name": "Tier-A Session lifecycle and staleness",
+      "tier": "A",
+      "gate": "A60",
+      "status": "preregistered",
+      "treatment_slices": [
+        "WS0.1a",
+        "WS0.1b",
+        "WS0.2",
+        "WS0.3",
+        "WS0.4",
+        "WS0.5",
+        "WS1.1",
+        "WS1.2a",
+        "WS1.2b",
+        "WS1.2c",
+        "WS1.2d",
+        "WS1.2e",
+        "WS1.3",
+        "WS2.7a"
+      ],
+      "bug_classes": [
+        "lifecycle_cancellation",
+        "staleness_fencing"
+      ],
+      "members": [
+        {
+          "id": "concurrency_primitive",
+          "paths": [
+            "src/easycat/_concurrency.py"
+          ],
+          "planned": true
+        },
+        {
+          "id": "epoch_primitive",
+          "paths": [
+            "src/easycat/_epoch.py"
+          ],
+          "planned": true
+        },
+        {
+          "id": "runtime_scope",
+          "paths": [
+            "src/easycat/runtime/scope.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "session_owner",
+          "paths": [
+            "src/easycat/session/_session.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "turn_manager",
+          "paths": [
+            "src/easycat/turn_manager.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "turn_runner",
+          "paths": [
+            "src/easycat/session/_turn_runner.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "stt_committer",
+          "paths": [
+            "src/easycat/session/_stt_committer.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "tts_scheduler",
+          "paths": [
+            "src/easycat/session/_tts_scheduler.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "audio_router",
+          "paths": [
+            "src/easycat/session/_audio_router.py"
+          ],
+          "planned": false
+        },
+        {
+          "id": "cancel_orchestrator",
+          "paths": [
+            "src/easycat/session/_cancel_orchestrator.py"
+          ],
+          "planned": false
+        }
+      ],
+      "controls": [
+        {
+          "id": "agent_bridge_lifecycle",
+          "paths": [
+            "src/easycat/integrations/agents/_agent_runner.py",
+            "src/easycat/integrations/agents/generic_workflow.py",
+            "src/easycat/integrations/agents/langchain.py",
+            "src/easycat/integrations/agents/langgraph.py",
+            "src/easycat/integrations/agents/llama_agents.py",
+            "src/easycat/integrations/agents/openai_agents.py",
+            "src/easycat/integrations/agents/pydantic_ai.py",
+            "src/easycat/integrations/agents/responses_api.py"
+          ],
+          "invalidated_by": null
+        },
+        {
+          "id": "transport_lifecycle",
+          "paths": [
+            "src/easycat/transports/local.py",
+            "src/easycat/transports/twilio_media.py",
+            "src/easycat/transports/webrtc.py",
+            "src/easycat/transports/websocket.py",
+            "src/easycat/transports/webtransport.py"
+          ],
+          "invalidated_by": null
+        }
+      ],
+      "minimum_exposure": {
+        "treated_touching_commits": 20,
+        "treated_changed_lines": 500,
+        "pooled_control_touching_commits": 20,
+        "pooled_control_changed_lines": 500
+      },
+      "non_inferiority_epsilon": 0.01,
+      "attribution_reviewer": "yisding",
+      "anchor": {
+        "status": "pending",
+        "completion_sha": null,
+        "completion_date": null,
+        "migration_commits": [],
+        "pre_window": null,
+        "post_window": null,
+        "superseded_anchors": []
+      }
+    },
+    {
+      "id": "tier_b_agent_bridge_lifecycle",
+      "name": "Tier-B retained agent bridges",
+      "tier": "B",
+      "gate": "bridge_B60",
+      "status": "blocked_peer_decision",
+      "treatment_slices": [
+        "WS2.6"
+      ],
+      "bug_classes": [
+        "lifecycle_cancellation",
+        "staleness_fencing",
+        "peer_fix_divergence"
+      ],
+      "candidate_members": [
+        {
+          "id": "generic_workflow",
+          "paths": [
+            "src/easycat/integrations/agents/generic_workflow.py"
+          ]
+        },
+        {
+          "id": "langchain",
+          "paths": [
+            "src/easycat/integrations/agents/langchain.py"
+          ]
+        },
+        {
+          "id": "langgraph",
+          "paths": [
+            "src/easycat/integrations/agents/langgraph.py"
+          ]
+        },
+        {
+          "id": "llama_agents",
+          "paths": [
+            "src/easycat/integrations/agents/llama_agents.py"
+          ]
+        },
+        {
+          "id": "openai_agents",
+          "paths": [
+            "src/easycat/integrations/agents/openai_agents.py"
+          ]
+        },
+        {
+          "id": "pydantic_ai",
+          "paths": [
+            "src/easycat/integrations/agents/pydantic_ai.py"
+          ]
+        },
+        {
+          "id": "responses_api",
+          "paths": [
+            "src/easycat/integrations/agents/responses_api.py"
+          ]
+        }
+      ],
+      "members": [],
+      "member_selection": {
+        "source": "peer-set ADR",
+        "rule": "Copy exactly the retained in-tree candidate members before the first WS2.6 production commit; do not add a peer after treatment begins.",
+        "decision_sha": null,
+        "locked_at": null
+      },
+      "controls": [
+        {
+          "id": "vad_provider_lifecycle",
+          "paths": [
+            "src/easycat/vad/_base.py",
+            "src/easycat/vad/factory.py",
+            "src/easycat/vad/funasr.py",
+            "src/easycat/vad/krisp.py",
+            "src/easycat/vad/silero.py",
+            "src/easycat/vad/ten.py"
+          ],
+          "invalidated_by": null
+        },
+        {
+          "id": "stage_pipeline_lifecycle",
+          "paths": [
+            "src/easycat/stages/audio.py",
+            "src/easycat/stages/base.py",
+            "src/easycat/stages/stt.py",
+            "src/easycat/stages/transport.py",
+            "src/easycat/stages/tts.py",
+            "src/easycat/stages/turn.py",
+            "src/easycat/stages/vad.py"
+          ],
+          "invalidated_by": null
+        }
+      ],
+      "minimum_exposure": {
+        "treated_touching_commits": 15,
+        "treated_changed_lines": 300,
+        "pooled_control_touching_commits": 15,
+        "pooled_control_changed_lines": 300
+      },
+      "non_inferiority_epsilon": 0.01,
+      "attribution_reviewer": "yisding",
+      "anchor": {
+        "status": "blocked",
+        "completion_sha": null,
+        "completion_date": null,
+        "migration_commits": [],
+        "pre_window": null,
+        "post_window": null,
+        "superseded_anchors": []
+      }
+    },
+    {
+      "id": "tier_b_transport_lifecycle",
+      "name": "Tier-B retained transports",
+      "tier": "B",
+      "gate": "transport_B60",
+      "status": "blocked_peer_decision",
+      "treatment_slices": [
+        "WS1.4",
+        "WS2.3",
+        "WS5.1"
+      ],
+      "bug_classes": [
+        "lifecycle_cancellation",
+        "staleness_fencing",
+        "peer_fix_divergence"
+      ],
+      "candidate_members": [
+        {
+          "id": "local",
+          "paths": [
+            "src/easycat/transports/local.py"
+          ]
+        },
+        {
+          "id": "twilio_media",
+          "paths": [
+            "src/easycat/transports/twilio_media.py"
+          ]
+        },
+        {
+          "id": "webrtc",
+          "paths": [
+            "src/easycat/transports/webrtc.py"
+          ]
+        },
+        {
+          "id": "websocket",
+          "paths": [
+            "src/easycat/transports/websocket.py"
+          ]
+        },
+        {
+          "id": "webtransport",
+          "paths": [
+            "src/easycat/transports/webtransport.py"
+          ]
+        }
+      ],
+      "members": [],
+      "member_selection": {
+        "source": "peer-set ADR",
+        "rule": "Copy exactly the retained in-tree candidate members before the first WS1.4, WS2.3, or WS5.1 production commit; do not add a peer after treatment begins.",
+        "decision_sha": null,
+        "locked_at": null
+      },
+      "controls": [
+        {
+          "id": "vad_provider_lifecycle",
+          "paths": [
+            "src/easycat/vad/_base.py",
+            "src/easycat/vad/factory.py",
+            "src/easycat/vad/funasr.py",
+            "src/easycat/vad/krisp.py",
+            "src/easycat/vad/silero.py",
+            "src/easycat/vad/ten.py"
+          ],
+          "invalidated_by": null
+        },
+        {
+          "id": "stage_pipeline_lifecycle",
+          "paths": [
+            "src/easycat/stages/audio.py",
+            "src/easycat/stages/base.py",
+            "src/easycat/stages/stt.py",
+            "src/easycat/stages/tts.py",
+            "src/easycat/stages/turn.py",
+            "src/easycat/stages/vad.py"
+          ],
+          "invalidated_by": null
+        }
+      ],
+      "minimum_exposure": {
+        "treated_touching_commits": 15,
+        "treated_changed_lines": 300,
+        "pooled_control_touching_commits": 15,
+        "pooled_control_changed_lines": 300
+      },
+      "non_inferiority_epsilon": 0.01,
+      "attribution_reviewer": "yisding",
+      "anchor": {
+        "status": "blocked",
+        "completion_sha": null,
+        "completion_date": null,
+        "migration_commits": [],
+        "pre_window": null,
+        "post_window": null,
+        "superseded_anchors": []
+      }
+    }
+  ]
+}
