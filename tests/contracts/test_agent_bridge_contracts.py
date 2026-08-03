@@ -52,25 +52,29 @@ class _ContractBridge:
         )
         recorder.record_unit_entered(cursor)
         recorder.record_unit_entered(tool_cursor)
-        recorder.record_tool_call("start", "lookup", call_id="call-1")
-        recorder.record_tool_call("result", "lookup", result_ref="result-ref", call_id="call-1")
-        recorder.record_framework_handoff("agent-1", "agent-2", reason="handoff")
-        recorder.record_state_snapshot("snapshot-ref", payload=b'{"history_len":0}')
-        self.history.append(turn_input.text)
-        # Cursor / handoff / state-snapshot transitions are journaled via the
-        # recorder above; bridges never mirror them onto the stream, which
-        # carries only text / tool / done events.
-        yield AgentBridgeEvent(kind="text_delta", text="hello")
-        yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call-1")
-        yield AgentBridgeEvent(
-            kind="tool_result",
-            tool_name="lookup",
-            call_id="call-1",
-            result="ok",
-        )
-        yield AgentBridgeEvent(kind="done", text="hello")
-        recorder.record_unit_exited(tool_cursor.with_committable(True), reason=None)
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        try:
+            recorder.record_tool_call("start", "lookup", call_id="call-1")
+            recorder.record_tool_call(
+                "result", "lookup", result_ref="result-ref", call_id="call-1"
+            )
+            recorder.record_framework_handoff("agent-1", "agent-2", reason="handoff")
+            recorder.record_state_snapshot("snapshot-ref", payload=b'{"history_len":0}')
+            self.history.append(turn_input.text)
+            # Cursor / handoff / state-snapshot transitions are journaled via
+            # the recorder above; bridges never mirror them onto the stream,
+            # which carries only text / tool / done events.
+            yield AgentBridgeEvent(kind="text_delta", text="hello")
+            yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call-1")
+            yield AgentBridgeEvent(
+                kind="tool_result",
+                tool_name="lookup",
+                call_id="call-1",
+                result="ok",
+            )
+            yield AgentBridgeEvent(kind="done", text="hello")
+        finally:
+            recorder.record_unit_exited(tool_cursor.with_committable(True), reason=None)
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         return FrameworkStateSnapshot(fields={"history": list(self.history)}, kind="fake")

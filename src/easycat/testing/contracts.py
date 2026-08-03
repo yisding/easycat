@@ -29,6 +29,7 @@ import asyncio
 import inspect
 import json
 import os
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, ClassVar, get_args
 
@@ -475,6 +476,33 @@ class AgentBridgeContractSuite(ContractSuite):
         assert isinstance(snapshot, FrameworkStateSnapshot)
         json.dumps(snapshot.fields)
 
+    async def test_consumer_close_balances_recorded_units(
+        self, provider: Any, recorder: RecordingAgentRecorder
+    ) -> None:
+        """Closing after the first event synchronously exits recorder cursors."""
+        stream = provider.invoke(AgentTurnInput.from_text(self.sample_user_text), recorder)
+        try:
+            async with asyncio.timeout(self.event_timeout):
+                first_event = await stream.__anext__()
+        except StopAsyncIteration:
+            pytest.fail("invoke() ended before yielding its first event", pytrace=False)
+        assert isinstance(first_event, AgentBridgeEvent)
+
+        aclose = getattr(stream, "aclose", None)
+        assert callable(aclose), "invoke() must return a consumer-closeable async iterator"
+        async with asyncio.timeout(self.event_timeout):
+            await aclose()
+
+        entered = Counter(
+            record[1][0].unit_id for record in recorder.records if record[0] == "unit_entered"
+        )
+        exited = Counter(
+            record[1][0].unit_id for record in recorder.records if record[0] == "unit_exited"
+        )
+        assert entered, "invoke() must journal at least one execution unit"
+        assert exited == entered, "consumer close must exit every entered execution unit"
+        json.dumps(provider.snapshot_state().fields)
+
     async def test_apply_interruption_journals_the_commit_protocol(
         self, provider: Any, recorder: RecordingAgentRecorder
     ) -> None:
@@ -502,3 +530,18 @@ class AgentBridgeContractSuite(ContractSuite):
         await self.run_turn(provider, recorder)
         provider.reset()
         json.dumps(provider.snapshot_state().fields)
+
+    async def test_reset_restores_the_initial_snapshot(
+        self, provider: Any, recorder: RecordingAgentRecorder
+    ) -> None:
+        initial = provider.snapshot_state()
+        assert isinstance(initial, FrameworkStateSnapshot)
+        json.dumps(initial.fields)
+
+        await self.run_turn(provider, recorder)
+        provider.reset()
+
+        reset = provider.snapshot_state()
+        assert isinstance(reset, FrameworkStateSnapshot)
+        json.dumps(reset.fields)
+        assert reset == initial, "reset() must restore the bridge's fresh-session state"
