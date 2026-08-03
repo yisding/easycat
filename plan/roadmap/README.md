@@ -12,6 +12,16 @@ Cross-cutting plans that shape multiple implementation areas.
   backlog derived from April audit history. Re-check current code before
   executing any item.
 
+## Active
+
+- [2026-08-02-bug-resistant-architecture.md](2026-08-02-bug-resistant-architecture.md):
+  design reference for eliminating the recurring implementation-bug classes
+  (lifecycle/cancellation races, staleness fencing, N-times peer fixes) by
+  construction — primitives, engines, and enforcement ratchets.
+- [2026-08-02-bug-resistant-refactor-plan.md](2026-08-02-bug-resistant-refactor-plan.md):
+  the PR-level backlog for that design — tiered workstreams with acceptance
+  criteria, the peer-set blocking decision, and re-measurement gates.
+
 ## Historical Architecture
 
 - [essential-debug-first-runtime.md](essential-debug-first-runtime.md):
