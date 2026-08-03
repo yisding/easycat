@@ -242,10 +242,15 @@ async def test_turn_runner_constructed_with_session() -> None:
     """Session installs a TurnRunner instance under ``_turn_runner``."""
     session = Session(_config())
     assert isinstance(session._turn_runner, TurnRunner)
-    # The runner's subscription handlers are bound to the bus.
-    handlers = session.event_bus._handlers.get(TurnStarted, [])
+    # The lifecycle command handler is reserved ahead of every public observer.
+    handlers = session.event_bus._reserved_handlers.get(TurnStarted, [])
     bound_names = [getattr(h, "__qualname__", "") for h in handlers]
     assert any("TurnRunner.on_turn_started" in name for name in bound_names)
+    public_names = [
+        getattr(handler, "__qualname__", "")
+        for handler in session.event_bus._handlers.get(TurnStarted, [])
+    ]
+    assert not any("TurnRunner.on_turn_started" in name for name in public_names)
     stt_handlers = session.event_bus._handlers.get(STTFinal, [])
     stt_bound_names = [getattr(h, "__qualname__", "") for h in stt_handlers]
     assert any("TurnRunner.on_stt_final" in name for name in stt_bound_names)
@@ -1754,6 +1759,27 @@ async def test_send_text_runs_agent_without_audio() -> None:
     )
     response = await session.send_text("hello")
     assert response == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_text_turn_started_observation_never_installs_voice_identity() -> None:
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+        )
+    )
+    session._is_running = True
+    observed_identity: list[TurnContext | None] = []
+    session.event_bus.subscribe(
+        TurnStarted, lambda _event: observed_identity.append(session._turn)
+    )
+
+    response = await session.send_text("hello")
+
+    assert response == "Reply."
+    assert observed_identity == [None]
+    assert session.current_turn is None
 
 
 @pytest.mark.asyncio

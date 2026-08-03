@@ -779,6 +779,18 @@ class Session:
         self._event_subscriptions.append(subscription)
         return subscription
 
+    def _subscribe_owned_reserved(
+        self,
+        event_type: type,
+        handler: EventHandler,
+    ) -> EventSubscription:
+        """Reserve a Session-owned lifecycle handler ahead of public observers."""
+
+        scoped_handler = self._scope_event_handler(handler)
+        subscription = self.event_bus._subscribe_reserved(event_type, scoped_handler)
+        self._event_subscriptions.append(subscription)
+        return subscription
+
     def _scope_event_handler(self, handler: EventHandler) -> EventHandler:
         """Wrap a session-level handler with this Session's correlation gate."""
 

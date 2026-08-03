@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from easycat._epoch import Lease
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 
@@ -78,6 +79,9 @@ class _SessionTurnHandle:
             self._session._turn_lifecycle.clear_identity()
         else:
             self._session._turn_lifecycle.publish_identity(turn)
+
+    def capture_identity(self) -> Lease[TurnContext | None]:
+        return self._session._turn_lifecycle.capture_identity()
 
 
 @dataclass(frozen=True)

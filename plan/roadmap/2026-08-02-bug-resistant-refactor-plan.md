@@ -539,6 +539,21 @@ that repeated IDLE resets and bot-stopped-to-IDLE stale prior activity leases,
 while `reset(preserve_token=True)` leaves the retained Session identity current
 and its token uncancelled.
 
+WS1.2c migration result: voice, application, text, and hand-built paths now
+construct a private `TurnPublication`; voice publication carries the exact
+manager token/activity lease into a directly awaited Session lifecycle
+callback, which returns the installed identity lease before the public event is
+emitted. Internal public `TurnStarted` events are privately marked
+observation-only without adding a public field or carrying a lease. A reserved
+Session pre-handler runs before global, exact-type, and parent observers: it
+no-ops those marked observations and routes unmarked hand-built events through
+the same lifecycle callback without a second emission. The refreshed 51-site
+manifest records four private publication constructors, one callback binding,
+two observation markers, two public producer sites, and two subscriptions; no
+public producer remains an identity command. Ordering contracts prove existing
+global and exact observers see voice identity installed and STT active, while a
+running text session's TurnStarted observation never installs voice identity.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

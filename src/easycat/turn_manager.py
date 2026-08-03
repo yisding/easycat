@@ -24,12 +24,14 @@ import logging
 import math
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from easycat._epoch import Epoch, Lease
+from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -40,6 +42,7 @@ from easycat.events import (
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
+    _mark_turn_started_observation,
 )
 from easycat.runtime.scope import RuntimeScope
 from easycat.smart_turn import SmartTurnProvider, _validate_probability_threshold
@@ -70,6 +73,18 @@ class TurnManagerState(enum.Enum):
     USER_PAUSED = "user_paused"
     PROCESSING = "processing"
     BOT_SPEAKING = "bot_speaking"
+
+
+@dataclass(frozen=True, slots=True)
+class TurnPublication:
+    """Private handoff from a turn producer to Session lifecycle ownership."""
+
+    source: Literal["voice", "application", "text", "hand_built"]
+    session_id: str | None
+    turn_id: str
+    cancel_token: CancelToken | None
+    activity: Lease[TurnManagerState] | None
+    identity: Lease[TurnContext | None] | None = None
 
 
 class TurnMode(enum.Enum):
@@ -261,6 +276,9 @@ class TurnManager:
         # recorder without pulling in the Session machinery.
         self._journal_state_change: Any = None
         self._endpoint_turn_getter: Any = None
+        self._turn_publication_callback: (
+            Callable[[TurnPublication], Awaitable[TurnPublication]] | None
+        ) = None
 
         # Correlation identifiers
         self._session_id: str | None = None
@@ -357,6 +375,13 @@ class TurnManager:
         tests that drive it directly can skip the hook.
         """
         self._journal_state_change = hook
+
+    def bind_turn_publication(
+        self,
+        callback: Callable[[TurnPublication], Awaitable[TurnPublication]],
+    ) -> None:
+        """Bind the private lifecycle callback that precedes TurnStarted observation."""
+        self._turn_publication_callback = callback
 
     def _transition(
         self,
@@ -549,16 +574,36 @@ class TurnManager:
         """
         if cancel_previous_token and self._cancel_token is not None:
             self._cancel_token.cancel()
-        self._cancel_token = CancelToken()
+        cancel_token = CancelToken()
+        self._cancel_token = cancel_token
         self._flush_pre_roll_into_turn_audio()
         self._turn_counter += 1
-        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
-        self._transition(
+        turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+        self._current_turn_id = turn_id
+        activity = self._transition(
             TurnManagerState.USER_SPEAKING,
             reason=reason,
         )
+        publication = TurnPublication(
+            source="voice",
+            session_id=self._session_id,
+            turn_id=turn_id,
+            cancel_token=cancel_token,
+            activity=activity,
+        )
+        callback = self._turn_publication_callback
+        if callback is not None:
+            publication = await callback(publication)
+            if __debug__:
+                assert publication.activity is activity
+                assert publication.cancel_token is cancel_token
+                if publication.identity is not None:
+                    assert publication.identity.value is not None
+                    assert publication.identity.value.id == turn_id
         await self._event_bus.emit(
-            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+            _mark_turn_started_observation(
+                TurnStarted(session_id=self._session_id, turn_id=turn_id)
+            )
         )
 
     async def _complete_user_turn(self, reason: str) -> None:

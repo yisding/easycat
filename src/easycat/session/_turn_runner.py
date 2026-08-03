@@ -29,7 +29,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
@@ -48,6 +48,8 @@ from easycat.events import (
     STTFinal,
     TurnEnded,
     TurnStarted,
+    _is_turn_started_observation,
+    _mark_turn_started_observation,
 )
 from easycat.integrations.agents._agent_runner import PreparedAgentResponse
 from easycat.integrations.agents.base import AgentBridgeEvent
@@ -80,7 +82,7 @@ from easycat.timeouts import (
     with_agent_timeout,
 )
 from easycat.tts.input import TTSInput
-from easycat.turn_manager import TurnManager, TurnManagerState
+from easycat.turn_manager import TurnManager, TurnManagerState, TurnPublication
 
 if TYPE_CHECKING:
     from easycat.integrations.agents.base import AgentBridgeEvent
@@ -258,16 +260,30 @@ class TurnRunner:
     # ── Subscription handlers ─────────────────────────────────────
 
     async def on_turn_started(self, event: TurnStarted) -> None:
-        """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
-        if event.turn_id in self._application_turn_ids:
+        """Route unmarked hand-built events through private lifecycle publication."""
+        if _is_turn_started_observation(event) or event.turn_id in self._application_turn_ids:
             return
-        if not self._is_running():
-            return
-        await self.cancel_preemptive_generation()
-        # TurnManager always stamps TurnStarted with a generated id;
-        # synthesize one for hand-built events so the TurnContext (and
-        # every journal record keyed off it) still gets a real id.
         turn_id = event.turn_id or f"turn-{uuid4().hex[:8]}"
+        await self.on_turn_publication(
+            TurnPublication(
+                source="hand_built",
+                session_id=event.session_id,
+                turn_id=turn_id,
+                cancel_token=self._turn_manager.cancel_token or CancelToken(),
+                activity=self._turn_manager.capture_activity(),
+            )
+        )
+
+    async def on_turn_publication(
+        self,
+        publication: TurnPublication,
+    ) -> TurnPublication:
+        """Install private voice lifecycle state before public TurnStarted observation."""
+        if publication.source not in {"voice", "hand_built"}:
+            return publication
+        if not self._is_running():
+            return publication
+        await self.cancel_preemptive_generation()
 
         # Cancel the previous turn's token so any in-flight agent/TTS work
         # notices the cancellation before we overwrite the turn pointer.
@@ -289,8 +305,9 @@ class TurnRunner:
             self._stt.cancel_inflight()
             self._stt.resolve_pending(prev, "")
 
-        cancel_token = self._turn_manager.cancel_token or CancelToken()
-        turn = self._turn.begin(turn_id, cancel_token)
+        cancel_token = publication.cancel_token or CancelToken()
+        turn = self._turn.begin(publication.turn_id, cancel_token)
+        publication = replace(publication, identity=self._turn.capture_identity())
         self._preemptive_turn_generation = turn.generation
         self._preemptive_attempts = 0
         # Tag startup records for this turn without leaving the EventBus task
@@ -329,9 +346,10 @@ class TurnRunner:
             # the caller doesn't sit in USER_SPEAKING until the silence timeout.
             if self._turn.current is turn:
                 self._reset_turn_state()
-            return
+            return publication
         finally:
             reset_turn(turn_token)
+        return publication
 
     async def on_stt_final(self, event: STTFinal) -> None:
         """Start history-isolated agent work while endpointing is still pending."""
@@ -1384,6 +1402,14 @@ class TurnRunner:
             turn = TurnContext(turn_id=turn_id, cancel_token=token)
             self._turn_manager.begin_application_turn(turn_id, token)
             self._turn.set(turn)
+            publication = TurnPublication(
+                source="application",
+                session_id=self._session_id,
+                turn_id=turn_id,
+                cancel_token=token,
+                activity=self._turn_manager.capture_activity(),
+                identity=self._turn.capture_identity(),
+            )
             self._application_prompt_cancel_token = token
             self._application_turn_ids.add(turn_id)
             coroutine = self._execute_application_prompt(
@@ -1393,6 +1419,7 @@ class TurnRunner:
                 turn_id=turn_id,
                 role=role,
                 speak=speak,
+                publication=publication,
             )
             task = self._runtime_scope.create_journaled_task(
                 coroutine,
@@ -1437,6 +1464,7 @@ class TurnRunner:
         turn_id: str,
         role: Literal["system", "user"],
         speak: bool,
+        publication: TurnPublication,
     ) -> str:
         agent_text, system_prefix = self._application_agent_input(text, role)
         try:
@@ -1447,6 +1475,7 @@ class TurnRunner:
                     turn=turn,
                     role=role,
                     system_prefix=system_prefix,
+                    publication=publication,
                 )
             return await self._execute_text_turn(
                 agent_text,
@@ -1454,6 +1483,7 @@ class TurnRunner:
                 turn_id=turn_id,
                 system_prefix_override=system_prefix,
                 input_role=role,
+                publication=publication,
             )
         finally:
             if self._turn.current is turn:
@@ -1467,10 +1497,11 @@ class TurnRunner:
         turn: TurnContext,
         role: Literal["system", "user"],
         system_prefix: str | None,
+        publication: TurnPublication,
     ) -> str:
         turn_token = bind_turn(turn.id)
         try:
-            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn.id))
+            await self._emit_turn_started_observation(publication)
             await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn.id))
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn.id))
             return await self.run_streaming_agent(
@@ -1482,6 +1513,17 @@ class TurnRunner:
             )
         finally:
             reset_turn(turn_token)
+
+    async def _emit_turn_started_observation(self, publication: TurnPublication) -> None:
+        """Expose a completed private publication without leaking its leases."""
+        await self._emit(
+            _mark_turn_started_observation(
+                TurnStarted(
+                    session_id=publication.session_id,
+                    turn_id=publication.turn_id,
+                )
+            )
+        )
 
     async def _stream_text_turn(
         self,
@@ -1621,13 +1663,21 @@ class TurnRunner:
         turn_id: str,
         system_prefix_override: str | None = None,
         input_role: Literal["system", "user"] = "user",
+        publication: TurnPublication | None = None,
     ) -> str:
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"
         turn_token = bind_turn(turn_id)
         try:
-            await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
+            publication = publication or TurnPublication(
+                source="text",
+                session_id=self._session_id,
+                turn_id=turn_id,
+                cancel_token=cancel_token,
+                activity=None,
+            )
+            await self._emit_turn_started_observation(publication)
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
             self._text_turn_accumulated = ""
             response, structured_output = await self._stream_text_turn(

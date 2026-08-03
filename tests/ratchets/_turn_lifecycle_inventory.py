@@ -181,7 +181,7 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
         if leaf == "TurnStarted":
             self._record("turn_started_producer", "construct TurnStarted", node)
         if (
-            leaf in {"subscribe", "_subscribe_owned"}
+            leaf in {"subscribe", "_subscribe_owned", "_subscribe_owned_reserved"}
             and node.args
             and _expression_path(node.args[0]).rsplit(".", 1)[-1] == "TurnStarted"
         ):
@@ -190,6 +190,7 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
                 f"call {callee}",
                 node,
             )
+        self._record_publication_topology(node, callee=callee, leaf=leaf)
 
         if self.relative_path == "turn_manager.py" and callee == "self._transition":
             state = ast.unparse(node.args[0]) if node.args else "<missing>"
@@ -240,6 +241,14 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
 
         self._record_dynamic_writer(node, callee)
         self.generic_visit(node)
+
+    def _record_publication_topology(self, node: ast.Call, *, callee: str, leaf: str) -> None:
+        if leaf == "TurnPublication":
+            self._record("turn_publication_construct", "construct TurnPublication", node)
+        elif leaf == "bind_turn_publication":
+            self._record("turn_publication_binding", f"call {callee}", node)
+        elif leaf == "_mark_turn_started_observation":
+            self._record("turn_started_observation_marker", f"call {callee}", node)
 
     def _visit_scope(
         self,

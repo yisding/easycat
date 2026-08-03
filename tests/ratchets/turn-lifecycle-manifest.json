@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2b2 routes all TurnManager activity changes through one Epoch-backed transition seam",
+  "update_rationale": "WS1.2c routes internal turn starts through private publications before marked public observations",
   "counts": {
     "categories": {
       "activity_epoch_bump": 1,
@@ -11,7 +11,10 @@
       "identity_clear_call": 15,
       "identity_owner_assignment": 1,
       "identity_publish_call": 6,
-      "turn_started_producer": 3,
+      "turn_publication_binding": 1,
+      "turn_publication_construct": 4,
+      "turn_started_observation_marker": 2,
+      "turn_started_producer": 2,
       "turn_started_subscription": 2
     },
     "roles": {
@@ -20,10 +23,11 @@
       "activity_transition": 9,
       "identity_carrier": 4,
       "identity_clear": 15,
-      "identity_command": 2,
+      "identity_command": 1,
       "identity_initialize": 1,
       "identity_publish": 6,
-      "observation": 3
+      "observation": 5,
+      "private_handoff": 5
     }
   },
   "entries": [
@@ -56,21 +60,27 @@
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner._execute_application_prompt\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears an application prompt identity when its execution settles.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears voice identity after TTS settlement when replay retention is unnecessary.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity when end-of-speech processing settles without retained playback.",
-    "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.on_turn_started\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears a just-published turn if STT startup fails.",
+    "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears a privately published voice identity when STT startup fails.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity when agent streaming settles before bot playback owns it.",
     "identity_clear_call\tsession/_wiring.py\t_SessionTurnHandle.set\tcall self._session._turn_lifecycle.clear_identity\tf07dfd8a99b6a463\t0\tidentity_clear\tRoutes collaborator handle clears through the canonical owner.",
     "identity_clear_call\tsession/_wiring.py\tbuild_wiring._clear_turn\tcall session._turn_lifecycle.clear_identity\t6d39b00a96463a77\t0\tidentity_clear\tRoutes TTS completion clears through the canonical owner.",
     "identity_owner_assignment\tsession/_turn_lifecycle.py\tTurnLifecycle.__init__\tassign self._identity\taafea12bbb0a66e0\t0\tidentity_initialize\tInitializes the Session-owned identity Epoch with no active turn.",
     "identity_publish_call\tsession/_session.py\tSession._turn\tcall self._turn_lifecycle.publish_identity\tc17320703fe8de29\t0\tidentity_publish\tRoutes private compatibility publication through the canonical owner.",
     "identity_publish_call\tsession/_session.py\tSession.begin_turn\tcall self._turn_lifecycle.publish_identity\tc17320703fe8de29\t0\tidentity_publish\tRoutes the public diagnostics and replay seam through the canonical owner.",
-    "identity_publish_call\tsession/_turn_runner.py\tTurnRunner.on_turn_started\tcall self._turn.begin\ta7d0f9c77e4d501e\t0\tidentity_publish\tReserved TurnStarted command handler installs voice-turn identity.",
+    "identity_publish_call\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tcall self._turn.begin\td314fd1fbae1c7ad\t0\tidentity_publish\tPrivate lifecycle publication installs voice identity before any public TurnStarted observer runs.",
     "identity_publish_call\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tcall self._turn.set\ta099c6d4e21b147f\t0\tidentity_publish\tApplication prompt admission installs its preconstructed identity synchronously.",
     "identity_publish_call\tsession/_wiring.py\t_SessionTurnHandle.begin\tcall self._session.begin_turn\tf4ff7494ed97c840\t0\tidentity_publish\tCollaborator begin seam delegates voice identity publication to Session.",
     "identity_publish_call\tsession/_wiring.py\t_SessionTurnHandle.set\tcall self._session._turn_lifecycle.publish_identity\tc48d312c90451c20\t0\tidentity_publish\tRoutes collaborator handle publication through the canonical owner.",
-    "turn_started_producer\tsession/_turn_runner.py\tTurnRunner._execute_spoken_application_prompt\tconstruct TurnStarted\t31a3c5c715a5d88f\t0\tobservation\tApplication turn identity is installed before this public lifecycle observation.",
-    "turn_started_producer\tsession/_turn_runner.py\tTurnRunner._execute_text_turn\tconstruct TurnStarted\tb8c61a53c2de84cf\t0\tobservation\tText-session lifecycle event is observational because text sessions never start the audio Session.",
-    "turn_started_producer\tturn_manager.py\tTurnManager._begin_turn\tconstruct TurnStarted\tdd22d7e98822d05b\t0\tidentity_command\tVAD, push-to-talk, and barge-in publish this command event to install voice identity.",
-    "turn_started_subscription\tsession/_builder.py\tbuild_session\tcall session._subscribe_owned\t01f20870ef11410b\t0\tidentity_command\tReserved Session-owned handler installs identity before later public subscribers observe the event.",
+    "turn_publication_binding\tsession/_builder.py\tbuild_session\tcall session._turn_manager.bind_turn_publication\t46963316e3233fb3\t0\tprivate_handoff\tBinds the manager's private voice publication directly to Session lifecycle ownership.",
+    "turn_publication_construct\tsession/_turn_runner.py\tTurnRunner._execute_text_turn\tconstruct TurnPublication\t1f508fdd5df35f72\t0\tprivate_handoff\tClassifies text turns as observation-only with no voice identity or activity lease.",
+    "turn_publication_construct\tsession/_turn_runner.py\tTurnRunner.on_turn_started\tconstruct TurnPublication\tbc0ffdafa121c7ae\t0\tprivate_handoff\tRoutes an unmarked hand-built command through the same private lifecycle callback without re-emission.",
+    "turn_publication_construct\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tconstruct TurnPublication\t4a39e390604451ef\t0\tprivate_handoff\tCaptures the exact application identity and activity leases before its public observation.",
+    "turn_publication_construct\tturn_manager.py\tTurnManager._begin_turn\tconstruct TurnPublication\t0006dbce94e0024b\t0\tprivate_handoff\tCarries the exact manager token and activity lease into private voice lifecycle publication.",
+    "turn_started_observation_marker\tsession/_turn_runner.py\tTurnRunner._emit_turn_started_observation\tcall _mark_turn_started_observation\t3896507b6be64338\t0\tobservation\tMarks application and text TurnStarted events after their private publication classification.",
+    "turn_started_observation_marker\tturn_manager.py\tTurnManager._begin_turn\tcall _mark_turn_started_observation\t0a27033d84f82b8f\t0\tobservation\tMarks the voice TurnStarted event only after the private lifecycle callback completes.",
+    "turn_started_producer\tsession/_turn_runner.py\tTurnRunner._emit_turn_started_observation\tconstruct TurnStarted\t5765e50281b09f52\t0\tobservation\tShared application and text producer exposes no private leases on the public event.",
+    "turn_started_producer\tturn_manager.py\tTurnManager._begin_turn\tconstruct TurnStarted\tb8c61a53c2de84cf\t0\tobservation\tVoice producer emits only after private identity installation and STT startup.",
+    "turn_started_subscription\tsession/_builder.py\tbuild_session\tcall session._subscribe_owned_reserved\t35e50eae6e91fe21\t0\tidentity_command\tReserved pre-handler no-ops marked observations and routes unmarked hand-built commands before public observers.",
     "turn_started_subscription\ttransports/_browser_events.py\tBrowserEventForwarder.__init__\tcall bus.subscribe\t85b12ee0831c3055\t0\tobservation\tBrowser forwarding observes TurnStarted without mutating Session identity."
   ]
 }

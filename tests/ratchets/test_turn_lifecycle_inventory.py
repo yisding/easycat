@@ -32,6 +32,7 @@ ROLES = frozenset(
         "identity_publish",
         "identity_publish_or_clear",
         "observation",
+        "private_handoff",
     }
 )
 
@@ -77,10 +78,33 @@ def test_turn_started_topology_has_one_command_path() -> None:
         role for site, role, _rationale in entries if site.category == "turn_started_subscription"
     ]
 
-    assert producers.count("identity_command") == 1
+    publications = [
+        role for site, role, _rationale in entries if site.category == "turn_publication_construct"
+    ]
+    markers = [
+        role
+        for site, role, _rationale in entries
+        if site.category == "turn_started_observation_marker"
+    ]
+    bindings = [
+        role for site, role, _rationale in entries if site.category == "turn_publication_binding"
+    ]
+    command_subscriptions = [
+        site
+        for site, role, _rationale in entries
+        if site.category == "turn_started_subscription" and role == "identity_command"
+    ]
+
+    assert producers.count("identity_command") == 0
     assert producers.count("observation") == 2
     assert subscriptions.count("identity_command") == 1
     assert subscriptions.count("observation") == 1
+    assert publications == ["private_handoff"] * 4
+    assert markers == ["observation"] * 2
+    assert bindings == ["private_handoff"]
+    assert [site.construct for site in command_subscriptions] == [
+        "call session._subscribe_owned_reserved"
+    ]
 
 
 def test_turn_manager_activity_epoch_has_one_owner_and_writer() -> None:
@@ -143,7 +167,11 @@ class TurnManager:
     _write_module(
         source_root,
         "producer.py",
-        "event = TurnStarted(turn_id='turn-1')\n",
+        """
+publication = TurnPublication(turn_id='turn-1')
+event = _mark_turn_started_observation(TurnStarted(turn_id='turn-1'))
+turn_manager.bind_turn_publication(callback)
+""",
     )
 
     counts = Counter(finding.site.category for finding in scan_turn_lifecycle(source_root))
@@ -156,7 +184,10 @@ class TurnManager:
         "identity_carrier_assignment": 1,
         "identity_clear_call": 1,
         "identity_pointer_assignment": 1,
+        "turn_publication_binding": 1,
+        "turn_publication_construct": 1,
         "turn_started_producer": 1,
+        "turn_started_observation_marker": 1,
         "turn_started_subscription": 1,
     }
 
