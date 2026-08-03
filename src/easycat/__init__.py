@@ -212,4 +212,4 @@ def __dir__() -> list[str]:
     return sorted(set(list(globals()) + list(_LAZY_ATTR) + [_VERSION_ATTR]))
 
 
-__all__ = sorted(_LAZY_ATTR)
+__all__ = sorted(_LAZY_ATTR)  # noqa: PLE0605 exports are generated from the public registry

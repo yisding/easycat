@@ -263,32 +263,25 @@ def test_justfile_parser_folds_continuations_and_strips_command_modifiers(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "justfile").write_text(
-        "\n".join(
-            (
-                "base:",
-                "    @uv run pytest \\",
-                "        tests/unit \\",
-                "        tests/runtime",
-                "    -uv run optional-check",
-                "    @-uv run quiet-optional-check",
-                "",
-                "dependent: base",
-                "    -@uv run mypy \\",
-                "        src/easycat",
-                "",
-            )
-        ),
+        """base:
+    @uv run pytest \\
+        tests/unit \\
+        tests/runtime
+    -uv run optional-check
+    @-uv run quiet-optional-check
+
+dependent: base
+    -@uv run mypy \\
+        src/easycat
+""",
         encoding="utf-8",
     )
 
     commands = just_recipe_commands(tmp_path)
 
-    assert commands["base"] == " && ".join(
-        (
-            "uv run pytest tests/unit tests/runtime",
-            "uv run optional-check",
-            "uv run quiet-optional-check",
-        )
+    assert commands["base"] == (
+        "uv run pytest tests/unit tests/runtime && uv run optional-check && "
+        "uv run quiet-optional-check"
     )
     assert commands["dependent"] == (f"{commands['base']} && uv run mypy src/easycat")
 

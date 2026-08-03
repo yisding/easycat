@@ -20,7 +20,7 @@ def test_validate_latency_cli_runs_smoke_and_writes_report(
     report_path = tmp_path / "latency.json"
     called: dict[str, object] = {}
 
-    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:
         called["mode"] = mode
         called.update(kwargs)
         run = ValidationRun(
@@ -75,7 +75,7 @@ def test_validate_latency_cli_can_require_samples(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:
         called["mode"] = mode
         called.update(kwargs)
         run = ValidationRun(
@@ -144,7 +144,7 @@ def test_validate_latency_cli_json_uses_standard_envelope(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+    def fake_run_latency_validation(mode: LatencyMode | str, **kwargs) -> ValidationRunResult:
         run = ValidationRun(
             run_id="20260522T120000Z-latency-sweep-12345",
             command=["uv", "run", "pytest", "-q"],

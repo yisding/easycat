@@ -30,10 +30,10 @@ from tests.session._session_core_helpers import FakeTransport, _full_config
 
 
 def _text_session(**overrides: Any) -> Session:
-    defaults: dict[str, Any] = dict(
-        agent=NoopAgent(),
-        runtime_mode="text_session",
-    )
+    defaults: dict[str, Any] = {
+        "agent": NoopAgent(),
+        "runtime_mode": "text_session",
+    }
     defaults.update(overrides)
     return Session(SessionConfig(**defaults))
 

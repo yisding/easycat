@@ -250,13 +250,12 @@ def _validate_common(
         from urllib.parse import urlparse
 
         parsed = urlparse(agent)
-        if parsed.scheme in ("http", "https") and parsed.netloc:
-            if agent_model is None:
-                raise EasyConfigError(
-                    "agent_model is required when agent is a URL string. "
-                    "Set agent_model to the model identifier the remote "
-                    "Responses API server should use."
-                )
+        if parsed.scheme in ("http", "https") and parsed.netloc and agent_model is None:
+            raise EasyConfigError(
+                "agent_model is required when agent is a URL string. "
+                "Set agent_model to the model identifier the remote "
+                "Responses API server should use."
+            )
 
 
 def _stt_uses_native_endpointing(stt: Any) -> bool:

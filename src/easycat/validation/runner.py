@@ -8,8 +8,12 @@ from easycat.validation import (
     _live_runner,
     _release_runner,
 )
-from easycat.validation._lane_harness import ValidationRunResult as ValidationRunResult
-from easycat.validation._runner_support import CommandResult as CommandResult
+from easycat.validation._lane_harness import (
+    ValidationRunResult as ValidationRunResult,  # noqa: PLC0414 public compatibility export
+)
+from easycat.validation._runner_support import (
+    CommandResult as CommandResult,  # noqa: PLC0414 public compatibility export
+)
 from easycat.validation._runner_support import CommandRunner
 from easycat.validation._slice_runner import VALIDATION_SELECTORS, run_validation_slice
 

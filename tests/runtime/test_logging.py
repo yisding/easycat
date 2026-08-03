@@ -91,6 +91,7 @@ def test_import_installs_only_nullhandler_and_leaves_root_untouched() -> None:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OK"
@@ -109,6 +110,7 @@ def test_import_does_not_call_basicconfig() -> None:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "OK"

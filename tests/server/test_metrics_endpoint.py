@@ -32,34 +32,30 @@ _RESOLVED_TOKEN = "sk-live-secret-token-abcdef1234567890"
 
 
 class _FakeSession:
-    async def start(self) -> None:  # noqa: D401 - test stub
+    async def start(self) -> None:
         pass
 
-    async def stop(self, *, force: bool = False) -> None:  # noqa: D401 - test stub
+    async def stop(self, *, force: bool = False) -> None:
         pass
 
 
 def _write_manifest(tmp_path: Path) -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
-        "\n".join(
-            [
-                "[project]",
-                'name = "metrics-endpoint-test"',
-                "",
-                "[server]",
-                'host = "127.0.0.1"',
-                "port = 0",
-                'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
-                "",
-                "[voice.default]",
-                'transport = "webrtc"',
-                'stt = "openai/realtime"',
-                'tts = "openai"',
-                'vad = "silero"',
-                "",
-            ]
-        ),
+        """[project]
+name = "metrics-endpoint-test"
+
+[server]
+host = "127.0.0.1"
+port = 0
+auth = "bearer-env:EASYCAT_SERVE_TOKEN"
+
+[voice.default]
+transport = "webrtc"
+stt = "openai/realtime"
+tts = "openai"
+vad = "silero"
+""",
         encoding="utf-8",
     )
     return manifest

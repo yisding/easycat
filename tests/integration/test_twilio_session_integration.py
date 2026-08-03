@@ -66,7 +66,7 @@ async def test_create_session_twilio_emits_dtmf_and_playback_ack(
                         "transcript": stt_final.text,
                     }
                 )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not server_result.done():
                 server_result.set_exception(exc)
         finally:

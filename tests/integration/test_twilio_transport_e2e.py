@@ -150,7 +150,7 @@ async def test_twilio_full_turn_e2e(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result({"text": final.text})
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -215,7 +215,7 @@ async def test_twilio_outbound_track_filtered(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -294,7 +294,7 @@ async def test_twilio_invalid_base64_media_ignored(
             final = await collector.wait_for(AgentFinal, timeout=3.0)
             if not result_future.done():
                 result_future.set_result(final.text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -458,7 +458,7 @@ async def test_twilio_dtmf_during_session(
             await collector.wait_for_count(DTMF, 2, timeout=2.0)
             if not result_future.done():
                 result_future.set_result({"text": final.text, "digits": list(dtmf_digits)})
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:
@@ -534,7 +534,7 @@ async def test_twilio_barge_in_sends_clear(
             interruption = await collector.wait_for(Interruption, timeout=5.0)
             if not result_future.done():
                 result_future.set_result(interruption is not None)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             if not result_future.done():
                 result_future.set_exception(exc)
         finally:

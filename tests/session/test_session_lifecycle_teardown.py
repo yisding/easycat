@@ -860,7 +860,7 @@ async def test_stale_cancel_turn_cleanup_preserves_barge_in_successor():
 
     try:
         await asyncio.wait_for(transport.first_clear_entered.wait(), timeout=1)
-        await session._turn_manager._handle_speech_start()  # noqa: SLF001
+        await session._turn_manager._handle_speech_start()
 
         successor = session._turn
         successor_stt_task = session._stt_committer.stt_task
@@ -920,7 +920,7 @@ async def test_stale_cancel_tts_playback_preserves_barge_in_successor():
     try:
         await asyncio.wait_for(transport.first_clear_entered.wait(), timeout=1)
         assert tts.cancelled.is_set()
-        await session._turn_manager._handle_speech_start()  # noqa: SLF001
+        await session._turn_manager._handle_speech_start()
 
         successor = session._turn
         assert successor is not None and successor is not old_turn
@@ -928,7 +928,7 @@ async def test_stale_cancel_tts_playback_preserves_barge_in_successor():
 
         # The successor can finish its agent work and begin playback while
         # the old transport clear remains blocked.
-        session._turn_manager._state = TurnManagerState.BOT_SPEAKING  # noqa: SLF001
+        session._turn_manager._state = TurnManagerState.BOT_SPEAKING
 
         transport.release_first_clear.set()
         await cancel_task

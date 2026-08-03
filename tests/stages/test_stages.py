@@ -98,7 +98,7 @@ async def test_stage_capture_skips_artifact_puts_when_journal_is_degraded(
 
 
 class _ContextRecordingBridge:
-    COMMITTABLE_BOUNDARIES = {}
+    COMMITTABLE_BOUNDARIES = {}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self, response: str = "ok") -> None:
         self.response = response
@@ -698,7 +698,7 @@ class TestStageExecuteRecording:
 
     async def test_agent_stage_journals_delta_before_yield_on_stream_close(self):
         class _OneDeltaBridge:
-            COMMITTABLE_BOUNDARIES = {}
+            COMMITTABLE_BOUNDARIES = {}  # noqa: RUF012 test fake uses shared class fixture
 
             async def invoke(
                 self,
@@ -747,7 +747,7 @@ class TestStageExecuteRecording:
 
     async def test_agent_stage_excludes_cancelled_delta_from_completion_history(self):
         class _CancelledDeltaBridge:
-            COMMITTABLE_BOUNDARIES = {}
+            COMMITTABLE_BOUNDARIES = {}  # noqa: RUF012 test fake uses shared class fixture
 
             async def invoke(
                 self,

@@ -53,9 +53,11 @@ prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a helpful voice assistant. "
-            "When the user says goodbye, use the end_call tool. "
-            "Be concise — you are speaking, not writing.",
+            (
+                "You are a helpful voice assistant. "
+                "When the user says goodbye, use the end_call tool. "
+                "Be concise — you are speaking, not writing."
+            ),
         ),
         ("placeholder", "{history}"),
         ("user", "{input}"),

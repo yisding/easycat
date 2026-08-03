@@ -39,7 +39,7 @@ from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConf
 class _CaptureBridge:
     """ExternalAgentBridge stub that records every turn_input.context."""
 
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self) -> None:
         self.captured_contexts: list[list[dict[str, str]]] = []

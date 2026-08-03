@@ -60,7 +60,7 @@ class _MockWSConnection:
             # Block until close is called (simulates a long-lived connection).
             while not self._closed:
                 await asyncio.sleep(0.01)
-            raise Exception("connection closed")
+            raise ConnectionError("connection closed")
         return self._messages.pop(0)
 
     async def close(self) -> None:

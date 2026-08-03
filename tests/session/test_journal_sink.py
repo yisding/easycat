@@ -514,7 +514,7 @@ async def test_journal_sink_coerces_non_json_native_action_payload() -> None:
 
     payload = {
         "tags": {"vip"},
-        "scheduled_at": datetime.datetime(2026, 6, 28, 12, 0, 0),
+        "scheduled_at": datetime.datetime(2026, 6, 28, 12, 0, 0, tzinfo=datetime.UTC),
     }
     await bus.emit(SessionActionRequested(action=CustomAction(name="schedule", payload=payload)))
 

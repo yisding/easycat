@@ -80,17 +80,17 @@ def _default_parse(frame):
 
 
 def _make_adapter(ws, **overrides) -> MultiContextAdapter:
-    defaults = dict(
-        connect_factory=lambda _hook: ws,
-        parse_frame=_default_parse,
+    defaults = {
+        "connect_factory": lambda _hook: ws,
+        "parse_frame": _default_parse,
         # route_key receives the *parsed* object now (parse happens once).
-        route_key=lambda d: d.get("context_id") if isinstance(d, dict) else None,
-        context_cancel_frames=lambda cid: [json.dumps({"context_id": cid, "cancel": True})],
-        on_context_replay=lambda _id: None,
-        socket_close_frames=lambda: [],
-        on_global_frame=lambda _f: None,
-        context_queue_maxsize=64,
-    )
+        "route_key": lambda d: d.get("context_id") if isinstance(d, dict) else None,
+        "context_cancel_frames": lambda cid: [json.dumps({"context_id": cid, "cancel": True})],
+        "on_context_replay": lambda _id: None,
+        "socket_close_frames": list,
+        "on_global_frame": lambda _f: None,
+        "context_queue_maxsize": 64,
+    }
     defaults.update(overrides)
     return MultiContextAdapter(**defaults)
 

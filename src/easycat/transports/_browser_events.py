@@ -247,7 +247,7 @@ class BrowserEventForwarder:
         except asyncio.CancelledError:
             task.cancel()
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("Dropping browser event %s: send failed", payload.get("type"))
 
     async def _call_send_json(self, payload: dict[str, Any]) -> None:
@@ -259,7 +259,7 @@ class BrowserEventForwarder:
             task.result()
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             # _send_payload logs failures while it owns the task. This callback
             # also retrieves exceptions from detached, timed-out sends.
             pass

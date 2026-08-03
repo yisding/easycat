@@ -26,26 +26,54 @@ from easycat._audio_utils import resample, to_mono
 from easycat._extras import require_module
 from easycat._numeric import is_finite_number
 from easycat._smart_turn_features import (
-    _create_triangular_filter_bank as _create_triangular_filter_bank,
+    _create_triangular_filter_bank as _create_triangular_filter_bank,  # noqa: PLC0414 compatibility export
 )
-from easycat._smart_turn_features import _hertz_to_mel as _hertz_to_mel
-from easycat._smart_turn_features import _mel_filter_bank as _mel_filter_bank
-from easycat._smart_turn_features import _mel_to_hertz as _mel_to_hertz
-from easycat._smart_turn_features import _spectrogram as _spectrogram
-from easycat._smart_turn_features import _WhisperFeatureExtractorNP as _WhisperFeatureExtractorNP
-from easycat._smart_turn_features import _window_function as _window_function
-from easycat._smart_turn_resources import _CGROUP_ROOT as _CGROUP_ROOT
-from easycat._smart_turn_resources import _MAX_INTRA_OP_THREADS as _MAX_INTRA_OP_THREADS
-from easycat._smart_turn_resources import _SELF_CGROUP as _SELF_CGROUP
-from easycat._smart_turn_resources import _cgroup_ancestors as _cgroup_ancestors
-from easycat._smart_turn_resources import _cgroup_cpu_count as _cgroup_cpu_count
-from easycat._smart_turn_resources import _cgroup_path as _cgroup_path
-from easycat._smart_turn_resources import _current_cgroup_paths as _current_cgroup_paths
+from easycat._smart_turn_features import (
+    _hertz_to_mel as _hertz_to_mel,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_features import (
+    _mel_filter_bank as _mel_filter_bank,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_features import (
+    _mel_to_hertz as _mel_to_hertz,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_features import (
+    _spectrogram as _spectrogram,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_features import (
+    _WhisperFeatureExtractorNP,
+)
+from easycat._smart_turn_features import (
+    _window_function as _window_function,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _CGROUP_ROOT as _CGROUP_ROOT,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _MAX_INTRA_OP_THREADS,
+    _cgroup_cpu_count,
+)
+from easycat._smart_turn_resources import (
+    _SELF_CGROUP as _SELF_CGROUP,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _cgroup_ancestors as _cgroup_ancestors,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _cgroup_path as _cgroup_path,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _current_cgroup_paths as _current_cgroup_paths,  # noqa: PLC0414 compatibility export
+)
 from easycat._smart_turn_resources import (
     _intra_op_thread_count as _resource_intra_op_thread_count,
 )
-from easycat._smart_turn_resources import _quota_cpu_count as _quota_cpu_count
-from easycat._smart_turn_resources import _quota_from_paths as _quota_from_paths
+from easycat._smart_turn_resources import (
+    _quota_cpu_count as _quota_cpu_count,  # noqa: PLC0414 compatibility export
+)
+from easycat._smart_turn_resources import (
+    _quota_from_paths as _quota_from_paths,  # noqa: PLC0414 compatibility export
+)
 from easycat.audio_format import AudioChunk
 
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
@@ -161,7 +189,7 @@ class SmartTurnONNX:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._warmup_sync)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("Smart-turn warmup skipped: %s", exc)
 
     def _warmup_sync(self) -> None:

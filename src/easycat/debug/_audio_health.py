@@ -24,6 +24,7 @@ them as int16 would be meaningless.
 
 from __future__ import annotations
 
+import itertools
 from array import array
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -343,10 +344,9 @@ def detect_dead_air(
     for turn_id, walls in by_turn.items():
         walls.sort()
         max_gap_ns = 0
-        for prev, nxt in zip(walls, walls[1:]):
+        for prev, nxt in itertools.pairwise(walls):
             gap = nxt - prev
-            if gap > max_gap_ns:
-                max_gap_ns = gap
+            max_gap_ns = max(max_gap_ns, gap)
         gap_ms = max_gap_ns / 1_000_000
         if gap_ms > dead_air_ms:
             flagged[turn_id] = gap_ms

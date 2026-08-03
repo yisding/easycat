@@ -348,7 +348,7 @@ def _audio_source(records, blobs):
         label="audio-source",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: blobs.get(ref),
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
 
@@ -705,7 +705,7 @@ def test_collect_concat_pcm_joins_frames():
         label="concat-source",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: blobs.get(ref),
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
     pcm, fmt = _collect_concat_pcm(source, "t1", track="tts")
     assert pcm == b"\x01\x02\x03\x04"
@@ -971,7 +971,7 @@ def test_collect_audio_frames_mic_falls_back_from_unsafe_target_format():
         label="mic-source",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: {"a": b"\x00\x00", "b": b"\x01" * 4}.get(ref),
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
     frames, fmt = _collect_audio_frames(source, "t1", track="mic")
     assert frames == []
@@ -994,7 +994,7 @@ def test_collect_audio_frames_mic_preserves_unsupported_width():
         label="mic-source",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: {"a": b"\x55" * 160}.get(ref),
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
     frames, fmt = _collect_audio_frames(source, "t1", track="mic")
     # The matching frame survives so the route reaches its unsupported-width
@@ -1041,7 +1041,7 @@ def test_collect_audio_frames_mic_selects_stt_stage_start():
         label="mic-source",
         _records_fn=lambda: records,
         _artifact_fn=lambda ref: blobs.get(ref),
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
     frames, fmt = _collect_audio_frames(source, "t1", track="mic")
     assert frames == [b"AA", b"BB"]  # seq 1 then seq 5, vad/tts excluded

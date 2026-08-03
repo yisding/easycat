@@ -433,7 +433,7 @@ class TestElevenLabsTTSHTTP:
         fake_response = FakeHTTPStreamResponse([], status_code=401)
         client = provider._get_http_client()
 
-        with patch.object(client, "stream", return_value=fake_response):
+        with patch.object(client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(httpx.HTTPStatusError):
                 async for _ in provider.synthesize("error test"):
                     pass
@@ -960,7 +960,7 @@ class TestElevenLabsPersistent:
             async def connect(self) -> None:
                 raise RuntimeError("connect boom")
 
-        with patch.object(provider, "_build_multi_ws", return_value=FailingConnectWS()):
+        with patch.object(provider, "_build_multi_ws", return_value=FailingConnectWS()):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(RuntimeError, match="connect boom"):
                 async for _ in provider.synthesize("hi"):
                     pass
@@ -1193,7 +1193,7 @@ class TestElevenLabsPersistent:
                     await self._queue.put(json.dumps({"audio": audio, "contextId": cid}))
                     await self._queue.put(None)  # end recv_iter mid-utterance
 
-        with patch.object(provider, "_build_multi_ws", return_value=DyingWS()):
+        with patch.object(provider, "_build_multi_ws", return_value=DyingWS()):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(Exception):
                 await asyncio.wait_for(_drain(provider.synthesize("hi")), timeout=2.0)
         await asyncio.sleep(0)

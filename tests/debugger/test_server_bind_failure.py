@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("aiohttp")
 
-from easycat.debugger import server as _server  # noqa: E402
+from easycat.debugger import server as _server
 
 
 def _bind_a_free_port() -> tuple[socket.socket, int]:

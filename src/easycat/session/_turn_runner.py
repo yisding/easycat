@@ -365,7 +365,7 @@ class TurnRunner:
                 return _PreemptiveAgentResult(response=response)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 return _PreemptiveAgentResult(error=exc)
 
         self._preemptive_task = self._runtime_scope.create_journaled_task(
@@ -832,7 +832,7 @@ class TurnRunner:
         self._record_voice_total_latency(turn)
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
-        if self._turn.current is turn and self._turn.generation == st.turn_gen:
+        if self._turn.current is turn and self._turn.generation == st.turn_gen:  # noqa: SIM102 nested branches preserve decision context
             if self._turn_manager.state != TurnManagerState.IDLE:
                 self._reset_turn_state()
         return accumulated_text

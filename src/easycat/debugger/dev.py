@@ -175,7 +175,7 @@ async def _unregister_on_close(session: Session) -> None:
     try:
         if callable(waiter):
             await waiter()
-    except Exception:  # noqa: BLE001 - never let a watcher crash the loop
+    except Exception:
         logger.debug("dev session wait_closed failed; unregistering anyway", exc_info=True)
     finally:
         unregister_session_obj(session)

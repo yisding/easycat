@@ -344,7 +344,7 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     importable from ``easycat.transports`` and documented in
     ``docs/public-api.md``.
     """
-    import easycat.transports as transports
+    from easycat import transports
 
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     try:
@@ -369,7 +369,7 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
 
 
 def test_provider_testing_extension_surface_is_public_and_documented() -> None:
-    import easycat.testing as testing
+    from easycat import testing
 
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     try:
@@ -392,7 +392,7 @@ def test_provider_testing_extension_surface_is_public_and_documented() -> None:
 
 def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
     """`easycat.integrations.agents` exposes the supported bridge seam."""
-    import easycat.integrations.agents as agents
+    from easycat.integrations import agents
 
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     try:
@@ -415,7 +415,7 @@ def test_agent_bridge_extension_surface_is_public_and_documented() -> None:
 
 
 def test_agent_bridge_constructor_signatures_are_stable() -> None:
-    import easycat.integrations.agents as agents
+    from easycat.integrations import agents
 
     actual = {
         name: str(inspect.signature(getattr(agents, name)))
@@ -453,8 +453,7 @@ def test_websocket_runtime_static_consumers_are_compatible(tmp_path: Path) -> No
 
 def test_server_package_owns_standalone_transport_orchestration() -> None:
     """Process lifecycle helpers belong to ``easycat.server``, not providers."""
-    import easycat.server as server
-    import easycat.transports as transports
+    from easycat import server, transports
 
     helpers = {
         "run_webrtc_config_server",

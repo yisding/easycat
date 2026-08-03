@@ -41,6 +41,7 @@ from easycat.validation.report import (
 
 __all__ = [
     "DEFAULT_BUDGETS",
+    "REDACTION_VERSION",
     "ArtifactRef",
     "EventLoopLagSampler",
     "GitMetadata",
@@ -53,7 +54,6 @@ __all__ = [
     "ProviderCheck",
     "ProviderCheckState",
     "ProviderIdentifier",
-    "REDACTION_VERSION",
     "ReliabilitySample",
     "ReliabilitySignals",
     "ValidationCheck",

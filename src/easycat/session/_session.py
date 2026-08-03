@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from re import sub
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, Self, TypeVar, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
@@ -128,7 +128,7 @@ def _recording_filename_session_id(session_id: str) -> str:
 
 def _validate_application_record_name(name: str) -> None:
     if not isinstance(name, str):
-        raise ValueError("Application journal record name must be a string")
+        raise ValueError("Application journal record name must be a string")  # noqa: TRY004 domain-specific validation error
     if name in BUILTIN_JOURNAL_RECORD_CONTRACTS:
         raise ValueError(f"Journal record name {name!r} is reserved by EasyCat")
     if not name.startswith("app.") or not name.removeprefix("app.").strip():
@@ -152,7 +152,7 @@ def _application_record_tags(tags: object) -> frozenset[str]:
 
 def _application_record_data(data: object) -> dict[str, Any]:
     if not isinstance(data, dict):
-        raise ValueError("Application journal record data must be a dictionary")
+        raise ValueError("Application journal record data must be a dictionary")  # noqa: TRY004 domain-specific validation error
     active: set[int] = set()
 
     def _snapshot(value: Any, path: str) -> Any:
@@ -172,7 +172,7 @@ def _application_record_data(data: object) -> dict[str, Any]:
                     snapshot: dict[str, Any] = {}
                     for key, item in value.items():
                         if not isinstance(key, str):
-                            raise ValueError(
+                            raise ValueError(  # noqa: TRY004 domain-specific validation error
                                 f"Application journal record {path} keys must be strings"
                             )
                         snapshot[key] = _snapshot(item, f"{path}.{key}")
@@ -1174,7 +1174,7 @@ class Session:
         snapshot = _application_record_data(data)
         frozen_tags = _application_record_tags(tags)
         inherit_turn_id = turn_id is _APPLICATION_TURN_ID_OMITTED
-        if not inherit_turn_id and turn_id is not None:
+        if not inherit_turn_id and turn_id is not None:  # noqa: SIM102 nested branches preserve decision context
             if not isinstance(turn_id, str) or not turn_id.strip():
                 raise ValueError("Application journal record turn_id must be non-empty or None")
         sequence = self._journal_sink.append_record(
@@ -1210,7 +1210,7 @@ class Session:
 
     # ── Async context manager ────────────────────────────────────
 
-    async def __aenter__(self) -> Session:
+    async def __aenter__(self) -> Self:
         """Enter an ``async with session:`` block.
 
         Starts the session when it has not been started already so that
@@ -1448,15 +1448,15 @@ class Session:
                 # start(). Preserve it by re-raising the original cancellation
                 # only after the independent cleanup task has completed.
                 continue
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 # The owned task has settled with an error. Read it below so
                 # the startup exception remains the primary caller outcome.
                 break
         try:
             cleanup_task.result()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return exc
-        except BaseException:
+        except BaseException:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return RuntimeError("Session startup rollback was interrupted")
         return None
 
@@ -1564,7 +1564,7 @@ class Session:
                 if done:
                     try:
                         superseded_task.result()
-                    except (asyncio.CancelledError, Exception):
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                         pass
                 else:
                     logger.warning(
@@ -1603,7 +1603,7 @@ class Session:
                 text_task.cancel()
                 try:
                     await text_task
-                except (asyncio.CancelledError, Exception):
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     pass
             if force and not prompt_is_current:
                 await self._turn_runner.cancel_application_prompt()
@@ -1654,7 +1654,7 @@ class Session:
                 for task in tasks:
                     try:
                         await task
-                    except (asyncio.CancelledError, Exception):
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                         pass
                 await self._stt_committer.cancel(turn)
                 # RuntimeScope-owned work currently covers heartbeat,
@@ -1824,9 +1824,8 @@ class Session:
         # the cleanup task itself remains owned by detached turn cleanup.
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        if barge_in:
-            if turn:
-                turn.record_barge_in()
+        if barge_in and turn:
+            turn.record_barge_in()
         self._tts_scheduler.set_playback_suppressed(True)
         tts_task = self._tts_scheduler.request_turn_cancel()
         self._outbound_queue.flush_for_new_turn()

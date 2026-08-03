@@ -72,7 +72,7 @@ async def main() -> None:
         while not stop.is_set():
             try:
                 await ws.send(SILENCE_FRAME_20MS_16KHZ)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 print(f"[client] send failed (will reconnect on next recv): {exc}")
             await asyncio.sleep(0.02)
 
@@ -89,14 +89,14 @@ async def main() -> None:
                         else len(message or "")
                     )
                     print(f"[client] received {size} bytes/chars from server")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 print(f"[client] receive loop error: {exc}")
             if stop.is_set():
                 return
             print("[client] receive stream ended; reconnecting…")
             try:
                 await ws.connect()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 print(f"[client] reconnect failed: {exc}; giving up")
                 stop.set()
                 return

@@ -251,8 +251,10 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --group dev",
             "uv run easycat console --voice-demo",
-            "uv run easycat init my-agent --easycat-git "
-            "https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>",
+            (
+                "uv run easycat init my-agent --easycat-git "
+                "https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>"
+            ),
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
@@ -572,9 +574,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --group dev",
             "uv run python docs/using-easycat/10-telephony/main.py",
-            "uv sync "
-            "--extra openai --extra telephony --extra telephony-fastapi "
-            "--extra openai-agents --group dev",
+            (
+                "uv sync "
+                "--extra openai --extra telephony --extra telephony-fastapi "
+                "--extra openai-agents --group dev"
+            ),
             "uv run easycat doctor --env-file .env --json",
             (
                 "uv run --env-file .env uvicorn examples.twilio_app:create_app "
@@ -745,8 +749,10 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "uv run pytest tests/debug/test_testing_helpers.py",
-            "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
-            "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
+            (
+                "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
+                "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle"
+            ),
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run easycat validate latency --smoke",

@@ -365,7 +365,7 @@ class TurnManager:
         if hook is not None:
             try:
                 hook(from_state, to_state, reason, self._current_turn_id)
-            except Exception:  # noqa: BLE001 - never break the state machine
+            except Exception:
                 logger.debug("journal state-change hook raised", exc_info=True)
 
     def bind_endpoint_stage(

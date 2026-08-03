@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import easycat.recipes as recipes
+from easycat import recipes
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.errors import EasyCatError
 from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType

@@ -200,7 +200,7 @@ class BridgeTemplate:
                 if not _is_secret_name(str(k))
             }
             return json.dumps(scrubbed, default=str).encode()
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return b"{}"
 
     # ── Inherited boilerplate: invoke lifecycle ───────────────────

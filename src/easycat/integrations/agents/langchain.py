@@ -361,7 +361,7 @@ class LangChainBridge:
                 if (event := _stream_event_object(event)) is None:
                     continue
 
-                if event.get("event") == "on_chain_start" and not (event.get("parent_ids") or ()):
+                if event.get("event") == "on_chain_start" and not (event.get("parent_ids") or ()):  # noqa: SIM102 nested branches preserve decision context
                     if acc.root_run_id is None:
                         rid = str(event.get("run_id") or "")
                         if rid:

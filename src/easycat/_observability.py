@@ -175,7 +175,7 @@ def record_histogram(
 
 def increment_counter(
     name: str,
-    value: int | float = 1,
+    value: float = 1,
     attributes: Mapping[str, Any] | None = None,
 ) -> None:
     _record_metric(name, "counter", value, attributes)
@@ -183,7 +183,7 @@ def increment_counter(
 
 def observe_gauge(
     name: str,
-    value: int | float,
+    value: float,
     attributes: Mapping[str, Any] | None = None,
 ) -> None:
     _record_metric(name, "observable_gauge", value, attributes)
@@ -258,7 +258,7 @@ def _validate_attribute_keys(
 def _record_metric(
     name: str,
     expected_kind: MetricKind,
-    value: int | float,
+    value: float,
     attributes: Mapping[str, Any] | None,
 ) -> None:
     if METRIC_DEFINITIONS.get(name) != expected_kind:
@@ -302,7 +302,7 @@ def _safe_attribute_value(value: Any) -> str | int | float | bool:
     return str(value)
 
 
-def _update_gauge_value(name: str, value: int | float, attributes: dict[str, Any]) -> None:
+def _update_gauge_value(name: str, value: float, attributes: dict[str, Any]) -> None:
     key = tuple(sorted(attributes.items()))
     with _GAUGE_LOCK:
         values = _GAUGE_VALUES.setdefault(name, {})
@@ -326,7 +326,7 @@ def _gauge_callback(name: str) -> Any:
     return _callback
 
 
-def _make_observation(value: int | float, attributes: dict[str, Any]) -> Any:
+def _make_observation(value: float, attributes: dict[str, Any]) -> Any:
     from opentelemetry.metrics import Observation
 
     return Observation(value, attributes=attributes)

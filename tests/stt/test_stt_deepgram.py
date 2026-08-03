@@ -242,7 +242,7 @@ def _make_deepgram_stt(
 @pytest.mark.asyncio
 async def test_deepgram_receives_final_transcript():
     messages = [_deepgram_result("hello world", is_final=True)]
-    stt, ws = _make_deepgram_stt(messages)
+    stt, _ws = _make_deepgram_stt(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     chunks = make_audio_chunks(pcm)
@@ -259,7 +259,7 @@ async def test_deepgram_receives_partial_and_final():
         _deepgram_result("hel", is_final=False),
         _deepgram_result("hello world", is_final=True),
     ]
-    stt, ws = _make_deepgram_stt(messages)
+    stt, _ws = _make_deepgram_stt(messages)
 
     pcm = generate_pcm_sine(duration_ms=200)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))

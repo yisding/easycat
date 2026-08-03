@@ -233,7 +233,7 @@ def test_align_tracks_skips_malformed_sequence_values():
 def test_frame_rms_series_mulaw_width_one_yields_no_frames():
     # 8-bit mu-law (sample_width == 1) is unsupported by the shared decoder, so
     # the RMS series is empty rather than mis-decoded int8 garbage.
-    blob = bytes(range(0, 256)) * 4
+    blob = bytes(range(256)) * 4
     assert frame_rms_series(blob, sample_width=1, frame_ms=20) == []
     # The supported int16 path still produces frames from the same byte count.
     assert frame_rms_series(_tone_pcm(4000, 320), sample_width=2, frame_ms=20)

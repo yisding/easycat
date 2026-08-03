@@ -92,7 +92,7 @@ class ContractSuite:
       fails the test instead of hanging it.
     """
 
-    pytestmark = [pytest.mark.contract]
+    pytestmark: ClassVar[list[Any]] = [pytest.mark.contract]
 
     provider_factory: ClassVar[Callable[[], Any] | None] = None
     live: ClassVar[bool] = False

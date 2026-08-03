@@ -236,14 +236,14 @@ async def _close_vad_provider_owned(provider: Any) -> None:
     close_error: BaseException | None = None
     try:
         close_task.result()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         close_error = exc
     if cancellation is not None:
         if close_error is not None:
             raise cancellation from close_error
         raise cancellation
     if isinstance(close_error, asyncio.CancelledError):
-        raise RuntimeError("Debugger VAD provider cleanup was interrupted") from close_error
+        raise RuntimeError("Debugger VAD provider cleanup was interrupted") from close_error  # noqa: TRY004 domain-specific validation error
     if close_error is not None:
         raise close_error
 
@@ -267,7 +267,7 @@ async def _vad_whatif_for_turn(
 
     try:
         provider = create_vad(VADConfig(sensitivity=threshold))
-    except Exception as exc:  # noqa: BLE001 - import/availability degrade → 422
+    except Exception as exc:
         raise RuntimeError(f"VAD provider unavailable: {exc}") from exc
 
     whatif_starts = 0
@@ -444,7 +444,7 @@ def _empty_dev_source() -> DebuggerSource:
     """
     return DebuggerSource(
         label=_EMPTY_DEV_SOURCE_LABEL,
-        _records_fn=lambda: [],
+        _records_fn=list,
         _progress_fn=lambda: (0, 0),
         _artifact_fn=lambda _ref: None,
         _manifest_fn=lambda: {
@@ -1027,7 +1027,7 @@ class _DebuggerRoutes:
                 tmp_path = source.export_turn(turn_id)
             except ValueError:
                 return web.Response(status=404, text="no records for that turn")
-            except Exception:  # noqa: BLE001 - never hide export errors
+            except Exception:
                 logger.exception("Turn export failed")
                 return web.Response(status=500, text="export failed")
             download_name = f"turn-{turn_id}.zip"
@@ -1036,7 +1036,7 @@ class _DebuggerRoutes:
                 return web.Response(status=503, text="no export function bound")
             try:
                 tmp_path = source.export()
-            except Exception:  # noqa: BLE001 - never hide export errors
+            except Exception:
                 # Detail is logged server-side; don't leak exception text to the
                 # client (CodeQL py/stack-trace-exposure).
                 logger.exception("Export failed")
@@ -1324,7 +1324,7 @@ class _DebuggerRoutes:
             if session is not None:
                 try:
                     stats = _session_overview_stats(_session_source(session).records())
-                except Exception:  # noqa: BLE001 - one flaky session must not 500 the strip
+                except Exception:
                     logger.debug(
                         "overview stats failed for %s", summary.registry_id, exc_info=True
                     )

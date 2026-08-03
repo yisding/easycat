@@ -409,7 +409,7 @@ class MultiContextWSManager:
 
     async def _aclose_transaction(self) -> None:
         """Run one physical close transaction after any connect owner settles."""
-        async with self._connect_lock:
+        async with self._connect_lock:  # noqa: SIM117 nested scopes clarify setup and cleanup
             # Lock order is always connect -> send. This joins an admitted
             # frame write before contexts or the exact socket are released.
             async with self._send_lock:
@@ -567,7 +567,7 @@ class MultiContextWSManager:
         # valid-but-non-object frame, etc., is treated as global/ignored.
         try:
             parsed = self._adapter.parse_frame(frame)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("Multi-context parse_frame raised; ignoring frame")
             return
         if parsed is None:
@@ -575,7 +575,7 @@ class MultiContextWSManager:
             return
         try:
             key = self._adapter.route_key(parsed)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("Multi-context route_key raised; treating as global")
             key = None
         ctx = self._contexts.get(key) if key is not None else None

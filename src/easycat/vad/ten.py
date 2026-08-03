@@ -119,7 +119,7 @@ class TenVAD(_VADBase):
     def version_info(self) -> dict[str, str]:
         try:
             sdk_ver = version("ten-vad")
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             sdk_ver = "unknown"
         return {
             "provider": "ten",

@@ -97,7 +97,7 @@ def test_resolve_tts_input_policy_prefers_typed_policy() -> None:
 
 def test_resolve_tts_input_policy_rejects_malformed_policy() -> None:
     class Provider:
-        input_policy = {"accepted_formats": ["plain"]}
+        input_policy = {"accepted_formats": ["plain"]}  # noqa: RUF012 test fake uses shared class fixture
 
     with pytest.raises(TypeError, match="input_policy"):
         resolve_tts_input_policy(Provider())

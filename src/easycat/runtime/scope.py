@@ -330,7 +330,7 @@ class RuntimeScope:
                     raise
                 if not cancel and pending is None:
                     pending = exc
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 if not cancel and pending is None:
                     pending = exc
             finally:

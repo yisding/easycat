@@ -531,11 +531,11 @@ def _is_placeholder_match(value: str) -> bool:
 
 
 __all__ = [
-    "ArtifactRedactionError",
-    "REDACTION_VERSION",
     "REDACTED_SECRET",
-    "RedactionPolicy",
+    "REDACTION_VERSION",
     "UNSAFE_TEXT_FIELDS",
+    "ArtifactRedactionError",
+    "RedactionPolicy",
     "contains_unredacted_sensitive_text",
     "redact_command",
     "redact_runtime_secrets",

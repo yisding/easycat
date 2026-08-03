@@ -19,7 +19,7 @@ from easycat.vad import VADConfig
 
 
 class _Agent:
-    async def run(self, text: str) -> str:  # noqa: D401 - test stub
+    async def run(self, text: str) -> str:
         return "ok"
 
 
@@ -127,7 +127,7 @@ def test_missing_extra_uses_find_spec_not_require_module(
     real_find_spec = importlib.util.find_spec
     seen: list[str] = []
 
-    def fake_find_spec(name: str, package: object = None):  # noqa: ANN202
+    def fake_find_spec(name: str, package: object = None):
         seen.append(name)
         if name == "aiortc":
             return None
@@ -159,7 +159,7 @@ def test_openai_audio_providers_do_not_require_optional_sdk(
     real_find_spec = importlib.util.find_spec
     seen: list[str] = []
 
-    def fake_find_spec(name: str, package: object = None):  # noqa: ANN202
+    def fake_find_spec(name: str, package: object = None):
         seen.append(name)
         if name == "openai":
             return None

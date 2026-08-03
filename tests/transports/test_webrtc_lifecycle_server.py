@@ -690,7 +690,7 @@ class TestWebRTCIngressQueueOwnership:
         await asyncio.sleep(0)
         assert not pending.done()
 
-        async def _boom(self) -> _FakeSessionDescription:  # noqa: ANN001
+        async def _boom(self) -> _FakeSessionDescription:
             raise RuntimeError("sdp boom")
 
         monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", _boom)
@@ -1114,7 +1114,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
 
         await transport.connect()
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
                 async with session.get(f"http://127.0.0.1:{port}/health") as resp:
                     assert resp.status == 200
                     data = await resp.json()
@@ -1152,7 +1152,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/", allow_redirects=False) as resp:
                 assert resp.status == 302
                 assert resp.headers["Location"] == "/webrtc_client.html"
@@ -1208,12 +1208,12 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         await transport.connect()
 
         query = urlencode({"webrtc": raw, "token": "sekrit"})
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"http://127.0.0.1:{port}/?{query}", allow_redirects=False
-            ) as resp:
-                assert resp.status == 302
-                location = resp.headers["Location"]
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"http://127.0.0.1:{port}/?{query}", allow_redirects=False) as resp,
+        ):
+            assert resp.status == 302
+            location = resp.headers["Location"]
 
         assert "webrtc=" not in location
         assert location == "/webrtc_client.html?token=sekrit"
@@ -1229,7 +1229,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/") as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1275,7 +1275,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport._config.static_dir = None
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/") as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1292,7 +1292,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/health") as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1345,7 +1345,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/config") as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1381,7 +1381,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
             async with session.get(f"http://127.0.0.1:{port}/config") as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1429,17 +1429,19 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         await transport.connect()
 
         origin = f"http://127.0.0.1:{port}"
-        async with aiohttp.ClientSession() as session:
-            async with session.options(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.options(
                 f"http://127.0.0.1:{port}/offer",
                 headers={
                     "Origin": origin,
                     "Access-Control-Request-Method": "POST",
                 },
-            ) as resp:
-                assert resp.status == 200
-                assert resp.headers["Access-Control-Allow-Origin"] == origin
-                assert resp.headers["Access-Control-Allow-Methods"] == "POST, GET, OPTIONS"
+            ) as resp,
+        ):
+            assert resp.status == 200
+            assert resp.headers["Access-Control-Allow-Origin"] == origin
+            assert resp.headers["Access-Control-Allow-Methods"] == "POST, GET, OPTIONS"
 
         await transport.disconnect()
 
@@ -1452,16 +1454,18 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
-            async with session.options(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.options(
                 f"http://127.0.0.1:{port}/offer",
                 headers={
                     "Origin": "https://evil.example",
                     "Access-Control-Request-Method": "POST",
                 },
-            ) as resp:
-                assert resp.status == 200
-                assert "Access-Control-Allow-Origin" not in resp.headers
+            ) as resp,
+        ):
+            assert resp.status == 200
+            assert "Access-Control-Allow-Origin" not in resp.headers
 
         await transport.disconnect()
 
@@ -1479,13 +1483,15 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
                 f"http://127.0.0.1:{port}/config",
                 headers={"Origin": origin},
-            ) as resp:
-                assert resp.status == 200
-                assert resp.headers["Access-Control-Allow-Origin"] == origin
+            ) as resp,
+        ):
+            assert resp.status == 200
+            assert resp.headers["Access-Control-Allow-Origin"] == origin
 
         await transport.disconnect()
 
@@ -1502,13 +1508,15 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
                 f"http://127.0.0.1:{port}/config",
                 headers={"Origin": "https://voice.example.com"},
-            ) as resp:
-                assert resp.status == 200
-                assert resp.headers["Access-Control-Allow-Origin"] == "*"
+            ) as resp,
+        ):
+            assert resp.status == 200
+            assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
         await transport.disconnect()
 
@@ -2189,7 +2197,7 @@ class TestWebRTCDegradedEvents:
     async def test_negotiation_failure_emits_non_fatal_and_coalesces(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
 
-        async def _boom(self) -> None:  # noqa: ANN001
+        async def _boom(self) -> None:
             raise RuntimeError("sdp boom")
 
         monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", _boom)

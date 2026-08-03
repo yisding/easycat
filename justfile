@@ -45,7 +45,7 @@ test-fast:
 test-one TARGET:
     uv run pytest "{{ TARGET }}"
 
-# Lint with ruff (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006, T201).
+# Lint with Ruff's defaults plus extensions (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006, T201, A001, A003, LOG, PERF203, PERF403).
 # Also runs the Import Linter contracts in pyproject.toml.
 # Run source lint and architectural import contracts.
 lint:

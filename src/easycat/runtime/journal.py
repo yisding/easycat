@@ -26,9 +26,9 @@ from easycat.runtime.records import (
 )
 
 __all__ = [
-    "append_journal_record_async",
     "ExecutionJournal",
     "JournalView",
+    "append_journal_record_async",
 ]
 
 
@@ -200,7 +200,7 @@ async def append_journal_record_async(
                     continue
             try:
                 worker.result()
-            except BaseException:
+            except BaseException:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 # Cancellation remains the caller-visible outcome; retrieving
                 # the result prevents a detached worker exception warning.
                 pass

@@ -561,7 +561,7 @@ class TestCartesiaPersistent:
             async def connect(self) -> None:
                 raise RuntimeError("connect boom")
 
-        with patch.object(provider, "_build_ws", return_value=FailingConnectWS()):
+        with patch.object(provider, "_build_ws", return_value=FailingConnectWS()):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(RuntimeError, match="connect boom"):
                 async for _ in provider.synthesize("hi"):
                     pass

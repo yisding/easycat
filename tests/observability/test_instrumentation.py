@@ -46,7 +46,7 @@ def test_no_sdk_path_validates_without_materializing_attributes(
     )
     observability.observe_gauge("easycat.queue.depth", 1, {"easycat.stage": "tts"})
 
-    with pytest.raises(ValueError, match="forbidden observability attribute: raw_text"):
+    with pytest.raises(ValueError, match="forbidden observability attribute: raw_text"):  # noqa: SIM117 nested scopes clarify setup and cleanup
         with observability.span("easycat.agent.invoke", {"raw_text": "secret"}):
             pass
     with pytest.raises(ValueError, match="unsupported observability attribute: unknown"):
@@ -295,7 +295,7 @@ async def test_transport_send_span_and_audio_counters_emit(
     from easycat.stages.transport import TransportStage
 
     class _StubTransport:
-        async def send_audio(self, chunk):  # noqa: ANN001
+        async def send_audio(self, chunk):
             return True
 
     tracer = _FakeTracer()
@@ -350,7 +350,7 @@ async def test_transport_send_validates_span_without_otel(
     from easycat.stages.transport import TransportStage
 
     class _StubTransport:
-        async def send_audio(self, chunk):  # noqa: ANN001
+        async def send_audio(self, chunk):
             return True
 
     monkeypatch.setattr(observability, "_get_tracer", lambda: None)
@@ -391,7 +391,7 @@ async def test_transport_send_error_increments_provider_errors_counter(
     from easycat.stages.transport import TransportStage
 
     class _BrokenTransport:
-        async def send_audio(self, chunk):  # noqa: ANN001
+        async def send_audio(self, chunk):
             raise RuntimeError("boom")
 
     tracer = _FakeTracer()
@@ -422,10 +422,9 @@ async def test_vad_detect_span_emits(monkeypatch: pytest.MonkeyPatch) -> None:
     from easycat.stages.vad import VADStage
 
     class _StubVAD:
-        async def process(self, chunk):  # noqa: ANN001
+        async def process(self, chunk):
             if False:
                 yield None
-            return
 
     tracer = _FakeTracer()
     monkeypatch.setattr(observability, "_get_tracer", lambda: tracer)
@@ -450,7 +449,7 @@ async def test_vad_error_increments_provider_errors_counter(
     from easycat.stages.vad import VADStage
 
     class _BrokenVAD:
-        async def process(self, chunk):  # noqa: ANN001
+        async def process(self, chunk):
             raise ValueError("vad-bad")
             if False:
                 yield None
@@ -493,11 +492,11 @@ async def test_audio_stage_attributes_error_to_failed_component(
     from easycat.stages.audio import AudioStage
 
     class _StubNR:
-        async def process(self, chunk):  # noqa: ANN001
+        async def process(self, chunk):
             return chunk
 
     class _BrokenEcho:
-        async def process(self, chunk):  # noqa: ANN001
+        async def process(self, chunk):
             raise ValueError("aec-bad")
 
     monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
@@ -529,7 +528,7 @@ async def test_stt_error_increments_provider_errors_counter(
     from easycat.stages.stt import STTStage
 
     class _BrokenSTT:
-        async def send_audio(self, chunk):  # noqa: ANN001
+        async def send_audio(self, chunk):
             raise RuntimeError("stt-down")
 
     monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
@@ -560,7 +559,7 @@ async def test_agent_error_increments_provider_errors_counter(
     from easycat.stages.agent import AgentStage
 
     class _BrokenAgent:
-        async def run(self, text):  # noqa: ANN001
+        async def run(self, text):
             raise RuntimeError("agent-down")
 
     monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
@@ -668,7 +667,7 @@ async def test_agent_tool_span_emits_on_tool_call(monkeypatch: pytest.MonkeyPatc
     class _ToolBridge(_TestBridgeBase):
         """Minimal bridge that emits a tool_started/result followed by done."""
 
-        async def invoke(self, turn_input, recorder, cancel_token=None):  # noqa: ANN001
+        async def invoke(self, turn_input, recorder, cancel_token=None):
             yield AgentBridgeEvent(kind="tool_started", tool_name="calc", call_id="c1")
             yield AgentBridgeEvent(kind="tool_result", call_id="c1", result="42")
             yield AgentBridgeEvent(kind="done", text="answer: 42")

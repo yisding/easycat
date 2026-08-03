@@ -755,7 +755,7 @@ class TestDeepgramTTS:
         fake_ws = FakeReconnectingWS()
         fake_ws.connect = AsyncMock(side_effect=RuntimeError("connect failed"))
 
-        with patch.object(provider, "_create_ws", return_value=fake_ws):
+        with patch.object(provider, "_create_ws", return_value=fake_ws):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(RuntimeError, match="connect failed"):
                 async for _ in provider.synthesize("test"):
                     pass

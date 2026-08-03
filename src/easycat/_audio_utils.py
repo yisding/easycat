@@ -131,7 +131,7 @@ def _resolve_resample_backend() -> str:
     once so silent quality regressions are observable.
     """
     try:
-        import numpy  # type: ignore[import-untyped]  # noqa: F401
+        import numpy  # type: ignore[import-untyped]
         import soxr  # type: ignore[import-not-found]  # noqa: F401
 
         return "soxr"
@@ -158,7 +158,7 @@ def _resample_soxr(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
     """
     try:
         return _resample_soxr_impl(data, from_rate, to_rate)
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         _log_runtime_failure_once("soxr")
         return None
 
@@ -182,7 +182,7 @@ def _resample_scipy(data: bytes, from_rate: int, to_rate: int) -> bytes | None:
     """
     try:
         return _resample_scipy_impl(data, from_rate, to_rate)
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         _log_runtime_failure_once("scipy")
         return None
 
@@ -217,7 +217,6 @@ def _log_runtime_failure_once(backend: str) -> None:
         "subsequent chunks; suppressing further %s failure logs.",
         backend,
         backend,
-        exc_info=True,
     )
 
 
@@ -252,7 +251,7 @@ def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
         else:
             value = samples[idx] if idx < num_samples else 0
         # Clamp to int16 range
-        out_samples.append(max(-32768, min(32767, int(round(value)))))
+        out_samples.append(max(-32768, min(32767, round(value))))
 
     return struct.pack(f"<{len(out_samples)}h", *out_samples)
 
@@ -343,7 +342,7 @@ class _StreamingLinearState:
                 value = first * (1 - fraction) + second * fraction
             else:
                 value = first
-            output.append(max(-32768, min(32767, int(round(value)))))
+            output.append(max(-32768, min(32767, round(value))))
             self._next_position += self._from_rate
             self._output_count += 1
 
@@ -505,12 +504,12 @@ def _streaming_state(from_rate: int, to_rate: int) -> Any:
     if backend == "soxr":
         try:
             return _StreamingSoxrState(from_rate, to_rate)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             _log_runtime_failure_once("soxr")
     elif backend == "scipy":
         try:
             return _StreamingScipyState(from_rate, to_rate)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             _log_runtime_failure_once("scipy")
     return _StreamingLinearState(from_rate, to_rate)
 
@@ -657,7 +656,7 @@ def to_mono(data: bytes, channels: int) -> bytes:
     for i in range(num_frames):
         offset = i * frame_size
         frame_samples = struct.unpack(f"<{channels}h", data[offset : offset + frame_size])
-        avg = int(round(sum(frame_samples) / channels))
+        avg = round(sum(frame_samples) / channels)
         mono_samples.append(max(-32768, min(32767, avg)))
 
     return struct.pack(f"<{len(mono_samples)}h", *mono_samples)

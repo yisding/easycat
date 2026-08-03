@@ -85,7 +85,7 @@ def test_bundle_record_summary_uses_timestamp_bounds_for_multiple_calls() -> Non
 
 
 @pytest.mark.parametrize("duration_s", [float("nan"), float("inf"), 10**1000])
-def test_bundle_record_summary_ignores_non_finite_call_duration(duration_s: float | int) -> None:
+def test_bundle_record_summary_ignores_non_finite_call_duration(duration_s: float) -> None:
     summary = summarise_bundle_records(
         [
             {"wall_ns": 1_000_000_000, "name": "session_started"},
@@ -102,7 +102,7 @@ def test_bundle_record_summary_ignores_non_finite_call_duration(duration_s: floa
 
 @pytest.mark.parametrize("duration_s", [None, float("nan"), float("inf"), 10**1000])
 def test_invalid_second_call_duration_still_marks_summary_ambiguous(
-    duration_s: float | int | None,
+    duration_s: float | None,
 ) -> None:
     summary = summarise_bundle_records(
         [

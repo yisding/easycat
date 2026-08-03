@@ -89,7 +89,7 @@ async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
         pass
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
         pass
 
     aclose = getattr(stream, "aclose", None)
@@ -188,7 +188,7 @@ class AgentRunnerConfig:
         if isinstance(self.preemptive_max_retries, bool) or not isinstance(
             self.preemptive_max_retries, int
         ):
-            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be an integer")
+            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be an integer")  # noqa: TRY004 domain-specific validation error
 
 
 @dataclass
@@ -632,4 +632,4 @@ class AgentRunner:
             await fn()
 
 
-__all__ = ["AgentRunner", "AgentRunnerConfig", "INTERRUPTION_NOTE"]
+__all__ = ["INTERRUPTION_NOTE", "AgentRunner", "AgentRunnerConfig"]

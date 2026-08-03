@@ -75,7 +75,7 @@ class LocalSupervisor:
             self.gate.release()
             try:
                 await session.stop(force=True)
-            except BaseException:
+            except BaseException:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
             raise
         return "accepted", session

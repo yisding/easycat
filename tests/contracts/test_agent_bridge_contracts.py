@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _ContractBridge:
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self) -> None:
         self.history: list[str] = []
@@ -41,7 +41,7 @@ class _ContractBridge:
         self,
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
-        cancel_token=None,  # noqa: ANN001
+        cancel_token=None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         del cancel_token
         cursor = ExecutionCursor(unit_id="agent-1", unit_kind=UnitKind.AGENT)

@@ -274,10 +274,7 @@ def test_easycat_config_auto_aligns_default_tts_configs_to_transport(
 
     if isinstance(config.tts, OpenAITTSConfig):
         assert config.tts.output_format == expected_output
-    elif isinstance(config.tts, DeepgramTTSConfig):
-        assert config.tts.sample_rate == expected_rate
-        assert config.tts.output_format == expected_output
-    elif isinstance(config.tts, CartesiaTTSConfig):
+    elif isinstance(config.tts, (DeepgramTTSConfig, CartesiaTTSConfig)):
         assert config.tts.sample_rate == expected_rate
         assert config.tts.output_format == expected_output
     else:
@@ -308,10 +305,7 @@ def test_easycat_config_auto_aligns_default_tts_configs_to_twilio_tts_preference
 
     if isinstance(config.tts, OpenAITTSConfig):
         assert config.tts.output_format == expected_output
-    elif isinstance(config.tts, DeepgramTTSConfig):
-        assert config.tts.sample_rate == expected_rate
-        assert config.tts.output_format == expected_output
-    elif isinstance(config.tts, CartesiaTTSConfig):
+    elif isinstance(config.tts, (DeepgramTTSConfig, CartesiaTTSConfig)):
         assert config.tts.sample_rate == expected_rate
         assert config.tts.output_format == expected_output
     else:

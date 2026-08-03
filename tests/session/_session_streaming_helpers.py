@@ -15,7 +15,7 @@ from tests._bridge_helpers import _TestBridgeBase
 from tests._fakes import FakeSTT, FakeTransport, FakeTTS, FakeVAD
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
-__all__ = ["FakeSTT", "FakeTTS", "FakeVAD", "FakeTransport"]
+__all__ = ["FakeSTT", "FakeTTS", "FakeTransport", "FakeVAD"]
 
 
 def _chunk(n: int = 320) -> AudioChunk:

@@ -655,7 +655,7 @@ class VoiceServer:
         exc: Exception,
         cleanup_errors: list[Exception],
     ) -> None:
-        logger.exception("VoiceServer cleanup failed during %s", stage, exc_info=exc)
+        logger.error("VoiceServer cleanup failed during %s", stage, exc_info=exc)
         cleanup_errors.append(exc)
 
     async def _attempt_cleanup(
@@ -667,7 +667,7 @@ class VoiceServer:
         """Await one cleanup stage, recording failure so later stages still run."""
         try:
             return True, await awaitable
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_cleanup_error(stage, exc, cleanup_errors)
             return False, None
 
@@ -719,14 +719,14 @@ class VoiceServer:
             if not task.cancelled():
                 try:
                     task.result()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     pass
                 else:
                     return None, True
 
         try:
             task = asyncio.ensure_future(cleanup())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_cleanup_error(stage, exc, cleanup_errors)
             return None, False
         self._listener_cleanup_tasks[stage] = task
@@ -772,7 +772,7 @@ class VoiceServer:
             logger.warning("VoiceServer: %s", cancelled_error)
             cleanup_errors.append(cancelled_error)
             return False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_cleanup_error(stage, exc, cleanup_errors)
             return False
         return True
@@ -809,7 +809,7 @@ class VoiceServer:
                     ws_server.close(close_connections=False)
                 else:
                     ws_server.close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 self._record_cleanup_error(
                     "raw-WebSocket listener close",
                     exc,

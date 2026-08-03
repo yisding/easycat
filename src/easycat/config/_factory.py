@@ -959,7 +959,7 @@ def _uninstall_shared_hooks() -> None:
         return
     try:
         atexit.unregister(_run_all_exporters)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
         pass
     if sys.excepthook is _EXPORT_EXCEPTHOOK:
         sys.excepthook = _EXPORT_PREVIOUS_EXCEPTHOOK or sys.__excepthook__

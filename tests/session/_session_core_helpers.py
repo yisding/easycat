@@ -210,14 +210,14 @@ class TrackingJournal:
 
 def _full_config(**overrides) -> SessionConfig:
     """Build a SessionConfig with all required providers filled in."""
-    defaults = dict(
-        transport=FakeTransport(),
-        vad=FakeVAD(),
-        stt=FakeSTT(),
-        agent=FakeAgent(),
-        tts=FakeTTS(),
-        noise_reducer=PassthroughNoiseReducer(),
-        enable_noise_reduction=False,
-    )
+    defaults = {
+        "transport": FakeTransport(),
+        "vad": FakeVAD(),
+        "stt": FakeSTT(),
+        "agent": FakeAgent(),
+        "tts": FakeTTS(),
+        "noise_reducer": PassthroughNoiseReducer(),
+        "enable_noise_reduction": False,
+    }
     defaults.update(overrides)
     return SessionConfig(**defaults)

@@ -74,7 +74,7 @@ def _serialize_text(value: str, key: str | None) -> str:
 @_serialize_typed_value.register(bool)
 @_serialize_typed_value.register(int)
 @_serialize_typed_value.register(float)
-def _serialize_scalar(value: bool | int | float | None, key: str | None) -> Any:
+def _serialize_scalar(value: bool | float | None, key: str | None) -> Any:
     return value
 
 

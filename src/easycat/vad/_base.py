@@ -156,7 +156,7 @@ class _VADBase:
         if callable(inner_close):
             try:
                 inner_close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
         if hasattr(self, "_model"):
             self._model = None

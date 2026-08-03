@@ -105,7 +105,7 @@ def test_registry_falls_back_to_strong_ref_for_non_weakreffable():
 
     class _NoWeak:
         # No __weakref__ slot -> weakref.ref raises TypeError -> strong fallback.
-        __slots__ = ("session_id", "is_running", "turn_state", "journal")
+        __slots__ = ("is_running", "journal", "session_id", "turn_state")
 
         def __init__(self) -> None:
             self.session_id = "noweak"

@@ -603,7 +603,7 @@ class LlamaAgentsBridge:
             if task.cancelled() and (caller is None or caller.cancelling() == cancellation_count):
                 return
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
     async def _cancel_local_handler(self, handler: Any) -> None:
@@ -624,7 +624,7 @@ class LlamaAgentsBridge:
         if callable(is_done):
             try:
                 cancellation_completed = bool(is_done())
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 cancellation_completed = True
             if not cancellation_completed:
                 # cancel_run() returned on its own timeout while the
@@ -638,7 +638,7 @@ class LlamaAgentsBridge:
 
         try:
             return await asyncio.wait_for(_await(), timeout=_POST_CANCEL_AWAIT_TIMEOUT)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return None
 
     # ── Remote WorkflowClient mode ────────────────────────────────
@@ -1203,9 +1203,8 @@ def _is_stop_event(event: Any) -> bool:
     if type(event).__name__ in _TERMINAL_EVENT_NAMES:
         return True
     event_type = getattr(event, "type", None)
-    if isinstance(event_type, str):
-        if event_type.rsplit(".", 1)[-1] in _TERMINAL_EVENT_NAMES:
-            return True
+    if isinstance(event_type, str) and event_type.rsplit(".", 1)[-1] in _TERMINAL_EVENT_NAMES:
+        return True
     # A remote envelope wrapping a server-only StopEvent subclass keeps
     # ``type`` set to the subclass (not in the set above) but lists the
     # serializable base classes in ``types``; treat the base StopEvent as
@@ -1235,9 +1234,8 @@ def _is_input_required_event(event: Any) -> bool:
     if cls_name == "InputRequiredEvent":
         return True
     event_type = getattr(event, "type", None)
-    if isinstance(event_type, str):
-        if event_type.rsplit(".", 1)[-1] == "InputRequiredEvent":
-            return True
+    if isinstance(event_type, str) and event_type.rsplit(".", 1)[-1] == "InputRequiredEvent":
+        return True
         # A remote envelope wrapping a server-only InputRequiredEvent
         # subclass keeps ``type`` set to the subclass name (which won't
         # match above) but lists the serializable base classes in
@@ -1303,7 +1301,7 @@ def _event_mapping(event: Any) -> dict[str, Any]:
                 if isinstance(extra, dict):
                     data.update(extra)
                 return data
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
     data = {}
@@ -1311,7 +1309,7 @@ def _event_mapping(event: Any) -> dict[str, Any]:
         try:
             if hasattr(event, key):
                 data[key] = getattr(event, key)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
             continue
     return data
 
@@ -1423,7 +1421,7 @@ def _jsonable_context(ctx: Any) -> Any:
     if callable(to_dict):
         try:
             return _scrub_secret_keys(to_dict())
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return type(ctx).__name__
     return _scrub_secret_keys(ctx)
 

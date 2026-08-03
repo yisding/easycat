@@ -587,12 +587,12 @@ class ServerTransportBase(AudioQueueMixin):
         cancellation_requests = caller.cancelling() if caller is not None else 0
         try:
             await client.close()
-        except asyncio.CancelledError as cancellation:
+        except asyncio.CancelledError:
             interrupted = RuntimeError(f"{self._transport_name} client close was interrupted")
             self._client_close_error = interrupted
             self._disconnect_cleanup_error = interrupted
             if caller is not None and caller.cancelling() > cancellation_requests:
-                raise cancellation
+                raise
             logger.debug(
                 "%s WebSocket client close cancelled internally",
                 self._transport_name,

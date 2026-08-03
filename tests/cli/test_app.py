@@ -65,7 +65,7 @@ def _registered_top_level_command_help() -> dict[str, str]:
 
 def _journey_menu_command_names(output: str) -> set[str]:
     plain_output = ANSI_ESCAPE_RE.sub("", output)
-    return set(re.findall(r"^    ([a-z][a-z0-9-]*)(?=\s{2,})", plain_output, re.M))
+    return set(re.findall(r"^    ([a-z][a-z0-9-]*)(?=\s{2,})", plain_output, re.MULTILINE))
 
 
 def test_journey_menu_command_names_parse_rendered_rich_markup() -> None:
@@ -574,8 +574,10 @@ def test_version_fast_path_matches_typer_path() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; sys.argv = ['easycat', '--version']; "
-            "from easycat.cli import main; main()",
+            (
+                "import sys; sys.argv = ['easycat', '--version']; "
+                "from easycat.cli import main; main()"
+            ),
         ],
         capture_output=True,
         text=True,
@@ -585,8 +587,10 @@ def test_version_fast_path_matches_typer_path() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; sys.argv = ['easycat', '--version']; "
-            "from easycat.cli._app import main; main()",
+            (
+                "import sys; sys.argv = ['easycat', '--version']; "
+                "from easycat.cli._app import main; main()"
+            ),
         ],
         capture_output=True,
         text=True,

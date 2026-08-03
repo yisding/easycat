@@ -61,7 +61,7 @@ _ENV = {"OPENAI_API_KEY": "sk-parity-test"}
 class _Agent:
     """A minimal non-noop agent so ``create_session`` passes provider validation."""
 
-    async def run(self, text: str) -> str:  # noqa: D401 - test stub
+    async def run(self, text: str) -> str:
         return "ok"
 
 
@@ -183,7 +183,7 @@ def _force_find_spec_none(monkeypatch: pytest.MonkeyPatch, *probe_modules: str) 
     """Make ``find_spec`` return ``None`` for the named probe modules only."""
     real_find_spec = importlib.util.find_spec
 
-    def fake_find_spec(name: str, package: object = None):  # noqa: ANN202
+    def fake_find_spec(name: str, package: object = None):
         if name in probe_modules:
             return None
         return real_find_spec(name, package)  # type: ignore[arg-type]
@@ -202,7 +202,7 @@ def test_parity_missing_vad_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plan.has_blocking_errors
 
     # create_session: make Silero's require_module raise the missing-extra error.
-    import easycat.vad.silero as silero
+    from easycat.vad import silero
 
     def boom(module_name: str, **kwargs: object) -> object:
         raise ImportError(f"Silero VAD ONNX requires the {module_name} package.")

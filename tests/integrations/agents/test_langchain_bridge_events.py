@@ -508,7 +508,7 @@ class TestStreamEventTranslator:
                 {"type": "thinking", "thinking": "private"},
                 {"type": "text", "text": "raw fallback"},
             ]
-            tool_call_chunks: list[Any] = []
+            tool_call_chunks: list[Any] = []  # noqa: RUF012 test fake uses shared class fixture
 
         event = {
             "event": "on_chat_model_stream",

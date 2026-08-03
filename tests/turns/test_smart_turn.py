@@ -102,7 +102,7 @@ def test_intra_op_thread_count_respects_affinity_and_cap(
     expected: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import easycat.smart_turn as smart_turn
+    from easycat import smart_turn
 
     monkeypatch.setattr(
         smart_turn.os,
@@ -124,7 +124,7 @@ def test_intra_op_thread_count_respects_cgroup_quota(
     expected: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import easycat.smart_turn as smart_turn
+    from easycat import smart_turn
 
     monkeypatch.setattr(
         smart_turn.os,

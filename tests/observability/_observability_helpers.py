@@ -19,7 +19,7 @@ class _FakeSpan:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+    def __exit__(self, exc_type, exc, tb):
         return False
 
 
@@ -36,7 +36,7 @@ class _FakeCounter:
     def __init__(self) -> None:
         self.adds: list[tuple[int | float, dict[str, object]]] = []
 
-    def add(self, value: int | float, attributes: dict[str, object]) -> None:
+    def add(self, value: float, attributes: dict[str, object]) -> None:
         self.adds.append((value, attributes))
 
 
@@ -44,7 +44,7 @@ class _FakeHistogram:
     def __init__(self) -> None:
         self.records: list[tuple[int | float, dict[str, object]]] = []
 
-    def record(self, value: int | float, attributes: dict[str, object]) -> None:
+    def record(self, value: float, attributes: dict[str, object]) -> None:
         self.records.append((value, attributes))
 
 

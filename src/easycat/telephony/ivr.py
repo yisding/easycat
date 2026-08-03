@@ -81,7 +81,7 @@ class IVRNavigatorConfig:
 
     def __post_init__(self) -> None:
         if isinstance(self.max_depth, bool) or not isinstance(self.max_depth, int):
-            raise ValueError("max_depth must be a positive integer")
+            raise ValueError("max_depth must be a positive integer")  # noqa: TRY004 domain-specific validation error
         if self.max_depth <= 0:
             raise ValueError("max_depth must be a positive integer")
         _validate_positive_number("prompt_timeout_s", self.prompt_timeout_s)
@@ -488,7 +488,7 @@ class IVRNavigator:
             )
         except TimeoutError:
             result = _AGENT_CALL_TIMED_OUT
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             result = _AgentCallbackRaised(exc)
         if not self._is_current_activation(activation_epoch):
             return _AGENT_CALL_FAILED

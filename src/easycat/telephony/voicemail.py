@@ -150,7 +150,7 @@ class VoicemailDetectorConfig:
     def __post_init__(self) -> None:
         _validate_positive_number("monologue_threshold_s", self.monologue_threshold_s)
         if not isinstance(self.beep, BeepDetectorConfig):
-            raise ValueError("beep must be a BeepDetectorConfig")
+            raise ValueError("beep must be a BeepDetectorConfig")  # noqa: TRY004 domain-specific validation error
 
 
 def _validate_positive_int(name: str, value: int) -> None:

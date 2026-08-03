@@ -1055,9 +1055,7 @@ def _graph_item_output(item: Any) -> Any:
 
 
 def _is_graph_end_item(item: Any) -> bool:
-    if type(item).__name__ == "EndMarker":
-        return True
-    return False
+    return type(item).__name__ == "EndMarker"
 
 
 def _graph_item_display_name(item: Any) -> str:

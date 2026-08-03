@@ -240,7 +240,7 @@ def test_save_annotation_serializes_concurrent_upserts(
     def _save(turn_id: str) -> None:
         try:
             save_annotation(bundle, Annotation(turn_id=turn_id, passed=True))
-        except BaseException as exc:  # pragma: no cover - asserted below
+        except BaseException as exc:  # noqa: BLE001  # pragma: no cover - asserted below
             errors.append(exc)
 
     first = threading.Thread(target=_save, args=("t1",))
@@ -260,8 +260,8 @@ def test_serve_run_bundle_propagates_annotation_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import easycat.debugger.server as server
     from easycat.debug.bundle import RunBundle
+    from easycat.debugger import server
 
     captured = []
     monkeypatch.setattr(server, "_serve", lambda source, **_kwargs: captured.append(source))

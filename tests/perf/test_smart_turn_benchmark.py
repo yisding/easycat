@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import perf.bench_smart_turn as bench_smart_turn
 from easycat.validation.latency import LatencyPercentileStats
+from perf import bench_smart_turn
 from perf.bench_smart_turn import _run_worker, compare_results, summarize_samples
 
 

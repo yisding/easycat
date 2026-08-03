@@ -138,7 +138,7 @@ class AgentStage:
     async def prepare_preemptive(self, input: Any, turn: TurnContext) -> PreparedAgentResponse:
         """Prepare a simple-agent response without committing conversation state."""
         if not isinstance(self._provider, AgentRunner):
-            raise RuntimeError("agent provider does not support preemptive generation")
+            raise RuntimeError("agent provider does not support preemptive generation")  # noqa: TRY004 domain-specific validation error
         input_text = input if isinstance(input, str) else str(input)
         return await self._provider.prepare_response(
             AgentTurnInput.from_text(input_text, turn_id=turn.id)

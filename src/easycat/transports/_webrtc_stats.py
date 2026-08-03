@@ -94,7 +94,7 @@ def sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
     the validation artifact constrained even if a custom client posts more.
     """
     if not isinstance(payload, dict):
-        raise ValueError("expected JSON object")
+        raise ValueError("expected JSON object")  # noqa: TRY004 domain-specific validation error
 
     snapshot: dict[str, object] = {}
     for field_name in _WEBRTC_STATS_TOP_LEVEL_FIELDS:

@@ -29,10 +29,10 @@ class _DummySession:
         self.session_id = session_id
         self.event_bus = EventBus()
 
-    def subscribe_event(self, event_type, handler) -> None:  # noqa: ANN001,ANN201
+    def subscribe_event(self, event_type, handler) -> None:
         self.event_bus.subscribe(event_type, handler)
 
-    def unsubscribe_event(self, event_type, handler) -> None:  # noqa: ANN001,ANN201
+    def unsubscribe_event(self, event_type, handler) -> None:
         self.event_bus.unsubscribe(event_type, handler)
 
 
@@ -63,7 +63,7 @@ class _FakeSupervisorWebSocket:
     def feed(self, message: object) -> None:
         self._incoming.put_nowait(message)
 
-    def __aiter__(self):  # noqa: ANN204
+    def __aiter__(self):
         return self
 
     async def __anext__(self) -> object:
@@ -174,10 +174,10 @@ async def test_session_audio_broadcaster_applies_consent_and_redaction_hooks() -
     session = _DummySession()
     redacted_chunk = _chunk(9)
 
-    def consent(frame) -> bool:  # noqa: ANN001
+    def consent(frame) -> bool:
         return frame.track == "assistant"
 
-    def redact(frame):  # noqa: ANN001,ANN201
+    def redact(frame):
         return replace(frame, chunk=redacted_chunk)
 
     broadcaster = SessionAudioBroadcaster(
@@ -221,7 +221,7 @@ async def test_session_audio_broadcaster_suppresses_async_consent_hooks() -> Non
     session = _DummySession()
     hook_body_executed = False
 
-    async def consent(_frame):  # noqa: ANN001,ANN202
+    async def consent(_frame):
         nonlocal hook_body_executed
         hook_body_executed = True
         return False
@@ -243,7 +243,7 @@ async def test_session_audio_broadcaster_suppresses_async_redaction_hooks() -> N
     session = _DummySession()
     hook_body_executed = False
 
-    async def redact(frame):  # noqa: ANN001,ANN202
+    async def redact(frame):
         nonlocal hook_body_executed
         hook_body_executed = True
         return replace(frame, chunk=_chunk(9))

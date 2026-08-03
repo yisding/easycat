@@ -381,7 +381,7 @@ class TestEmitCallStatus:
 class TestOutboundCallManager:
     def test_twilio_sdk_import_error(self) -> None:
         bus = EventBus()
-        with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):
+        with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(ImportError) as exc_info:
                 OutboundCallManager(bus, from_number="+1555")
         message = str(exc_info.value)

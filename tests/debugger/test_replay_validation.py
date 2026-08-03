@@ -57,7 +57,7 @@ async def test_replay_route_maps_unhashable_enum_controls_to_bad_request(
 
     source = DebuggerSource(
         label="test",
-        _records_fn=lambda: [],
+        _records_fn=list,
         _artifact_fn=lambda _ref: None,
         _manifest_fn=lambda: {"supports_replay": True},
     )

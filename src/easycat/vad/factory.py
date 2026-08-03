@@ -200,7 +200,7 @@ def create_vad(config: Any = None) -> VADProvider:
 
     cfg = config if config is not None else VADConfig()
     if not isinstance(cfg, VADConfig):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 domain-specific validation error
             f"Unsupported VAD configuration type: {type(cfg).__name__!r}. "
             "Pass VADConfig, a registered VAD config, or a VAD provider instance."
         )

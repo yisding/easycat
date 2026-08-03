@@ -8,6 +8,7 @@ import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace, TracebackType
+from typing import Self
 
 import pytest
 
@@ -57,7 +58,7 @@ async def test_deep_workflow_rewrites_private_history_to_delivered_text(
                 raise StopAsyncIteration from exc
             return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=text))])
 
-        async def __aenter__(self) -> ResponseStream:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(

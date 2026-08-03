@@ -39,7 +39,7 @@ class TestLangGraphBridgeState:
 
         bridge.apply_interruption("the full", CancellationMode.IMMEDIATE_STOP)
         assert graph.update_state_calls
-        cfg, values = graph.update_state_calls[0]
+        _cfg, values = graph.update_state_calls[0]
         assert "messages" in values
         # Last AI message in state now truncated.
         assert state.values["messages"][-1].content == "the full..."

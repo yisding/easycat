@@ -32,7 +32,7 @@ def _observed_ms(stats: Mapping[str, Any], percentile: str) -> float | None:
     if raw_observed is None:
         return None
     if isinstance(raw_observed, bool) or not isinstance(raw_observed, (int, float)):
-        raise ValueError(f"latency metric {percentile} must be a number or null")
+        raise ValueError(f"latency metric {percentile} must be a number or null")  # noqa: TRY004 domain-specific validation error
     observed_ms = float(raw_observed)
     if not math.isfinite(observed_ms) or observed_ms < 0:
         raise ValueError(f"latency metric {percentile} must be a finite non-negative number")
@@ -53,15 +53,15 @@ def evaluate(
     if min_samples <= 0:
         raise ValueError("min_samples must be positive")
     if not isinstance(report, Mapping):
-        raise ValueError("stdin is not a JSON object")
+        raise ValueError("stdin is not a JSON object")  # noqa: TRY004 domain-specific validation error
     if report.get("command") != "latency":
         raise ValueError("stdin is not an easycat latency JSON report")
     percentiles = report.get("percentiles")
     if not isinstance(percentiles, Mapping):
-        raise ValueError("latency report has no percentiles object")
+        raise ValueError("latency report has no percentiles object")  # noqa: TRY004 domain-specific validation error
     stats = percentiles.get(metric)
     if not isinstance(stats, Mapping):
-        raise ValueError(f"latency report has no {metric!r} metric")
+        raise ValueError(f"latency report has no {metric!r} metric")  # noqa: TRY004 domain-specific validation error
 
     count = _sample_count(stats)
     observed_ms = _observed_ms(stats, percentile)

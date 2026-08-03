@@ -151,66 +151,66 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
         # Fast clean turn.
         (
             "turn_01_fast.bundle",
-            dict(
-                t_start=1_000_000.0,
-                stt_text="what time is it",
-                agent_first_token_delay_ms=350,
-                tts_spans_ms=[300, 280, 310],
-            ),
+            {
+                "t_start": 1_000_000.0,
+                "stt_text": "what time is it",
+                "agent_first_token_delay_ms": 350,
+                "tts_spans_ms": [300, 280, 310],
+            },
         ),
         # Slow agent turn (P95 spike).
         (
             "turn_02_slow_agent.bundle",
-            dict(
-                t_start=1_100_000.0,
-                stt_text="tell me a joke",
-                agent_first_token_delay_ms=2100,
-                tts_spans_ms=[320, 290],
-            ),
+            {
+                "t_start": 1_100_000.0,
+                "stt_text": "tell me a joke",
+                "agent_first_token_delay_ms": 2100,
+                "tts_spans_ms": [320, 290],
+            },
         ),
         # Normal turn with a ghost interruption (like ch11 bug 3).
         (
             "turn_03_ghost_interrupt.bundle",
-            dict(
-                t_start=1_200_000.0,
-                stt_text="whats the weather",
-                agent_first_token_delay_ms=400,
-                tts_spans_ms=[310],
-                interruption_t_ms=1_200_001_450.0,
-            ),
+            {
+                "t_start": 1_200_000.0,
+                "stt_text": "whats the weather",
+                "agent_first_token_delay_ms": 400,
+                "tts_spans_ms": [310],
+                "interruption_t_ms": 1_200_001_450.0,
+            },
         ),
         # Normal turn, correctly interrupted by a real user.
         (
             "turn_04_real_interrupt.bundle",
-            dict(
-                t_start=1_300_000.0,
-                stt_text="stop",
-                agent_first_token_delay_ms=380,
-                tts_spans_ms=[290, 310],
-                interruption_t_ms=1_300_001_400.0,
-            ),
+            {
+                "t_start": 1_300_000.0,
+                "stt_text": "stop",
+                "agent_first_token_delay_ms": 380,
+                "tts_spans_ms": [290, 310],
+                "interruption_t_ms": 1_300_001_400.0,
+            },
         ),
         # Medium-clean turn.
         (
             "turn_05_medium.bundle",
-            dict(
-                t_start=1_400_000.0,
-                stt_text="remind me to buy milk",
-                agent_first_token_delay_ms=600,
-                tts_spans_ms=[310, 280, 300, 320],
-            ),
+            {
+                "t_start": 1_400_000.0,
+                "stt_text": "remind me to buy milk",
+                "agent_first_token_delay_ms": 600,
+                "tts_spans_ms": [310, 280, 300, 320],
+            },
         ),
         # Turn with two tool calls — exercises the chapter-7 tool
         # shape so exercise 2's "run on tool-bearing bundles" has
         # something to consume.
         (
             "tools_01_weather.bundle",
-            dict(
-                t_start=1_500_000.0,
-                stt_text="whats the weather in paris and set a timer for five minutes",
-                agent_first_token_delay_ms=820,
-                tts_spans_ms=[340, 310, 290],
-                tool_calls=[
+            {
+                "t_start": 1_500_000.0,
+                "stt_text": "whats the weather in paris and set a timer for five minutes",
+                "agent_first_token_delay_ms": 820,
+                "tts_spans_ms": [340, 310, 290],
+                "tool_calls": [
                     {
                         "name": "get_weather",
                         "args": {"city": "paris"},
@@ -224,7 +224,7 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
                         "elapsed_ms": 42,
                     },
                 ],
-            ),
+            },
         ),
     ]
 

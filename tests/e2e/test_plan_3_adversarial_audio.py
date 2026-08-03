@@ -213,7 +213,7 @@ async def test_malformed_frames_do_not_crash(
         # Invalid type string.
         try:
             await client._ws.send("not json at all")  # type: ignore[union-attr]
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
 
         # Follow with real audio to prove session is still alive.

@@ -196,7 +196,7 @@ def _parse_config_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     for item in _INIT_CONFIG_FIELDS:
         kind = item.metadata.get(_FIELD_KIND_METADATA_KEY)
         if not isinstance(kind, _InitFieldKind):
-            raise RuntimeError(f"InitConfig field {item.name!r} has no parser contract")
+            raise RuntimeError(f"InitConfig field {item.name!r} has no parser contract")  # noqa: TRY004 domain-specific validation error
         parsed[item.name] = _FIELD_PARSERS[kind](payload, item.name)
     return parsed
 

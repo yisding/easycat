@@ -122,7 +122,7 @@ def get_package_version(pkg: str) -> str:
         from importlib.metadata import version
 
         return version(pkg)
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "unknown"
 
 

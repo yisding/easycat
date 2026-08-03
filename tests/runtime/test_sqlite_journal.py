@@ -586,7 +586,7 @@ class TestSqliteJournalLifecycle:
                         session_id="close-race",
                     )
                 )
-            except BaseException as exc:  # pragma: no cover - regression assertion below
+            except BaseException as exc:  # noqa: BLE001  # pragma: no cover - assertion
                 errors.append(exc)
 
         journal._do_append = _paused_do_append
@@ -1754,6 +1754,7 @@ class TestSqliteHotPathBehavior:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                check=False,
             )
             count = 0
             for line in result.stderr.splitlines():
@@ -2021,7 +2022,7 @@ class TestLibsqlJournal:
     def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
         from easycat.runtime import LibsqlJournal
 
-        with mock.patch.dict("sys.modules", {"libsql_experimental": None}):
+        with mock.patch.dict("sys.modules", {"libsql_experimental": None}):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(ValueError, match="session_id must"):
                 LibsqlJournal("../escape", data_dir=tmp_path)
 
@@ -2123,7 +2124,7 @@ class TestLibsqlJournal:
         from easycat.runtime import LibsqlJournal
 
         fake_libsql = _FakeLibsqlModule(_LockProbeConn())
-        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(
                 ValueError, match="sync_interval_s must be a finite positive number"
             ):
@@ -2146,7 +2147,7 @@ class TestLibsqlJournal:
 
         monkeypatch.setenv("EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S", value)
         fake_libsql = _FakeLibsqlModule(_LockProbeConn())
-        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):  # noqa: SIM117 nested scopes clarify setup and cleanup
             with pytest.raises(
                 ValueError, match="sync_interval_s must be a finite positive number"
             ):

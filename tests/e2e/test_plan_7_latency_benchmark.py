@@ -324,7 +324,7 @@ class ConditionResult:
         if not self.samples_ms:
             return float("nan")
         srt = sorted(self.samples_ms)
-        idx = max(0, min(len(srt) - 1, int(round(0.9 * (len(srt) - 1)))))
+        idx = max(0, min(len(srt) - 1, round(0.9 * (len(srt) - 1))))
         return srt[idx]
 
     @property
@@ -521,7 +521,7 @@ async def _measure_one_turn(
         bytes_per_ms = int((sample_rate * 2) / 1000)
         chunk_size = max(bytes_per_ms * chunk_ms, 320)
         silence_chunk = bytes(chunk_size)
-        chunk_count = max(1, int(math.ceil((max_silence_s * 1000.0) / chunk_ms)))
+        chunk_count = max(1, math.ceil((max_silence_s * 1000.0) / chunk_ms))
         for _ in range(chunk_count):
             if probe.vad_stop_ts is not None:
                 return
@@ -587,7 +587,7 @@ async def _measure_one_turn(
                     )
                 await asyncio.sleep(0.01)
             await asyncio.sleep(0.2)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise RuntimeError(
             f"benchmark sample setup/turn failed: server_exception={handle.exception!r}, "
             f"detail={exc}"

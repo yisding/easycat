@@ -290,7 +290,7 @@ class TestWebRTCServedPlaygroundPage(_UsesPytestTcpPortFactory):
 
         await transport.connect()
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session:  # noqa: SIM117 nested scopes clarify setup and cleanup
                 async with session.get(f"http://127.0.0.1:{port}/webrtc_client.html") as resp:
                     assert resp.status == 200
                     html = await resp.text()
@@ -313,17 +313,19 @@ class TestWebRTCServedPlaygroundPage(_UsesPytestTcpPortFactory):
 
         await transport.connect()
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.options(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.options(
                     f"{origin}/config",
                     headers={
                         "Origin": origin,
                         "Access-Control-Request-Method": "GET",
                     },
-                ) as resp:
-                    assert resp.status == 200
-                    assert resp.headers["Access-Control-Allow-Origin"] == origin
-                    assert "GET" in resp.headers["Access-Control-Allow-Methods"]
+                ) as resp,
+            ):
+                assert resp.status == 200
+                assert resp.headers["Access-Control-Allow-Origin"] == origin
+                assert "GET" in resp.headers["Access-Control-Allow-Methods"]
         finally:
             await transport.disconnect()
 

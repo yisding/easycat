@@ -106,16 +106,16 @@ class FakeTTS:
 
 
 def _config(**overrides: object) -> SessionConfig:
-    defaults = dict(
-        transport=FakeTransport(),
-        vad=FakeVAD(),
-        stt=FakeSTT(),
-        agent=FakeAgent(),
-        tts=FakeTTS(),
-        noise_reducer=PassthroughNoiseReducer(),
-        enable_noise_reduction=False,
-        turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
-    )
+    defaults = {
+        "transport": FakeTransport(),
+        "vad": FakeVAD(),
+        "stt": FakeSTT(),
+        "agent": FakeAgent(),
+        "tts": FakeTTS(),
+        "noise_reducer": PassthroughNoiseReducer(),
+        "enable_noise_reduction": False,
+        "turn_manager_config": TurnManagerConfig(end_of_turn_silence_ms=1),
+    }
     defaults.update(overrides)
     return SessionConfig(**defaults)
 

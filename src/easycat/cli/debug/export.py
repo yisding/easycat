@@ -101,10 +101,14 @@ def _readme_text(
             "",
             "## Safety Boundary",
             "",
-            "This pack intentionally omits raw journal payload fields such as transcripts, "
-            "prompts, generated text, tool arguments, tool results, and provider responses.",
-            "Error messages, tracebacks, and free-form exception notes are also stripped; "
-            "machine-generated stage correlation notes are retained.",
+            (
+                "This pack intentionally omits raw journal payload fields such as transcripts, "
+                "prompts, generated text, tool arguments, tool results, and provider responses."
+            ),
+            (
+                "Error messages, tracebacks, and free-form exception notes are also stripped; "
+                "machine-generated stage correlation notes are retained."
+            ),
             "Treat the original bundle or SQLite journal as sensitive.",
             f"Requested redaction: {redaction_requested}; applied redaction: {redaction_applied}.",
             "",

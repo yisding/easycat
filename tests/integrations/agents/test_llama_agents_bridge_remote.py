@@ -458,8 +458,8 @@ class TestRemoteLlamaAgentsBridge:
 
         class _OpaqueStopEnvelope:
             type = "acme.CustomStopEvent"
-            types = ["workflows.events.StopEvent", "workflows.events.Event"]
-            value = {"result": "the answer"}
+            types = ["workflows.events.StopEvent", "workflows.events.Event"]  # noqa: RUF012 test fake uses shared class fixture
+            value = {"result": "the answer"}  # noqa: RUF012 test fake uses shared class fixture
             qualified_name = "acme.CustomStopEvent"
 
             def load_event(self) -> Any:
@@ -488,8 +488,8 @@ class TestRemoteLlamaAgentsBridge:
 
         class _EmptyEnvelope:
             type = "StopEvent"
-            types = ["workflows.events.StopEvent"]
-            value: dict[str, Any] = {}
+            types = ["workflows.events.StopEvent"]  # noqa: RUF012 test fake uses shared class fixture
+            value: dict[str, Any] = {}  # noqa: RUF012 test fake uses shared class fixture
             qualified_name = "workflows.events.StopEvent"
 
             def load_event(self) -> Any:
@@ -528,8 +528,8 @@ class TestRemoteLlamaAgentsBridge:
 
         class _OpaqueInputEnvelope:
             type = "acme.CustomInputRequiredEvent"
-            types = ["workflows.events.InputRequiredEvent", "workflows.events.Event"]
-            value = {"prefix": "Remote subclass prompt"}
+            types = ["workflows.events.InputRequiredEvent", "workflows.events.Event"]  # noqa: RUF012 test fake uses shared class fixture
+            value = {"prefix": "Remote subclass prompt"}  # noqa: RUF012 test fake uses shared class fixture
             qualified_name = "acme.CustomInputRequiredEvent"
 
             def load_event(self) -> Any:
@@ -613,8 +613,8 @@ class TestRemoteLlamaAgentsBridge:
 
         class _OpaqueStopEnvelope:
             type = "acme.CustomStopEvent"
-            types = ["workflows.events.StopEvent", "workflows.events.Event"]
-            value = {"result": {"score": 0.9}}
+            types = ["workflows.events.StopEvent", "workflows.events.Event"]  # noqa: RUF012 test fake uses shared class fixture
+            value = {"result": {"score": 0.9}}  # noqa: RUF012 test fake uses shared class fixture
             qualified_name = "acme.CustomStopEvent"
 
             def load_event(self) -> Any:

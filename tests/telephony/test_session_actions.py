@@ -84,7 +84,7 @@ async def test_twilio_session_action_missing_sdk_install_hint() -> None:
         TwilioSessionActionConfig(account_sid="AC123", auth_token="token")
     )
 
-    with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):
+    with patch.dict("sys.modules", {"twilio": None, "twilio.rest": None}):  # noqa: SIM117 nested scopes clarify setup and cleanup
         with pytest.raises(RuntimeError) as exc_info:
             await executor.execute(_FakeSession(), EndCallAction())
 

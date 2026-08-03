@@ -207,15 +207,15 @@ class _FailingStreamingAgent(_TestBridgeBase):
 
 
 def _config(**overrides) -> SessionConfig:
-    base = dict(
-        transport=FakeTransport(),
-        vad=FakeVAD(),
-        stt=FakeSTT(transcript="hello"),
-        agent=_SimpleStreamingAgent(),
-        tts=FakeTTS(),
-        noise_reducer=FakeNoiseReducer(),
-        turn_manager_config=_FAST_TURN,
-    )
+    base = {
+        "transport": FakeTransport(),
+        "vad": FakeVAD(),
+        "stt": FakeSTT(transcript="hello"),
+        "agent": _SimpleStreamingAgent(),
+        "tts": FakeTTS(),
+        "noise_reducer": FakeNoiseReducer(),
+        "turn_manager_config": _FAST_TURN,
+    }
     base.update(overrides)
     return SessionConfig(**base)
 
@@ -1619,13 +1619,10 @@ class _CancelMidStreamAgent(_TestBridgeBase):
     ) -> AsyncIterator[AgentBridgeEvent]:
         _ = turn_input, recorder
         yield AgentBridgeEvent(kind="text_delta", text="Hello. ")
-        try:
-            while True:
-                if cancel_token and cancel_token.is_cancelled:
-                    return
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            raise
+        while True:
+            if cancel_token and cancel_token.is_cancelled:
+                return
+            await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio

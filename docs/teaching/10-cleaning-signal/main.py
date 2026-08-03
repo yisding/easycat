@@ -181,7 +181,7 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
             if cancel.is_cancelled:
                 await tts.cancel()
                 break
-            if event.type == TTSEventType.AUDIO and event.audio is not None:
+            if event.type == TTSEventType.AUDIO and event.audio is not None:  # noqa: SIM102 nested branches preserve decision context
                 if await transport.send_audio(event.audio):
                     # The crucial dual-input line: AEC needs to know what
                     # the speaker accepted, so it can subtract that pattern

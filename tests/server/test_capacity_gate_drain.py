@@ -739,7 +739,7 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
 
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     gate: CapacityGate[int] = CapacityGate(max_sessions=4)
-    await gate.drain(lambda: [], drain_timeout_s=1.0, force_after=True)
+    await gate.drain(list, drain_timeout_s=1.0, force_after=True)
     assert gate.active_keys() == ()
 
 

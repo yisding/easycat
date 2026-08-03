@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import easycat.validation.latency as latency
+from easycat.validation import latency
 from easycat.validation._latency_budgets import (
     LatencyBudget,
     LatencyBudgetViolation,

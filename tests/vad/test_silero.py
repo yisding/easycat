@@ -51,7 +51,7 @@ def test_silero_onnx_session_is_cached_while_recurrent_state_is_not(
         def get_available_providers(self) -> list[str]:
             return ["CPUExecutionProvider"]
 
-        def InferenceSession(self, *_args, **_kwargs):  # noqa: N802
+        def InferenceSession(self, *_args, **_kwargs):
             session = object()
             self.sessions.append(session)
             return session
@@ -100,7 +100,7 @@ def test_silero_onnx_cache_releases_failed_model_construction(
             return ["CPUExecutionProvider"]
 
         @staticmethod
-        def InferenceSession(*_args, **_kwargs):  # noqa: N802
+        def InferenceSession(*_args, **_kwargs):
             return object()
 
     monkeypatch.setattr(

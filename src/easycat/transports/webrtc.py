@@ -474,7 +474,7 @@ class WebRTCTransport(AudioQueueMixin):
         cleanup_errors: list[Exception] = []
         try:
             await self._close_signaling_for_disconnect(cleanup_errors)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             retained_error = (
                 exc
                 if isinstance(exc, Exception)
@@ -553,7 +553,7 @@ class WebRTCTransport(AudioQueueMixin):
             offer_task.result()
         except asyncio.CancelledError:
             pass
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_disconnect_cleanup_error(
                 "active WebRTC offer",
                 exc,
@@ -580,7 +580,7 @@ class WebRTCTransport(AudioQueueMixin):
             except asyncio.CancelledError:
                 if current is not None and current.cancelling() > cancellation_count:
                     raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 self._record_disconnect_cleanup_error(
                     "inbound audio consumer",
                     exc,
@@ -634,7 +634,7 @@ class WebRTCTransport(AudioQueueMixin):
         """Release the browser-event subscription without blocking later cleanup."""
         try:
             self._close_browser_event_forwarder()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_disconnect_cleanup_error(
                 "browser event forwarder",
                 exc,
@@ -655,7 +655,7 @@ class WebRTCTransport(AudioQueueMixin):
             outbound_stopped = True
             try:
                 self._outbound.stop()  # no-op by design; track is discarded with the PC
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 outbound_stopped = False
                 self._record_disconnect_cleanup_error(
                     "outbound audio stop",
@@ -723,7 +723,7 @@ class WebRTCTransport(AudioQueueMixin):
         exc: Exception,
         cleanup_errors: list[Exception],
     ) -> None:
-        logger.exception("WebRTC cleanup failed during %s", stage, exc_info=exc)
+        logger.error("WebRTC cleanup failed during %s", stage, exc_info=exc)
         cleanup_errors.append(exc)
 
     async def _attempt_disconnect_cleanup(
@@ -734,7 +734,7 @@ class WebRTCTransport(AudioQueueMixin):
     ) -> bool:
         try:
             await awaitable
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_disconnect_cleanup_error(stage, exc, cleanup_errors)
             return False
         return True
@@ -847,11 +847,11 @@ class WebRTCTransport(AudioQueueMixin):
                 # The caller's original cancellation is preserved by the
                 # surrounding offer path after this owned cleanup settles.
                 continue
-            except Exception:
+            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 break
         try:
             cleanup_task.result()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             cleanup_error: BaseException | None = exc
         else:
             cleanup_error = None
@@ -961,7 +961,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         try:
             params = await request.json()
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return web.Response(
                 status=400,
                 text=json.dumps({"error": "Invalid JSON"}),
@@ -1090,7 +1090,7 @@ class WebRTCTransport(AudioQueueMixin):
             await _wait_for_ice_gathering(pc, ice_gathering_complete)
         except asyncio.CancelledError as cancellation:
             await self._raise_cancelled_offer_after_peer_close(pc, cancellation)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.warning("WebRTC offer handling failed: %s", exc)
             self._emit_degraded(
                 _DEGRADED_NEGOTIATION_FAILED,
@@ -1264,7 +1264,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         except StopAsyncIteration:
             logger.info("WebRTC audio track stream ended")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # aiortc raises MediaStreamError when the track ends.
             aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
             if isinstance(exc, aiortc.MediaStreamError):

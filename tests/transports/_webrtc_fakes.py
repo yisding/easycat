@@ -64,13 +64,13 @@ class _FakeJsonRequest:
 
 
 class _FakeSessionDescription:
-    def __init__(self, *, sdp: str, type: str) -> None:  # noqa: A002
+    def __init__(self, *, sdp: str, type: str) -> None:
         self.sdp = sdp
         self.type = type
 
 
 class _FakeRTCConfiguration:
-    def __init__(self, *, iceServers: list[object]) -> None:  # noqa: N803
+    def __init__(self, *, iceServers: list[object]) -> None:
         self.iceServers = iceServers
 
 
@@ -127,7 +127,7 @@ class _FakeAudioFrame:
 
 
 class _FakeRTCPeerConnection:
-    instances: list[_FakeRTCPeerConnection] = []
+    instances: list[_FakeRTCPeerConnection] = []  # noqa: RUF012 test fake uses shared class fixture
 
     # When set on the class before an offer, the next constructed peer fires
     # its registered ``track`` handler synchronously during
@@ -148,7 +148,7 @@ class _FakeRTCPeerConnection:
         type(self).next_inbound_track = None
         self.instances.append(self)
 
-    def addTrack(self, track: object) -> None:  # noqa: N802
+    def addTrack(self, track: object) -> None:
         self.tracks.append(track)
 
     def on(self, event: str):
@@ -158,7 +158,7 @@ class _FakeRTCPeerConnection:
 
         return decorator
 
-    async def setRemoteDescription(self, offer: _FakeSessionDescription) -> None:  # noqa: N802
+    async def setRemoteDescription(self, offer: _FakeSessionDescription) -> None:
         self.remoteDescription = offer
         # aiortc fires the synchronous ``track`` event during
         # setRemoteDescription — before the offer handler commits the new
@@ -169,10 +169,10 @@ class _FakeRTCPeerConnection:
             if callback is not None:
                 callback(self._inbound_track)
 
-    async def createAnswer(self) -> _FakeSessionDescription:  # noqa: N802
+    async def createAnswer(self) -> _FakeSessionDescription:
         return _FakeSessionDescription(sdp="fake-answer", type="answer")
 
-    async def setLocalDescription(self, answer: _FakeSessionDescription) -> None:  # noqa: N802
+    async def setLocalDescription(self, answer: _FakeSessionDescription) -> None:
         self.localDescription = answer
 
     async def close(self) -> None:

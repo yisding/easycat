@@ -45,10 +45,9 @@ def test_timed_critical_path_restores_gc_state_on_failure(
         lambda was_enabled: calls.append(was_enabled),
     )
 
-    with pytest.raises(RuntimeError, match="sample failed"):
-        with _timed_critical_path() as started:
-            assert started == 12.5
-            raise RuntimeError("sample failed")
+    with pytest.raises(RuntimeError, match="sample failed"), _timed_critical_path() as started:
+        assert started == 12.5
+        raise RuntimeError("sample failed")
 
     assert calls == [True]
 

@@ -37,13 +37,13 @@ async def probe() -> dict[str, object]:
             view = session.journal
             assert view is not None
 
-            backend_before = type(view._journal).__name__  # noqa: SLF001 — inspection probe
+            backend_before = type(view._journal).__name__
             append_before = hasattr(view, "append")
             response = await session.send_text("postmortem check")
             before = view.read()
 
             await session.stop()
-            backend_after = type(view._journal).__name__  # noqa: SLF001 — inspection probe
+            backend_after = type(view._journal).__name__
             after = view.read()
 
             bundle_path = Path(temp_dir) / "postmortem.bundle"

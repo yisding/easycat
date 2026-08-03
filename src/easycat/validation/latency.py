@@ -46,10 +46,10 @@ from easycat.validation._latency_selectors import (
 __all__ = [
     "DEFAULT_BUDGETS",
     "DEFAULT_RELIABILITY_BUDGETS",
-    "FailureCategory",
     "LATENCY_SMOKE_TEST",
     "LATENCY_SWEEP_TEST",
     "LATENCY_TEST_FILE",
+    "FailureCategory",
     "LatencyBudget",
     "LatencyBudgetViolation",
     "LatencyComparisonThresholds",

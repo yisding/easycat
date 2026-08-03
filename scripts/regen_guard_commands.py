@@ -126,8 +126,6 @@ def _render_module(guards: Sequence[GuardRecipe]) -> str:
         "run ``uv run python scripts/regen_guard_commands.py``.",
         '"""',
         "",
-        "# ruff: noqa: E501",
-        "",
         "from __future__ import annotations",
         "",
         "DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (",

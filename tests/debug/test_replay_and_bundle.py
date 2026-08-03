@@ -1475,7 +1475,7 @@ class TestBundlePartialJournal:
         conn.commit()
         conn.close()
 
-        recovered = list(RunBundle.from_partial_journal(db_path).records())[0]
+        recovered = next(iter(RunBundle.from_partial_journal(db_path).records()))
 
         assert "tags" not in recovered
 
@@ -1509,7 +1509,7 @@ class TestBundlePartialJournal:
         conn.commit()
         conn.close()
 
-        recovered = list(RunBundle.from_partial_journal(db_path).records())[0]
+        recovered = next(iter(RunBundle.from_partial_journal(db_path).records()))
 
         assert recovered["cpu_ns"] == 0
         assert recovered["error"] == {

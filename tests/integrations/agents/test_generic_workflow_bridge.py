@@ -85,8 +85,6 @@ class _InterruptibleShallowWorkflow:
 class _NoOnUserTurn:
     """Invalid workflow — no on_user_turn."""
 
-    pass
-
 
 # ── Tests ────────────────────────────────────────────────────────
 

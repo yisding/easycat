@@ -155,7 +155,7 @@ class DeepgramSTT(WebSocketSTTBase):
                     self._ensure_persistent_connection(),
                     timeout=self._config.warmup_timeout_s,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 logger.debug("Deepgram STT warmup skipped: %s", exc)
                 # Keep cleanup serialized with a concurrently queued first
                 # stream so it cannot close that stream's replacement socket.

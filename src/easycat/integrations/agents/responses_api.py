@@ -213,7 +213,7 @@ async def _drain_completed_stream(lines: AsyncIterator[str]) -> None:
                 pass
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
         pass
 
 

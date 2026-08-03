@@ -82,7 +82,7 @@ async def probe() -> dict[str, object]:
     failed_slot_released = False
     cancelled_start_error = ""
 
-    async with manager.connection("alpha", alpha):  # type: ignore[arg-type]
+    async with manager.connection("alpha", alpha):  # type: ignore[arg-type]  # noqa: SIM117 nested scopes clarify setup and cleanup
         async with manager.connection("beta", beta):  # type: ignore[arg-type]
             active_together = manager.get("alpha") is alpha and manager.get("beta") is beta
 

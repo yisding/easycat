@@ -350,7 +350,7 @@ def test_provider_catalog_discovery_is_atomic_across_threads(
             results.append(
                 tuple(domain for domains in catalog.api_domains.values() for domain in domains)
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             errors.append(exc)
         finally:
             if finished is not None:

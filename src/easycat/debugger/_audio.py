@@ -199,7 +199,7 @@ def _apply_pcm_conversion(
                 )
             else:
                 converted = _np_ratecv(converted, width, target_channels, rate, target_rate)
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         # audio helpers reject malformed PCM lengths; never abort the turn.
         return None
     return converted

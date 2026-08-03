@@ -164,7 +164,7 @@ async def test_recover_from_partial_journal(tmp_path: pathlib.Path) -> None:
     # Do NOT call finalize() / close() — simulate crash.
     try:
         journal._conn.commit()  # type: ignore[attr-defined]
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
         pass
 
     # Try to locate the SQLite file.

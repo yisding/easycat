@@ -115,7 +115,7 @@ class TestWebTransportSession:
         finally:
             await session.stop()
 
-        sent = session._quic_protocol._quic.sent  # noqa: SLF001
+        sent = session._quic_protocol._quic.sent
         by_stream: dict[int, bytearray] = {}
         for sid, data in sent:
             by_stream.setdefault(sid, bytearray()).extend(data)
@@ -143,19 +143,19 @@ class TestWebTransportSession:
         try:
             await out_q.put(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
             await asyncio.sleep(0.05)
-            first_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            first_sid = session._outbound_audio_stream_id
             assert first_sid is not None
 
             hi = AudioFormat(sample_rate=24000, channels=1, sample_width=2)
             await out_q.put(AudioChunk(data=b"\x02\x03" * 4, format=hi))
             await asyncio.sleep(0.05)
-            second_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            second_sid = session._outbound_audio_stream_id
             assert second_sid is not None and second_sid != first_sid
         finally:
             await session.stop()
 
         by_stream: dict[int, bytearray] = {}
-        for sid, data in session._quic_protocol._quic.sent:  # noqa: SLF001
+        for sid, data in session._quic_protocol._quic.sent:
             by_stream.setdefault(sid, bytearray()).extend(data)
         # Old stream header advertises 16k; new one advertises 24k.
         assert struct.unpack_from(">I", by_stream[first_sid], 1)[0] == 16000
@@ -164,24 +164,24 @@ class TestWebTransportSession:
     @pytest.mark.asyncio
     async def test_reset_audio_stream_aborts_in_flight_bytes(self) -> None:
         """After ``reset_audio_stream``, the next chunk opens a fresh stream."""
-        session, fake_h3, _in_q, out_q = _make_session()
+        session, _fake_h3, _in_q, out_q = _make_session()
         await session.start()
         try:
             chunk = AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K)
             await out_q.put(chunk)
             await asyncio.sleep(0.05)
-            first_audio_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            first_audio_sid = session._outbound_audio_stream_id
             assert first_audio_sid is not None
 
             session.reset_audio_stream()
-            assert session._outbound_audio_stream_id is None  # noqa: SLF001
-            quic = session._quic_protocol._quic  # noqa: SLF001
+            assert session._outbound_audio_stream_id is None
+            quic = session._quic_protocol._quic
             assert (first_audio_sid, 0) in quic.resets
 
             # Next chunk must allocate a new stream id.
             await out_q.put(chunk)
             await asyncio.sleep(0.05)
-            second_audio_sid = session._outbound_audio_stream_id  # noqa: SLF001
+            second_audio_sid = session._outbound_audio_stream_id
             assert second_audio_sid is not None
             assert second_audio_sid != first_audio_sid
         finally:
@@ -199,9 +199,9 @@ class TestWebTransportSession:
             def _explode(*_args, **_kwargs):
                 raise RuntimeError("simulated send_stream_data failure")
 
-            session._quic_protocol._quic.send_stream_data = _explode  # type: ignore[assignment]  # noqa: SLF001
+            session._quic_protocol._quic.send_stream_data = _explode  # type: ignore[assignment]
             await out_q.put(AudioChunk(data=b"\x00\x01" * 4, format=PCM16_MONO_16K))
-            await asyncio.wait_for(session._on_close.wait(), timeout=1)  # noqa: SLF001
+            await asyncio.wait_for(session._on_close.wait(), timeout=1)
         finally:
             await session.stop()
 
@@ -213,10 +213,10 @@ class TestWebTransportSession:
         """
         session, _h3, _in_q, _out_q = _make_session()
         sid = 1000
-        session._outbound_audio_stream_id = sid  # noqa: SLF001
+        session._outbound_audio_stream_id = sid
         buf = bytearray(_OUTBOUND_SEND_BUFFER_HIGH_WATER + 1)
-        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}  # noqa: SLF001
-        task = asyncio.create_task(session._await_outbound_capacity())  # noqa: SLF001
+        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}
+        task = asyncio.create_task(session._await_outbound_capacity())
         await asyncio.sleep(0.15)
         assert not task.done()  # still backpressured
         buf.clear()  # client caught up
@@ -228,21 +228,21 @@ class TestWebTransportSession:
         lost, so the owning transport can tear down."""
         session, _h3, _in_q, _out_q = _make_session()
         sid = 1000
-        session._outbound_audio_stream_id = sid  # noqa: SLF001
+        session._outbound_audio_stream_id = sid
         buf = bytearray(_OUTBOUND_SEND_BUFFER_HIGH_WATER + 1)
-        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}  # noqa: SLF001
-        task = asyncio.create_task(session._await_outbound_capacity())  # noqa: SLF001
+        session._quic_protocol._quic._streams = {sid: _FakeStream(buf)}
+        task = asyncio.create_task(session._await_outbound_capacity())
         await asyncio.sleep(0.1)
         assert not task.done()
-        session._on_close.set()  # noqa: SLF001
+        session._on_close.set()
         await asyncio.wait_for(task, timeout=1)
 
     @pytest.mark.asyncio
     async def test_outbound_capacity_no_audio_stream_returns_immediately(self) -> None:
         """No open audio stream → nothing buffered → no backpressure."""
         session, _h3, _in_q, _out_q = _make_session()
-        assert session._outbound_audio_stream_id is None  # noqa: SLF001
-        await asyncio.wait_for(session._await_outbound_capacity(), timeout=1)  # noqa: SLF001
+        assert session._outbound_audio_stream_id is None
+        await asyncio.wait_for(session._await_outbound_capacity(), timeout=1)
 
     @pytest.mark.asyncio
     async def test_server_send_does_not_block_client_control_reception(self) -> None:
@@ -264,7 +264,7 @@ class TestWebTransportSession:
                 data=bytes([_TAG_CONTROL]) + msg,
                 ended=False,
             )
-            assert session._inbound_control_stream_id == client_ctrl_sid  # noqa: SLF001
+            assert session._inbound_control_stream_id == client_ctrl_sid
             # An inbound 48k audio chunk on its own client stream is resampled
             # down to 16k via the inline rate header.
             client_audio_sid = 20
@@ -289,9 +289,9 @@ class TestWebTransportSession:
         session.handle_stream_data(
             stream_id=8, data=bytes([_TAG_CONTROL]) + oversized, ended=False
         )
-        assert session._control_codec.poisoned is True  # noqa: SLF001
-        assert session._on_close.is_set()  # noqa: SLF001
-        assert session._quic_protocol.close_calls == [(0, "control framing violation")]  # noqa: SLF001
+        assert session._control_codec.poisoned is True
+        assert session._on_close.is_set()
+        assert session._quic_protocol.close_calls == [(0, "control framing violation")]
 
     def test_poisoned_control_codec_marks_closed_when_quic_close_raises(self) -> None:
         session, _h3, _in_q, _out_q = _make_session()
@@ -303,7 +303,7 @@ class TestWebTransportSession:
                 stream_id=8, data=bytes([_TAG_CONTROL]) + oversized, ended=False
             )
 
-        assert session._on_close.is_set()  # noqa: SLF001
+        assert session._on_close.is_set()
 
     def test_rejected_stream_flood_marks_closed_when_quic_close_raises(self) -> None:
         session, _h3, _in_q, _out_q = _make_session()
@@ -311,9 +311,9 @@ class TestWebTransportSession:
 
         with pytest.raises(RuntimeError, match="close failed"):
             for stream_id in range(_MAX_REJECTED_STREAMS + 1):
-                session._reject_stream(stream_id)  # noqa: SLF001
+                session._reject_stream(stream_id)
 
-        assert session._on_close.is_set()  # noqa: SLF001
+        assert session._on_close.is_set()
 
     def test_pending_tags_dict_is_capped(self) -> None:
         """A flood of untagged streams must not grow ``_pending_tags`` past the cap."""
@@ -321,7 +321,7 @@ class TestWebTransportSession:
         # Open many empty streams without ever sending the tag byte.
         for sid in range(100):
             session.handle_stream_data(stream_id=sid, data=b"", ended=False)
-        assert len(session._pending_tags) <= 4  # noqa: SLF001 — matches _MAX_PENDING_TAG_STREAMS
+        assert len(session._pending_tags) <= 4
 
     def test_large_first_delivery_is_dispatched_not_dropped(self) -> None:
         """A batched first delivery of ``[tag] + multi-KiB PCM`` in a single
@@ -340,7 +340,7 @@ class TestWebTransportSession:
         # Stream is now identified; a follow-up event routes without re-tagging.
         session.handle_stream_data(stream_id=7, data=b"\x02\x03", ended=False)
         assert in_q.get_nowait().data == b"\x02\x03"
-        assert 7 not in session._pending_tags  # noqa: SLF001
+        assert 7 not in session._pending_tags
 
     def test_nonempty_first_delivery_dispatched_even_when_cap_full(self) -> None:
         """The pending-tag cap must never refuse a *non-empty* first delivery
@@ -351,14 +351,14 @@ class TestWebTransportSession:
         # Saturate the cap with zero-byte streams.
         for sid in range(10):
             session.handle_stream_data(stream_id=sid, data=b"", ended=False)
-        assert len(session._pending_tags) == 4  # noqa: SLF001
+        assert len(session._pending_tags) == 4
 
         # A brand-new stream that arrives *with* its tag+payload must still be
         # dispatched despite the cap being full.
         pcm = b"\x07\x07" * 4
         session.handle_stream_data(stream_id=999, data=_audio_frame(pcm), ended=False)
         assert in_q.get_nowait().data == pcm
-        assert len(session._pending_tags) == 4  # noqa: SLF001 — unchanged
+        assert len(session._pending_tags) == 4
 
     def test_rejected_duplicate_audio_stream_stays_rejected(self) -> None:
         """Regression: a duplicate audio stream is rejected with its
@@ -368,7 +368,7 @@ class TestWebTransportSession:
         """
         session, _h3, in_q, _out_q = _make_session(target_rate=16000)
         session.handle_stream_data(stream_id=4, data=_audio_frame(b"\xaa\xbb"), ended=False)
-        assert session._inbound_audio_stream_id == 4  # noqa: SLF001
+        assert session._inbound_audio_stream_id == 4
         in_q.get_nowait()  # drain the legit chunk
 
         # A second audio stream opened while the first is active is rejected.
@@ -376,23 +376,23 @@ class TestWebTransportSession:
         # the pre-fix code would later misroute it.
         poison = bytes([_TAG_AUDIO]) + struct.pack(">I", 16000) + b"\x01\x02"
         session.handle_stream_data(stream_id=8, data=poison, ended=False)
-        assert 8 in session._rejected_stream_ids  # noqa: SLF001
+        assert 8 in session._rejected_stream_ids
         assert in_q.empty()
 
         # The original audio stream ends — no audio stream is now active.
         session.handle_stream_data(stream_id=4, data=b"", ended=True)
-        assert session._inbound_audio_stream_id is None  # noqa: SLF001
+        assert session._inbound_audio_stream_id is None
 
         # A full audio frame on the rejected stream must NOT be accepted as a
         # fresh audio stream just because none is currently active (pre-fix it
         # would be: tag re-read, PCM enqueued, stream id re-bound).
         session.handle_stream_data(stream_id=8, data=_audio_frame(b"\x33\x44"), ended=False)
         assert in_q.empty()
-        assert session._inbound_audio_stream_id is None  # noqa: SLF001
+        assert session._inbound_audio_stream_id is None
 
         # A FIN on the rejected stream clears its bookkeeping.
         session.handle_stream_data(stream_id=8, data=b"", ended=True)
-        assert 8 not in session._rejected_stream_ids  # noqa: SLF001
+        assert 8 not in session._rejected_stream_ids
 
     def test_rejected_stream_flood_tears_down_session(self) -> None:
         """A flood of rejected streams is a malicious-peer signal: past the
@@ -406,10 +406,8 @@ class TestWebTransportSession:
             session.handle_stream_data(
                 stream_id=100 + sid, data=_audio_frame(b"\x00\x00"), ended=False
             )
-        assert session._on_close.is_set()  # noqa: SLF001
-        assert session._quic_protocol.close_calls == [  # noqa: SLF001
-            (0, "too many rejected streams")
-        ]
+        assert session._on_close.is_set()
+        assert session._quic_protocol.close_calls == [(0, "too many rejected streams")]
 
     @pytest.mark.asyncio
     async def test_control_stream_end_resets_codec(self) -> None:
@@ -422,7 +420,7 @@ class TestWebTransportSession:
         # announcing a 10-byte body, only 3 body bytes), then FIN it.
         partial = struct.pack(">I", 10) + b"abc"
         session.handle_stream_data(stream_id=12, data=bytes([_TAG_CONTROL]) + partial, ended=True)
-        assert session._inbound_control_stream_id is None  # noqa: SLF001
+        assert session._inbound_control_stream_id is None
 
         # A re-opened control stream sends a clean frame.  Without the codec
         # reset, the stale 7 bytes would shift framing and the trailing bytes
@@ -430,6 +428,6 @@ class TestWebTransportSession:
         # session down.
         msg = _ControlCodec.encode({"type": "start"})
         session.handle_stream_data(stream_id=16, data=bytes([_TAG_CONTROL]) + msg, ended=False)
-        assert session._inbound_control_stream_id == 16  # noqa: SLF001
-        assert session._control_codec.poisoned is False  # noqa: SLF001
-        assert not session._on_close.is_set()  # noqa: SLF001
+        assert session._inbound_control_stream_id == 16
+        assert session._control_codec.poisoned is False
+        assert not session._on_close.is_set()

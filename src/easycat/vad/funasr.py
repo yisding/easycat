@@ -129,7 +129,7 @@ class FunASROnnxVAD(_VADBase):
         if self._model is not None and hasattr(self._model, "max_end_sil"):
             try:
                 self._model.max_end_sil = min_silence_duration_ms
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
         # FunASR already applies the silence gate internally via
         # max_end_sil, so disable the shared state machine's silence
@@ -236,7 +236,7 @@ class FunASROnnxVAD(_VADBase):
     def version_info(self) -> dict[str, str]:
         try:
             sdk_ver = version("onnxruntime")
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             sdk_ver = "unknown"
         model_name = self._model_dir
         if self._model_dir == _FUNASR_DEFAULT_MODEL:

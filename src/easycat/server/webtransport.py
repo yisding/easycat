@@ -26,7 +26,7 @@ async def _shutdown_webtransport_sessions(
     primary_error: BaseException | None = None
     try:
         await server.stop()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         primary_error = exc
 
     try:

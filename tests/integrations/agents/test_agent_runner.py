@@ -385,7 +385,7 @@ async def test_append_interruption_note_dedupes():
 
 
 class _FakeBridge:
-    COMMITTABLE_BOUNDARIES: dict = {}
+    COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self):
         self.invoke_called = False
@@ -613,7 +613,7 @@ async def test_agent_runner_warmup_noops_without_inner_warmup():
 
 
 class _PostDoneHangingBridge:
-    COMMITTABLE_BOUNDARIES: dict = {}
+    COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self):
         self.closed = False
@@ -696,7 +696,7 @@ async def test_bridge_delegation_closes_inner_stream_on_early_consumer_close():
 
 
 class _HangingBridge:
-    COMMITTABLE_BOUNDARIES: dict = {}
+    COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
     async def invoke(self, turn_input, recorder, cancel_token=None):
         await asyncio.Event().wait()
@@ -752,7 +752,7 @@ async def test_configured_timeout_keeps_bridge_iteration_in_caller_task():
 class _SucceedThenHangBridge:
     """Replies normally on the first turn, then hangs forever."""
 
-    COMMITTABLE_BOUNDARIES: dict = {}
+    COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self):
         self.turn = 0
@@ -806,7 +806,7 @@ async def test_bridge_timeout_leaves_no_dangling_user_entry():
 
 
 class _ContextCapturingBridge:
-    COMMITTABLE_BOUNDARIES: dict = {}
+    COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self):
         self.seen_contexts: list[list[dict[str, str]]] = []

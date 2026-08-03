@@ -184,7 +184,7 @@ class _SafeRenderer:
             return f"{rendered_name}='***'"
         try:
             field_value = getattr(value, name)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             rendered = _SAFE_REPR_UNAVAILABLE
         else:
             rendered = self.render(field_value, depth=depth + 1)
@@ -263,7 +263,7 @@ def _type_name(value_type: type[Any]) -> str:
     try:
         module = type.__getattribute__(value_type, "__module__")
         qualname = type.__getattribute__(value_type, "__qualname__")
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "unknown"
     if type(module) is not str or type(qualname) is not str:
         return "unknown"
@@ -273,7 +273,7 @@ def _type_name(value_type: type[Any]) -> str:
 def _type_short_name(value_type: type[Any]) -> str:
     try:
         name = type.__getattribute__(value_type, "__name__")
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "unknown"
     return name if type(name) is str else "unknown"
 
@@ -310,7 +310,7 @@ def safe_config_snapshot(config: object) -> dict[str, Any]:
             continue
         try:
             val = getattr(config, name, None)
-        except Exception:
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             result[name] = _SAFE_REPR_UNAVAILABLE
             continue
         if val is not None:
@@ -325,7 +325,7 @@ def _sanitize_url(raw: str) -> str:
         scheme = parsed.scheme or "unknown"
         host = parsed.hostname or "unknown"
         return f"{scheme}://{host}"
-    except Exception:
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return "<redacted>"
 
 

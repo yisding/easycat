@@ -330,7 +330,7 @@ class SileroVAD(_VADBase):
             frame = [0.0] * _SILERO_FRAME_SAMPLES_AT[_SILERO_DEFAULT_RATE]
             self._model.predict(frame, _SILERO_DEFAULT_RATE)
             self._model.reset_states()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("Silero VAD warmup skipped: %s", exc)
 
     def reset(self) -> None:
@@ -343,7 +343,7 @@ class SileroVAD(_VADBase):
         if self._model is not None:
             try:
                 self._model.reset_states()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                 pass
 
     def close(self) -> None:
@@ -360,7 +360,7 @@ class SileroVAD(_VADBase):
         sdk_ver = "unknown"
         try:
             sdk_ver = version("onnxruntime")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
         model_name = "silero-vad-v6.2.1-onnx" if self._backend == "onnx" else "silero-vad-unknown"
         return {

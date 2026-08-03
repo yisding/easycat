@@ -489,7 +489,7 @@ def _add_exception_notes(exc: BaseException, **context: Any) -> None:
             continue
         try:
             exc.add_note(note)
-        except Exception:  # pragma: no cover - Python <3.11 compatibility
+        except Exception:  # noqa: BLE001  # pragma: no cover - defensive
             return
 
 

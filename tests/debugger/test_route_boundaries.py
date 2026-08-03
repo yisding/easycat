@@ -28,10 +28,10 @@ def test_core_route_group_owns_read_only_source_endpoints() -> None:
     app = SimpleNamespace(router=router)
     source = DebuggerSource(
         label="test",
-        _records_fn=lambda: [],
+        _records_fn=list,
         _progress_fn=lambda: (0, 0),
         _artifact_fn=lambda _ref: None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
         _bundle_fn=None,
         _replay_fn=None,
         is_live=False,
@@ -100,7 +100,7 @@ async def test_vad_whatif_preserves_geometry_and_closes_provider(
             }
         ],
         _artifact_fn=lambda ref: b"\x00\x00\x00\x00" * 8 if ref == "pcm" else None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
     if provider_fails:
@@ -162,7 +162,7 @@ async def test_vad_whatif_rejects_same_non_pcm16_formats_as_live_stage(
             }
         ],
         _artifact_fn=lambda ref: b"\x10\xf0\x20\xe0" if ref == "audio" else None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
     with pytest.raises(RuntimeError, match="VAD what-if requires captured PCM16 audio"):
@@ -220,7 +220,7 @@ async def test_vad_whatif_owns_async_provider_close_through_repeated_cancellatio
             }
         ],
         _artifact_fn=lambda ref: b"\x00\x00" if ref == "audio" else None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
     request_task = asyncio.create_task(_vad_whatif_for_turn(source, "t1", threshold=0.5))
@@ -287,7 +287,7 @@ async def test_vad_whatif_logs_internal_provider_close_cancel_without_cancelling
             }
         ],
         _artifact_fn=lambda ref: b"\x00\x00" if ref == "audio" else None,
-        _manifest_fn=lambda: {},
+        _manifest_fn=dict,
     )
 
     async def run_request() -> tuple[dict[str, Any], int]:

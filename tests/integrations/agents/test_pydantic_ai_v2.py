@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -36,7 +36,7 @@ class _ToolCallPart:
 class _ToolReturnPart:
     tool_name = "lookup"
     tool_call_id = "tc1"
-    content = {"ok": True}
+    content = {"ok": True}  # noqa: RUF012 test fake uses shared class fixture
 
 
 class _NoContentToolReturnPart:
@@ -84,10 +84,10 @@ class _EmptyAgentRun:
     result = None
     ctx = object()
 
-    async def __aenter__(self) -> _EmptyAgentRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _EmptyAgentRun:
@@ -101,7 +101,7 @@ class _EmptyAgentRun:
 
 
 class _StructuredOutputRun(_EmptyAgentRun):
-    output = {"utterance": "hello", "intent": "capture"}
+    output = {"utterance": "hello", "intent": "capture"}  # noqa: RUF012 test fake uses shared class fixture
 
 
 class _UsageAgentRun(_EmptyAgentRun):
@@ -167,10 +167,10 @@ class _NoOpGraphRun:
     output = "graph-output"
     history = None
 
-    async def __aenter__(self) -> _NoOpGraphRun:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     def __aiter__(self) -> _NoOpGraphRun:
@@ -181,7 +181,7 @@ class _NoOpGraphRun:
 
 
 class _StructuredOutputGraphRun(_NoOpGraphRun):
-    output = {"utterance": "hello", "intent": "capture"}
+    output = {"utterance": "hello", "intent": "capture"}  # noqa: RUF012 test fake uses shared class fixture
 
 
 class _AmbiguousKeywordGraph:

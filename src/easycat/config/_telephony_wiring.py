@@ -172,7 +172,7 @@ class _OutboundPipelineWiring:
                     current_task = asyncio.current_task()
                     if current_task is not None and current_task.cancelling():
                         raise
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     pass
                 self._hold_audio_task = None
         await self._session.replay_gated_audio(events)

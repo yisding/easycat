@@ -527,7 +527,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
                         "promoting %d-char partial to FINAL",
                         len(self._partial_text),
                     )
-                if self._promote_partial_to_final():
+                if self._promote_partial_to_final():  # noqa: SIM102 nested branches preserve decision context
                     # Only suppress the late committed transcript when we
                     # actually promoted a partial to a FINAL.  If no partial
                     # ever arrived, a real ``committed_transcript`` showing up

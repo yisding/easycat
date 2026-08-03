@@ -274,7 +274,7 @@ def detect_self_echo(
         sample_rate=sample_rate,
         frame_ms=frame_ms,
     )
-    interruptions = sorted(set(int(f) for f in interruption_frames))
+    interruptions = sorted({int(f) for f in interruption_frames})
 
     def _near_interruption(frame: int) -> bool:
         return any(abs(frame - it) <= guard_frames for it in interruptions)

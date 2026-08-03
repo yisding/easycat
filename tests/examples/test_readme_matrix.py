@@ -298,15 +298,10 @@ def test_default_openai_provider_examples_install_openai_sdk() -> None:
 def test_example_env_var_collector_reads_direct_environ_access(tmp_path: Path) -> None:
     path = tmp_path / "example.py"
     path.write_text(
-        "\n".join(
-            [
-                "import os",
-                'require_env("REQUIRED_API_KEY")',
-                'os.getenv("OPTIONAL_TOKEN")',
-                'os.environ.get("OPTIONAL_HOST")',
-                'os.environ["DIRECT_SECRET"]',
-                '_env_flag("FEATURE_FLAG")',
-            ]
+        (
+            'import os\nrequire_env("REQUIRED_API_KEY")\nos.getenv("OPTIONAL_TOKEN")\n'
+            'os.environ.get("OPTIONAL_HOST")\nos.environ["DIRECT_SECRET"]\n'
+            '_env_flag("FEATURE_FLAG")'
         ),
         encoding="utf-8",
     )

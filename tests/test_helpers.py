@@ -7,7 +7,7 @@ import signal
 import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -37,7 +37,7 @@ class _ImmediateSession:
         self.events: list[str] = []
         self.loop: asyncio.AbstractEventLoop | None = None
 
-    async def __aenter__(self) -> _ImmediateSession:
+    async def __aenter__(self) -> Self:
         self.loop = asyncio.get_running_loop()
         self.events.append("start")
         return self
@@ -51,7 +51,7 @@ class _ImmediateSession:
 
 def _install_immediate_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
     @contextmanager
-    def scope(_loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event):  # noqa: ANN202
+    def scope(_loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event):
         stop_event.set()
         yield True
 
@@ -136,7 +136,7 @@ async def test_arun_releases_temporary_signal_handlers(
     events: list[str] = []
 
     @contextmanager
-    def scope(_loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event):  # noqa: ANN202
+    def scope(_loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event):
         events.append("install")
         stop_event.set()
         try:

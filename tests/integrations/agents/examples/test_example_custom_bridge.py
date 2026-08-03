@@ -36,7 +36,7 @@ from easycat.runtime.records import ErrorInfo
 class DirectChatBridge:
     """Minimal custom bridge: mocked chat completions with no framework."""
 
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self, *, model: str, system: str) -> None:
         self._model = model

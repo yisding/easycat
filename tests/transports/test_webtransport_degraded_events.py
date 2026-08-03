@@ -78,12 +78,12 @@ class TestWebTransportDegradedEvents:
     async def test_barge_in_reset_failure_emits_degraded(self) -> None:
         rec = _DegradedRecorder()
         session, _h3, _in_q, _out_q = _make_session(emit_degraded=rec)
-        session._outbound_audio_stream_id = 1000  # noqa: SLF001 — pretend a stream is open
+        session._outbound_audio_stream_id = 1000
 
         def _boom(stream_id: int, error_code: int) -> None:
             raise RuntimeError("reset boom")
 
-        session._quic_protocol._quic.reset_stream = _boom  # noqa: SLF001
+        session._quic_protocol._quic.reset_stream = _boom
         session.reset_audio_stream()
         assert rec.reasons == [_DEGRADED_BARGE_IN_RESET_FAILED]
         assert rec.calls[0][2] is False  # client may still hear TTS, but not fatal
@@ -94,12 +94,12 @@ class TestWebTransportDegradedEvents:
         session, _h3, _in_q, out_q = _make_session(emit_degraded=rec)
         await session.start()  # "ready" goes out on the unpatched fake first
 
-        def _boom(stream_id: int, data: bytes, end_stream: bool = False) -> None:  # noqa: FBT001, FBT002
+        def _boom(stream_id: int, data: bytes, end_stream: bool = False) -> None:
             raise RuntimeError("send boom")
 
-        session._quic_protocol._quic.send_stream_data = _boom  # noqa: SLF001
+        session._quic_protocol._quic.send_stream_data = _boom
         out_q.put_nowait(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
-        await asyncio.wait_for(session._on_close.wait(), timeout=1)  # noqa: SLF001
+        await asyncio.wait_for(session._on_close.wait(), timeout=1)
         await session.stop()
         crash = next(c for c in rec.calls if c[0] == _DEGRADED_OUTBOUND_WRITER_CRASHED)
         assert crash[2] is True
@@ -118,8 +118,8 @@ class TestWebTransportDegradedEvents:
         received: list[TransportDegraded] = []
         bus = EventBus()
         bus.subscribe(TransportDegraded, lambda e: received.append(e))
-        transport._event_bus = bus  # noqa: SLF001 — mirrors Session._maybe_attach_event_bus
-        transport._connected = True  # noqa: SLF001 — skip the draining writer
+        transport._event_bus = bus
+        transport._connected = True
         chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
         assert await transport.send_audio(chunk) is True  # fills the 1-slot queue
         assert await transport.send_audio(chunk) is False  # dropped

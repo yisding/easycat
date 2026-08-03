@@ -292,9 +292,8 @@ def promote_turn(
     import tempfile
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(dir=out.parent, suffix=".zip", delete=False)
-    tmp.close()
-    tmp_path = Path(tmp.name)
+    with tempfile.NamedTemporaryFile(dir=out.parent, suffix=".zip", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     frame_count, error_message = _validate_promoted_slice(sliced, tmp_path, turn_id=safe_id)
     if error_message is not None:
         emit_command_error(

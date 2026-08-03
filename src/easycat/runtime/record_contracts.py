@@ -18,30 +18,84 @@ class BuiltinRecordContract:
 
 
 _KIND_NAMES = {
-    JournalRecordKind.EVENT: """
-        aec_reference_frame interruption_note markdown_stripped provider_versions
-        replace_last_assistant_text stage_complete stage_error stage_start
-        stt_segment_commit_requested stt_segment_commit_result stt_segment_final tts_frame
-        tts_payload_prepared agent_delta agent_failure_fallback agent_final
-        agent_request_started agent_usage bot_started_speaking
-        bot_stopped_speaking call_answered call_ended call_failed call_screening error
-        playback_mark_ack session_action_completed session_action_failed session_action_requested
-        session_action_started stt_final stt_partial supervisor_listener_attached
-        supervisor_listener_detached tool_call_delta tool_call_result tool_call_started
-        transport_degraded tts_audio tts_markers turn_ended turn_started vad_start_speaking
-        vad_stop_speaking ws_reconnect_attempt ws_reconnect_failure ws_reconnect_success
-        assistant_interruption_notified audio_queue_drop pipeline_heartbeat task_cancelled
-        task_completed task_raised task_scheduled turn_state_changed warmup_completed
-    """.split(),
-    JournalRecordKind.METRIC: "text_turn_latency_ms turn_total_latency_ms".split(),
-    JournalRecordKind.CONTROL: """
-        interruption transport_degraded control_signal control_signal_cause warmup_failed
-        buffer_overflow
-    """.split(),
-    JournalRecordKind.FRAMEWORK_TRANSITION: """
-        cancellation_boundary framework_error framework_handoff interruption_apply_failed
-        state_committed state_snapshot tool_phase_changed unit_entered unit_exited
-    """.split(),
+    JournalRecordKind.EVENT: [
+        "aec_reference_frame",
+        "interruption_note",
+        "markdown_stripped",
+        "provider_versions",
+        "replace_last_assistant_text",
+        "stage_complete",
+        "stage_error",
+        "stage_start",
+        "stt_segment_commit_requested",
+        "stt_segment_commit_result",
+        "stt_segment_final",
+        "tts_frame",
+        "tts_payload_prepared",
+        "agent_delta",
+        "agent_failure_fallback",
+        "agent_final",
+        "agent_request_started",
+        "agent_usage",
+        "bot_started_speaking",
+        "bot_stopped_speaking",
+        "call_answered",
+        "call_ended",
+        "call_failed",
+        "call_screening",
+        "error",
+        "playback_mark_ack",
+        "session_action_completed",
+        "session_action_failed",
+        "session_action_requested",
+        "session_action_started",
+        "stt_final",
+        "stt_partial",
+        "supervisor_listener_attached",
+        "supervisor_listener_detached",
+        "tool_call_delta",
+        "tool_call_result",
+        "tool_call_started",
+        "transport_degraded",
+        "tts_audio",
+        "tts_markers",
+        "turn_ended",
+        "turn_started",
+        "vad_start_speaking",
+        "vad_stop_speaking",
+        "ws_reconnect_attempt",
+        "ws_reconnect_failure",
+        "ws_reconnect_success",
+        "assistant_interruption_notified",
+        "audio_queue_drop",
+        "pipeline_heartbeat",
+        "task_cancelled",
+        "task_completed",
+        "task_raised",
+        "task_scheduled",
+        "turn_state_changed",
+        "warmup_completed",
+    ],
+    JournalRecordKind.METRIC: ["text_turn_latency_ms", "turn_total_latency_ms"],
+    JournalRecordKind.CONTROL: [
+        "interruption",
+        "transport_degraded",
+        "control_signal",
+        "control_signal_cause",
+        "warmup_failed",
+        "buffer_overflow",
+    ],
+    JournalRecordKind.FRAMEWORK_TRANSITION: [
+        "cancellation_boundary",
+        "framework_error",
+        "framework_handoff",
+        "interruption_apply_failed",
+        "state_committed",
+        "state_snapshot",
+        "tool_phase_changed",
+        "unit_entered",
+        "unit_exited",
+    ],
     JournalRecordKind.DEGRADED: ["journal_degraded"],
     JournalRecordKind.RECOVERY: ["recovered_session"],
 }

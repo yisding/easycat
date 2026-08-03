@@ -160,7 +160,7 @@ class _KitTransport:
 
 
 class _KitBridge:
-    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}
+    COMMITTABLE_BOUNDARIES = {UnitKind.AGENT: CommitRule.BETWEEN_TURNS}  # noqa: RUF012 test fake uses shared class fixture
 
     def __init__(self) -> None:
         self.history: list[str] = []
@@ -169,7 +169,7 @@ class _KitBridge:
         self,
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
-        cancel_token=None,  # noqa: ANN001
+        cancel_token=None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         del recorder, cancel_token
         self.history.append(turn_input.text)
@@ -455,7 +455,7 @@ async def test_agent_bridge_suite_rejects_stream_missing_done() -> None:
             self,
             turn_input: AgentTurnInput,
             recorder: AgentRecorder,
-            cancel_token=None,  # noqa: ANN001
+            cancel_token=None,
         ) -> AsyncIterator[AgentBridgeEvent]:
             del recorder, cancel_token
             self.history.append(turn_input.text)

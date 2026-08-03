@@ -110,6 +110,7 @@ def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, templat
         cwd=project,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert proc.returncode == 0, (
         f"ruff check failed on scaffolded {template} Python files:\n{proc.stdout}\n{proc.stderr}"
@@ -141,6 +142,7 @@ def test_scaffold_dependencies_resolve_with_uv_lock(
         capture_output=True,
         text=True,
         timeout=240,
+        check=False,
     )
     assert proc.returncode == 0, (
         f"uv lock failed for scaffolded {template}:\n{proc.stdout}\n{proc.stderr}"
@@ -170,6 +172,7 @@ def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, temp
         capture_output=True,
         text=True,
         env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
     )
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
@@ -196,6 +199,7 @@ def test_provider_scaffold_named_vad_conformance_suite_passes(
         capture_output=True,
         text=True,
         env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
     )
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded provider project:\n{proc.stdout}\n{proc.stderr}"
@@ -232,6 +236,7 @@ def test_speech_provider_scaffold_contract_suite_passes(
         capture_output=True,
         text=True,
         env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
     )
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
@@ -285,6 +290,7 @@ def test_live_requests_are_never_implicit() -> None:
             "DEEPGRAM_API_KEY": "dg-ambient-provider-credential",
             "ELEVENLABS_API_KEY": "el-ambient-provider-credential",
         },
+        check=False,
     )
 
     assert proc.returncode == 0, (

@@ -184,7 +184,7 @@ class CartesiaTTS(_WSTTSBase):
                     json.dumps({"context_id": ctx_id, "cancel": True})
                 ],
                 on_context_replay=self._reset_persistent_audio_alignment,
-                socket_close_frames=lambda: [],
+                socket_close_frames=list,
                 on_global_frame=self._on_global_frame,
                 context_queue_maxsize=self._config.context_queue_maxsize,
             )
@@ -200,7 +200,7 @@ class CartesiaTTS(_WSTTSBase):
                 self._get_mgr().warmup(),
                 timeout=self._config.warmup_timeout_s,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             # Startup warmup is an optimization, not a new availability gate.
             # The manager clears a failed socket so synthesize() can retry.
             logger.debug("Cartesia TTS warmup skipped: %s", exc)

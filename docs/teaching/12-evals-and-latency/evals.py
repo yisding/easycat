@@ -89,7 +89,7 @@ def _stats_from_records(records, *, bundle_name: str) -> dict:
     gap = gaps[0]
     hypothesis = hypotheses[0]
     if not isinstance(hypothesis, str):
-        raise ValueError(f"{bundle_name}: stt.final.text must be a string")
+        raise ValueError(f"{bundle_name}: stt.final.text must be a string")  # noqa: TRY004 domain-specific validation error
     if isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap < 0:
         raise ValueError(f"{bundle_name}: turn.gap.total_gap_ms must be a non-negative number")
 
