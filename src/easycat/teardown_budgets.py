@@ -44,3 +44,21 @@ SESSION_BARGE_IN_CUTOFF_TIMEOUT_S: Final = 0.4
 
 # Briefly drain a superseded application prompt before abandoning its cleanup.
 SESSION_APPLICATION_PROMPT_CANCEL_DRAIN_TIMEOUT_S: Final = 0.1
+
+# Let Litestream exit cleanly after SIGTERM before escalating to SIGKILL.
+JOURNAL_LITESTREAM_TERMINATE_TIMEOUT_S: Final = 5.0
+
+# Bound process reaping after Litestream is forcibly killed.
+JOURNAL_LITESTREAM_KILL_TIMEOUT_S: Final = 2.0
+
+# Join Litestream's stderr-drain thread before releasing its pipe.
+JOURNAL_LITESTREAM_STDERR_JOIN_TIMEOUT_S: Final = 2.0
+
+# Bound libSQL's background sync-thread shutdown before final synchronization.
+JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S: Final = 5.0
+
+# Drain in-flight WebRTC delivery events before cancelling their worker.
+WEBRTC_AUDIO_ACLOSE_TIMEOUT_S: Final = 5.0
+
+# Bound cancellation of an active WebRTC offer during disconnect.
+WEBRTC_OFFER_CANCEL_DRAIN_TIMEOUT_S: Final = 0.5

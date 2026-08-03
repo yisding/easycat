@@ -265,12 +265,20 @@ and 30 `not_teardown` without adding runtime budget enforcement.
 
 ### WS0.2b3 — central runtime and transport lifecycle-budget defaults [M]
 
-Move the concrete journal, WebRTC audio/offer, and WebTransport close/reap
-cleanup defaults. Protocol-local sends, handshakes, idle bounds, and
+Move the concrete journal and WebRTC audio/offer cleanup defaults.
+`WebTransportConnectionTransport.wait_closed(timeout=None)` is an opt-out
+sentinel rather than a concrete default, while WebTransport handler reaping and
+listener close consume the configurable server force-shutdown value and move
+with WS0.2b4. Protocol-local sends, handshakes, idle bounds, and
 acknowledgements remain with their protocols.
 
 Acceptance: close/cancel/drain behavior and values are unchanged across each
 runtime and transport, and their focused lifecycle suites pass.
+
+Migration result: six concrete values — four journal process/thread joins and
+two WebRTC cleanup bounds. Naming four formerly inline journal values and
+retaining the overridable WebRTC audio class alias grows the reviewed manifest
+to 170 sites, including 82 `lifecycle_budget` entries.
 
 ### WS0.2b4 — central configurable server lifecycle defaults [M]
 

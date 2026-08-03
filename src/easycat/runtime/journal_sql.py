@@ -60,6 +60,12 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
+from easycat.teardown_budgets import (
+    JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S,
+    JOURNAL_LITESTREAM_KILL_TIMEOUT_S,
+    JOURNAL_LITESTREAM_STDERR_JOIN_TIMEOUT_S,
+    JOURNAL_LITESTREAM_TERMINATE_TIMEOUT_S,
+)
 from easycat.validation.redaction import RedactionPolicy, validate_redaction_policy
 
 logger = logging.getLogger(__name__)
@@ -1234,17 +1240,17 @@ class LitestreamSqliteJournal:
             return
         try:
             self._sidecar.send_signal(signal.SIGTERM)
-            self._sidecar.wait(timeout=5)
+            self._sidecar.wait(timeout=JOURNAL_LITESTREAM_TERMINATE_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             self._sidecar.kill()
-            self._sidecar.wait(timeout=2)
+            self._sidecar.wait(timeout=JOURNAL_LITESTREAM_KILL_TIMEOUT_S)
         except OSError:
             pass
         finally:
             # The drain thread closes the pipe on EOF; join it so the fd is
             # released before we drop our reference to the process.
             if self._stderr_thread is not None:
-                self._stderr_thread.join(timeout=2)
+                self._stderr_thread.join(timeout=JOURNAL_LITESTREAM_STDERR_JOIN_TIMEOUT_S)
                 self._stderr_thread = None
             if self._sidecar.stderr is not None:
                 try:
@@ -1483,7 +1489,7 @@ class LibsqlJournal(_SqlJournalBase):
         # Stop the sync thread.
         self._sync_stop.set()
         if self._sync_thread is not None:
-            self._sync_thread.join(timeout=5)
+            self._sync_thread.join(timeout=JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S)
 
         # Serialize the final sync and connection close with an append that
         # started just before ``_closed`` was set.  Unlike the periodic sync
