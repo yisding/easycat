@@ -446,6 +446,14 @@ Unit suite: capture/bump ordering; guard on both stale policies; atomic
 bump during a loop-side guard; re-guard-after-await example as an
 executable doc test.
 
+Implementation result: the leaf primitive starts at generation zero,
+atomically publishes replacements through `bump(value)`, and returns immutable
+leases from `capture()`. A lease holds its captured generation and payload,
+offers a thread-safe advisory `is_current()`, and makes loop-only `guard()`
+either return `False` or raise `Stale`. The module-level contract documents the
+mutex memory model and the mandatory re-guard immediately before an effect;
+domain adoption remains in WS1.2+.
+
 ### WS1.2 — turn identity and activity inside `session/` [L, split a-g]
 
 Use one primitive but **two semantic state machines**: a Session-owned turn-
