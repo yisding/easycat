@@ -47,14 +47,14 @@
       }
     }
   ],
-  "schema_version": 1,
-  "vertical_slice_soak": {
+  "schema_version": 2,
+  "vertical_slice_gate": {
+    "anchor": null,
     "incidents": [],
     "reasons": [
-      "soak_pending"
+      "vertical_slice_gate_pending"
     ],
     "result": "insufficient_data",
-    "status": "pending",
-    "window": null
+    "status": "pending"
   }
 }

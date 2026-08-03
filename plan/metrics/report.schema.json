@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://easycat.dev/schemas/refactor-metrics-report-v1.json",
+  "$id": "https://easycat.dev/schemas/refactor-metrics-report-v2.json",
   "title": "Bug-resistant refactor outcome report",
   "type": "object",
   "additionalProperties": false,
@@ -8,11 +8,11 @@
     "schema_version",
     "as_of",
     "cohorts",
-    "vertical_slice_soak"
+    "vertical_slice_gate"
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "as_of": {
       "$ref": "#/$defs/timestamp"
@@ -23,8 +23,8 @@
         "$ref": "#/$defs/cohort"
       }
     },
-    "vertical_slice_soak": {
-      "$ref": "#/$defs/soak"
+    "vertical_slice_gate": {
+      "$ref": "#/$defs/vertical_slice_gate"
     }
   },
   "$defs": {
@@ -293,14 +293,14 @@
         }
       }
     },
-    "soak": {
+    "vertical_slice_gate": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "result",
         "status",
         "reasons",
-        "window",
+        "anchor",
         "incidents"
       ],
       "properties": {
@@ -317,10 +317,23 @@
             "type": "string"
           }
         },
-        "window": {
+        "anchor": {
           "oneOf": [
             {
-              "$ref": "#/$defs/window"
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "completion_sha",
+                "completion_date"
+              ],
+              "properties": {
+                "completion_sha": {
+                  "$ref": "#/$defs/sha"
+                },
+                "completion_date": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
             },
             {
               "type": "null"

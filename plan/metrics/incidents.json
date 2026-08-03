@@ -1,16 +1,33 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "rubric_version": 1,
-  "soak_window_days": 14,
-  "soak": {
+  "required_verification": {
+    "commands": [
+      "uv run pytest tests/runtime/test_scope.py tests/session/test_session_lifecycle_teardown.py tests/integration/test_session_lifecycle_e2e.py -q",
+      "just check"
+    ],
+    "github_checks": [
+      "CodeRabbit",
+      "GitGuardian Security Checks"
+    ],
+    "incident_searches": [
+      "issues",
+      "regression_prs",
+      "reverts",
+      "release_blocking_ci"
+    ]
+  },
+  "vertical_slice_gate": {
     "status": "pending",
     "completion_sha": null,
     "completion_date": null,
-    "window": null,
     "review": {
       "status": "pending",
       "reviewer": null,
       "reviewed_at": null,
+      "commands": [],
+      "github_checks": [],
+      "incident_searches": [],
       "evidence": []
     }
   },

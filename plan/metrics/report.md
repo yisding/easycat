@@ -28,8 +28,8 @@ As of `2026-08-02T00:00:00Z`. Generated; do not edit by hand.
 - Result: **insufficient_data**
 - Reasons: `peer_decision_blocked`
 
-## Fourteen-day vertical-slice soak
+## WS2.1a vertical-slice acceptance gate
 
 - Status: `pending`
 - Result: **insufficient_data**
-- Reasons: `soak_pending`
+- Reasons: `vertical_slice_gate_pending`
