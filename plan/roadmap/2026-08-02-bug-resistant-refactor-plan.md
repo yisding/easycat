@@ -1031,6 +1031,18 @@ drops the unsafe retained Context. Every row proves JSON-safe snapshots and
 empty post-reset state. All seven bridge drivers are now wired; WS3.1d6 owns
 the explicit zero-pending ratchet and exact-candidate-SHA optional-extras proof.
 
+WS3.1d6 result: the execution registry is now closed rather than merely
+progress-bearing: every one of the seven shipped bridges must remain `wired`,
+and the ratchet rejects any reintroduced `pending` state. The existing nightly
+extras matrix now identifies the six real-SDK bridge cells (including both
+supported PydanticAI generations), reruns the exact public contract class after
+the isolated extra install, and rejects zero tests, skips, failures, or errors.
+Each such cell compares `git rev-parse HEAD` with the workflow's `github.sha`
+and uploads the JUnit result plus a deterministic JSON attestation whose name
+includes that candidate SHA. A manually dispatched run at a PR ref therefore
+produces the same auditable exact-candidate evidence required by the Tier-A
+gate without making optional SDKs part of the default developer environment.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
