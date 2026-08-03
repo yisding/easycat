@@ -1,0 +1,332 @@
+{
+  "version": 1,
+  "update_rationale": "WS3.1a freezes lifecycle scenario applicability and the 13 capability-level gaps before introducing shared drivers",
+  "bridges": {
+    "generic_workflow": {
+      "display_name": "GenericWorkflowBridge",
+      "required_extra": null
+    },
+    "langchain": {
+      "display_name": "LangChainBridge",
+      "required_extra": "langchain"
+    },
+    "langgraph": {
+      "display_name": "LangGraphBridge",
+      "required_extra": "langgraph"
+    },
+    "llama_agents": {
+      "display_name": "LlamaAgentsBridge",
+      "required_extra": "llama-agents"
+    },
+    "openai_agents": {
+      "display_name": "OpenAIAgentsBridge",
+      "required_extra": "openai-agents"
+    },
+    "pydantic_ai": {
+      "display_name": "PydanticAIBridge",
+      "required_extra": "pydantic-ai"
+    },
+    "remote_responses_api": {
+      "display_name": "RemoteResponsesAPIBridge",
+      "required_extra": "openai"
+    }
+  },
+  "scenarios": {
+    "interruption_prior_turn_isolation": {
+      "contract": "An interrupted or empty current turn never rewrites a prior turn's assistant history."
+    },
+    "recorder_transient_cleanup": {
+      "contract": "Cancellation or close balances recorder cursors and purges per-run transient bookkeeping."
+    },
+    "stream_close_cleanup": {
+      "contract": "Closing the bridge stream closes the innermost SDK iterator and stops its running work."
+    },
+    "tool_inflight_cancellation_drain": {
+      "contract": "Cancellation with tool work in flight obeys delivered-text commit policy and drains the tool boundary."
+    },
+    "unknown_event_tolerance": {
+      "contract": "A malformed or unknown provider event does not suppress a later valid terminal response."
+    }
+  },
+  "after_each_applicable_scenario": {
+    "reset_isolation": "reset() clears state introduced by the scenario",
+    "snapshot_json_safe": "snapshot_state() remains JSON-serializable after the scenario"
+  },
+  "counts": {
+    "applicability": {
+      "not_applicable": 2,
+      "required": 33
+    },
+    "coverage": {
+      "existing": 20,
+      "missing": 13,
+      "not_applicable": 2
+    }
+  },
+  "cells": {
+    "generic_workflow": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "A history-capable workflow delegate can expose whether bridge interruption reaches behind the current turn.",
+        "evidence": []
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Deep and shallow workflows share BridgeTemplate recorder cursor ownership.",
+        "evidence": [
+          "tests/integrations/agents/test_generic_workflow_bridge.py::TestCursorCleanupOnCancel::test_shallow_streaming_aclose_balances_cursor"
+        ]
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Workflow-owned async iterators must receive consumer close.",
+        "evidence": [
+          "tests/integrations/agents/test_generic_workflow_bridge.py::TestCursorCleanupOnCancel::test_aclose_propagates_to_non_generator_async_iterator"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Deep workflows can expose recorder tool phases and cooperative cancellation.",
+        "evidence": []
+      },
+      "unknown_event_tolerance": {
+        "applicability": "not_applicable",
+        "coverage": "not_applicable",
+        "rationale": "GenericWorkflowBridge consumes user return values, not an open-ended provider event taxonomy.",
+        "evidence": []
+      }
+    },
+    "langchain": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "LangChain owns shadow or runnable-store history that an empty cancelled turn must not rewrite.",
+        "evidence": [
+          "tests/integrations/agents/test_langchain_bridge_interruption.py::TestLangChainBridgePartialTurnOnCancel::test_early_cancel_before_any_token_leaves_prior_reply_intact"
+        ]
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Runnable and model cursors must balance when AgentRunner times out the stream.",
+        "evidence": [
+          "tests/integrations/agents/test_langchain_bridge_invoke.py::TestLangChainBridgeInvoke::test_agent_runner_timeout_closes_open_cursors"
+        ]
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The consumer close must propagate into runnable-owned event streams.",
+        "evidence": [
+          "tests/integrations/agents/test_langchain_bridge_invoke.py::TestLangChainBridgeInvoke::test_consumer_aclose_closes_underlying_event_stream"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "LangChain tool run events expose a controllable in-flight tool boundary.",
+        "evidence": []
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "astream_events is open-ended and may add malformed or unknown event objects.",
+        "evidence": [
+          "tests/integrations/agents/test_langchain_bridge_invoke.py::TestLangChainBridgeInvoke::test_ignores_non_mapping_stream_events"
+        ]
+      }
+    },
+    "langgraph": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Checkpoint history must retain the prior assistant turn when the current turn has no assistant output.",
+        "evidence": [
+          "tests/integrations/agents/test_langgraph_bridge_cancellation.py::TestLangGraphBridgePartialTurnOnCancel::test_early_cancel_does_not_rewrite_prior_turn"
+        ]
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Workflow-node and model cursors must balance when AgentRunner times out the stream.",
+        "evidence": [
+          "tests/integrations/agents/test_langgraph_bridge_invoke.py::TestLangGraphBridgeInvoke::test_agent_runner_timeout_closes_open_cursors"
+        ]
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Consumer close must reach the graph event stream and synchronously commit partial state.",
+        "evidence": [
+          "tests/integrations/agents/test_langgraph_bridge_interruption.py::TestLangGraphBridgeAclosePropagation::test_consumer_aclose_propagates_to_drive_stream_cleanup"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Graph tool nodes expose a controllable in-flight tool boundary.",
+        "evidence": []
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "LangGraph's astream_events feed is open-ended across framework releases.",
+        "evidence": [
+          "tests/integrations/agents/test_langgraph_bridge_invoke.py::TestLangGraphBridgeInvoke::test_ignores_non_mapping_stream_events"
+        ]
+      }
+    },
+    "llama_agents": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "not_applicable",
+        "coverage": "not_applicable",
+        "rationale": "LlamaAgentsBridge carries interruption metadata into the next start event and does not rewrite assistant message history.",
+        "evidence": []
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Workflow cursors and retained handler/context fields need one normalized close assertion.",
+        "evidence": []
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Closing a local workflow stream must cancel its live handler.",
+        "evidence": [
+          "tests/integrations/agents/test_llama_agents_bridge_local.py::TestLocalLlamaAgentsBridge::test_early_generator_close_cancels_running_workflow"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "A blocked workflow step is the Llama lifecycle equivalent of in-flight tool work.",
+        "evidence": []
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Workflow event streams are open-ended and custom event classes are expected.",
+        "evidence": []
+      }
+    },
+    "openai_agents": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "The bridge-owned message list must not rewrite the previous assistant reply when a new run closes before text.",
+        "evidence": []
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Agent/tool recorder cursors and pending-tool bookkeeping need one normalized close assertion.",
+        "evidence": []
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Generator close must cancel the SDK run and close its event iterator.",
+        "evidence": [
+          "tests/integrations/agents/test_openai_agents_bridge_cancellation.py::test_generator_close_closes_sdk_event_stream"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "OpenAI Agents exposes pending function tools and drain-to-turn cancellation.",
+        "evidence": [
+          "tests/integrations/agents/test_openai_agents_bridge_cancellation.py::test_barge_in_with_pending_tool_cancels_after_turn"
+        ]
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The SDK run-item stream can add item subclasses unknown to this adapter version.",
+        "evidence": [
+          "tests/integrations/agents/test_openai_agents_bridge_options.py::test_openai_agents_map_run_item_ignores_unknown_items"
+        ]
+      }
+    },
+    "pydantic_ai": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Bridge-owned per-session message histories must commit the current partial response without altering the previous response.",
+        "evidence": [
+          "tests/integrations/agents/test_pydantic_ai_bridge_cancellation.py::test_aclose_commits_current_turn_before_interruption_rewrite"
+        ]
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Agent/model/tool recorder cursors and per-run graph state need a normalized close assertion.",
+        "evidence": []
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Closing either iter or run_stream variants must commit current-turn messages before interruption.",
+        "evidence": [
+          "tests/integrations/agents/test_pydantic_ai_bridge_cancellation.py::test_aclose_commits_current_turn_before_interruption_rewrite"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "PydanticAI tool-call nodes expose a controllable in-flight tool boundary.",
+        "evidence": []
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Typed model and graph event unions can grow across PydanticAI SDK versions.",
+        "evidence": []
+      }
+    },
+    "remote_responses_api": {
+      "interruption_prior_turn_isolation": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Response-chain interruption must roll back to the predecessor rather than mutate a completed prior response.",
+        "evidence": [
+          "tests/integrations/agents/test_responses_api_bridge.py::TestN1ChainInterruption::test_completed_turn_interruption_rolls_chain_back_to_predecessor"
+        ]
+      },
+      "recorder_transient_cleanup": {
+        "applicability": "required",
+        "coverage": "missing",
+        "rationale": "Agent/tool recorder cursors and pending SSE tool maps need one normalized close assertion.",
+        "evidence": []
+      },
+      "stream_close_cleanup": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Cancellation must wake and close both the nested line iterator and HTTP stream context.",
+        "evidence": [
+          "tests/integrations/agents/test_responses_api_bridge.py::TestDrainCurrentUnit::test_idle_stream_wakes_on_cancel_and_closes_line_reader"
+        ]
+      },
+      "tool_inflight_cancellation_drain": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Responses SSE exposes explicit function-call start/result boundaries.",
+        "evidence": [
+          "tests/integrations/agents/test_responses_api_bridge.py::TestDrainCurrentUnit::test_cancel_during_tool_call_drains_through_tool_result"
+        ]
+      },
+      "unknown_event_tolerance": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The remote SSE protocol is explicitly extensible by event type.",
+        "evidence": [
+          "tests/integrations/agents/test_responses_api_bridge.py::TestSSETranslator::test_unknown_event_returns_none"
+        ]
+      }
+    }
+  }
+}

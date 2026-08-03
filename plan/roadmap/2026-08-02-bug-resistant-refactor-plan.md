@@ -874,6 +874,31 @@ candidate SHA. Any bridge fix is its own PR. This is rows **and capability
 wiring**, not an assertion that today's `provider_factory` can inject these
 faults.
 
+Deliver WS3.1 as four one-concern PRs:
+
+- **a. Scenario matrix inventory.** Freeze the seven shipped bridges by five
+  lifecycle capabilities, plus the universal reset-isolation and JSON-safe
+  snapshot postconditions. Classify every bridge/scenario cell as required or
+  not applicable, with the exact pre-harness evidence or a named gap.
+- **b. Internal suite + offline driver.** Introduce the internal scenario and
+  capability-driver protocols, then run all shared row logic against an
+  unmarked deterministic model bridge on every PR.
+- **c. Portable public rows.** Add only lifecycle behavior observable through
+  the existing provider factory to the source-compatible public
+  `AgentBridgeContractSuite`.
+- **d. Built-in capability drivers.** Wire each applicable built-in cell,
+  close every gap in (a), and produce the required-extras or exact-candidate-
+  SHA nightly evidence. Bridge defects discovered here remain separate PRs.
+
+WS3.1a inventory result: the checked-in 7-by-5 matrix freezes 35 cells. Thirty-
+three are required and two are not applicable: generic workflows have no
+provider event taxonomy, while Llama interruption metadata does not rewrite
+assistant history. Existing focused tests cover twenty required cells; thirteen
+capability-level gaps remain for WS3.1d. The matrix records reset isolation and
+JSON-safe snapshotting as postconditions of every applicable scenario. This
+inventory slice changes no production behavior; later WS3.1 slices must evolve
+the same matrix until no required cell remains `missing`.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
