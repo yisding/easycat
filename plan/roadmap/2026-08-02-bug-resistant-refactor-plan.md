@@ -812,6 +812,21 @@ Three PRs:
   order in `Session.stop`). Do not assert an incidental total order among
   siblings inside one broadcast cohort. Pass/fail scenarios cannot see these
   edges; barrier assertions can.
+
+WS2.7a inventory result: the checked-in coverage map freezes 27 observable
+scenarios against concrete pytest nodes — twelve entry/admission and
+supersession cases, five turn-work policies, five ordering contracts, three
+resource-ownership rules, and two postmortem guarantees. Existing tests
+already covered prompt policy, retry admission, startup cancellation, runtime-
+owned reentrancy, barge-in cleanup while providers are live, scoped STT work,
+provider/queue ownership, and journal preservation. The two missing concepts
+now have observation-based nets: force stop requests cancellation for the
+pipeline, TTS, outbound, and scoped members before any member settles; and
+both force/graceful modes preserve the reviewed branch plus common-finalizer
+partial-order edges through ingress, health, helpers, queue, outbound,
+transport, manager, agent, provider siblings, identity, journal, and closed
+publication. Provider siblings deliberately have no asserted total order.
+
 - **b. Mapping table (Tier B, after WS2.1).** In the PR description (or a
   short note in this
   file): every step of the complete `Session.stop()` symbol — entry admission,

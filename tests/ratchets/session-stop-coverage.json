@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "scope": "easycat.session._session.Session.stop",
+  "update_rationale": "WS2.7a inventories existing stop behavior and adds the missing broadcast-barrier and finalizer-ordering nets before scope-tree work",
+  "counts": {
+    "entry": 12,
+    "ordering": 5,
+    "ownership": 3,
+    "postmortem": 2,
+    "turn_work": 5
+  },
+  "scenarios": [
+    {
+      "id": "audio_provider_ownership",
+      "class": "ownership",
+      "contract": "Session closes each owned audio provider in both graceful and force modes.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_session_teardown_closes_audio_providers"
+      ]
+    },
+    {
+      "id": "cancel_resistant_start_cannot_resurrect",
+      "class": "entry",
+      "contract": "A startup that suppresses cancellation cannot republish a running Session after force stop.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_force_stop_does_not_resurrect_after_cancel_resistant_connect"
+      ]
+    },
+    {
+      "id": "cancelled_stop_blocks_restart",
+      "class": "entry",
+      "contract": "Caller cancellation leaves admission closed until a later teardown retry completes.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_cancelled_stop_blocks_restart_until_cleanup_retry"
+      ]
+    },
+    {
+      "id": "context_exit_uses_force",
+      "class": "entry",
+      "contract": "The async context manager exits through the public force-stop path.",
+      "evidence": [
+        "tests/session/test_async_context_manager.py::test_aexit_calls_stop_force_true"
+      ]
+    },
+    {
+      "id": "debug_backends_finalize_and_close",
+      "class": "postmortem",
+      "contract": "Successful stop finalizes and closes live journal backends exactly once.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_session_teardown_finalizes_and_closes_journal"
+      ]
+    },
+    {
+      "id": "emergency_exporter_is_released",
+      "class": "ownership",
+      "contract": "Clean stop unregisters its process-wide emergency-export closure.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_stop_unregisters_armed_emergency_export"
+      ]
+    },
+    {
+      "id": "external_outbound_queue_survives",
+      "class": "ownership",
+      "contract": "Session teardown does not close a caller-owned outbound queue.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_external_outbound_queue_survives_session_teardown"
+      ]
+    },
+    {
+      "id": "failed_stop_blocks_restart",
+      "class": "entry",
+      "contract": "A failed teardown keeps startup admission closed until cleanup retry succeeds.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_failed_stop_blocks_restart_until_cleanup_retry"
+      ]
+    },
+    {
+      "id": "failed_stop_releases_owned_handlers",
+      "class": "entry",
+      "contract": "A failed stop releases Session-owned EventBus handlers without removing external handlers.",
+      "evidence": [
+        "tests/session/test_session_event_bus_playback.py::test_failed_session_stop_releases_owned_event_handlers"
+      ]
+    },
+    {
+      "id": "force_cancels_application_prompt",
+      "class": "turn_work",
+      "contract": "Force stop cancels and drains an active application prompt.",
+      "evidence": [
+        "tests/session/test_session_streaming_behavior.py::test_force_stop_cancels_application_prompt"
+      ]
+    },
+    {
+      "id": "force_cancels_in_progress_start",
+      "class": "entry",
+      "contract": "Force stop closes admission and cancels an in-progress startup transaction.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_force_stop_cancels_in_progress_start_without_waiting_for_connect"
+      ]
+    },
+    {
+      "id": "force_signals_task_cohort_before_await",
+      "class": "ordering",
+      "contract": "Pipeline, TTS, outbound, and scoped work all observe cancellation requested before any member settles.",
+      "evidence": [
+        "tests/session/test_session_stop_ordering.py::test_force_stop_signals_entire_task_cohort_before_awaiting_a_member"
+      ]
+    },
+    {
+      "id": "force_stt_pause_commit_is_cancelled",
+      "class": "ordering",
+      "contract": "Force stop cancels and accounts for a runtime-scoped delayed STT commit.",
+      "evidence": [
+        "tests/session/test_session_journal_accounting.py::test_force_stop_cancels_runtime_scoped_stt_pause_commit"
+      ]
+    },
+    {
+      "id": "force_supersedes_hung_graceful",
+      "class": "entry",
+      "contract": "A force caller takes ownership from a cancellation-resistant graceful stop.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_force_stop_preempts_hung_graceful_stop"
+      ]
+    },
+    {
+      "id": "graceful_barge_cleanup_precedes_provider_teardown",
+      "class": "ordering",
+      "contract": "Detached barge-in cleanup drains while providers, transport, and journal remain live.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_graceful_stop_drains_barge_in_cleanup_before_provider_teardown"
+      ]
+    },
+    {
+      "id": "graceful_drains_application_prompt",
+      "class": "turn_work",
+      "contract": "Graceful stop allows confirmed application-prompt work to finish without token cancellation.",
+      "evidence": [
+        "tests/session/test_session_streaming_behavior.py::test_graceful_stop_drains_application_prompt"
+      ]
+    },
+    {
+      "id": "graceful_rejects_new_application_prompt",
+      "class": "turn_work",
+      "contract": "Graceful drain closes admission to a second application prompt.",
+      "evidence": [
+        "tests/session/test_session_streaming_behavior.py::test_graceful_stop_rejects_new_application_prompt_during_drain"
+      ]
+    },
+    {
+      "id": "graceful_stt_pause_commit_is_drained",
+      "class": "ordering",
+      "contract": "Graceful stop drains and accounts for a runtime-scoped delayed STT commit.",
+      "evidence": [
+        "tests/session/test_session_journal_accounting.py::test_stop_cancels_runtime_scoped_stt_pause_commit"
+      ]
+    },
+    {
+      "id": "idempotent_stop",
+      "class": "entry",
+      "contract": "Stopping an already stopped Session is a no-op.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_session_stop_idempotent"
+      ]
+    },
+    {
+      "id": "joined_stop_preserves_caller_cancellation",
+      "class": "entry",
+      "contract": "Joiners distinguish their own pending cancellation from cancellation of the active stop owner.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_stop_join_propagates_cancellation_pending_before_entry"
+      ]
+    },
+    {
+      "id": "postmortem_sqlite_view_remains_readable",
+      "class": "postmortem",
+      "contract": "Clean stop preserves SQLite journal reads and bundle export through the read-only postmortem view.",
+      "evidence": [
+        "tests/session/test_session_journal_accounting.py::test_stop_keeps_sqlite_journal_and_bundle_readable"
+      ]
+    },
+    {
+      "id": "preemptive_generation_precedes_agent_close",
+      "class": "turn_work",
+      "contract": "Speculative agent work is cancelled and drained before the wrapped agent closes.",
+      "evidence": [
+        "tests/session/test_turn_runner.py::test_graceful_stop_cancels_preemptive_generation_before_agent_close"
+      ]
+    },
+    {
+      "id": "runtime_owned_stop_does_not_self_cancel",
+      "class": "entry",
+      "contract": "A stop invoked by voice, text, or preemptive runtime work cancels siblings without cancelling itself.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_force_stop_from_runtime_owned_turn_task_closes_and_cancels_siblings"
+      ]
+    },
+    {
+      "id": "start_stop_basic",
+      "class": "entry",
+      "contract": "A started Session stops cleanly and disconnects its transport.",
+      "evidence": [
+        "tests/session/test_session_lifecycle_teardown.py::test_session_start_and_stop"
+      ]
+    },
+    {
+      "id": "stop_common_finalizer_partial_order",
+      "class": "ordering",
+      "contract": "Both modes preserve reviewed branch and common finalizer edges without constraining provider siblings.",
+      "evidence": [
+        "tests/session/test_session_stop_ordering.py::test_stop_preserves_reviewed_partial_order"
+      ]
+    },
+    {
+      "id": "text_turn_rechecks_stop_admission",
+      "class": "turn_work",
+      "contract": "Text-turn admission rechecks Session stopping state after waiting for predecessor work.",
+      "evidence": [
+        "tests/session/test_turn_runner.py::test_send_text_rechecks_admission_after_waiting_for_prior_work"
+      ]
+    },
+    {
+      "id": "wait_closed_observes_stop",
+      "class": "entry",
+      "contract": "A wait_closed observer wakes only after Session stop marks the lifecycle closed.",
+      "evidence": [
+        "tests/session/test_async_context_manager.py::test_wait_closed_wakes_when_session_shuts_down"
+      ]
+    }
+  ]
+}
