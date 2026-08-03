@@ -55,7 +55,8 @@ migration obligations, and the owner/date for any deferred removal. A vague
 ```
 WS6.1a manifest/rubric ──→ Tier-A implementation begins
 WS0.1a ──→ WS0.1b ──→ WS0.3a ──→ WS0.3b                  [Tier A]
-WS0 ──→ WS1.1 ──→ WS1.2a-e + WS1.3                      [Tier A]
+WS0.2a ──→ WS0.2b                                        [Tier A]
+WS0 (all slices) ──→ WS1.1 ──→ WS1.2a-e + WS1.3         [Tier A]
 WS2.7a, WS3.1, WS4.1, WS5.2, WS6.1b                     [Tier A]
                   │
                   ▼
@@ -204,26 +205,54 @@ independent listener exceptions retain the legacy propagate policy. The
 manager sweep, connection close, handler cancellation, `_safe_await`, and
 `_BACKGROUND_TIMEOUT_TASKS` remain unchanged and grandfathered.
 
-### WS0.2 — teardown-budget manifest and defaults [M]
+### WS0.2a — teardown-budget manifest and no-growth inventory [M]
 
-Create `teardown_budgets.py` plus a checked-in manifest classifying every
-timeout/deadline used by a `stop`/`close`/`disconnect`/`drain`/`cancel` path as
+Create a checked-in manifest classifying timeout/deadline declarations and
+defaults plus the calls that enforce them in
+`stop`/`close`/`disconnect`/`drain`/`cancel` closures as
 `lifecycle_budget`, `protocol_local`, `configurable`, or `not_teardown`.
-Centralize lifecycle defaults without changing values; configurable server
-deadlines retain configuration but draw defaults from this module. Starting
-inventory includes the previously listed Session/turn/audio/WebRTC-aclose/
-llama/server values **and** current-main omissions such as
+Starting inventory includes the previously listed Session/turn/audio/
+WebRTC-aclose/llama/server values **and** current-main omissions such as
 `_OFFER_CANCEL_DRAIN_TIMEOUT_S`, `_CANCEL_SEND_TIMEOUT`,
 `_SOCKET_CLOSE_SEND_TIMEOUT`, `_POST_DONE_STREAM_DRAIN_TIMEOUT_S`,
 `_COMPLETED_STREAM_DRAIN_TIMEOUT_S`, and browser-event send/close bounds.
 
-An AST-based no-growth test finds timeout calls and timeout/deadline constants
-inside lifecycle-symbol closures, requires every result to have a manifest
-classification, and fails on an unclassified new site. False-positive
-classifications carry a rationale. This is inventory until WS2.1 consumes the
-`lifecycle_budget` entries as named phase/policy budgets; protocol-local bounds
-remain with their protocols. Acceptance is manifest/source bijection, not a
-hand-written claim that six constants are complete.
+An AST-based no-growth test requires every source result to have exactly one
+manifest classification and a non-empty rationale. Fingerprints use relative
+path, enclosing qualname, construct, normalized surrounding AST, and an
+occurrence index, so line-only movement is stable and delete-plus-add changes
+remain visible. Updating requires explicit `--update-baseline` plus a reviewed
+rationale; new skeleton entries remain `unclassified` and intentionally fail
+until reviewed. False-positive classifications explain why the site is not a
+teardown budget.
+
+Freeze result after WS0.3b: 159 sites, comprising 32 timeout-bearing defaults,
+61 bounded calls in lifecycle closures, and 66 named declarations. Their
+reviewed classifications are 71 `lifecycle_budget`, 41 `protocol_local`, 17
+`configurable`, and 30 `not_teardown`.
+
+Acceptance: manifest/source bijection, deliberate additions fail the ratchet,
+line insertion preserves fingerprints, regeneration preserves reviewed
+classifications, and no entry has an empty classification or rationale.
+
+### WS0.2b — central lifecycle-budget defaults [M]
+
+Create `teardown_budgets.py` and centralize the WS0.2a `lifecycle_budget`
+defaults without changing values. Configurable server deadlines retain public
+configuration but draw their defaults from this module; protocol-local bounds
+remain with their protocols, and `not_teardown` entries do not migrate.
+
+The 159-site inventory showed that combining discovery, classification, and
+all default migrations would exceed this plan's review-size limit. Migrate in
+review-sized domain groups if WS0.2b would otherwise touch more than roughly
+10 source files; each child slice updates the manifest in the same PR and
+preserves the WS0.2a classification counts except where its reviewed rationale
+explicitly reclassifies a site. This remains default consolidation until WS2.1
+consumes lifecycle entries as named phase/policy budgets.
+
+Acceptance: every lifecycle default has one canonical definition, public
+configuration behavior and values are unchanged, protocol-local values remain
+local, and the WS0.2a manifest/source bijection stays green.
 
 ### WS0.3a — Enforcement: structural call-site ratchets [M]
 
