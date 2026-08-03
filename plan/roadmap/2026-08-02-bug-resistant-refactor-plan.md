@@ -899,6 +899,21 @@ JSON-safe snapshotting as postconditions of every applicable scenario. This
 inventory slice changes no production behavior; later WS3.1 slices must evolve
 the same matrix until no required cell remains `missing`.
 
+WS3.1b result: the private `BridgeLifecycleScenarioSuite` now owns the five
+framework-neutral assertions and the universal after-scenario postconditions.
+Its driver protocol exposes direct events, recorder cursor ids, inner-stream
+close counts, transient-item counts, delivered-text history, and normalized
+history projections; SDK-specific drivers therefore cannot substitute a bare
+pass/fail flag for observable evidence. An unmarked deterministic model bridge
+exercises malformed and future events before a valid terminal response, a
+gated in-flight tool cancellation that drains only the tool result, consumer
+close propagation, balanced recorder cleanup, and an empty current-turn
+interruption after seeded prior history. Every row also proves JSON-safe state
+before and after `reset()`, with the post-reset normalized state empty. The
+internal module reuses the public contract kit's reviewed timeout and is not
+re-exported from `easycat.testing`; this slice changes neither public API nor a
+built-in bridge.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
