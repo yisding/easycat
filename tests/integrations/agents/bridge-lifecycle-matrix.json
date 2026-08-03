@@ -54,8 +54,7 @@
   },
   "driver_execution": {
     "counts": {
-      "pending": 1,
-      "wired": 6
+      "wired": 7
     },
     "bridges": {
       "generic_workflow": {
@@ -91,9 +90,14 @@
         ]
       },
       "llama_agents": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_llama_agents.py::TestLlamaAgentsBridgeLifecycleScenarios",
+        "scenarios": [
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "openai_agents": {
         "status": "wired",

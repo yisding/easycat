@@ -1015,6 +1015,19 @@ still exercised. Every row proves balanced cursors, zero live run/stream state,
 JSON-safe snapshots, and empty post-reset history. The execution registry
 advances to six wired bridges with only Llama Agents pending.
 
+WS3.1d5 result: a credential-free local-workflow driver now runs all four
+applicable Llama Agents scenarios on every PR; prior-turn assistant rewriting
+remains the matrix-declared non-applicable row. A controlled workflow stream
+injects a future custom event before valid text, exposes exact source close
+state, and models a blocked workflow step as the tool boundary: it records tool
+start before cancellation and the drained result from `cancel_run()` while the
+bridge suppresses all later deltas. The recorder cleanup row closes a pending
+step whose handler remains nonterminal, proving the bridge balances its
+workflow cursor, closes the source, clears active/pending handler fields, and
+drops the unsafe retained Context. Every row proves JSON-safe snapshots and
+empty post-reset state. All seven bridge drivers are now wired; WS3.1d6 owns
+the explicit zero-pending ratchet and exact-candidate-SHA optional-extras proof.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
