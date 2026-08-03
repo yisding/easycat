@@ -70,6 +70,9 @@ from easycat.session.interruption import (
 from easycat.session.text import _text_for_estimation_timeline
 from easycat.stages.agent import AgentStage
 from easycat.strip_markdown import strip_markdown
+from easycat.teardown_budgets import (
+    SESSION_APPLICATION_PROMPT_CANCEL_DRAIN_TIMEOUT_S as _APPLICATION_PROMPT_CANCEL_DRAIN_S,
+)
 from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
@@ -90,7 +93,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _APPLICATION_SYSTEM_TRIGGER = "Follow the application instruction above."
-_APPLICATION_PROMPT_CANCEL_DRAIN_S = 0.1
 
 
 def _new_first_tts_payload_gate() -> asyncio.Future[bool]:

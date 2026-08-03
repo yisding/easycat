@@ -257,6 +257,12 @@ policy but do not define a second numeric default.
 Acceptance: Session teardown, prompt cancellation, audio drain, stalled-send,
 and barge-in behavior retain their exact values and focused regressions pass.
 
+Migration result: eight concrete values move to the canonical module. The
+manifest grows from 159 to 165 sites because six inline or non-timeout-named
+values now have explicit timeout declarations; the reviewed classification
+totals become 77 `lifecycle_budget`, 41 `protocol_local`, 17 `configurable`,
+and 30 `not_teardown` without adding runtime budget enforcement.
+
 ### WS0.2b3 — central runtime and transport lifecycle-budget defaults [M]
 
 Move the concrete journal, WebRTC audio/offer, and WebTransport close/reap
@@ -276,10 +282,11 @@ default deadline, rather than inventing a concrete policy value.
 
 The 159-site inventory showed that combining discovery, classification, and
 these migrations would exceed this plan's review-size limit. Each child slice
-updates the manifest in the same PR and preserves the WS0.2a classification
-totals except where its reviewed rationale explicitly reclassifies a site.
-This remains default consolidation until WS2.1 consumes lifecycle entries as
-named phase/policy budgets.
+updates the manifest in the same PR. Moving an existing named declaration
+preserves its classification; turning an inline literal into a canonical named
+default may add a reviewed declaration entry whose rationale points to the
+existing enforcement site. This remains default consolidation until WS2.1
+consumes lifecycle entries as named phase/policy budgets.
 
 Acceptance: every concrete lifecycle default has one canonical definition,
 public configuration behavior and values are unchanged, protocol-local values

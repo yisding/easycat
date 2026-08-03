@@ -111,11 +111,17 @@ from easycat.stubs import (
     NoopTTS,
     NoopVAD,
 )
+from easycat.teardown_budgets import (
+    SESSION_BARGE_IN_CUTOFF_TIMEOUT_S as _BARGE_IN_CUTOFF_TIMEOUT_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_FORCE_START_LOCK_TIMEOUT_S,
+    SESSION_SUPERSEDED_STOP_TIMEOUT_S,
+)
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
-_BARGE_IN_CUTOFF_TIMEOUT_S = 0.4
 _EventT = TypeVar("_EventT", bound=Event)
 
 
@@ -1510,7 +1516,10 @@ class Session:
             if start_task is not None and not start_task.done():
                 start_task.cancel()
             try:
-                await asyncio.wait_for(self._start_lock.acquire(), timeout=0.5)
+                await asyncio.wait_for(
+                    self._start_lock.acquire(),
+                    timeout=SESSION_FORCE_START_LOCK_TIMEOUT_S,
+                )
             except TimeoutError:
                 # Force teardown must not hang forever behind startup code that
                 # ignores cancellation. Cleanup below proceeds with the
@@ -1560,7 +1569,10 @@ class Session:
         stop_error: Exception | None = None
         try:
             if superseded_task is not None:
-                done, _ = await asyncio.wait({superseded_task}, timeout=0.5)
+                done, _ = await asyncio.wait(
+                    {superseded_task},
+                    timeout=SESSION_SUPERSEDED_STOP_TIMEOUT_S,
+                )
                 if done:
                     try:
                         superseded_task.result()
