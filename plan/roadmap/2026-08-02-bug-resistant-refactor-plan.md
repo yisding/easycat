@@ -1097,6 +1097,31 @@ Seed it from duplicated edge cases, including each semantic clause of Twilio's
 disconnect predicate. The current provider fake alone is not proof that a
 built-in passes.
 
+Deliver WS4.1 as reviewable, progress-bearing child slices:
+
+- **a. Scenario matrix inventory.** Freeze the five shipped transport families
+  by the eight lifecycle scenarios, record exact pre-harness evidence, and
+  leave every built-in capability driver explicitly pending.
+- **b. Internal suite + model driver.** Introduce the private scenario/driver
+  protocols and run every row against an unmarked deterministic transport
+  model on each PR.
+- **c. Portable public rows.** Add only lifecycle behavior observable through
+  the source-compatible public `TransportContractSuite` factory.
+- **d. Built-in capability drivers.** Wire framework-bounded children: **d1**
+  Local plus WebSocket, **d2** Twilio, **d3** WebRTC, **d4** WebTransport, and
+  **d5** the zero-pending ratchet plus any exact-candidate optional-backend
+  evidence. Every child updates the same execution registry; production fixes
+  discovered by a driver interrupt the sequence as separate PRs.
+
+WS4.1a inventory result: the checked-in 5-by-8 matrix freezes forty required
+cells across Local, WebSocket, Twilio, WebRTC, and WebTransport. Thirty-six
+cells have exact pre-harness tests and four remain named gaps: Local connect
+leadership, Local disconnect-during-connect, Local interrupted-disconnect
+publication, and Twilio queue overflow. All five capability drivers remain
+explicitly pending. This inventory changes no transport behavior; later WS4.1
+slices must evolve the same registry until every required row is wired and no
+pending driver remains.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,
