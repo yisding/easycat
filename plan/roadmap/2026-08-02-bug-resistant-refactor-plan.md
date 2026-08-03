@@ -54,7 +54,7 @@ migration obligations, and the owner/date for any deferred removal. A vague
 
 ```
 WS6.1a manifest/rubric ──→ Tier-A implementation begins
-WS0.1a ──→ WS0.1b ──→ WS0.3                              [Tier A]
+WS0.1a ──→ WS0.1b ──→ WS0.3a ──→ WS0.3b                  [Tier A]
 WS0 ──→ WS1.1 ──→ WS1.2a-e + WS1.3                      [Tier A]
 WS2.7a, WS3.1, WS4.1, WS5.2, WS6.1b                     [Tier A]
                   │
@@ -225,7 +225,7 @@ classifications carry a rationale. This is inventory until WS2.1 consumes the
 remain with their protocols. Acceptance is manifest/source bijection, not a
 hand-written claim that six constants are complete.
 
-### WS0.3 — Enforcement: call-site ratchets, then hard bans [M]
+### WS0.3a — Enforcement: structural call-site ratchets [M]
 
 All grandfathering is production-source-only (`src/easycat/`); tests,
 examples, docs, perf tools, and scripts may create raw tasks to orchestrate
@@ -256,18 +256,22 @@ in the function, and update only via an explicit
   module, with the STT audio-accounting watermarks excluded by
   module list (else the baseline is polluted from day one)
 
-**Ruff banned-api (TID251)** becomes a hard ban for a qualified API only
-after its repository-wide source baseline reaches zero. There are no per-file
-spawn waivers. `_concurrency.py` and
-`runtime/scope.py` are the only sanctioned raw-spawn modules; the AST ratchet
-continues to cover `loop.create_task` and dynamically shaped calls Ruff cannot
-prove.
-
 Baselines are **measured at freeze time** (the proposal's counts are
 evidence, not baselines; measured 2026-08-02: spawns ~90, cancelled-suppress
 ~117 by the AST shape, `cancelling()` 61, instance ledgers 12,
 module-global ledgers 4, shield-loops 13, epoch-field declarations ~23
 unscoped / ~15 with watermarks excluded).
+
+Freeze result after WS0.1b: the checked-in structural baseline records 89 raw
+spawns, 109 `CancelledError` handlers, 57 `cancelling()` calls, 31
+`gather(return_exceptions=True)` calls, four module task/future ledgers, 12
+inline shield loops, 18 generation/epoch field declarations, and zero
+`uncancel()` calls outside `_concurrency.py`. The zero baseline makes the last
+category a structural hard ban before WS0.3b adds Ruff's qualified-call layer.
+Epoch findings are declarations only (module/class fields or `self` fields
+initialized in `__init__`), with the named STT accounting modules excluded;
+later resets do not inflate progress. Reviewed baseline changes require
+`--update-baseline` and a non-empty `--baseline-rationale`.
 
 Also: the C901/PLR grandfather list **stays in ruff**; extend
 `tests/test_complexity_ignores.py` to fingerprint current violations and
@@ -285,6 +289,21 @@ function fail; the same construct in a race test remains permitted; a
 delete-plus-add replacement, insert-before-existing call, import alias,
 assigned alias, and deliberate new `except CancelledError` all have regression
 fixtures that fail the ratchet.
+
+### WS0.3b — Enforcement: qualified zero-baseline hard bans [S]
+
+After WS0.3a freezes and verifies the structural baseline, Ruff banned-api
+(TID251) becomes a second hard ban for each statically qualified API whose
+repository-wide production-source baseline is zero, beginning with
+`asyncio.Task.uncancel`. Keep the lint-extension lists synchronized in
+`pyproject.toml`, `CLAUDE.md`, and the `justfile`. There are no per-file spawn
+waivers. `_concurrency.py` and `runtime/scope.py` remain the only sanctioned
+raw-spawn modules; the AST ratchet continues to cover instance calls,
+`loop.create_task`, and dynamically shaped calls Ruff cannot prove.
+
+Acceptance: Ruff rejects a qualified zero-baseline API fixture, the AST
+ratchet rejects the equivalent instance-call fixture, and the documented lint
+policy matches the executable configuration.
 
 ### WS0.4 — Journal discarded teardown-gather failures [S]
 

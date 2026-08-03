@@ -71,6 +71,28 @@ dependency floors, validation artifact lanes, and built distributions. Run the
 change-specific validation or release lane below when those surfaces are in
 scope.
 
+### Source-enforcement ratchets
+
+`tests/ratchets/` fingerprints grandfathered production call sites for raw
+task spawning, cancellation handling, survivor ledgers, inline shield loops,
+and generation/epoch fields. The inventory is structural and location-free,
+so inserting lines does not require baseline churn; tests and examples remain
+free to create raw tasks when orchestrating races. Ruff complexity waivers use
+the same rule at function granularity, and `mkdocs.yml` must cover every
+maintained Markdown page.
+
+For a recurring bug class, put the fix in the shared primitive or engine. If a
+site must remain hand-rolled, add it through an explicit, reviewed baseline
+update—never by silently broadening a file-wide waiver:
+
+```bash
+uv run pytest -n 0 tests/ratchets tests/test_complexity_ignores.py \
+  --update-baseline --baseline-rationale "why this exception remains necessary"
+```
+
+Commit the resulting baseline diff with the implementation and rationale.
+Ordinary development and CI runs never rewrite baselines.
+
 The docs/onboarding guard table below is generated from the `justfile` by
 `uv run python scripts/regen_guard_commands.py`; edit the `guard-*` recipe
 in the `justfile`, then re-run the script.
