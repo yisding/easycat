@@ -134,6 +134,9 @@ class _StreamingTtsState:
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
     gated: bool = False
+    #: True once this gated turn adopted the BOT_SPEAKING activity published by
+    #: the classification gate's replay (see ``_adopt_gated_playback_activity``).
+    gated_playback_adopted: bool = False
     playback_started: bool = False
     # True only if playback was cut off mid-stream by a cancelled token
     # (a genuine barge-in), as opposed to the queue draining naturally.
@@ -1200,7 +1203,30 @@ class TurnRunner:
 
     def _streaming_turn_is_current(self, st: _StreamingTtsState) -> bool:
         """Re-guard streaming identity and activity at one commit boundary."""
-        return self._identity_owns_turn(st.identity, st.turn) and st.activity.guard()
+        if not self._identity_owns_turn(st.identity, st.turn):
+            return False
+        return st.activity.guard() or self._adopt_gated_playback_activity(st)
+
+    def _adopt_gated_playback_activity(self, st: _StreamingTtsState) -> bool:
+        """Follow the BOT_SPEAKING transition published by the gate's replay.
+
+        A gated first payload is synthesized into the classification buffer, so
+        ``begin_synthesis_with_bot_start`` never runs for it and no
+        ``activity_started`` callback refreshes ``st.activity``. Playback for
+        the *same* turn starts later, when the application flushes the gate
+        through ``Session.replay_gated_audio`` and ``AudioRouter.gated_replay``
+        publishes BOT_SPEAKING. The caller has already guarded identity, so
+        that publication belongs to this turn and this streaming state must
+        follow it instead of fencing itself off from its own playback.
+        """
+        if not st.gated or st.gated_playback_adopted:
+            return False
+        activity = self._turn_manager.capture_activity()
+        if not self._activity_is_current(activity, TurnManagerState.BOT_SPEAKING):
+            return False
+        st.activity = activity
+        st.gated_playback_adopted = True
+        return True
 
     @staticmethod
     async def _await_owned_first_synthesis(
@@ -1223,7 +1249,7 @@ class TurnRunner:
         # Cancellation can unwind this old consumer while barge-in has already
         # installed a successor turn. Never finalize or reset shared turn state
         # on behalf of a stale generation.
-        if not self._identity_owns_turn(st.identity, st.turn) or not st.activity.guard():
+        if not self._streaming_turn_is_current(st):
             return
         if st.synth_started and self._activity_is_current(
             st.activity, TurnManagerState.BOT_SPEAKING

@@ -1659,6 +1659,76 @@ async def test_stale_tts_settlement_rejects_same_state_activity_republication() 
 
 
 @pytest.mark.asyncio
+async def test_gated_settlement_adopts_gate_published_playback_activity() -> None:
+    """A gated turn owns the BOT_SPEAKING transition its own replay publishes.
+
+    ``_synthesize_first_payload`` skips ``begin_synthesis_with_bot_start`` while
+    the classification gate is buffering, so nothing refreshes the captured
+    PROCESSING activity. Playback starts later via
+    ``Session.replay_gated_audio``; the finalizer must follow that transition
+    rather than treat its own playback as a stale successor and leave the
+    manager wedged in BOT_SPEAKING.
+    """
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-gated-replay", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.gated = True
+    state.agent_output_settled.set()
+
+    # The application flushes the gate: AudioRouter.gated_replay() publishes
+    # BOT_SPEAKING for this same turn.
+    await session._turn_manager.bot_started_speaking()
+
+    await runner._settle_turn_after_tts(state)
+
+    assert state.gated_playback_adopted
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn is None
+    assert not turn.cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_gated_settlement_still_rejects_successor_turn_playback() -> None:
+    """Adoption is scoped to the gated turn that still owns the turn pointer."""
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-gated-superseded", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.gated = True
+    state.agent_output_settled.set()
+
+    successor = TurnContext("turn-gated-successor", CancelToken())
+    runner._turn.set(successor)
+    await session._turn_manager.bot_started_speaking()
+
+    await runner._settle_turn_after_tts(state)
+
+    assert not state.gated_playback_adopted
+    assert session._turn is successor
+    assert session._turn_manager.state is TurnManagerState.BOT_SPEAKING
+
+
+@pytest.mark.asyncio
 async def test_tts_result_does_not_stamp_republished_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
