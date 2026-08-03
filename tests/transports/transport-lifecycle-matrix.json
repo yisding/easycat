@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d4 wires the complete WebTransport capability driver while preserving the frozen five-by-eight cross-product and its forty exact evidence cells.",
+  "update_rationale": "WS4.1d5 closes the execution registry with a zero-pending ratchet while preserving five complete drivers and forty exact evidence cells.",
   "transports": [
     "local",
     "twilio",
