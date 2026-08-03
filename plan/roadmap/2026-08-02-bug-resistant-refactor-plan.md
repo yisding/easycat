@@ -1158,6 +1158,15 @@ now has two complete and three pending drivers; thirty-nine of forty
 pre-harness cells have exact evidence, with only Twilio queue overflow still
 missing.
 
+WS4.1d2 result: `TwilioConnectionTransport` now runs every shared lifecycle
+row through a credential-free accepted-socket driver. Deferred-start gating
+proves single-flight connect leadership and disconnect invalidation outside
+the lifecycle lock; the explicit socket-close ledger proves interrupted
+cleanup and retry; the real Media Streams SID filters prove late-frame
+fencing; and the inherited bounded ingress queue proves the missing overflow
+drop plus canonical degraded event. Three drivers are complete and two remain
+pending. All forty pre-harness matrix cells now have exact evidence.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,

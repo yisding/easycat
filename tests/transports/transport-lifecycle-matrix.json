@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d1 wires complete Local and WebSocket capability drivers, closing the three Local pre-harness gaps while retaining the frozen five-by-eight cross-product.",
+  "update_rationale": "WS4.1d2 wires the complete Twilio capability driver and closes the final pre-harness evidence gap without changing the frozen five-by-eight cross-product.",
   "transports": [
     "local",
     "twilio",
@@ -20,8 +20,8 @@
   },
   "driver_execution": {
     "counts": {
-      "complete": 2,
-      "pending": 3
+      "complete": 3,
+      "pending": 2
     },
     "transports": {
       "local": {
@@ -39,9 +39,18 @@
         ]
       },
       "twilio": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "webrtc": {
         "status": "pending",
@@ -74,8 +83,7 @@
       "required": 40
     },
     "coverage": {
-      "existing": 39,
-      "missing": 1
+      "existing": 40
     }
   },
   "cells": {
@@ -196,9 +204,11 @@
       },
       "queue_overflow": {
         "applicability": "required",
-        "coverage": "missing",
-        "rationale": "Twilio inherits bounded audio queues but lacks a direct built-in overflow policy assertion.",
-        "evidence": []
+        "coverage": "existing",
+        "rationale": "The Twilio capability driver fills the one-slot accepted-socket ingress queue and proves the second frame is dropped with one canonical degraded event.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios::test_queue_overflow"
+        ]
       },
       "startup_rollback": {
         "applicability": "required",
