@@ -1315,10 +1315,12 @@ description explains why the omitted targets cannot observe the change.
 | WS3 | `uv run pytest tests/contracts/test_agent_bridge_contracts.py tests/integrations/agents/test_bridge_lifecycle_scenarios.py -q` | required extras cells, or successful nightly artifact at the exact candidate SHA |
 | WS4 | `uv run pytest tests/contracts/test_transport_contracts.py tests/transports/test_transport_conformance.py tests/transports/test_lifecycle_scenarios.py -q` | retained-backend cells when an offline SDK/backend is optional |
 | WS5 | `uv run pytest tests/config/test_secret_reprs.py tests/server/test_auth.py tests/transports/test_webrtc_auth_browser_playground.py -q` | retained aioquic cell for WebTransport bind migration |
-| WS6 | `uv run pytest tests/test_refactor_metrics.py tests/ratchets -q` | none |
+| WS6 | `uv run pytest tests/test_refactor_metrics.py -q` | none |
 
-New paths in this table are deliverables of their owning slice. The SDK-gated
-real bridge suite is not silently treated as part of local `just check`.
+New paths in this table are deliverables of their owning slice. In particular,
+`tests/ratchets` is created by WS0 and is not a prerequisite for the earlier
+WS6 measurement-infrastructure slices. The SDK-gated real bridge suite is not
+silently treated as part of local `just check`.
 
 ---
 
@@ -1379,7 +1381,8 @@ The gates are deliberately separate:
 After each eligible window, regenerate the persisted report and run:
 
 ```bash
-uv run python scripts/refactor_metrics.py --manifest plan/metrics/refactor-families.json
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time>
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time> --check
 uv run pytest tests/ratchets -q
 uv run ruff check .
 ```

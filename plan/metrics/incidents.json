@@ -2,5 +2,17 @@
   "schema_version": 1,
   "rubric_version": 1,
   "soak_window_days": 14,
+  "soak": {
+    "status": "pending",
+    "completion_sha": null,
+    "completion_date": null,
+    "window": null,
+    "review": {
+      "status": "pending",
+      "reviewer": null,
+      "reviewed_at": null,
+      "evidence": []
+    }
+  },
   "incidents": []
 }
