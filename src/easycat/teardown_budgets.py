@@ -62,3 +62,12 @@ WEBRTC_AUDIO_ACLOSE_TIMEOUT_S: Final = 5.0
 
 # Bound cancellation of an active WebRTC offer during disconnect.
 WEBRTC_OFFER_CANCEL_DRAIN_TIMEOUT_S: Final = 0.5
+
+# Default grace period exposed by multi-session server configurations.
+SERVER_DRAIN_TIMEOUT_S: Final = 30.0
+
+# Default hard bound exposed by multi-session server configurations.
+SERVER_FORCE_SHUTDOWN_TIMEOUT_S: Final = 10.0
+
+# The standalone WebRTC helper historically uses a shorter hard-shutdown cap.
+STANDALONE_WEBRTC_FORCE_SHUTDOWN_TIMEOUT_S: Final = 5.0

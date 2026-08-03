@@ -25,6 +25,10 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.teardown_budgets import (
+    SERVER_DRAIN_TIMEOUT_S,
+    SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
+)
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
@@ -76,8 +80,8 @@ class WebSocketSessionServerConfig:
     port: int = 8765
     auth_token: str | None = field(default=None, repr=False)
     max_sessions: int = 10
-    drain_timeout_s: float = 30.0
-    force_shutdown_timeout_s: float = 10.0
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S
+    force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 
 
 def websocket_session_server_config_from_env(
@@ -89,8 +93,13 @@ def websocket_session_server_config_from_env(
         port=int(os.getenv(f"{prefix}_PORT", "8765")),
         auth_token=os.getenv(f"{prefix}_TOKEN"),
         max_sessions=int(os.getenv(f"{prefix}_MAX_SESSIONS", "10")),
-        drain_timeout_s=float(os.getenv(f"{prefix}_DRAIN_TIMEOUT_S", "30")),
-        force_shutdown_timeout_s=float(os.getenv(f"{prefix}_FORCE_SHUTDOWN_TIMEOUT_S", "10")),
+        drain_timeout_s=float(os.getenv(f"{prefix}_DRAIN_TIMEOUT_S", str(SERVER_DRAIN_TIMEOUT_S))),
+        force_shutdown_timeout_s=float(
+            os.getenv(
+                f"{prefix}_FORCE_SHUTDOWN_TIMEOUT_S",
+                str(SERVER_FORCE_SHUTDOWN_TIMEOUT_S),
+            )
+        ),
     )
 
 

@@ -286,7 +286,9 @@ Move the remaining server lifecycle defaults and make configurable voice,
 WebSocket, WebRTC, WebTransport, and Twilio server fields draw unchanged
 defaults from `teardown_budgets.py`. Public configuration remains authoritative
 at every call site. `reap(..., timeout=None)` remains a sentinel meaning no
-default deadline, rather than inventing a concrete policy value.
+default deadline, rather than inventing a concrete policy value. The analogous
+internal cleanup and WebTransport `wait_closed(timeout=None)` sentinels remain
+unchanged, and the configurable STT provider close timeout stays protocol-owned.
 
 The 159-site inventory showed that combining discovery, classification, and
 these migrations would exceed this plan's review-size limit. Each child slice
@@ -296,9 +298,16 @@ default may add a reviewed declaration entry whose rationale points to the
 existing enforcement site. This remains default consolidation until WS2.1
 consumes lifecycle entries as named phase/policy budgets.
 
-Acceptance: every concrete lifecycle default has one canonical definition,
-public configuration behavior and values are unchanged, protocol-local values
-remain local, and the WS0.2a manifest/source bijection stays green.
+Acceptance: every concrete server lifecycle default has one canonical
+definition, public configuration behavior and values are unchanged,
+protocol-local values remain local, and the WS0.2a manifest/source bijection
+stays green.
+
+Migration result: three canonical values now supply thirteen public server
+configuration/default sites without changing their `30.0`, `10.0`, and `5.0`
+values. The reviewed manifest grows from 170 to 173 sites, with 20
+`configurable`, 82 `lifecycle_budget`, 41 `protocol_local`, and 30
+`not_teardown` entries. WS0.2 is complete without changing runtime enforcement.
 
 ### WS0.3a — Enforcement: structural call-site ratchets [M]
 

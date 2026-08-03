@@ -110,6 +110,7 @@ from easycat._extras import require_module
 from easycat._net import normalize_auth_token
 from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.teardown_budgets import SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # noqa: PLC0414 compatibility export
 )
@@ -379,7 +380,7 @@ class WebTransportTransportConfig:
     # session handler can suppress cancellation, and aioquic's listener can
     # retain one such handler while waiting to close; neither may wedge
     # ``WebTransportServer.stop()`` indefinitely.
-    force_shutdown_timeout_s: float = 10.0
+    force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 
     def __post_init__(self) -> None:
         if (
