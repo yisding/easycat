@@ -1135,6 +1135,14 @@ receive iterator. The internal module is not re-exported from
 `easycat.testing`; this slice changes neither public API nor a built-in
 transport.
 
+WS4.1c result: the source-compatible public `TransportContractSuite` now
+checks repeated and concurrent connect callers, repeated disconnect, and
+disconnect-driven termination of an already-active inbound iterator. These
+rows use only the existing public factory and transport methods. Backend
+leadership counts, gated races, rollback resources, late-frame injection,
+queue pressure, degraded events, and lifecycle publication remain internal
+capability-driver responsibilities rather than new third-party hooks.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,

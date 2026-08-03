@@ -134,11 +134,13 @@ async def test_memory_transport_round_trips_audio() -> None:
     assert len(received) == 1
 ```
 
-The suite verifies connection/send/disconnect semantics, terminating inbound
-iteration, and idempotent playback clearing. `isinstance(transport,
-Transport)` checks member names only and is not a behavioral conformance
-test. The in-tree use of the same installable suite lives in
-[`tests/contracts/test_transport_contracts.py`](../../tests/contracts/test_transport_contracts.py).
+The suite verifies connection/send/disconnect semantics, repeated and
+concurrent connection calls, active receiver termination, idempotent
+disconnect, and idempotent playback clearing. These are public-surface checks;
+the suite does not require test-only lifecycle hooks from a transport.
+`isinstance(transport, Transport)` checks member names only and is not a
+behavioral conformance test. The in-tree use of the same installable suite
+lives in [`tests/contracts/test_transport_contracts.py`](../../tests/contracts/test_transport_contracts.py).
 
 ## Notes
 

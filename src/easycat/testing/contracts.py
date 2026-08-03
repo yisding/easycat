@@ -385,7 +385,9 @@ class TransportContractSuite(ProviderContractSuite):
 
     Override ``expects_send_accepted_after_connect = False`` for transports
     whose offline factory connects without a peer (so ``send_audio`` legally
-    drops chunks even after ``connect()``).
+    drops chunks even after ``connect()``). The factory needs no lifecycle
+    injection hooks: the portable rows observe only public connect,
+    disconnect, receive, and send behavior.
     """
 
     sample_audio_format: ClassVar[AudioFormat] = PCM16_MONO_16K
@@ -401,6 +403,30 @@ class TransportContractSuite(ProviderContractSuite):
         """A disconnected transport reports the drop instead of raising."""
         assert await provider.send_audio(self.sample_audio_chunk()) is False
 
+    async def test_connect_is_idempotent(self, provider: Any) -> None:
+        """Repeated connect calls keep the transport usable."""
+        await provider.connect()
+        await provider.connect()
+        try:
+            accepted = await provider.send_audio(self.sample_audio_chunk())
+            assert isinstance(accepted, bool), "send_audio() must return a bool"
+            if self.expects_send_accepted_after_connect:
+                assert accepted is True, "send_audio() after connect() must accept the chunk"
+        finally:
+            await provider.disconnect()
+
+    async def test_concurrent_connect_callers_complete(self, provider: Any) -> None:
+        """Concurrent connect callers share one usable lifecycle outcome."""
+        async with asyncio.timeout(self.event_timeout):
+            await asyncio.gather(provider.connect(), provider.connect())
+        try:
+            accepted = await provider.send_audio(self.sample_audio_chunk())
+            assert isinstance(accepted, bool), "send_audio() must return a bool"
+            if self.expects_send_accepted_after_connect:
+                assert accepted is True, "send_audio() after connect() must accept the chunk"
+        finally:
+            await provider.disconnect()
+
     async def test_connect_send_disconnect_lifecycle(self, provider: Any) -> None:
         """connect → send → disconnect; the inbound stream then terminates."""
         await provider.connect()
@@ -414,6 +440,32 @@ class TransportContractSuite(ProviderContractSuite):
         )
         for chunk in received:
             assert isinstance(chunk, AudioChunk)
+
+    async def test_disconnect_terminates_an_active_receiver(self, provider: Any) -> None:
+        """Disconnect wakes an iterator that is already waiting for inbound audio."""
+        await provider.connect()
+        received: list[Any] = []
+
+        async def _collect() -> None:
+            received.extend(
+                await self.collect_events(
+                    provider.receive_audio(), source="active Transport.receive_audio()"
+                )
+            )
+
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(_collect())
+            await asyncio.sleep(0)
+            await provider.disconnect()
+        for chunk in received:
+            assert isinstance(chunk, AudioChunk)
+
+    async def test_disconnect_is_idempotent(self, provider: Any) -> None:
+        """Repeated disconnect calls remain safe and leave sends rejected."""
+        await provider.connect()
+        await provider.disconnect()
+        await provider.disconnect()
+        assert await provider.send_audio(self.sample_audio_chunk()) is False
 
     async def test_clear_audio_is_idempotent(self, provider: Any) -> None:
         clear_audio = getattr(provider, "clear_audio", None)
