@@ -344,10 +344,10 @@ sharpened their specs; the load-bearing details:
 | helper | replaces | spec notes |
 |---|---|---|
 | `checkpoint_pending_cancellation()` | 4 inline copies | promotion of the existing correct helper |
-| `start_owned(factory, registry, owner_id, task_name)` | raw parkable-task construction | reserves root + supervisor capacity before invoking the factory; returns `OwnedTask`; bare coroutine input is rejected |
+| `await start_owned(factory, registry, owner_id, task_name)` | raw parkable-task construction | async so cancellation can be checkpointed before factory/resource acquisition and after task creation; reserves root + supervisor capacity before invoking the factory; returns `OwnedTask`; bare coroutine input is rejected |
 | `reap(owned)` | ≥16 hand-rolled sites | returns the child's exception rather than choosing caller policy; on caller cancellation it parks a pending child or releases a settled one before re-raising |
 | `shielded_cleanup(factory)` | 13 drain-loop copies | returns `CleanupSettlement` carrying cleanup result/error and caller-cancellation requests; caller selects precedence explicitly |
-| `hard_timeout(owned, absolute_deadline)` | 2 copies + 1 variant, 3 module-global ledgers | parks through existing ownership; lifecycle locks must be released first |
+| `hard_timeout(owned, absolute_deadline)` | 2 copies + 1 variant, 3 module-global ledgers | parks through existing ownership; supervisor-aware `LifecycleLock` ownership makes the release-before-park rule enforceable |
 | `swallow_cancel()` | 6 shapes, ~117 sites | **must be `async with`** — the `cancelling()` baseline requires an awaited checkpoint in `__aenter__`; a sync context manager provably cannot distinguish a pre-entry pending cancel from a swallowable child cancel |
 
 Two invariants the whole baseline-comparison scheme silently depends on,
