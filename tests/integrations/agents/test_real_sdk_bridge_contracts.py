@@ -192,6 +192,10 @@ class TestRealLangChainBridgeContract(AgentBridgeContractSuite):
 @pytest.mark.integration_external
 class TestRealLangGraphBridgeContract(AgentBridgeContractSuite):
     provider_factory = staticmethod(_langgraph_bridge)
+    rotating_reset_snapshot_fields = frozenset({"thread_id"})
+
+    async def settle_interruption(self, provider: LangGraphBridge) -> None:
+        await provider.aclose()
 
 
 @pytest.mark.integration_external

@@ -925,14 +925,17 @@ WS3.1c result: the source-compatible public suite adds two portable lifecycle
 rows. A consumer close after the first bridge event must complete within the
 existing contract timeout, balance every recorder unit entered during the
 turn, and leave a JSON-safe snapshot. Separately, `reset()` after a completed
-turn must restore the exact fresh-session `FrameworkStateSnapshot`, not merely
-return some serializable value. The first row exposed the reference contract
-fake's straight-line cursor exits; the fake now owns them in `finally`, so it
-models the contract on both exhaustion and early close. Both credential-free
-shipped factories satisfy the rows. The five optional-SDK classes remain the
-WS3.1d extras-matrix responsibility; when the extras are absent they skip
-explicitly under `integration_external`. No built-in bridge implementation or
-public import was changed.
+turn must restore the exact fresh-session stable state, not merely return some
+serializable value; a suite subclass may declare isolation-identity fields
+that must rotate while every other snapshot field stays exact. The first row
+exposed the reference contract fake's straight-line cursor exits; the fake now
+owns them in `finally`, so it models the contract on both exhaustion and early
+close. The public suite also exposes a no-op settlement hook for frameworks
+whose interruption boundary is correctly deferred until async state
+persistence. Both credential-free shipped factories satisfy the default rows.
+The five optional-SDK classes remain the WS3.1d extras-matrix responsibility;
+when the extras are absent they skip explicitly under `integration_external`.
+No built-in bridge implementation or public import was changed.
 
 WS3.1d1 result: the execution registry is now a second, progress-bearing layer
 of the checked-in matrix. It derives each wired suite's scenario set from the

@@ -435,6 +435,7 @@ class AgentBridgeContractSuite(ContractSuite):
     sample_user_text: ClassVar[str] = "hello there"
     interrupted_text: ClassVar[str] = "hel"
     expects_interruption_journal: ClassVar[bool] = True
+    rotating_reset_snapshot_fields: ClassVar[frozenset[str]] = frozenset()
 
     @pytest.fixture
     def recorder(self) -> RecordingAgentRecorder:
@@ -448,6 +449,16 @@ class AgentBridgeContractSuite(ContractSuite):
             bridge.invoke(AgentTurnInput.from_text(self.sample_user_text), recorder),
             source="ExternalAgentBridge.invoke()",
         )
+
+    async def settle_interruption(self, provider: Any) -> None:
+        """Wait for framework-specific deferred persistence, when required.
+
+        Synchronous bridges need no override. A bridge whose public
+        ``apply_interruption()`` queues an async state write can override this
+        hook in its contract-suite subclass and wait for that write through a
+        public lifecycle boundary such as ``aclose()``.
+        """
+        del provider
 
     async def test_satisfies_external_agent_bridge_protocol(self, provider: Any) -> None:
         assert isinstance(provider, ExternalAgentBridge)
@@ -516,6 +527,7 @@ class AgentBridgeContractSuite(ContractSuite):
         )
         if not self.expects_interruption_journal:
             return
+        await self.settle_interruption(provider)
         kinds = recorder.kinds()
         assert "state_committed" in kinds, (
             "apply_interruption() must journal a state_committed record before mutating"
@@ -544,4 +556,17 @@ class AgentBridgeContractSuite(ContractSuite):
         reset = provider.snapshot_state()
         assert isinstance(reset, FrameworkStateSnapshot)
         json.dumps(reset.fields)
-        assert reset == initial, "reset() must restore the bridge's fresh-session state"
+        rotating = self.rotating_reset_snapshot_fields
+        initial_fields = dict(initial.fields)
+        reset_fields = dict(reset.fields)
+        for field_name in rotating:
+            assert field_name in initial_fields, f"missing initial rotating field {field_name!r}"
+            assert field_name in reset_fields, f"missing reset rotating field {field_name!r}"
+            assert reset_fields.pop(field_name) != initial_fields.pop(field_name), (
+                f"reset() must rotate declared isolation identity {field_name!r}"
+            )
+        assert reset.kind == initial.kind
+        assert reset.state_ref == initial.state_ref
+        assert reset_fields == initial_fields, (
+            "reset() must restore every stable field to its fresh-session value"
+        )
