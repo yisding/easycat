@@ -189,6 +189,7 @@ class AudioRouter:
         self._event_bus = event_bus
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
+        self._inline_send_scope = runtime_scope.create_child("_audio_router.inline_send")
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
@@ -351,7 +352,7 @@ class AudioRouter:
         # A cancelled first-frame caller can leave its transport write running
         # briefly while the transport is being terminated. Keep shutdown
         # joined to that lifecycle-owned write before reporting outbound idle.
-        await self._runtime_scope.cancel_and_drain(self._INLINE_SEND_TASK_NAME)
+        await self._inline_send_scope.cancel_and_drain()
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
@@ -448,13 +449,21 @@ class AudioRouter:
 
         self._claim_outbound_send()
         turn = self._current_turn()
+        owned_send_started = False
+
+        async def send_owned() -> bool:
+            nonlocal owned_send_started
+            owned_send_started = True
+            return await self._send_first_audio_inline_owned(chunk, outbound_task, turn)
+
         try:
-            send_task = self._runtime_scope.create_task(
+            send_task = await self._inline_send_scope.create_owned_task(
                 self._INLINE_SEND_TASK_NAME,
-                self._send_first_audio_inline_owned(chunk, outbound_task, turn),
+                send_owned,
             )
         except BaseException:
-            await self._finish_outbound_send(replayed_chunk=False)
+            if not owned_send_started:
+                await self._finish_outbound_send(replayed_chunk=False)
             raise
         return await self._await_non_cancellable_send(
             send_task,
@@ -529,6 +538,7 @@ class AudioRouter:
                     timeout=self._INLINE_SEND_CANCEL_GRACE_S,
                 )
             if not done:
+                self._inline_send_scope.park(task)
                 logger.warning("Cancelled inline transport audio send remains lifecycle-owned")
 
         raise cancellation

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
 from easycat.runtime.scope import BackgroundTaskScope, JournalSink, RuntimeScope
 
 
@@ -195,6 +197,162 @@ def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:
     names = [r["name"] for r in sink.records]
     assert names == ["task_scheduled", "task_completed"]
     assert all(r["turn_id"] == "turn-1" for r in sink.records)
+
+
+def test_runtime_scope_children_require_an_explicit_attached_root() -> None:
+    scope = RuntimeScope()
+
+    with pytest.raises(RuntimeError, match="attached root"):
+        scope.create_child("worker")
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_root_recursively_owns_registered_child_tasks() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    root = RuntimeScope.create_root(
+        "session:test",
+        supervisor=supervisor,
+        survivor_capacity=1,
+    )
+    child = root.create_child("_audio_router.inline_send")
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    task = child.create_task("worker", work())
+    await started.wait()
+
+    assert child.parent is root
+    assert child.root is root
+    assert root.children == (child,)
+    assert child.survivor_registry is root.survivor_registry
+    assert root.tasks("worker") == (task,)
+    assert not root.empty
+
+    await root.cancel_and_drain()
+
+    assert task.cancelled()
+    assert cleaned_up.is_set()
+    assert root.empty
+    assert child.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_owned_children_share_aggregate_supervisor_quota() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    first_root = RuntimeScope.create_root(
+        "session:first",
+        supervisor=supervisor,
+        survivor_capacity=2,
+    )
+    second_root = RuntimeScope.create_root(
+        "session:second",
+        supervisor=supervisor,
+        survivor_capacity=2,
+    )
+    first_child = first_root.create_child("_audio_router.inline_send")
+    second_child = second_root.create_child("_audio_router.inline_send")
+    release = asyncio.Event()
+    first = await first_child.create_owned_task("audio_inline_send", release.wait)
+    rejected_started = False
+
+    async def rejected() -> None:
+        nonlocal rejected_started
+        rejected_started = True
+
+    with pytest.raises(SurvivorCapacityError) as exc_info:
+        await second_child.create_owned_task("audio_inline_send", rejected)
+
+    assert exc_info.value.quota == "runtime"
+    assert not rejected_started
+    assert first_root.tasks("audio_inline_send") == (first,)
+    assert supervisor.active_count == 1
+
+    release.set()
+    await first
+    await asyncio.sleep(0)
+    await first_root.drain()
+
+    assert supervisor.active_count == 0
+    assert first_root.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_parks_owned_child_until_eventual_settlement() -> None:
+    records: list[tuple[str, dict[str, object]]] = []
+    supervisor = RuntimeSupervisor(
+        capacity=1,
+        journal=lambda event, data: records.append((event, dict(data))),
+    )
+    root = RuntimeScope.create_root(
+        "session:test",
+        supervisor=supervisor,
+        survivor_capacity=1,
+    )
+    child = root.create_child("_audio_router.inline_send")
+    release = asyncio.Event()
+    task = await child.create_owned_task("audio_inline_send", release.wait)
+
+    assert child.park(task) is True
+    assert supervisor.survivor_count == 1
+    assert root.tasks("audio_inline_send") == (task,)
+    assert any(
+        event == "owned_task_transition"
+        and data["root_id"] == "session:test"
+        and str(data["owner_id"]).startswith(
+            "session:test/_audio_router.inline_send:audio_inline_send:"
+        )
+        and data["state"] == "parked"
+        for event, data in records
+    )
+
+    release.set()
+    await task
+    await asyncio.sleep(0)
+    await root.drain()
+
+    assert supervisor.active_count == 0
+    assert root.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_attaches_task_when_cancellation_lands_during_owned_start() -> None:
+    caller = asyncio.current_task()
+    assert caller is not None
+
+    def journal(event: str, data: Mapping[str, object]) -> None:
+        if event == "owned_task_transition" and data.get("state") == "active":
+            caller.cancel()
+
+    supervisor = RuntimeSupervisor(capacity=1, journal=journal)
+    root = RuntimeScope.create_root(
+        "session:test",
+        supervisor=supervisor,
+        survivor_capacity=1,
+    )
+    child = root.create_child("_audio_router.inline_send")
+
+    async def work() -> None:
+        await asyncio.Event().wait()
+
+    with pytest.raises(asyncio.CancelledError):
+        await child.create_owned_task("audio_inline_send", work)
+
+    retained = root.tasks("audio_inline_send")
+    assert len(retained) == 1
+    assert retained[0].cancelling()
+
+    await root.cancel_and_drain()
+    await asyncio.sleep(0)
+
+    assert root.empty
+    assert supervisor.active_count == 0
 
 
 def test_runtime_scope_closes_coroutine_when_task_creation_fails() -> None:

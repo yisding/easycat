@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from functools import partial
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
-from easycat._concurrency import checkpoint_pending_cancellation
+from easycat._concurrency import (
+    OwnedTask,
+    RuntimeSupervisor,
+    SurvivorRegistry,
+    checkpoint_pending_cancellation,
+    start_owned,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +134,138 @@ class JournalSink(Protocol):
 
 
 class RuntimeScope:
-    """Track named runtime tasks and provide consistent cancellation/drain."""
+    """Track named runtime tasks and provide consistent cancellation/drain.
+
+    ``RuntimeScope()`` remains a detached compatibility scope for isolated
+    collaborators. Lifecycle-owned work must instead start at
+    :meth:`create_root`; attached roots can register named children, and every
+    child shares the root's bounded survivor registry.
+    """
 
     def __init__(self) -> None:
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        self._name: str | None = None
+        self._parent: RuntimeScope | None = None
+        self._root: RuntimeScope = self
+        self._registry: SurvivorRegistry | None = None
+        self._children: dict[str, RuntimeScope] = {}
+        self._owned_tasks: dict[asyncio.Task[Any], OwnedTask[Any]] = {}
+        self._owned_task_sequence = 0
+
+    @classmethod
+    def create_root(
+        cls,
+        name: str,
+        *,
+        supervisor: RuntimeSupervisor,
+        survivor_capacity: int,
+    ) -> RuntimeScope:
+        """Create an explicitly attached lifecycle root.
+
+        Application runtimes may pass one shared ``RuntimeSupervisor`` to
+        multiple roots. The per-root registry preserves lifecycle isolation
+        while the supervisor enforces the aggregate runtime bound.
+        """
+        cls._validate_scope_name(name)
+        scope = cls()
+        scope._name = name
+        scope._registry = SurvivorRegistry(
+            supervisor=supervisor,
+            root_id=name,
+            capacity=survivor_capacity,
+        )
+        return scope
+
+    def create_child(self, name: str) -> RuntimeScope:
+        """Register and return one named child under this attached scope."""
+        self._validate_scope_name(name)
+        if self._registry is None:
+            raise RuntimeError(
+                "RuntimeScope children require an attached root created with create_root()"
+            )
+        if name in self._children:
+            raise RuntimeError(f"RuntimeScope child {name!r} is already registered")
+
+        child = RuntimeScope()
+        child._name = name
+        child._parent = self
+        child._root = self._root
+        child._registry = self._registry.for_child()
+        self._children[name] = child
+        return child
+
+    @property
+    def name(self) -> str | None:
+        """Return this scope's attached name, or ``None`` when detached."""
+        return self._name
+
+    @property
+    def parent(self) -> RuntimeScope | None:
+        """Return the registered parent; lifecycle roots have no parent."""
+        return self._parent
+
+    @property
+    def root(self) -> RuntimeScope:
+        """Return the lifecycle root shared by this scope tree."""
+        return self._root
+
+    @property
+    def children(self) -> tuple[RuntimeScope, ...]:
+        """Return directly registered child scopes in registration order."""
+        return tuple(self._children.values())
+
+    @property
+    def survivor_registry(self) -> SurvivorRegistry | None:
+        """Return the root registry shared by attached scopes."""
+        return self._registry
+
+    async def create_owned_task(
+        self,
+        name: str,
+        factory: Callable[[], Coroutine[Any, Any, _T]],
+        *,
+        task_name: str | None = None,
+    ) -> asyncio.Task[_T]:
+        """Reserve bounded ownership, create, and track one parkable task.
+
+        The unique owner id represents this task attempt rather than the
+        reusable scope. Parking one cancellation-resistant attempt can close
+        its registry owner without preventing a later attempt in the same
+        cohort.
+        """
+        if not name:
+            raise ValueError("RuntimeScope task name must be non-empty")
+        registry = self._registry
+        if registry is None:
+            raise RuntimeError(
+                "Owned RuntimeScope tasks require an attached root created with create_root()"
+            )
+
+        self._owned_task_sequence += 1
+        owner_id = f"{self._scope_path()}:{name}:{self._owned_task_sequence}"
+        try:
+            owned = await start_owned(
+                factory,
+                registry=registry,
+                owner_id=owner_id,
+                task_name=task_name or name,
+            )
+        except BaseException:
+            # ``start_owned`` may have created and parked a task before a
+            # newly-pending caller cancellation is delivered. Attach that
+            # retained task to the scope tree before preserving the failure.
+            self._attach_retained_owned_tasks(owner_id, name)
+            raise
+
+        self._owned_tasks[owned.task] = owned
+        return self.add_task(name, owned.task)
+
+    def park(self, task: asyncio.Task[Any]) -> bool:
+        """Park a still-running bounded task through the root supervisor."""
+        owned = self._find_owned_task(task)
+        if owned is None:
+            raise ValueError("Task is not a bounded member of this RuntimeScope tree")
+        return owned.park()
 
     def create_task(
         self,
@@ -261,15 +395,19 @@ class RuntimeScope:
             raise ValueError("RuntimeScope task name must be non-empty")
 
         bucket = self._tasks.setdefault(name, set())
-        bucket.difference_update({existing for existing in bucket if existing.done()})
+        completed = {existing for existing in bucket if existing.done()}
+        bucket.difference_update(completed)
+        for existing in completed:
+            self._owned_tasks.pop(existing, None)
         bucket.add(task)
         return task
 
     def tasks(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
-        """Return tracked tasks that have not been drained yet."""
+        """Return tracked tasks in this scope and all registered descendants."""
+        scopes = self._scope_tree()
         if name is not None:
-            return tuple(self._tasks.get(name, ()))
-        return tuple(task for tasks in self._tasks.values() for task in tasks)
+            return tuple(task for scope in scopes for task in scope._tasks.get(name, ()))
+        return tuple(task for scope in scopes for tasks in scope._tasks.values() for task in tasks)
 
     @property
     def empty(self) -> bool:
@@ -351,12 +489,51 @@ class RuntimeScope:
         self._discard_task(task)
 
     def _discard_task(self, task: asyncio.Task[Any]) -> None:
-        for name, tasks in tuple(self._tasks.items()):
-            if task in tasks:
-                tasks.discard(task)
-                if not tasks:
-                    self._tasks.pop(name, None)
-                return
+        for scope in self._scope_tree():
+            for name, tasks in tuple(scope._tasks.items()):
+                if task in tasks:
+                    tasks.discard(task)
+                    scope._owned_tasks.pop(task, None)
+                    if not tasks:
+                        scope._tasks.pop(name, None)
+                    return
+
+    def _scope_tree(self) -> tuple[RuntimeScope, ...]:
+        scopes = [self]
+        for child in self._children.values():
+            scopes.extend(child._scope_tree())
+        return tuple(scopes)
+
+    def _scope_path(self) -> str:
+        names: list[str] = []
+        scope: RuntimeScope | None = self
+        while scope is not None:
+            if scope._name is not None:
+                names.append(scope._name)
+            scope = scope._parent
+        return "/".join(reversed(names))
+
+    def _find_owned_task(self, task: asyncio.Task[Any]) -> OwnedTask[Any] | None:
+        for scope in self._scope_tree():
+            owned = scope._owned_tasks.get(task)
+            if owned is not None:
+                return owned
+        return None
+
+    def _attach_retained_owned_tasks(self, owner_id: str, name: str) -> None:
+        registry = self._registry
+        if registry is None:
+            return
+        for owned in registry.owned_tasks(owner_id):
+            if owned.task in self._owned_tasks:
+                continue
+            self._owned_tasks[owned.task] = owned
+            self.add_task(name, owned.task)
+
+    @staticmethod
+    def _validate_scope_name(name: str) -> None:
+        if not name:
+            raise ValueError("RuntimeScope name must be non-empty")
 
     @staticmethod
     def _validate_new_task_name(name: str, coro: Coroutine[Any, Any, Any]) -> None:

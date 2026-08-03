@@ -25,6 +25,7 @@ from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._concurrency import RuntimeSupervisor
     from easycat.runtime.artifacts import ArtifactStore
     from easycat.runtime.journal import ExecutionJournal
     from easycat.telephony.compliance import DNCStore
@@ -273,6 +274,11 @@ class SessionConfig:
     # Keep appended for positional compatibility with older SessionConfig calls.
     capture_audio: bool | Callable[[], bool] = True
     journal_redaction: Literal["secrets", "pii"] = "secrets"
+    # Advanced runtime seam: application/server owners can share one bounded
+    # supervisor across multiple Session roots. Standalone Sessions create a
+    # private one-slot supervisor by default for backward compatibility.
+    runtime_supervisor: RuntimeSupervisor | None = field(default=None, repr=False)
+    runtime_survivor_capacity: int = 1
 
     def __post_init__(self) -> None:
         """Reject invalid runtime policies before any Session resources are wired."""
@@ -281,6 +287,8 @@ class SessionConfig:
         _validate_policy("runtime_mode", self.runtime_mode, _RUNTIME_MODES)
         _validate_caller_id_exposure(self.caller_id_exposure)
         _validate_policy("journal_redaction", self.journal_redaction, _JOURNAL_REDACTIONS)
+        if self.runtime_survivor_capacity < 1:
+            raise ValueError("runtime_survivor_capacity must be positive")
         self._validate_required_collaborators()
 
     def _validate_required_collaborators(self) -> None:

@@ -18,6 +18,7 @@ from easycat import (
     TurnMode,
     create_session,
 )
+from easycat._concurrency import RuntimeSupervisor
 from easycat.config import EasyConfigError
 from easycat.config import _factory as config_factory
 from easycat.runtime.artifacts import ArtifactWriteReceipt
@@ -174,6 +175,31 @@ async def test_session_stop_releases_outbound_identity_subscription_only() -> No
     await bus.emit(event)
     assert observed == [event]
     assert session.call_identity is None
+
+
+@pytest.mark.asyncio
+async def test_session_attaches_audio_inline_scope_to_injected_runtime_supervisor() -> None:
+    supervisor = RuntimeSupervisor(capacity=2)
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            session_id="owned-session",
+            runtime_supervisor=supervisor,
+            runtime_survivor_capacity=1,
+        )
+    )
+
+    root = session._runtime_scope
+    inline_scope = session._audio_router._inline_send_scope
+    assert root.name == "session:owned-session"
+    assert root.parent is None
+    assert inline_scope.parent is root
+    assert inline_scope.root is root
+    assert inline_scope.survivor_registry is root.survivor_registry
+    assert root.survivor_registry is not None
+    assert root.survivor_registry.supervisor is supervisor
+
+    await session.stop(force=True)
 
 
 def test_create_session_copies_mutable_config_for_each_runtime() -> None:

@@ -45,3 +45,8 @@ def test_text_session_config_allows_noop_agent_for_recording_only_uses() -> None
     config = SessionConfig(runtime_mode="text_session")
 
     assert config.runtime_mode == "text_session"
+
+
+def test_session_config_rejects_nonpositive_runtime_survivor_capacity() -> None:
+    with pytest.raises(ValueError, match="runtime_survivor_capacity must be positive"):
+        SessionConfig(runtime_mode="text_session", runtime_survivor_capacity=0)
