@@ -129,7 +129,7 @@ Reader-facing reference: [docs/reference/session-lifecycle.md](docs/reference/se
 
 - Python ≥3.11, typing-first
 - 4-space indent, 99-char line limit (ruff)
-- Ruff extensions: E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006, T201, A001, A003, LOG, PERF203, PERF403
+- Ruff extensions: E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006, T201, A001, A003, LOG, PERF203, PERF403, TID251
 - Commit format: `<scope>: <imperative summary>` (e.g., `stt: normalize partial transcript events`)
 
 ## Testing

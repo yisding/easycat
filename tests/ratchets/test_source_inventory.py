@@ -211,6 +211,19 @@ async def run():
     assert not removed
 
 
+def test_zero_baseline_uncancel_instance_call_is_fingerprinted(tmp_path: Path) -> None:
+    source_root = tmp_path / "src" / "easycat"
+    _write_module(
+        source_root,
+        "new_instance_call.py",
+        "def break_cancellation_accounting(task):\n    task.uncancel()\n",
+    )
+
+    findings = scan_production_source(source_root)
+
+    assert [item.fingerprint.category for item in findings] == ["task_uncancel"]
+
+
 def test_test_tree_raw_tasks_are_outside_the_production_inventory(tmp_path: Path) -> None:
     source_root = tmp_path / "src" / "easycat"
     _write_module(source_root, "safe.py", "VALUE = 1\n")
