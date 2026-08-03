@@ -206,6 +206,18 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
                 f"transition {state} reason={reason}",
                 node,
             )
+        activity_target = callee.rsplit(".", 1)[0]
+        activity_owner, _, activity_attribute = activity_target.rpartition(".")
+        if (
+            leaf == "bump"
+            and activity_attribute == "_activity"
+            and self._is_turn_manager_owner(activity_owner)
+        ):
+            self._record(
+                "activity_epoch_bump",
+                "bump self._activity",
+                node,
+            )
 
         reset_owner = callee.rsplit(".", 1)[0]
         if (
@@ -272,14 +284,20 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
                 return "identity_owner_assignment"
             if target_path == "turn.generation":
                 return "identity_carrier_assignment"
-        if attribute == "_state" and (
-            "turn_manager" in owner_leaf
-            or owner == "self"
+        if attribute == "_state" and self._is_turn_manager_owner(owner):
+            return "activity_state_assignment"
+        if attribute == "_activity" and self._is_turn_manager_owner(owner):
+            return "activity_owner_assignment"
+        return None
+
+    def _is_turn_manager_owner(self, owner: str) -> bool:
+        owner_leaf = owner.rsplit(".", 1)[-1]
+        scope_owner = self.qualname.split(".", 1)[0]
+        return "turn_manager" in owner_leaf or (
+            owner == "self"
             and self.relative_path == "turn_manager.py"
             and scope_owner == "TurnManager"
-        ):
-            return "activity_state_assignment"
-        return None
+        )
 
     def _record_dynamic_writer(self, node: ast.Call, callee: str) -> None:
         if callee != "setattr" or len(node.args) < 2:

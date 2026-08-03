@@ -1,11 +1,12 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2b1 routes Session identity through TurnLifecycle and Epoch",
+  "update_rationale": "WS1.2b2 routes all TurnManager activity changes through one Epoch-backed transition seam",
   "counts": {
     "categories": {
+      "activity_epoch_bump": 1,
+      "activity_owner_assignment": 1,
       "activity_reset_call": 3,
-      "activity_state_assignment": 3,
-      "activity_transition_call": 7,
+      "activity_transition_call": 9,
       "identity_carrier_assignment": 4,
       "identity_clear_call": 15,
       "identity_owner_assignment": 1,
@@ -16,7 +17,7 @@
     "roles": {
       "activity_initialize": 1,
       "activity_reset": 4,
-      "activity_transition": 8,
+      "activity_transition": 9,
       "identity_carrier": 4,
       "identity_clear": 15,
       "identity_command": 2,
@@ -26,19 +27,20 @@
     }
   },
   "entries": [
+    "activity_epoch_bump\tturn_manager.py\tTurnManager._transition\tbump self._activity\t7e9b3d381c8119ed\t0\tactivity_transition\tSole writer atomically publishes each manager phase and invalidates prior activity leases.",
+    "activity_owner_assignment\tturn_manager.py\tTurnManager.__init__\tassign self._activity\t45c30128467ea343\t0\tactivity_initialize\tInitializes the TurnManager-owned activity Epoch in IDLE.",
     "activity_reset_call\tsession/_session.py\tSession._reset_turn_state\tcall self._turn_manager.reset\tc784e162b528b927\t0\tactivity_reset\tResets manager activity whenever Session clears voice-turn identity.",
     "activity_reset_call\tsession/_turn_runner.py\tTurnRunner._reset_turn_manager_preserving_token\tcall self._turn_manager.reset\t3c0a3930c95e301f\t0\tactivity_reset\tEnds manager activity while gated replay deliberately retains turn identity and token.",
     "activity_reset_call\tturn_manager.py\tTurnManager.shutdown\tcall self.reset\tcf0d1ee17187962a\t0\tactivity_reset\tRoutes shutdown through the manager activity reset path.",
-    "activity_state_assignment\tturn_manager.py\tTurnManager.__init__\tassign self._state\t005989e6639af4a1\t0\tactivity_initialize\tInitializes manager activity in IDLE.",
-    "activity_state_assignment\tturn_manager.py\tTurnManager._transition\tassign self._state\t3d44a8829077ed63\t0\tactivity_transition\tCanonical state-transition writer with logging and journal notification.",
-    "activity_state_assignment\tturn_manager.py\tTurnManager.reset\tassign self._state\t005989e6639af4a1\t0\tactivity_reset\tDirect reset writer that invalidates the active manager phase.",
     "activity_transition_call\tturn_manager.py\tTurnManager._begin_turn\ttransition TurnManagerState.USER_SPEAKING reason=reason\tbfeeacc99d9fdfa4\t0\tactivity_transition\tStarts USER_SPEAKING for VAD, push-to-talk, and barge-in entry paths.",
     "activity_transition_call\tturn_manager.py\tTurnManager._complete_user_turn\ttransition TurnManagerState.PROCESSING reason=reason\t3a3779ab91d50a6c\t0\tactivity_transition\tEnds user input for endpointed and manual turn-completion paths.",
     "activity_transition_call\tturn_manager.py\tTurnManager._handle_speech_start\ttransition TurnManagerState.USER_SPEAKING reason='speech_resumed'\t179c233027e43662\t0\tactivity_transition\tReopens speaking activity when speech resumes during a VAD pause.",
     "activity_transition_call\tturn_manager.py\tTurnManager._handle_speech_stop\ttransition TurnManagerState.USER_PAUSED reason='vad_silence'\t9066e16861629dc4\t0\tactivity_transition\tOpens the paused activity phase after VAD speech stop.",
+    "activity_transition_call\tturn_manager.py\tTurnManager._state\ttransition state reason='compatibility_state_set'\t1f6ae3a1b77ce38e\t0\tactivity_transition\tRoutes focused-harness state setup through the canonical activity seam without emitting lifecycle observations.",
     "activity_transition_call\tturn_manager.py\tTurnManager.begin_application_turn\ttransition TurnManagerState.PROCESSING reason='application_prompt'\t40c7e54a258c935d\t0\tactivity_transition\tPublishes application-authored activity directly in processing.",
     "activity_transition_call\tturn_manager.py\tTurnManager.bot_started_speaking\ttransition TurnManagerState.BOT_SPEAKING reason='bot_started'\t2d22a4e3f0d98d25\t0\tactivity_transition\tOpens bot playback activity.",
     "activity_transition_call\tturn_manager.py\tTurnManager.bot_stopped_speaking\ttransition TurnManagerState.IDLE reason='bot_done'\t0d668e3766a98073\t0\tactivity_transition\tEnds bot playback activity while identity may remain for gated replay bookkeeping.",
+    "activity_transition_call\tturn_manager.py\tTurnManager.reset\ttransition TurnManagerState.IDLE reason='reset'\t26c007d86a80ffce\t0\tactivity_reset\tInvalidates the active manager phase on every reset, including same-state IDLE resets, without changing historical journal behavior.",
     "identity_carrier_assignment\t_turn_context.py\tTurnContext\tassign _generation_counter\t55cd5b40868efabb\t0\tidentity_carrier\tSeeds the legacy process-wide turn generation counter.",
     "identity_carrier_assignment\t_turn_context.py\tTurnContext.__init__\tassign self.generation\tfa24c1112ec3c5cf\t0\tidentity_carrier\tCopies the allocated legacy generation onto a new TurnContext.",
     "identity_carrier_assignment\t_turn_context.py\tTurnContext.__init__\tupdate TurnContext._generation_counter\t602b69516b4ac6fc\t0\tidentity_carrier\tAllocates the next legacy TurnContext generation.",

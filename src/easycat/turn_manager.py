@@ -29,6 +29,7 @@ from numbers import Integral, Real
 from typing import Any
 from uuid import uuid4
 
+from easycat._epoch import Epoch, Lease
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -218,8 +219,9 @@ class TurnManager:
         # post-construction via :meth:`set_cancel_callback`.
         self._cancel_turn_callback = cancel_turn_callback
 
-        # State
-        self._state = TurnManagerState.IDLE
+        # Activity phase. Every change, including an IDLE reset while already
+        # idle, routes through ``_transition`` after this initial publication.
+        self._activity: Epoch[TurnManagerState] = Epoch(TurnManagerState.IDLE)
         self._mode = self._config.mode
 
         # Pre-roll audio buffer (rolling window of recent audio frames)
@@ -269,7 +271,24 @@ class TurnManager:
 
     @property
     def state(self) -> TurnManagerState:
-        return self._state
+        return self._activity.capture().value
+
+    @property
+    def _state(self) -> TurnManagerState:
+        """Compatibility view for focused harnesses that predate activity leases."""
+        return self.state
+
+    @_state.setter
+    def _state(self, state: TurnManagerState) -> None:
+        self._transition(
+            state,
+            reason="compatibility_state_set",
+            observe=False,
+        )
+
+    def capture_activity(self) -> Lease[TurnManagerState]:
+        """Capture the manager activity generation and state atomically."""
+        return self._activity.capture()
 
     @property
     def mode(self) -> TurnMode:
@@ -344,13 +363,16 @@ class TurnManager:
         to_state: TurnManagerState,
         *,
         reason: str,
-    ) -> None:
-        """Move to ``to_state``, log the transition, and journal it.
+        observe: bool = True,
+    ) -> Lease[TurnManagerState]:
+        """Publish ``to_state`` and optionally log and journal the transition.
 
-        Centralises what used to be a scattered set of ``self._state = X``
-        + ``logger.debug(...)`` pairs.  Every transition now gets a
-        ``turn_state_changed`` record so bundles can answer "why did the
-        turn end when it did" from the journal alone.
+        This is the sole activity Epoch writer. Every call bumps the activity
+        generation, including same-state IDLE resets. Ordinary lifecycle
+        transitions emit a ``turn_state_changed`` record so bundles can answer
+        "why did the turn end when it did" from the journal alone. Reset and
+        compatibility setup preserve their historical silent behavior with
+        ``observe=False`` while still invalidating outstanding activity leases.
 
         The debug log line is derived from the real ``from_state`` /
         ``to_state`` / ``reason`` so it can never disagree with the journal
@@ -358,8 +380,15 @@ class TurnManager:
         drift from the actual transition — e.g. a barge-in from PROCESSING
         used to falsely log a from-state of BOT_SPEAKING).
         """
-        from_state = self._state
-        self._state = to_state
+        from_state = self.state
+        generation = self._activity.bump(to_state)
+        lease = self._activity.capture()
+        if __debug__:
+            assert lease.generation == generation
+            assert lease.value is to_state
+            assert lease.is_current()
+        if not observe:
+            return lease
         logger.debug("Turn: %s -> %s (%s)", from_state.value, to_state.value, reason)
         hook = self._journal_state_change
         if hook is not None:
@@ -367,6 +396,7 @@ class TurnManager:
                 hook(from_state, to_state, reason, self._current_turn_id)
             except Exception:
                 logger.debug("journal state-change hook raised", exc_info=True)
+        return lease
 
     def bind_endpoint_stage(
         self,
@@ -865,7 +895,11 @@ class TurnManager:
         dropped, but the token is left uncancelled.
         """
         self._cancel_silence_timer()
-        self._state = TurnManagerState.IDLE
+        self._transition(
+            TurnManagerState.IDLE,
+            reason="reset",
+            observe=False,
+        )
         self._turn_audio.clear()
         self._turn_audio_duration_ms = 0.0
         self._pre_roll_buffer.clear()

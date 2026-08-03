@@ -83,6 +83,27 @@ def test_turn_started_topology_has_one_command_path() -> None:
     assert subscriptions.count("observation") == 1
 
 
+def test_turn_manager_activity_epoch_has_one_owner_and_writer() -> None:
+    entries = [_parse_entry(record) for record in _load_manifest()["entries"]]
+    owners = [
+        site for site, _role, _rationale in entries if site.category == "activity_owner_assignment"
+    ]
+    writers = [
+        site for site, _role, _rationale in entries if site.category == "activity_epoch_bump"
+    ]
+    direct_state_writers = [
+        site for site, _role, _rationale in entries if site.category == "activity_state_assignment"
+    ]
+
+    assert [(site.path, site.qualname) for site in owners] == [
+        ("turn_manager.py", "TurnManager.__init__")
+    ]
+    assert [(site.path, site.qualname) for site in writers] == [
+        ("turn_manager.py", "TurnManager._transition")
+    ]
+    assert direct_state_writers == []
+
+
 def test_scanner_covers_direct_writes_transitions_and_event_topology(tmp_path: Path) -> None:
     source_root = tmp_path / "src" / "easycat"
     _write_module(
@@ -104,7 +125,11 @@ class Session:
         """
 class TurnManager:
     def __init__(self):
+        self._activity = Epoch(IDLE)
         self._state = IDLE
+
+    def _transition(self, state, *, reason):
+        self._activity.bump(state)
 
     def publish(self):
         self._transition(ACTIVE, reason='test')
@@ -124,6 +149,8 @@ class TurnManager:
     counts = Counter(finding.site.category for finding in scan_turn_lifecycle(source_root))
 
     assert counts == {
+        "activity_epoch_bump": 1,
+        "activity_owner_assignment": 1,
         "activity_state_assignment": 1,
         "activity_transition_call": 1,
         "identity_carrier_assignment": 1,
@@ -170,13 +197,20 @@ def test_new_module_cannot_bypass_session_or_manager_writer_inventory(tmp_path: 
         """
 def bypass(session, turn_manager, turn):
     session._turn = turn
+    turn_manager._activity = Epoch(IDLE)
+    turn_manager._activity.bump(ACTIVE)
     turn_manager._state = ACTIVE
 """,
     )
 
     categories = [finding.site.category for finding in scan_turn_lifecycle(source_root)]
 
-    assert categories == ["activity_state_assignment", "identity_pointer_assignment"]
+    assert categories == [
+        "activity_epoch_bump",
+        "activity_owner_assignment",
+        "activity_state_assignment",
+        "identity_pointer_assignment",
+    ]
 
 
 def _load_manifest() -> dict[str, Any]:

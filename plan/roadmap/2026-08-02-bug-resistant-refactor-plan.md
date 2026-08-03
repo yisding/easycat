@@ -528,6 +528,17 @@ calls, fifteen clear calls, and four legacy-carrier assignments. The only new
 carrier write is the asserted `TurnContext.generation` dual-write. Manager
 activity ownership remains isolated to WS1.2b2.
 
+WS1.2b2 migration result: TurnManager now owns an
+`Epoch[TurnManagerState]`, and `_transition` is its sole writer. The refreshed
+45-site manifest has zero direct activity-state assignments, one activity-owner
+initialization, one Epoch bump site, nine calls through the transition seam,
+and the same three external reset calls. Ordinary transitions retain their
+existing log and journal observations; reset and focused-harness compatibility
+setup remain silent while still bumping activity. Adversarial contracts prove
+that repeated IDLE resets and bot-stopped-to-IDLE stale prior activity leases,
+while `reset(preserve_token=True)` leaves the retained Session identity current
+and its token uncancelled.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

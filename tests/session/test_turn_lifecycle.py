@@ -87,10 +87,12 @@ def test_manager_activity_reset_does_not_stale_retained_session_identity() -> No
     turn = session.begin_turn("gated-replay-turn")
     session._turn_manager.begin_application_turn(turn.id, turn.cancel_token)
     identity = session._turn_lifecycle.capture_identity()
+    activity = session._turn_manager.capture_activity()
 
     session._turn_manager.reset(preserve_token=True)
 
     assert session._turn_manager.state is TurnManagerState.IDLE
     assert session.current_turn is turn
     assert identity.is_current()
+    assert not activity.is_current()
     assert not turn.cancel_token.is_cancelled
