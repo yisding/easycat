@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "WS1.2b1 replaces Session._turn_generation integer storage with the canonical TurnLifecycle epoch owner",
+  "rationale": "WS1.2d2a removes the preemptive generation integer after adopting the Session identity lease",
   "counts": {
     "cancelled_error_handler": 109,
-    "epoch_field": 17,
+    "epoch_field": 16,
     "gather_return_exceptions": 31,
     "module_task_set": 4,
     "raw_task_spawn": 89,
@@ -125,7 +125,6 @@
     "epoch_field\truntime/journal_sql.py\tSqliteJournal.__init__\tinteger field _batch_generation\tbfb6c74a45d3a3a7\t0",
     "epoch_field\tsession/_session.py\tSession.__init__\tinteger field _audio_capture_epoch\t37be4c0a8435c1b6\t0",
     "epoch_field\tsession/_turn_runner.py\tTurnRunner.__init__\tinteger field _preemptive_finalized_generation\t7fa28bd22c6bc585\t0",
-    "epoch_field\tsession/_turn_runner.py\tTurnRunner.__init__\tinteger field _preemptive_turn_generation\tbd44b1f74b6abc03\t0",
     "epoch_field\tstages/agent.py\tAgentStage.__init__\tinteger field _history_epoch\t4cbb9484136baef7\t0",
     "epoch_field\tstt/base.py\tSTTBase.__init__\tinteger field _stream_generation\tccdccfa6b270012c\t0",
     "epoch_field\ttelephony/call_state.py\tClassificationGate.__init__\tinteger field _generation\t6e6641518fab3af3\t0",

@@ -43,6 +43,7 @@ from easycat.tts.input import TTSInput, resolve_tts_input_policy, strip_ssml_tag
 from easycat.turn_manager import TurnManager
 
 if TYPE_CHECKING:
+    from easycat._epoch import Lease
     from easycat._turn_context import TurnContext
     from easycat.session._audio_router import AudioRouter
     from easycat.session._wiring import SessionWiringContext
@@ -84,6 +85,7 @@ class TTSScheduler:
         self._strip_markdown = strip_markdown_enabled
 
         self._current_turn = wiring.current_turn
+        self._capture_identity = wiring.capture_identity
         self._is_gated = wiring.is_gated
         self._session_actions = wiring.session_actions
         self._drain_session_actions = wiring.drain_session_actions
@@ -185,7 +187,7 @@ class TTSScheduler:
         self,
         turn: TurnContext | None,
         *,
-        turn_generation: int | None = None,
+        identity: Lease[TurnContext | None] | None = None,
     ) -> bool:
         """Run the end-of-turn drain → stop → drain → clear sequence.
 
@@ -202,34 +204,35 @@ class TTSScheduler:
         audio is drained afterwards so the router can still record sent
         bytes and emit playback marks.
 
-        The turn pointer is only cleared when the same turn (matched by
-        identity *and*, when supplied, ``turn_generation``) is still
-        active — a turn that was replaced (barge-in) or replaced-then-
-        reissued under the same identity must not be cleared here.
+        The turn pointer is only cleared while the identity lease captured
+        for this finalizer remains current. A turn that was replaced
+        (barge-in) or re-published under the same object identity must not be
+        cleared here.
 
         Returns ``True`` if a drained session action signalled that the
         session should stop.
         """
+        identity = identity or self._capture_identity()
         should_stop = await self._drain_session_actions()
         try:
-            if not self._turn_is_current(turn, turn_generation):
+            if not self._turn_is_current(turn, identity):
                 return should_stop
             if should_stop:
                 await self._audio_router.await_drain()
-                if self._turn_is_current(turn, turn_generation):
+                if self._turn_is_current(turn, identity):
                     await self._turn_manager.bot_stopped_speaking()
             else:
                 await self._turn_manager.bot_stopped_speaking()
-                if self._turn_is_current(turn, turn_generation):
+                if self._turn_is_current(turn, identity):
                     await self._audio_router.await_drain()
         finally:
             actions = self._session_actions()
             if actions is not None:
                 actions.clear_no_interrupt()
-        turn_still_current = self._turn_is_current(turn, turn_generation)
+        turn_still_current = self._turn_is_current(turn, identity)
         if turn_still_current:
             await self._audio_router.flush_trailing_playback_mark(turn)
-            turn_still_current = self._turn_is_current(turn, turn_generation)
+            turn_still_current = self._turn_is_current(turn, identity)
             if turn_still_current:
                 self._clear_turn()
         return should_stop
@@ -237,12 +240,10 @@ class TTSScheduler:
     def _turn_is_current(
         self,
         turn: TurnContext | None,
-        turn_generation: int | None,
+        identity: Lease[TurnContext | None],
     ) -> bool:
-        """Whether a finalizer still owns the active turn pointer."""
-        return self._current_turn() is turn and (
-            turn_generation is None or (turn is not None and turn.generation == turn_generation)
-        )
+        """Whether a finalizer's captured identity still owns ``turn``."""
+        return identity.value is turn and identity.guard()
 
     async def synthesize_bypass(self, text: str) -> None:
         """Synthesize text via TTS, bypassing the classification gate.

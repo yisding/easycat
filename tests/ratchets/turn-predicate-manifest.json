@@ -1,12 +1,10 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2d1 freezes synchronous turn predicates before lease adoption",
+  "update_rationale": "WS1.2d2a replaces pointer and generation liveness checks with atomically captured identity leases",
   "counts": {
     "categories": {
       "activity_state_predicate": 9,
-      "identity_generation_predicate": 9,
-      "identity_pointer_predicate": 8,
-      "null_object_predicate": 29,
+      "null_object_predicate": 28,
       "phase_latch_predicate": 1,
       "token_cancellation_predicate": 14,
       "token_ownership_predicate": 3
@@ -14,9 +12,7 @@
     "roles": {
       "activity": 9,
       "cancellation": 14,
-      "identity": 8,
-      "legacy_identity": 9,
-      "null_object": 29,
+      "null_object": 28,
       "phase_latch": 1,
       "token_ownership": 3
     }
@@ -31,23 +27,6 @@
     "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.on_turn_ended\tself._turn_manager.state != TurnManagerState.PROCESSING\t87d818dfca98832b\t0\tactivity\tGuards an effect by the manager activity phase.",
     "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._turn_manager.state is not TurnManagerState.IDLE\t008c08c2412f86ee\t0\tactivity\tGuards an effect by the manager activity phase.",
     "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tself._turn_manager.state != TurnManagerState.IDLE\td3e9769d92e67352\t0\tactivity\tGuards an effect by the manager activity phase.",
-    "identity_generation_predicate\tsession/_tts_scheduler.py\tTTSScheduler._turn_is_current\tturn.generation == turn_generation\t0e63f35a1e460481\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner._is_active_voice_turn\tself._turn.generation == generation\td58c17ef47b07cbe\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner._maybe_speak_agent_failure_fallback\tself._turn.generation != st.turn_gen\tc6bf504beb8b7a84\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner._preemptive_matches\tself._preemptive_turn_generation == turn.generation\t9f2a99185ad9a65b\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tself._turn.generation != st.turn_gen\tc6bf504beb8b7a84\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner._take_preemptive_response\tself._preemptive_turn_generation != turn.generation\t49ea5b9edb2d3593\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner.on_stt_final\tself._preemptive_turn_generation != turn.generation\t49ea5b9edb2d3593\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner.on_turn_ended\tself._turn.generation != generation\t20d6497c19d2ee93\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_generation_predicate\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tself._turn.generation == st.turn_gen\tae788cdf3411706d\t0\tlegacy_identity\tLegacy generation participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_tts_scheduler.py\tTTSScheduler._turn_is_current\tself._current_turn() is turn\t714d91fea9e0f66e\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner._execute_application_prompt\tself._turn.current is turn\t6519f13ecd33c4ed\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner._is_active_voice_turn\tself._turn.current is turn\t6519f13ecd33c4ed\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner._maybe_speak_agent_failure_fallback\tself._turn.current is not st.turn\tad746f04571f5d46\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tself._turn.current is not st.turn\tad746f04571f5d46\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tself._turn.current is turn\t6519f13ecd33c4ed\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tself._turn.current is turn\t6519f13ecd33c4ed\t0\tidentity\tPointer identity participates in turn-identity liveness.",
-    "identity_pointer_predicate\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tself._turn.current is turn\t6519f13ecd33c4ed\t0\tidentity\tPointer identity participates in turn-identity liveness.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tturn is self._no_turn\t0fc4c8154cbbf4c6\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._take_next_pause_generation\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
@@ -66,7 +45,6 @@
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter.start_event_loop\tturn is not self._no_turn\t741a86c7b97b9fc3\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tturn is not self._no_turn\t741a86c7b97b9fc3\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tturn is not self._no_turn\t741a86c7b97b9fc3\t1\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
-    "null_object_predicate\tsession/_tts_scheduler.py\tTTSScheduler._turn_is_current\tturn is not None\tfa3de40529c7a8e8\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._finalize_turn_transcript\tturn is not None\tfa3de40529c7a8e8\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._is_active_voice_turn\tturn is not None\tfa3de40529c7a8e8\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._preemptive_candidate\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",

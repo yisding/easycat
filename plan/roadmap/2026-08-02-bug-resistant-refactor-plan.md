@@ -568,6 +568,19 @@ pointer/generation/activity liveness mechanisms through lease adoption while
 leaving cancellation, token ownership, null-object semantics, and the one-way
 phase latch independently visible.
 
+WS1.2d2 is split into WS1.2d2a identity-lease adoption and WS1.2d2b activity-
+lease adoption so the two state machines can be reviewed and rolled back
+independently. WS1.2d2a migration result: the Session wiring now exposes atomic
+identity capture; `TurnRunner` carries the captured lease through end-of-speech,
+streaming TTS, application prompts, and preemptive attempts; and `TTSScheduler`
+re-guards that same lease before every post-await stop, drain, mark, or clear
+effect. Same-object republication contracts prove an epoch bump fences stale
+work even when pointer identity is unchanged. The refreshed 55-site predicate
+manifest has zero identity-pointer and zero legacy identity-generation checks;
+the nine activity checks remain deliberately frozen for WS1.2d2b, alongside
+the independent cancellation, token-owner, null-object, and phase-latch
+semantics.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

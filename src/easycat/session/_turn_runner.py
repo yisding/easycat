@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._epoch import Lease
 from easycat._log_context import bind_turn, reset_turn
 from easycat._tts_synthesizer import TTSSynthResult
 from easycat._turn_context import TurnContext, TurnHandle
@@ -111,7 +112,7 @@ class _StreamingTtsState:
     """
 
     turn: TurnContext
-    turn_gen: int
+    identity: Lease[TurnContext | None]
     token: CancelToken | None
     queue: asyncio.Queue[TTSInput | None]
     #: Released after first-payload lifecycle dispatch (or a no-audio terminal
@@ -229,7 +230,7 @@ class TurnRunner:
         # transcript still matches.
         self._preemptive_task: asyncio.Task[_PreemptiveAgentResult] | None = None
         self._preemptive_transcript = ""
-        self._preemptive_turn_generation = 0
+        self._preemptive_identity: Lease[TurnContext | None] | None = None
         self._preemptive_attempts = 0
         # Highest turn generation whose end-of-speech take point has passed.
         # A trailing STTFinal for such a turn (e.g. a provider flushing a
@@ -308,7 +309,7 @@ class TurnRunner:
         cancel_token = publication.cancel_token or CancelToken()
         turn = self._turn.begin(publication.turn_id, cancel_token)
         publication = replace(publication, identity=self._turn.capture_identity())
-        self._preemptive_turn_generation = turn.generation
+        self._preemptive_identity = publication.identity
         self._preemptive_attempts = 0
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
@@ -344,7 +345,9 @@ class TurnRunner:
                 logger.debug("STT teardown after start failure raised", exc_info=True)
             # Clear the turn pointer and return the TurnManager toward IDLE so
             # the caller doesn't sit in USER_SPEAKING until the silence timeout.
-            if self._turn.current is turn:
+            if publication.identity is not None and self._identity_owns_turn(
+                publication.identity, turn
+            ):
                 self._reset_turn_state()
             return publication
         finally:
@@ -356,7 +359,7 @@ class TurnRunner:
         candidate = self._preemptive_candidate(event)
         if candidate is None:
             return
-        turn, transcript = candidate
+        identity, turn, transcript = candidate
         if self._preemptive_matches(turn, transcript):
             return
 
@@ -369,15 +372,20 @@ class TurnRunner:
         # attempt that could overlap the confirmed run.
         if self._preemptive_take_passed(turn):
             return
-        if self._preemptive_turn_generation != turn.generation:
-            self._preemptive_turn_generation = turn.generation
+        identity = self._turn.capture_identity()
+        if not self._identity_owns_turn(identity, turn):
+            return
+        if self._preemptive_identity is None or not self._identity_owns_turn(
+            self._preemptive_identity, turn
+        ):
+            self._preemptive_identity = identity
             self._preemptive_attempts = 0
         if self._preemptive_attempts >= self._agent_stage.preemptive_max_retries:
             return
 
         self._preemptive_attempts += 1
         self._preemptive_transcript = transcript
-        self._preemptive_turn_generation = turn.generation
+        self._preemptive_identity = identity
 
         async def _prepare() -> _PreemptiveAgentResult:
             try:
@@ -395,12 +403,16 @@ class TurnRunner:
             turn_id=turn.id,
         )
 
-    def _preemptive_candidate(self, event: STTFinal) -> tuple[TurnContext, str] | None:
+    def _preemptive_candidate(
+        self,
+        event: STTFinal,
+    ) -> tuple[Lease[TurnContext | None], TurnContext, str] | None:
         """Return the active turn/transcript when speculative work is safe."""
         if not self._agent_stage.supports_preemptive_generation:
             return None
-        turn = self._turn.current
-        if turn is None or turn.cancel_token.is_cancelled:
+        identity = self._turn.capture_identity()
+        turn = identity.value
+        if not identity.guard() or turn is None or turn.cancel_token.is_cancelled:
             return None
         if self._preemptive_take_passed(turn):
             return None
@@ -410,13 +422,14 @@ class TurnRunner:
         transcript = turn.transcript_text
         if not transcript:
             return None
-        return turn, transcript
+        return identity, turn, transcript
 
     def _preemptive_matches(self, turn: TurnContext, transcript: str) -> bool:
         """Whether the active attempt already targets this exact transcript."""
         return bool(
             self._preemptive_task is not None
-            and self._preemptive_turn_generation == turn.generation
+            and self._preemptive_identity is not None
+            and self._identity_owns_turn(self._preemptive_identity, turn)
             and self._preemptive_transcript == transcript
         )
 
@@ -445,11 +458,10 @@ class TurnRunner:
         current_tts_task = self._tts.active_turn_task
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
-        gen = self._turn.generation
-        turn = self._turn.current
+        identity = self._turn.capture_identity()
         turn_token = bind_turn(event.turn_id)
         try:
-            turn_ended = self.on_turn_ended(event, gen, turn=turn)
+            turn_ended = self.on_turn_ended(event, identity)
             if self._journal_enabled:
                 new_task = self._runtime_scope.create_journaled_task(
                     turn_ended,
@@ -467,36 +479,41 @@ class TurnRunner:
     async def on_turn_ended(
         self,
         event: TurnEnded,
-        generation: int,
-        turn: TurnContext | None = None,
+        identity: Lease[TurnContext | None],
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
         turn_token = bind_turn(event.turn_id)
         try:
-            if self._turn.generation != generation:
+            if not identity.guard():
                 return
+            turn = identity.value
             if turn and turn.cancel_token.is_cancelled:
                 return
             if self._turn_manager.state != TurnManagerState.PROCESSING:
                 return
             if turn:
                 turn.end_time = event.timestamp
-            await self.handle_end_of_speech(turn=turn)
+            await self.handle_end_of_speech(turn=turn, identity=identity)
         finally:
             reset_turn(turn_token)
 
     # ── Pipeline ───────────────────────────────────────────────────
 
-    async def handle_end_of_speech(self, turn: TurnContext | None = None) -> None:
+    async def handle_end_of_speech(
+        self,
+        turn: TurnContext | None = None,
+        *,
+        identity: Lease[TurnContext | None] | None = None,
+    ) -> None:
         """Finalize STT, run the agent, synthesize TTS.
 
         ``turn`` defaults to the active session turn for backwards
         compatibility; internal callers always pass it explicitly.
         """
+        identity = identity or self._turn.capture_identity()
         if turn is None:
-            turn = self._turn.current
+            turn = identity.value
         token = turn.cancel_token if turn else None
-        turn_generation = self._turn.generation
         if turn is not None:
             # This turn is now past its take point: a trailing STTFinal (a
             # provider can flush a second final segment during the
@@ -512,7 +529,7 @@ class TurnRunner:
 
         if not transcript or (token and token.is_cancelled):
             await self.cancel_preemptive_generation()
-            if self._turn.current is turn:
+            if self._identity_owns_turn(identity, turn):
                 self._reset_turn_state()
             if stt_close_task is not None:
                 await asyncio.shield(stt_close_task)
@@ -530,13 +547,14 @@ class TurnRunner:
             # during it, cancelling/replacing this turn. Never fall through to the
             # confirmed invocation for an abandoned transcript: even a cancelled
             # AgentRunner records its user message before it observes the token.
-            if not self._is_active_voice_turn(turn, token, turn_generation):
+            if not self._is_active_voice_turn(turn, token, identity):
                 return
             await self.run_streaming_agent(
                 transcript,
                 token,
                 turn=turn,
                 prepared_response=prepared_response,
+                identity=identity,
             )
         finally:
             if stt_close_task is not None:
@@ -582,15 +600,22 @@ class TurnRunner:
         self,
         turn: TurnContext | None,
         token: CancelToken | None,
-        generation: int,
+        identity: Lease[TurnContext | None],
     ) -> bool:
-        """Whether a post-await voice turn is still the session's active generation."""
+        """Whether a post-await voice turn still owns its captured identity."""
         return bool(
             turn is not None
             and not (token and token.is_cancelled)
-            and self._turn.current is turn
-            and self._turn.generation == generation
+            and self._identity_owns_turn(identity, turn)
         )
+
+    @staticmethod
+    def _identity_owns_turn(
+        identity: Lease[TurnContext | None],
+        turn: TurnContext | None,
+    ) -> bool:
+        """Guard one atomically captured identity against its turn payload."""
+        return identity.value is turn and identity.guard()
 
     async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
@@ -639,7 +664,8 @@ class TurnRunner:
         if (
             task is None
             or turn is None
-            or self._preemptive_turn_generation != turn.generation
+            or self._preemptive_identity is None
+            or not self._identity_owns_turn(self._preemptive_identity, turn)
             or self._preemptive_transcript != transcript
         ):
             await self.cancel_preemptive_generation()
@@ -733,6 +759,7 @@ class TurnRunner:
         token: CancelToken | None,
         *,
         turn: TurnContext | None = None,
+        identity: Lease[TurnContext | None] | None = None,
         prepared_response: PreparedAgentResponse | None = None,
         system_prefix_override: str | None = None,
         input_role: Literal["system", "user"] = "user",
@@ -746,12 +773,13 @@ class TurnRunner:
         ``_finalize_streamed_text`` (final markdown strip), and
         ``_record_streaming_interruption`` (barge-in accounting).
         """
+        identity = identity or self._turn.capture_identity()
         if turn is None:
-            turn = self._turn.current
+            turn = identity.value
         assert turn is not None
         st = _StreamingTtsState(
             turn=turn,
-            turn_gen=self._turn.generation,
+            identity=identity,
             token=token,
             # Bounded so a fast agent against a slow/stalled TTS consumer
             # applies natural backpressure via consume_agent_stream's awaited
@@ -852,9 +880,11 @@ class TurnRunner:
         self._record_voice_total_latency(turn)
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
-        if self._turn.current is turn and self._turn.generation == st.turn_gen:  # noqa: SIM102 nested branches preserve decision context
-            if self._turn_manager.state != TurnManagerState.IDLE:
-                self._reset_turn_state()
+        if (
+            self._identity_owns_turn(st.identity, turn)
+            and self._turn_manager.state != TurnManagerState.IDLE
+        ):
+            self._reset_turn_state()
         return accumulated_text
 
     # ── Streaming agent phases ─────────────────────────────────────
@@ -872,8 +902,7 @@ class TurnRunner:
             or not st.queue.empty()
             or (st.token and st.token.is_cancelled)
             or self._tts.is_playback_suppressed
-            or self._turn.current is not st.turn
-            or self._turn.generation != st.turn_gen
+            or not self._identity_owns_turn(st.identity, st.turn)
             or self._turn_manager.state != TurnManagerState.PROCESSING
         ):
             return
@@ -1089,11 +1118,12 @@ class TurnRunner:
         # Cancellation can unwind this old consumer while barge-in has already
         # installed a successor turn. Never finalize or reset shared turn state
         # on behalf of a stale generation.
-        if self._turn.current is not st.turn or self._turn.generation != st.turn_gen:
+        if not self._identity_owns_turn(st.identity, st.turn):
             return
         if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             st.should_stop = await self._tts.finalize_speaking_turn(
-                st.turn, turn_generation=st.turn_gen
+                st.turn,
+                identity=st.identity,
             )
         elif st.synth_started and not st.playback_started:
             if st.gated:
@@ -1486,7 +1516,9 @@ class TurnRunner:
                 publication=publication,
             )
         finally:
-            if self._turn.current is turn:
+            if publication.identity is not None and self._identity_owns_turn(
+                publication.identity, turn
+            ):
                 self._reset_turn_state()
 
     async def _execute_spoken_application_prompt(
@@ -1508,6 +1540,7 @@ class TurnRunner:
                 text,
                 token,
                 turn=turn,
+                identity=publication.identity,
                 system_prefix_override=system_prefix,
                 input_role=role,
             )

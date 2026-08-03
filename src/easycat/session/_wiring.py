@@ -96,6 +96,7 @@ class SessionWiringContext:
 
     # ── Turn pointer / correlation ───────────────────────────────
     current_turn: Callable[[], TurnContext | None]
+    capture_identity: Callable[[], Lease[TurnContext | None]]
     correlation_ids: Callable[[], tuple[str | None, str | None]]
     with_correlation: Callable[[Any], Any]
     emit: Callable[[Any], Awaitable[None]]
@@ -168,6 +169,7 @@ def build_wiring(session: Session) -> SessionWiringContext:
 
     return SessionWiringContext(
         current_turn=lambda: session._turn,
+        capture_identity=session._turn_lifecycle.capture_identity,
         correlation_ids=lambda: (
             session.session_id,
             active.id if (active := session._active_turn()) else None,

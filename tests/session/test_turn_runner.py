@@ -1425,7 +1425,7 @@ async def test_stale_tts_settlement_preserves_successor_turn() -> None:
     runner._turn.set(old_turn)
     state = _StreamingTtsState(
         turn=old_turn,
-        turn_gen=old_turn.generation,
+        identity=runner._turn.capture_identity(),
         token=old_turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -1443,6 +1443,31 @@ async def test_stale_tts_settlement_preserves_successor_turn() -> None:
     assert session._turn is successor
     assert session._turn_generation == successor.generation
     assert not successor.cancel_token.is_cancelled
+    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_stale_tts_settlement_rejects_same_object_republication() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-reissued", CancelToken())
+    runner._turn.set(turn)
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.agent_output_settled.set()
+
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.USER_SPEAKING
+
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is turn
     assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
 
 
@@ -2116,7 +2141,7 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
     session._turn = turn
     state = _StreamingTtsState(
         turn=turn,
-        turn_gen=session._turn.generation,
+        identity=session._turn_runner._turn.capture_identity(),
         token=turn.cancel_token,
         queue=asyncio.Queue(),
     )

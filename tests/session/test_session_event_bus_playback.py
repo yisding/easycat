@@ -637,10 +637,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
 
         new_turn = session.begin_turn("new-turn")
 
-        await session._tts_scheduler.finalize_speaking_turn(
-            old_turn,
-            turn_generation=old_turn.generation,
-        )
+        await session._tts_scheduler.finalize_speaking_turn(old_turn)
 
         assert transport.playback_marks == []
         assert old_turn.bytes_since_last_mark == 320
