@@ -1122,6 +1122,19 @@ explicitly pending. This inventory changes no transport behavior; later WS4.1
 slices must evolve the same registry until every required row is wired and no
 pending driver remains.
 
+WS4.1b result: the private `TransportLifecycleScenarioSuite` now owns all
+eight framework-neutral assertions and JSON-safe, quiescent postconditions.
+Its capability-driver protocol exposes backend start/close counts, caller
+generation results, lifecycle publications, retained cleanup ownership,
+delivered frames, queue acceptance/drop observations, normalized degraded
+events, receiver termination, and rollback resource state rather than opaque
+pass/fail flags. An unmarked deterministic transport model runs every row on
+each PR with gated startup and cleanup, shared connect/disconnect task
+ownership, a one-frame bounded queue, exact generation fencing, and a live
+receive iterator. The internal module is not re-exported from
+`easycat.testing`; this slice changes neither public API nor a built-in
+transport.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,
