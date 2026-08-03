@@ -24,6 +24,7 @@ SCENARIOS = frozenset(
         "startup_rollback",
     }
 )
+LIFECYCLE_TEST_METHODS = frozenset(f"test_{scenario}" for scenario in SCENARIOS)
 
 
 def test_transport_lifecycle_matrix_is_a_complete_classified_cross_product() -> None:
@@ -66,7 +67,17 @@ def test_transport_lifecycle_matrix_is_a_complete_classified_cross_product() -> 
     assert set(execution["transports"]) == TRANSPORTS
     statuses: Counter[str] = Counter()
     for transport, driver in execution["transports"].items():
-        assert driver == {"status": "pending", "suite_node": None, "scenarios": []}, transport
+        assert driver["status"] in {"complete", "pending"}, transport
+        if driver["status"] == "pending":
+            assert driver == {
+                "status": "pending",
+                "suite_node": None,
+                "scenarios": [],
+            }, transport
+        else:
+            assert isinstance(driver["suite_node"], str), transport
+            _assert_lifecycle_suite_exists(driver["suite_node"])
+            assert set(driver["scenarios"]) == SCENARIOS, transport
         statuses[driver["status"]] += 1
     assert execution["counts"] == dict(sorted(statuses.items()))
 
@@ -83,6 +94,7 @@ def _assert_test_exists(node_id: str) -> None:
     assert path.is_file(), f"missing evidence file: {node_id}"
 
     body: list[ast.stmt] = ast.parse(path.read_text(encoding="utf-8"), filename=str(path)).body
+    parent_class: ast.ClassDef | None = None
     for index, name in enumerate(parts[1:]):
         node = next(
             (
@@ -93,12 +105,46 @@ def _assert_test_exists(node_id: str) -> None:
             ),
             None,
         )
+        if (
+            node is None
+            and index == len(parts[1:]) - 1
+            and parent_class is not None
+            and name in LIFECYCLE_TEST_METHODS
+            and _inherits_lifecycle_suite(parent_class)
+        ):
+            return
         assert node is not None, f"missing evidence node: {node_id}"
         if index < len(parts[1:]) - 1:
             assert isinstance(node, ast.ClassDef), f"non-class evidence parent: {node_id}"
+            parent_class = node
             body = node.body
         else:
             assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)), (
                 f"evidence leaf is not a test: {node_id}"
             )
             assert node.name.startswith("test_"), f"evidence leaf is not a test: {node_id}"
+
+
+def _assert_lifecycle_suite_exists(node_id: str) -> None:
+    parts = node_id.split("::")
+    assert len(parts) == 2, f"invalid lifecycle suite node id: {node_id}"
+    path = REPO_ROOT / parts[0]
+    assert path.is_relative_to(REPO_ROOT / "tests"), f"suite escapes tests/: {node_id}"
+    assert path.is_file(), f"missing lifecycle suite file: {node_id}"
+    body = ast.parse(path.read_text(encoding="utf-8"), filename=str(path)).body
+    suite = next(
+        (node for node in body if isinstance(node, ast.ClassDef) and node.name == parts[1]),
+        None,
+    )
+    assert suite is not None, f"missing lifecycle suite: {node_id}"
+    assert _inherits_lifecycle_suite(suite), (
+        f"lifecycle driver must inherit TransportLifecycleScenarioSuite: {node_id}"
+    )
+
+
+def _inherits_lifecycle_suite(node: ast.ClassDef) -> bool:
+    return any(
+        (isinstance(base, ast.Name) and base.id == "TransportLifecycleScenarioSuite")
+        or (isinstance(base, ast.Attribute) and base.attr == "TransportLifecycleScenarioSuite")
+        for base in node.bases
+    )

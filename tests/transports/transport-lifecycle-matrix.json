@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1a freezes the shipped transport lifecycle cross-product and exact pre-harness evidence before shared scenario drivers exist.",
+  "update_rationale": "WS4.1d1 wires complete Local and WebSocket capability drivers, closing the three Local pre-harness gaps while retaining the frozen five-by-eight cross-product.",
   "transports": [
     "local",
     "twilio",
@@ -20,13 +20,23 @@
   },
   "driver_execution": {
     "counts": {
-      "pending": 5
+      "complete": 2,
+      "pending": 3
     },
     "transports": {
       "local": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "twilio": {
         "status": "pending",
@@ -39,9 +49,18 @@
         "scenarios": []
       },
       "websocket": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestWebSocketTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "webtransport": {
         "status": "pending",
@@ -55,17 +74,19 @@
       "required": 40
     },
     "coverage": {
-      "existing": 36,
-      "missing": 4
+      "existing": 39,
+      "missing": 1
     }
   },
   "cells": {
     "local": {
       "connect_leadership_race": {
         "applicability": "required",
-        "coverage": "missing",
-        "rationale": "PortAudio stream creation is multi-resource startup but concurrent callers have no direct leadership proof.",
-        "evidence": []
+        "coverage": "existing",
+        "rationale": "The Local capability driver proves two concurrent callers create exactly one input/output stream generation.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_connect_leadership_race"
+        ]
       },
       "degraded_emission": {
         "applicability": "required",
@@ -77,15 +98,19 @@
       },
       "disconnect_during_connect": {
         "applicability": "required",
-        "coverage": "missing",
-        "rationale": "Input and output streams start separately, so disconnect may race a partially acquired device pair.",
-        "evidence": []
+        "coverage": "existing",
+        "rationale": "Local device startup is synchronous on the event loop, so the capability driver proves a concurrently scheduled disconnect runs after one published generation and closes that pair exactly once.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_disconnect_during_connect"
+        ]
       },
       "interrupted_disconnect_publication": {
         "applicability": "required",
-        "coverage": "missing",
-        "rationale": "Blocking stream stop and close calls still need deterministic publication when caller cancellation arrives.",
-        "evidence": []
+        "coverage": "existing",
+        "rationale": "The Local capability driver cancels the first asynchronous disconnect boundary after synchronous device closure and proves no cleanup ownership remains stranded.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_interrupted_disconnect_publication"
+        ]
       },
       "late_frames": {
         "applicability": "required",

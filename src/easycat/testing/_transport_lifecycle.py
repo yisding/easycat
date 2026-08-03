@@ -162,6 +162,14 @@ class TransportLifecycleScenarioSuite(ContractSuite):
     applicable_scenarios: ClassVar[frozenset[TransportLifecycleScenario]] = (
         ALL_TRANSPORT_LIFECYCLE_SCENARIOS
     )
+    expected_degraded_event: ClassVar[NormalizedDegradedEvent] = NormalizedDegradedEvent(
+        provider="offline-lifecycle-model",
+        reason="model_fault",
+        detail="controlled lifecycle fault",
+        fatal=False,
+    )
+    expected_disconnect_during_connect: ClassVar[tuple[bool, int]] = (True, 0)
+    expected_interrupted_disconnect_state: ClassVar[tuple[bool, int]] = (True, 1)
 
     @pytest.fixture
     def driver(self) -> TransportLifecycleScenarioDriver:
@@ -196,14 +204,7 @@ class TransportLifecycleScenarioSuite(ContractSuite):
         observation = await self._observe(
             driver.observe_degraded_emission(), scenario="degraded_emission"
         )
-        assert observation.events == (
-            NormalizedDegradedEvent(
-                provider="offline-lifecycle-model",
-                reason="model_fault",
-                detail="controlled lifecycle fault",
-                fatal=False,
-            ),
-        )
+        assert observation.events == (self.expected_degraded_event,)
         self._assert_postconditions(driver)
 
     async def test_disconnect_during_connect(
@@ -213,9 +214,10 @@ class TransportLifecycleScenarioSuite(ContractSuite):
         observation = await self._observe(
             driver.observe_disconnect_during_connect(), scenario="disconnect_during_connect"
         )
-        assert observation.connect_cancelled is True
+        expected_cancelled, expected_publications = self.expected_disconnect_during_connect
+        assert observation.connect_cancelled is expected_cancelled
         assert observation.backend_close_calls == 1
-        assert observation.connected_publications == ()
+        assert len(observation.connected_publications) == expected_publications
         self._assert_postconditions(driver)
 
     async def test_interrupted_disconnect_publication(
@@ -226,9 +228,10 @@ class TransportLifecycleScenarioSuite(ContractSuite):
             driver.observe_interrupted_disconnect_publication(),
             scenario="interrupted_disconnect_publication",
         )
+        expected_connected, expected_retained = self.expected_interrupted_disconnect_state
         assert observation.caller_cancelled is True
-        assert observation.connected_during_retained_cleanup is True
-        assert observation.retained_cleanup_during_cancel == 1
+        assert observation.connected_during_retained_cleanup is expected_connected
+        assert observation.retained_cleanup_during_cancel == expected_retained
         assert observation.backend_close_calls == 1
         assert len(observation.lifecycle_publications) == 2
         assert observation.lifecycle_publications[0] is not None

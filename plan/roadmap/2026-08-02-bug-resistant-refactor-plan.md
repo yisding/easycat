@@ -1143,6 +1143,21 @@ leadership counts, gated races, rollback resources, late-frame injection,
 queue pressure, degraded events, and lifecycle publication remain internal
 capability-driver responsibilities rather than new third-party hooks.
 
+WS4.1d1 result: Local and WebSocket now run all eight shared lifecycle rows
+through credential-free capability drivers. The Local driver replaces only
+module resolution with deterministic input/output stream resources while the
+real transport owns rollback, callback-generation fencing, queue policy,
+receiver termination, and cleanup. The WebSocket driver covers both shipped
+lifecycle models: listener leadership/serialization on `WebSocketTransport`
+and accepted-socket rollback/retained cleanup on
+`WebSocketConnectionTransport`. Internal class policy values preserve the
+reviewed difference between cancellation and lock-queued startup, and between
+public disconnect publication and retained cleanup, without weakening shared
+resource, generation, queue, or quiescence assertions. The execution registry
+now has two complete and three pending drivers; thirty-nine of forty
+pre-harness cells have exact evidence, with only Twilio queue overflow still
+missing.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,
