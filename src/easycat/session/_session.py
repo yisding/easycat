@@ -88,6 +88,7 @@ from easycat.session._builder import (
 from easycat.session._caller_id import CallerIdState
 from easycat.session._debug_backends import SessionDebugBackends
 from easycat.session._telephony_facade import TelephonyFacade
+from easycat.session._turn_lifecycle import TurnLifecycle
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
@@ -363,11 +364,9 @@ class Session:
         self._session_log_token = None
         self._event_subscription_owner = object()
         self._event_subscriptions: list[EventSubscription] = []
-        # Per-turn state — created fresh at each turn start.
-        # _turn_generation is a monotonic counter incremented at turn start
-        # so stale callbacks from previous turns are detectable.
-        self._turn: TurnContext | None = None
-        self._turn_generation: int = 0
+        # Canonical turn-identity owner. Private compatibility properties below
+        # keep existing focused harnesses on the same publication seam.
+        self._turn_lifecycle = TurnLifecycle()
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -518,6 +517,27 @@ class Session:
         return None
 
     @property
+    def _turn(self) -> TurnContext | None:
+        """Compatibility view over the canonical Session identity owner."""
+        return self._turn_lifecycle.current
+
+    @_turn.setter
+    def _turn(self, turn: TurnContext | None) -> None:
+        if turn is None:
+            self._turn_lifecycle.clear_identity()
+        else:
+            self._turn_lifecycle.publish_identity(turn)
+
+    @property
+    def _turn_generation(self) -> int:
+        """Legacy generation view, dual-written from the identity epoch."""
+        return self._turn_lifecycle.generation
+
+    @_turn_generation.setter
+    def _turn_generation(self, generation: int) -> None:
+        self._turn_lifecycle.assert_legacy_generation(generation)
+
+    @property
     def current_turn(self) -> TurnContext | None:
         """Return the live turn context, including post-playback bookkeeping.
 
@@ -542,8 +562,7 @@ class Session:
         if not turn_id.strip():
             raise ValueError("turn_id must be a non-empty string")
         turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-        self._turn = turn
-        self._turn_generation = turn.generation
+        self._turn_lifecycle.publish_identity(turn)
         return turn
 
     def _with_correlation(self, event: Any) -> Any:
@@ -667,7 +686,7 @@ class Session:
         self._stt_committer.cancel_scheduled()
         self._stt_committer.cancel_inflight()
         self._stt_committer.resolve_pending(turn, "")
-        self._turn = None
+        self._turn_lifecycle.clear_identity()
         self._audio_router.reset_speech_detection()
         self._audio_router.reset_replay_chunks()
         self._turn_manager.reset()
@@ -1730,7 +1749,7 @@ class Session:
             except Exception:
                 logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
-            self._turn = None
+            self._turn_lifecycle.clear_identity()
             self._finalize_debug_backends()
             self._mark_closed()
             # Drop this session's armed emergency-export exporter from the

@@ -74,9 +74,10 @@ class _SessionTurnHandle:
         return self._session.begin_turn(turn_id, cancel_token)
 
     def set(self, turn: TurnContext | None) -> None:
-        self._session._turn = turn
-        if turn is not None:
-            self._session._turn_generation = turn.generation
+        if turn is None:
+            self._session._turn_lifecycle.clear_identity()
+        else:
+            self._session._turn_lifecycle.publish_identity(turn)
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,7 @@ def build_wiring(session: Session) -> SessionWiringContext:
         session._is_running = value
 
     def _clear_turn() -> None:
-        session._turn = None
+        session._turn_lifecycle.clear_identity()
 
     return SessionWiringContext(
         current_turn=lambda: session._turn,

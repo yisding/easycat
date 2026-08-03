@@ -470,12 +470,13 @@ bookkeeping intentionally remain live.
   turns. Add registration/AST guards so new writers cannot bypass the listed
   seams. Freeze the current behavior whereby a hand-built public
   `TurnStarted` can command a Session install.
-- **b. Canonical state owners (Tier A).** Add a synchronous Session
-  `TurnLifecycle.publish_identity/clear_identity` seam and a distinct manager
-  activity transition seam. Replacing/clearing `Session._turn` bumps identity;
-  manager reset/IDLE bumps activity but does not stale identity when gated
-  replay retains it. Dual-write `TurnContext.generation` from the identity
-  epoch during migration with debug assertions.
+- **b1. Canonical Session identity owner (Tier A).** Add a synchronous Session
+  `TurnLifecycle.publish_identity/clear_identity` seam. Replacing/clearing
+  `Session._turn` bumps identity, and `TurnContext.generation` is dual-written
+  from the identity epoch during migration with debug assertions.
+- **b2. Canonical manager activity owner (Tier A).** Add the distinct manager
+  activity transition seam. Manager reset/IDLE bumps activity but does not
+  stale identity when gated replay retains it.
 - **c. Private lifecycle before public observation (Tier A).** Internal
   producers create a private `TurnPublication` carrying the exact leases and
   await a private lifecycle callback that preserves today's handoff/STT-start/
@@ -517,6 +518,15 @@ subscriptions. The manifest distinguishes the one command producer/subscriber
 pair from the two observational application/text producers and browser
 observer. A behavior contract freezes a correlated hand-built `TurnStarted`
 installing Session identity before a later public type subscriber observes it.
+
+WS1.2b1 migration result: `TurnLifecycle` now owns the Session identity Epoch;
+all production publications and clears use its synchronous seams, while the
+private `_turn` compatibility property routes focused harnesses through the
+same owner. The refreshed 44-site manifest has zero direct production
+turn-pointer assignments, one identity-owner initialization, six publication
+calls, fifteen clear calls, and four legacy-carrier assignments. The only new
+carrier write is the asserted `TurnContext.generation` dual-write. Manager
+activity ownership remains isolated to WS1.2b2.
 
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a

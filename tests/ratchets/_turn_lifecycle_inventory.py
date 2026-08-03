@@ -217,11 +217,13 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
             self._record("activity_reset_call", f"call {callee}", node)
 
         call_owner = callee.rsplit(".", 1)[0]
-        if callee in {"self._turn.begin", "self._turn.set"} or (
-            leaf == "begin_turn" and "session" in call_owner.rsplit(".", 1)[-1]
+        if (
+            callee in {"self._turn.begin", "self._turn.set"}
+            or (leaf == "begin_turn" and "session" in call_owner.rsplit(".", 1)[-1])
+            or leaf == "publish_identity"
         ):
             self._record("identity_publish_call", f"call {callee}", node)
-        elif leaf in {"_clear_turn", "_reset_turn_state"}:
+        elif leaf in {"_clear_turn", "_reset_turn_state", "clear_identity"}:
             self._record("identity_clear_call", f"call {callee}", node)
 
         self._record_dynamic_writer(node, callee)
@@ -265,6 +267,11 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
             or target_path in {"TurnContext._generation_counter", "self.generation"}
         ):
             return "identity_carrier_assignment"
+        if self.relative_path == "session/_turn_lifecycle.py":
+            if target_path == "self._identity":
+                return "identity_owner_assignment"
+            if target_path == "turn.generation":
+                return "identity_carrier_assignment"
         if attribute == "_state" and (
             "turn_manager" in owner_leaf
             or owner == "self"
