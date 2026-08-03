@@ -509,6 +509,15 @@ bookkeeping intentionally remain live.
   `TurnContext.generation`, dual-write assertions, and the matching baseline
   only after every writer, member, and predicate is migrated.
 
+WS1.2a freeze result: 43 classified sites — six direct identity-pointer
+assignments, six old-carrier assignments, three identity publish calls, ten
+identity clear calls, three activity-state assignments, seven canonical
+transition calls, three reset calls, three `TurnStarted` producers, and two
+subscriptions. The manifest distinguishes the one command producer/subscriber
+pair from the two observational application/text producers and browser
+observer. A behavior contract freezes a correlated hand-built `TurnStarted`
+installing Session identity before a later public type subscriber observes it.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

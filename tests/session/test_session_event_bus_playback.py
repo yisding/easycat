@@ -331,6 +331,29 @@ async def test_failed_second_session_does_not_poison_private_bus_compatibility()
 
 
 @pytest.mark.asyncio
+async def test_hand_built_turn_started_installs_identity_before_public_observation() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    session = Session(_full_config(event_bus=bus, session_id="command-session"))
+    session._is_running = True
+    observed_turn_ids: list[str | None] = []
+
+    def observe(_event: TurnStarted) -> None:
+        turn = session.current_turn
+        observed_turn_ids.append(turn.id if turn is not None else None)
+
+    external = bus.subscribe(TurnStarted, observe)
+    try:
+        await bus.emit(TurnStarted(session_id=session.session_id, turn_id="hand-built-turn"))
+
+        assert session.current_turn is not None
+        assert session.current_turn.id == "hand-built-turn"
+        assert observed_turn_ids == ["hand-built-turn"]
+    finally:
+        external.unsubscribe()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_session_stop_releases_only_session_owned_event_handlers() -> None:
     bus = EventBus(handler_error_policy="raise")
     observed: list[TurnStarted] = []
