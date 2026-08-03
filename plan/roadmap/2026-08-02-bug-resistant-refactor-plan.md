@@ -401,6 +401,14 @@ preceding explicit teardown cancellation as expected, and journal unexpected
 exceptions. Tests: expected cancellation emits no failure, while a genuine
 finalizer exception is observable with its task name.
 
+Implementation clarification (2026-08-02): neither server lifecycle owns an
+`ExecutionJournal`, and reaching through its connection registry to a
+per-session journal would introduce the coupling WS2 is intended to remove.
+For this pre-scope slice, "journal" therefore means an error record in the
+owning module's operational logger, with stable task identity and traceback.
+WS2's journal-injected scopes can translate the same terminal outcome into
+structured task records without changing the cancellation classification.
+
 ### WS0.5 — Websocket resampler-tail fence [S] [behavior fix]
 
 Moved forward from the epoch workstream on review: this is a live race

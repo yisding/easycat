@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Hashable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Hashable, Iterable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
@@ -53,6 +53,28 @@ KeyT = TypeVar("KeyT", bound=Hashable)
 ConnectionT = TypeVar("ConnectionT")
 SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
+
+
+def _log_unexpected_task_results(
+    tasks: Sequence[asyncio.Task[Any]],
+    results: Sequence[object],
+    *,
+    explicitly_cancelled: Collection[asyncio.Task[Any]],
+    context: str,
+    log: logging.Logger,
+) -> None:
+    """Log exceptional teardown results without misreporting requested cancellation."""
+    for task, result in zip(tasks, results, strict=True):
+        if not isinstance(result, BaseException):
+            continue
+        if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
+            continue
+        log.error(
+            "%s task %r failed",
+            context,
+            task.get_name(),
+            exc_info=result,
+        )
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
