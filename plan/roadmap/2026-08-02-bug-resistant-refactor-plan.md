@@ -1167,6 +1167,14 @@ fencing; and the inherited bounded ingress queue proves the missing overflow
 drop plus canonical degraded event. Three drivers are complete and two remain
 pending. All forty pre-harness matrix cells now have exact evidence.
 
+WS4.1d3 result: `WebRTCTransport` now runs every shared lifecycle row without
+network sockets or optional aiortc/aiohttp installations. The capability
+driver separates signaling-stack leadership and rollback from peer-offer
+cancellation and generation fencing, while using the real inbound/outbound
+queues, degraded publication, receiver boundary, consumer reaping, and
+retained cleanup ledger. Four drivers are complete; only WebTransport remains
+pending. The forty-cell pre-harness evidence inventory remains closed.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,

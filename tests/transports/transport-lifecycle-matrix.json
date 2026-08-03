@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d2 wires the complete Twilio capability driver and closes the final pre-harness evidence gap without changing the frozen five-by-eight cross-product.",
+  "update_rationale": "WS4.1d3 wires the complete WebRTC capability driver while preserving the frozen five-by-eight cross-product and its forty exact evidence cells.",
   "transports": [
     "local",
     "twilio",
@@ -20,8 +20,8 @@
   },
   "driver_execution": {
     "counts": {
-      "complete": 3,
-      "pending": 2
+      "complete": 4,
+      "pending": 1
     },
     "transports": {
       "local": {
@@ -53,9 +53,18 @@
         ]
       },
       "webrtc": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webrtc.py::TestWebRTCTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "websocket": {
         "status": "complete",
