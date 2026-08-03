@@ -41,6 +41,20 @@ RATIONALE_BY_CATEGORY = {
     "turn_field_commit": "Mutates bookkeeping retained on the shared TurnContext.",
 }
 
+GUARD_POLICIES = frozenset(
+    {
+        "admission",
+        "correlated_observation",
+        "identity",
+        "identity_activity",
+        "identity_phase",
+        "phase_latch",
+        "publication_scope",
+        "session_scope",
+        "text_task",
+    }
+)
+
 
 def test_turn_commit_manifest_is_a_classified_source_bijection(
     pytestconfig: pytest.Config,
@@ -52,7 +66,7 @@ def test_turn_commit_manifest_is_a_classified_source_bijection(
 
     manifest = _load_manifest()
     entries = [_parse_entry(record) for record in manifest["entries"]]
-    expected = {site for site, _role, _rationale in entries}
+    expected = {site for site, _role, _rationale, _guard in entries}
     added, removed = inventory_delta(expected, actual)
     assert not added and not removed, (
         format_delta(added, removed, findings=findings)
@@ -62,7 +76,8 @@ def test_turn_commit_manifest_is_a_classified_source_bijection(
     assert all(
         role == ROLE_BY_CATEGORY[site.category]
         and rationale == RATIONALE_BY_CATEGORY[site.category]
-        for site, role, rationale in entries
+        and guard == _guard_policy(site)
+        for site, role, rationale, guard in entries
     )
     assert manifest["counts"] == _counts(entries)
 
@@ -160,21 +175,22 @@ def _load_manifest() -> dict[str, Any]:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def _parse_entry(record: str) -> tuple[TurnCommitSite, str, str]:
-    site_record, role, rationale = record.rsplit("\t", 2)
-    return TurnCommitSite.from_record(site_record), role, rationale
+def _parse_entry(record: str) -> tuple[TurnCommitSite, str, str, str]:
+    site_record, role, rationale, guard = record.rsplit("\t", 3)
+    return TurnCommitSite.from_record(site_record), role, rationale, guard
 
 
 def _counts(
-    entries: list[tuple[TurnCommitSite, str, str]],
+    entries: list[tuple[TurnCommitSite, str, str, str]],
 ) -> dict[str, dict[str, int]]:
     return {
-        "categories": dict(sorted(Counter(site.category for site, _, _ in entries).items())),
-        "roles": dict(sorted(Counter(role for _, role, _ in entries).items())),
+        "categories": dict(sorted(Counter(site.category for site, _, _, _ in entries).items())),
+        "guards": dict(sorted(Counter(guard for _, _, _, guard in entries).items())),
+        "roles": dict(sorted(Counter(role for _, role, _, _ in entries).items())),
         "suspensions": dict(
             sorted(
                 Counter(
-                    site.construct.split(" ", 1)[0] for site, _role, _rationale in entries
+                    site.construct.split(" ", 1)[0] for site, _role, _rationale, _guard in entries
                 ).items()
             )
         ),
@@ -187,6 +203,7 @@ def _write_manifest(sites: set[TurnCommitSite], *, update_rationale: str) -> Non
             site,
             ROLE_BY_CATEGORY[site.category],
             RATIONALE_BY_CATEGORY[site.category],
+            _guard_policy(site),
         )
         for site in sorted(sites)
     ]
@@ -195,7 +212,8 @@ def _write_manifest(sites: set[TurnCommitSite], *, update_rationale: str) -> Non
         "update_rationale": update_rationale,
         "counts": _counts(entries),
         "entries": [
-            f"{site.as_record()}\t{role}\t{rationale}" for site, role, rationale in entries
+            f"{site.as_record()}\t{role}\t{rationale}\t{guard}"
+            for site, role, rationale, guard in entries
         ],
     }
     MANIFEST_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -206,6 +224,69 @@ def _required_rationale(pytestconfig: pytest.Config) -> str:
     if not rationale:
         pytest.fail("--update-baseline requires --baseline-rationale 'reviewed reason'")
     return str(rationale)
+
+
+def _guard_policy(site: TurnCommitSite) -> str:
+    """Classify the liveness boundary required by one frozen effect."""
+    qualname = site.qualname
+    construct = site.construct
+    if site.category == "phase_latch_commit":
+        policy = "phase_latch"
+    elif site.category == "session_lifecycle_commit" or qualname.endswith("synthesize_bypass"):
+        policy = "session_scope"
+    elif site.category == "activity_commit":
+        policy = "admission" if qualname.endswith("prompt_agent") else "identity_activity"
+    elif site.category == "identity_commit":
+        policy = (
+            "admission"
+            if "call self._turn.begin" in construct or "call self._turn.set" in construct
+            else "identity_activity"
+        )
+    elif site.category == "provider_commit":
+        policy = (
+            "identity_phase"
+            if qualname.endswith("_prepare_preemptive_response")
+            else "identity_activity"
+        )
+    elif site.category == "turn_field_commit":
+        policy = "identity" if "start_event_loop._consume" in qualname else "identity_activity"
+    elif site.category == "public_observation_commit":
+        policy = _observation_guard_policy(site)
+    else:  # pragma: no cover - a new scanner category must be classified here
+        raise AssertionError(f"unclassified turn commit category: {site.category}")
+    assert policy in GUARD_POLICIES
+    return policy
+
+
+def _observation_guard_policy(site: TurnCommitSite) -> str:
+    qualname = site.qualname
+    construct = site.construct
+    if "start_event_loop._consume" in qualname:
+        return "identity"
+    if any(
+        name in qualname
+        for name in (
+            "_consume_text_event",
+            "_drain_cancelled_text_event",
+            "_emit_text_tool_event",
+        )
+    ):
+        return "text_task"
+    if qualname.endswith(("_emit_turn_started_observation", "_execute_text_turn")):
+        return "publication_scope"
+    if "<Error>" in construct:
+        return "correlated_observation"
+    if any(
+        name in qualname
+        for name in (
+            "handle_end_of_speech",
+            "_execute_spoken_application_prompt",
+            "_speak_agent_failure_fallback",
+            "run_streaming_agent",
+        )
+    ):
+        return "identity_activity"
+    return "correlated_observation"
 
 
 def _write_module(root: Path, relative_path: str, source: str) -> None:

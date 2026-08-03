@@ -608,6 +608,26 @@ WS1.2e2 will classify liveness requirements for these frozen effects and add or
 prove the commit-time identity/activity/token/phase guards without using
 cancellation as a substitute.
 
+WS1.2e2 migration result: all 66 effects now carry an explicit reviewed
+boundary — three admission guards, four identity guards, thirty-three combined
+identity/activity guards, one identity/phase guard, one one-way phase latch,
+six publication-scoped effects, two Session-scoped effects, five serialized
+text-task effects, and eleven correlated diagnostic observations that
+intentionally survive stale cleanup. Private publication admission re-guards
+activity after preemptive and predecessor drains; STT pause commits carry exact
+identity beside activity and recheck both after provider suspension; STT event
+consumers reject stale same-object republications; transcript and first-audio
+bookkeeping re-guard immediately before mutation; and first-payload lifecycle,
+queued synthesis, voice output, application-text output, raw-stage history,
+simple-agent history, bridge-shadow history, and prepared-response history all
+use an exact commit predicate. Adversarial contracts cover identity and
+same-state activity republication during every newly guarded suspension class.
+The predicate ratchet remains at 46 sites with no identity-pointer, legacy
+generation, or manager-state liveness reads; one cancellation-as-stream-
+admission check was removed, leaving thirteen cancellation checks, while the
+application-text ownership branch adds one explicit null-object check. The
+late-STT-final phase contract remains independent and unchanged.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately

@@ -386,6 +386,55 @@ async def test_cancelled_silent_prompt_suppresses_late_raw_bridge_output():
 
 
 @pytest.mark.asyncio
+async def test_silent_prompt_suppresses_output_after_same_turn_republication():
+    bridge = _CancellationIgnoringPromptBridge()
+    session = _prompt_session(bridge)
+    emitted: list[Event] = []
+    session.event_bus.subscribe(AgentDelta, emitted.append)
+    session.event_bus.subscribe(AgentFinal, emitted.append)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
+        turn = session._turn
+        assert turn is not None
+        session._turn = turn
+        bridge.release.set()
+
+        assert await asyncio.wait_for(prompt, timeout=1) == ""
+        assert emitted == []
+        assert session._agent_stage._history == []
+    finally:
+        bridge.release.set()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_silent_prompt_finalizer_preserves_republished_activity():
+    bridge = _CancellationIgnoringPromptBridge()
+    session = _prompt_session(bridge)
+    prompt = asyncio.create_task(
+        session.prompt_agent("Classify this call.", role="user", speak=False)
+    )
+
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
+        turn = session._turn
+        assert turn is not None
+        session._turn_manager._state = TurnManagerState.PROCESSING
+        bridge.release.set()
+
+        assert await asyncio.wait_for(prompt, timeout=1) == ""
+        assert session._turn is turn
+        assert session._turn_manager.state is TurnManagerState.PROCESSING
+    finally:
+        bridge.release.set()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_silent_prompt_drains_inflight_tool_without_stale_journal_output():
     bridge = _CancellationIgnoringToolPromptBridge()
     journal = InMemoryRingBuffer(capacity=100)

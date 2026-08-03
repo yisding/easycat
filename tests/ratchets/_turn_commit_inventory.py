@@ -203,7 +203,7 @@ class _TurnCommitVisitor(ast.NodeVisitor):
         if callee in {"self._turn.begin", "self._turn.set"}:
             category = "identity_commit"
         if category is not None:
-            self._record(category, f"call {callee}", node)
+            self._record(category, _call_effect(callee, node), node)
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -291,3 +291,26 @@ def _expression_path(node: ast.AST) -> str:
         prefix = _expression_path(node.value)
         return f"{prefix}.{node.attr}" if prefix else node.attr
     return ast.unparse(node)
+
+
+def _call_effect(callee: str, node: ast.Call) -> str:
+    """Describe emitted observations semantically, without source locations."""
+    leaf = callee.rsplit(".", 1)[-1]
+    if (
+        leaf
+        not in {
+            "_emit",
+            "_emit_text_tool_event",
+            "_emit_turn_started_observation",
+            "emit_tool_event",
+        }
+        or not node.args
+    ):
+        return f"call {callee}"
+    argument = node.args[0]
+    event = (
+        _expression_path(argument.func)
+        if isinstance(argument, ast.Call)
+        else _expression_path(argument)
+    )
+    return f"call {callee}<{event.rsplit('.', 1)[-1]}>"

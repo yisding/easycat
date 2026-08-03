@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2d2b replaces all manager-state liveness reads with captured activity leases",
+  "update_rationale": "WS1.2e2 replaces streaming cancellation admission with exact leases and classifies application text null ownership",
   "counts": {
     "categories": {
-      "null_object_predicate": 28,
+      "null_object_predicate": 29,
       "phase_latch_predicate": 1,
-      "token_cancellation_predicate": 14,
+      "token_cancellation_predicate": 13,
       "token_ownership_predicate": 3
     },
     "roles": {
-      "cancellation": 14,
-      "null_object": 28,
+      "cancellation": 13,
+      "null_object": 29,
       "phase_latch": 1,
       "token_ownership": 3
     }
@@ -39,6 +39,7 @@
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._preemptive_candidate\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._take_committed_transcript\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._take_preemptive_response\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
+    "null_object_predicate\tsession/_turn_runner.py\tTurnRunner._text_publication_is_current\tturn is not None\tfa3de40529c7a8e8\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tturn is not None\tfa3de40529c7a8e8\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tturn is not None\tfa3de40529c7a8e8\t1\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
@@ -53,12 +54,11 @@
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._is_active_voice_turn\ttoken.is_cancelled\tfd37cdf50d365535\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._maybe_speak_agent_failure_fallback\tst.token.is_cancelled\t7d151c5925822f85\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._preemptive_candidate\tturn.cancel_token.is_cancelled\tddee11ccfa462093\t0\tcancellation\tCooperative cancellation participates in effect admission.",
+    "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._prepare_turn_publication\tprev.cancel_token.is_cancelled\t67efb8318625f146\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._stream_text_turn\tcancel_token.is_cancelled\tf9722bc08564741c\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._synthesize_queued_payloads\tst.token.is_cancelled\t7d151c5925822f85\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\ttoken.is_cancelled\tfd37cdf50d365535\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner.on_turn_ended\tturn.cancel_token.is_cancelled\tddee11ccfa462093\t0\tcancellation\tCooperative cancellation participates in effect admission.",
-    "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tprev.cancel_token.is_cancelled\t67efb8318625f146\t0\tcancellation\tCooperative cancellation participates in effect admission.",
-    "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\ttoken.is_cancelled\tfd37cdf50d365535\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_ownership_predicate\tsession/_turn_runner.py\tTurnRunner.cancel_application_prompt\tself._application_prompt_cancel_token is not None\t1f1da3203ff3ba5e\t0\ttoken_ownership\tToken identity guards ownership or cleanup bookkeeping.",
     "token_ownership_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._application_prompt_cancel_token is token\t5f5f792599beeae0\t0\ttoken_ownership\tToken identity guards ownership or cleanup bookkeeping.",
     "token_ownership_predicate\tsession/_turn_runner.py\tTurnRunner.send_text\tself._text_turn_cancel_token is token\t5b923b46aa816f84\t0\ttoken_ownership\tToken identity guards ownership or cleanup bookkeeping."
