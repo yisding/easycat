@@ -593,6 +593,21 @@ zero identity-pointer, and zero legacy identity-generation liveness reads; only
 the explicitly independent cancellation, token-owner, null-object, and phase-
 latch predicates remain.
 
+WS1.2e is split into WS1.2e1 commit-edge inventory and WS1.2e2 guard completion
+so discovery drift is independently reviewable from the behavioral migration.
+WS1.2e1 freezes 66 turn-scoped effects across the STT committer, TTS scheduler,
+and turn runner: five manager-activity commits, eight identity commits, one
+one-way phase-latch commit, eleven provider dispatches, thirty-one public
+observations, one Session lifecycle commit, and nine turn-bookkeeping writes.
+The location-free manifest records each effect's own AST fingerprint plus its
+suspension relationship: forty-five are directly awaited, sixteen occur after
+an earlier await, and five are synchronous. A structural guard also pins the
+existing behavioral regression for a trailing STT final racing `end_stream`,
+including its end-of-speech take, late-final injection, and agent-call witness.
+WS1.2e2 will classify liveness requirements for these frozen effects and add or
+prove the commit-time identity/activity/token/phase guards without using
+cancellation as a substitute.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately
