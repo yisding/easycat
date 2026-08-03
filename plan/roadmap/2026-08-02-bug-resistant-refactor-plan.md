@@ -951,6 +951,20 @@ delivered-text history, unknown-event tolerance for Responses, and reset/
 snapshot postconditions. Generic's sole skipped row is the matrix-declared
 unknown-event non-applicability; no required row skips.
 
+WS3.1d2 prerequisite fix result: the first LangChain/LangGraph driver probe
+found that both bridges observed the cancel token before translating a pending
+`on_tool_end`, so their framework stream stopped without delivering the
+matching tool result to the runtime's drain policy. The correction is isolated
+from driver wiring: the shared event-family module now tracks tool starts seen
+before cancellation, records the boundary once, forwards only matching tool
+deltas/results while draining, suppresses post-cancel model text, and stops
+after the final pending result. LangChain then commits only the delivered text
+to its history; LangGraph commits the same partial assistant message before
+interruption. A shared regression proves both result phases arrive, innermost
+event streams close, and a follow-up interruption rewrites the current partial
+turn without touching the prior assistant reply. WS3.1d2 remains pending until
+the five-row driver suites land in the next PR.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
