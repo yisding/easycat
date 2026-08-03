@@ -54,8 +54,8 @@
   },
   "driver_execution": {
     "counts": {
-      "pending": 5,
-      "wired": 2
+      "pending": 3,
+      "wired": 4
     },
     "bridges": {
       "generic_workflow": {
@@ -69,14 +69,26 @@
         ]
       },
       "langchain": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_langchain_langgraph.py::TestLangChainBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "langgraph": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_langchain_langgraph.py::TestLangGraphBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "llama_agents": {
         "status": "pending",

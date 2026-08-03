@@ -965,6 +965,21 @@ event streams close, and a follow-up interruption rewrites the current partial
 turn without touching the prior assistant reply. WS3.1d2 remains pending until
 the five-row driver suites land in the next PR.
 
+WS3.1d2 result: a single credential-free, close-aware `astream_events` harness
+now drives the LangChain and LangGraph bridges through all five required
+scenarios on every PR. It injects a non-mapping value and future event before a
+valid model delta, gates a tool result across cancellation, measures exact
+innermost-stream close propagation, opens nested framework/model recorder
+cursors before consumer close, and cancels an empty current turn after seeding
+prior history. The drivers normalize typed and dict-shaped messages, include
+LangGraph's pending mutation and transient-context lists in cleanup state, and
+model `reset()`'s thread rotation explicitly in the one-state graph double.
+Both bridges prove balanced cursors, zero remaining transient work, delivered-
+text-only tool cancellation history, prior-assistant isolation, JSON-safe
+snapshots, and empty post-reset state. The execution registry advances from two
+to four wired bridges; OpenAI Agents, PydanticAI, and Llama Agents remain the
+three explicit pending drivers.
+
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
 After the peer-set decision retains both bridges, extract the near-fork
