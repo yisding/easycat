@@ -1175,6 +1175,16 @@ queues, degraded publication, receiver boundary, consumer reaping, and
 retained cleanup ledger. Four drivers are complete; only WebTransport remains
 pending. The forty-cell pre-harness evidence inventory remains closed.
 
+WS4.1d4 result: WebTransport now runs every shared lifecycle row without
+network sockets or the optional aioquic installation. The capability driver
+uses the outer transport for serialized QUIC-server startup and the real
+accepted-session transport for writer cancellation, rollback, bounded queues,
+and receive termination. Its generation row admits an active session through
+the real server dispatch path, closes admission during stop, and proves a late
+session is force-closed without spawning a handler. All five drivers are now
+complete and all forty pre-harness evidence cells remain closed; WS4.1d5 owns
+the separate zero-pending execution ratchet.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,

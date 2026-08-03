@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d3 wires the complete WebRTC capability driver while preserving the frozen five-by-eight cross-product and its forty exact evidence cells.",
+  "update_rationale": "WS4.1d4 wires the complete WebTransport capability driver while preserving the frozen five-by-eight cross-product and its forty exact evidence cells.",
   "transports": [
     "local",
     "twilio",
@@ -20,8 +20,7 @@
   },
   "driver_execution": {
     "counts": {
-      "complete": 4,
-      "pending": 1
+      "complete": 5
     },
     "transports": {
       "local": {
@@ -81,9 +80,18 @@
         ]
       },
       "webtransport": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webtransport.py::TestWebTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       }
     }
   },
