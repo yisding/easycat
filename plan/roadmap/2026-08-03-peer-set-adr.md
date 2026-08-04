@@ -97,12 +97,20 @@ remaining exposure is acceptable, not an assertion that it is zero.
 
 ## Consequences
 
-### Unblocked
+### Scope of what this discharges
 
-This ADR is the precondition for WS1.4, WS2.3, WS2.6, WS3.2+, WS4.2+, and
-WS5.1. All of those now migrate the full shipped set rather than a subset —
-which is more total work than a demotion would have required, and that is the
-accepted cost of the decision.
+This ADR satisfies the peer-set precondition for WS1.4, WS1.5, WS2.2-2.6,
+WS2.7b-c, WS3.2+, WS4.2+, WS5.1, and WS5.3. All of those now migrate the full
+shipped set rather than a subset — more total work than a demotion would have
+required, and that is the accepted cost of the decision.
+
+It does **not** permit any of them to start. Each remains behind its own tier
+gate: A60 for the Tier-B slices (which cannot begin until the Tier-A completion
+SHA is stamped, and WS0.4, WS5.2, and WS6.1b are still open), and the relevant
+B60 plus the named prerequisites for the Tier-C engines. A reader treating this
+ADR as a green light would begin production treatment before the plan permits
+it — and before the cohort member arrays are locked, which would invalidate the
+measurement for that family.
 
 ### Measurement membership must be locked before treatment begins
 

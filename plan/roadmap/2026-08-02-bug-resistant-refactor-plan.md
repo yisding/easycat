@@ -39,11 +39,23 @@ proposal first; sections referenced as §N below are its sections.
 every shipped transport and agent bridge is retained in-tree; nothing is
 demoted or deleted, reversing T1's recommendation on the grounds that WS3.1 and
 WS4.1 supplied the compatibility signal whose absence was T1's mechanism. The
-*retained set* is therefore the full shipped set, and WS1.4, WS2.3, WS2.6,
-WS3.2+, WS4.2+, and WS5.1's backend migrations are unblocked. Remaining
-obligation: lock both Tier-B cohort `members` arrays in
-`plan/metrics/refactor-families.json` to the ADR's twelve peers before the
-first production treatment commit of any of those slices.
+*retained set* is therefore the full shipped set, and every gated item below
+migrates all twelve peers rather than a subset.
+
+**This discharges the peer-set prerequisite only — it does not start any
+migration.** The tier gates in the dependency graph above are unchanged and
+still bind:
+
+- WS1.4, WS1.5, WS2.2-2.6, WS2.7b-c, WS5.1, and WS5.3 remain behind **A60**,
+  which cannot even begin until the Tier-A completion SHA is stamped — and
+  WS0.4, WS5.2, and WS6.1b are still open.
+- WS3.2+ additionally requires **bridge B60** plus the retained-peer adapter
+  sketches; WS4.2+ additionally requires **transport B60** plus WS1.4, WS2.3,
+  and WS5.1.
+
+Before the first production treatment commit of any gated slice, lock both
+Tier-B cohort `members` arrays in `plan/metrics/refactor-families.json` to the
+ADR's twelve peers.
 
 Original framing, retained for context: the critique's T1 recommended demoting
 several agent bridges to out-of-tree and deleting WebTransport; as of
