@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import TypeVar
 
 import pytest
 
+from easycat._epoch import Epoch, Lease
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -100,6 +101,7 @@ def _make_committer(
     segment_silence_ms: int = 0,
     auto_turn: bool = False,
     current_turn=lambda: None,
+    capture_identity: Callable[[], Lease[TurnContext | None]] | None = None,
     on_speech_detection_reset=lambda: None,
     stt_track_label=lambda: None,
     turn_config: TurnManagerConfig | None = None,
@@ -129,6 +131,7 @@ def _make_committer(
         wiring=make_wiring(
             stt=lambda: stt,
             current_turn=current_turn,
+            capture_identity=capture_identity,
             emit=_emit,
             auto_turn_from_stt_final=lambda: auto_turn,
             stt_track_label=stt_track_label,
@@ -221,18 +224,132 @@ async def test_commit_now_skips_when_turn_cancelled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_commit_now_rejects_same_state_activity_republication() -> None:
+    committer, stt, _emitted, _no_turn, manager = _make_committer()
+    committer.mark_active()
+    turn = _new_turn()
+    manager._state = TurnManagerState.USER_PAUSED
+    activity = manager.capture_activity()
+
+    manager._state = TurnManagerState.USER_PAUSED
+    await committer.commit_now(turn, activity=activity)
+
+    assert stt.commit_calls == 0
+    assert turn.stt_has_uncommitted_audio is True
+
+
+@pytest.mark.asyncio
 async def test_commit_now_uncommitted_reset_when_provider_returns_false() -> None:
-    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+    committer, _stt, _emitted, _no_turn, tm = _make_committer(
         stt=_RecordingSTT(commit_result=False)
     )
     committer.mark_active()
     turn = _new_turn()
 
-    await committer.commit_now(turn, pause_generation=1)
+    await committer.commit_now(turn, pause=tm.capture_pause())
 
     assert turn.stt_has_uncommitted_audio is True
     assert turn.pending_stt_segment_futures == []  # future was popped
-    assert committer._pause_generation_by_future == {}
+    assert committer._pause_by_future == {}
+
+
+@pytest.mark.asyncio
+async def test_failed_commit_does_not_reopen_audio_after_same_turn_republication() -> None:
+    class _BlockingFailedCommitSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__(commit_result=False)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            self.started.set()
+            await self.release.wait()
+            return False
+
+    turn = _new_turn("same-turn-republication")
+    identity: Epoch[TurnContext | None] = Epoch(turn)
+    stt = _BlockingFailedCommitSTT()
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+        stt=stt,
+        current_turn=lambda: identity.capture().value,
+        capture_identity=identity.capture,
+    )
+    committer.mark_active()
+    commit = asyncio.create_task(committer.commit_now(turn, identity=identity.capture()))
+    await stt.started.wait()
+
+    identity.bump(turn)
+    stt.release.set()
+    await commit
+
+    assert turn.stt_has_uncommitted_audio is False
+    assert turn.pending_stt_segment_futures == []
+
+
+@pytest.mark.asyncio
+async def test_failed_commit_does_not_reopen_audio_after_pause_republication() -> None:
+    class _BlockingFailedCommitSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__(commit_result=False)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            self.started.set()
+            await self.release.wait()
+            return False
+
+    turn = _new_turn("same-pause-republication")
+    identity: Epoch[TurnContext | None] = Epoch(turn)
+    stt = _BlockingFailedCommitSTT()
+    committer, _stt, _emitted, _no_turn, manager = _make_committer(
+        stt=stt,
+        current_turn=lambda: identity.capture().value,
+        capture_identity=identity.capture,
+    )
+    committer.mark_active()
+    manager._state = TurnManagerState.USER_PAUSED
+    activity = manager.capture_activity()
+    commit = asyncio.create_task(
+        committer.commit_now(
+            turn,
+            identity=identity.capture(),
+            activity=activity,
+        )
+    )
+    await stt.started.wait()
+
+    manager._state = TurnManagerState.USER_PAUSED
+    stt.release.set()
+    await commit
+
+    assert turn.stt_has_uncommitted_audio is False
+    assert turn.pending_stt_segment_futures == []
+
+
+@pytest.mark.asyncio
+async def test_stale_event_consumer_rejects_same_turn_republication() -> None:
+    turn = _new_turn("same-turn-event-republication")
+    identity: Epoch[TurnContext | None] = Epoch(turn)
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(
+        stt=stt,
+        current_turn=lambda: identity.capture().value,
+        capture_identity=identity.capture,
+    )
+    lease = identity.capture()
+    committer.start_event_loop(turn, identity=lease)
+    consumer = committer.stt_task
+    assert consumer is not None
+
+    identity.bump(turn)
+    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="stale final"))
+    await consumer
+
+    assert turn.stt_segments == []
+    assert not any(isinstance(event, STTFinal) for event in emitted)
 
 
 @pytest.mark.asyncio
@@ -750,7 +867,7 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
     try:
         await tm.on_vad_event(VADStartSpeaking())
         await tm.on_vad_event(VADStopSpeaking())
-        first_pause = tm.pause_generation
+        first_pause = tm.capture_pause()
         committer.schedule(VADStopSpeaking(), turn=turn)
         assert committer._pause_commit_task is not None
         await committer._pause_commit_task
@@ -760,13 +877,14 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
         committer.cancel_scheduled(VADStartSpeaking(), turn=turn)
         turn.stt_has_uncommitted_audio = True
         await tm.on_vad_event(VADStopSpeaking())
-        second_pause = tm.pause_generation
+        second_pause = tm.capture_pause()
         committer.schedule(VADStopSpeaking(), turn=turn)
         assert committer._pause_commit_task is not None
         await committer._pause_commit_task
         await committer.await_inflight_commit()
 
-        assert second_pause > first_pause
+        assert not first_pause.guard()
+        assert second_pause.guard()
         assert len(turn.pending_stt_segment_futures) == 2
 
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Old segment."))
@@ -775,7 +893,7 @@ async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
 
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Current segment."))
         await asyncio.wait_for(tm._punctuated_transcript_event.wait(), timeout=1.0)
-        assert committer._pause_generation_by_future == {}
+        assert committer._pause_by_future == {}
     finally:
         await committer.cancel(turn)
         await tm.shutdown()

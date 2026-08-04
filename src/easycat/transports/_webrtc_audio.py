@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
+from easycat.teardown_budgets import WEBRTC_AUDIO_ACLOSE_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class OutboundAudioSource:
     _EMIT_QUEUE_MAX: ClassVar[int] = 256
     # Teardown budget for draining in-flight delivery events before the drain
     # worker is cancelled outright.
-    _ACLOSE_TIMEOUT_S: ClassVar[float] = 5.0
+    _ACLOSE_TIMEOUT_S: ClassVar[float] = WEBRTC_AUDIO_ACLOSE_TIMEOUT_S
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)

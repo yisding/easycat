@@ -24,7 +24,7 @@ flowchart LR
 
 Write the contract as a sentence before code. Examples:
 
-- “A final transcript from pause generation N must not shorten pause N+1.”
+- “A final transcript carrying pause A's lease must not shorten pause B.”
 - “A buffered transport emits `AudioOut` only after the chunk crosses its last
   clearable buffer.”
 - “A second STT stream receives events from a fresh iterator.”
@@ -237,7 +237,7 @@ Test at least:
 
 - normal speech start/stop;
 - speech resume before endpoint;
-- punctuation from the correct and stale pause generations;
+- punctuation from the current and stale pause leases;
 - smart complete, incomplete, and error;
 - push-to-talk if shared code changed;
 - speech during `PROCESSING` and `BOT_SPEAKING`;

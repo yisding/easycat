@@ -436,7 +436,7 @@ async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout() -> None:
 
     await tm.on_vad_event(VADStartSpeaking())
     await tm.on_vad_event(VADStopSpeaking())
-    tm.on_stt_final('That is complete."', pause_generation=tm.pause_generation)
+    tm.on_stt_final('That is complete."', pause=tm.capture_pause())
     await asyncio.sleep(0.05)
 
     assert tm.state == TurnManagerState.PROCESSING
@@ -457,7 +457,7 @@ async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout() -> None:
 
     await tm.on_vad_event(VADStartSpeaking())
     await tm.on_vad_event(VADStopSpeaking())
-    tm.on_stt_final("still thinking", pause_generation=tm.pause_generation)
+    tm.on_stt_final("still thinking", pause=tm.capture_pause())
     await asyncio.sleep(0.04)
     assert tm.state == TurnManagerState.USER_PAUSED
 
@@ -479,7 +479,7 @@ async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
 
     await tm.on_vad_event(VADStartSpeaking())
     await tm.on_vad_event(VADStopSpeaking())
-    tm.on_stt_final(text, pause_generation=tm.pause_generation)
+    tm.on_stt_final(text, pause=tm.capture_pause())
 
     assert not tm._punctuated_transcript_event.is_set()
     await tm.shutdown()
@@ -508,7 +508,7 @@ async def test_late_punctuated_final_uses_elapsed_pause_time(
     timer.cancel()
     with pytest.raises(asyncio.CancelledError):
         await timer
-    tm.on_stt_final("Complete.", pause_generation=tm.pause_generation)
+    tm.on_stt_final("Complete.", pause=tm.capture_pause())
 
     sleep = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", sleep)
@@ -573,7 +573,7 @@ async def test_stt_final_before_pause_does_not_shorten_next_pause() -> None:
     )
 
     await tm.on_vad_event(VADStartSpeaking())
-    tm.on_stt_final("Old segment.", pause_generation=tm.pause_generation)
+    tm.on_stt_final("Old segment.", pause=tm.capture_pause())
     await tm.on_vad_event(VADStopSpeaking())
     await asyncio.sleep(0.04)
 

@@ -276,6 +276,7 @@ extend-select = [
     "LOG",
     "PERF203",
     "PERF403",
+    "TID251",
 ]
 # ASYNC109 (explicit async timeout params) is deliberate public API here (incl.
 # timeouts.py) — permanent.
@@ -285,6 +286,9 @@ ignore = ["ASYNC109"]
 # typer.Option / typer.Argument defaults are the documented Typer idiom, not B008
 # bugs (kills all 19 false positives).
 extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asyncio.Task.uncancel" = { msg = "Use easycat._concurrency cancellation accounting instead." }
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

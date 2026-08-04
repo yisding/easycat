@@ -41,10 +41,11 @@ from easycat.integrations.agents.base import (
     run_interruption_journal_protocol,
 )
 from easycat.runtime.records import ErrorInfo
+from easycat.teardown_budgets import (
+    REMOTE_RESPONSES_COMPLETED_STREAM_DRAIN_TIMEOUT_S as _COMPLETED_STREAM_DRAIN_TIMEOUT_S,
+)
 
 logger = logging.getLogger(__name__)
-
-_COMPLETED_STREAM_DRAIN_TIMEOUT_S = 0.05
 
 
 class _ResponseStreamCancelled(Exception):

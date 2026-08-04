@@ -24,11 +24,14 @@ import logging
 import math
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
+from easycat._epoch import Epoch, Lease
+from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -39,6 +42,7 @@ from easycat.events import (
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
+    _mark_turn_started_observation,
 )
 from easycat.runtime.scope import RuntimeScope
 from easycat.smart_turn import SmartTurnProvider, _validate_probability_threshold
@@ -69,6 +73,18 @@ class TurnManagerState(enum.Enum):
     USER_PAUSED = "user_paused"
     PROCESSING = "processing"
     BOT_SPEAKING = "bot_speaking"
+
+
+@dataclass(frozen=True, slots=True)
+class TurnPublication:
+    """Private handoff from a turn producer to Session lifecycle ownership."""
+
+    source: Literal["voice", "application", "text", "hand_built"]
+    session_id: str | None
+    turn_id: str
+    cancel_token: CancelToken | None
+    activity: Lease[TurnManagerState] | None
+    identity: Lease[TurnContext | None] | None = None
 
 
 class TurnMode(enum.Enum):
@@ -218,8 +234,9 @@ class TurnManager:
         # post-construction via :meth:`set_cancel_callback`.
         self._cancel_turn_callback = cancel_turn_callback
 
-        # State
-        self._state = TurnManagerState.IDLE
+        # Activity phase. Every change, including an IDLE reset while already
+        # idle, routes through ``_transition`` after this initial publication.
+        self._activity: Epoch[TurnManagerState] = Epoch(TurnManagerState.IDLE)
         self._mode = self._config.mode
 
         # Pre-roll audio buffer (rolling window of recent audio frames)
@@ -234,7 +251,7 @@ class TurnManager:
         self._silence_start_time: float | None = None
         self._silence_timer_task: asyncio.Task[None] | None = None
         self._punctuated_transcript_event = asyncio.Event()
-        self._pause_generation = 0
+        self._pause_epoch: Epoch[None] = Epoch(None)
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
@@ -259,6 +276,9 @@ class TurnManager:
         # recorder without pulling in the Session machinery.
         self._journal_state_change: Any = None
         self._endpoint_turn_getter: Any = None
+        self._turn_publication_callback: (
+            Callable[[TurnPublication], Awaitable[TurnPublication]] | None
+        ) = None
 
         # Correlation identifiers
         self._session_id: str | None = None
@@ -269,7 +289,24 @@ class TurnManager:
 
     @property
     def state(self) -> TurnManagerState:
-        return self._state
+        return self._activity.capture().value
+
+    @property
+    def _state(self) -> TurnManagerState:
+        """Compatibility view for focused harnesses that predate activity leases."""
+        return self.state
+
+    @_state.setter
+    def _state(self, state: TurnManagerState) -> None:
+        self._transition(
+            state,
+            reason="compatibility_state_set",
+            observe=False,
+        )
+
+    def capture_activity(self) -> Lease[TurnManagerState]:
+        """Capture the manager activity generation and state atomically."""
+        return self._activity.capture()
 
     @property
     def mode(self) -> TurnMode:
@@ -279,10 +316,9 @@ class TurnManager:
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
 
-    @property
-    def pause_generation(self) -> int:
-        """Monotonic identifier for the most recently opened VAD pause."""
-        return self._pause_generation
+    def capture_pause(self) -> Lease[None]:
+        """Capture the exact current pause identity."""
+        return self._pause_epoch.capture()
 
     @property
     def turn_audio(self) -> list[AudioChunk]:
@@ -339,18 +375,28 @@ class TurnManager:
         """
         self._journal_state_change = hook
 
+    def bind_turn_publication(
+        self,
+        callback: Callable[[TurnPublication], Awaitable[TurnPublication]],
+    ) -> None:
+        """Bind the private lifecycle callback that precedes TurnStarted observation."""
+        self._turn_publication_callback = callback
+
     def _transition(
         self,
         to_state: TurnManagerState,
         *,
         reason: str,
-    ) -> None:
-        """Move to ``to_state``, log the transition, and journal it.
+        observe: bool = True,
+    ) -> Lease[TurnManagerState]:
+        """Publish ``to_state`` and optionally log and journal the transition.
 
-        Centralises what used to be a scattered set of ``self._state = X``
-        + ``logger.debug(...)`` pairs.  Every transition now gets a
-        ``turn_state_changed`` record so bundles can answer "why did the
-        turn end when it did" from the journal alone.
+        This is the sole activity Epoch writer. Every call bumps the activity
+        generation, including same-state IDLE resets. Ordinary lifecycle
+        transitions emit a ``turn_state_changed`` record so bundles can answer
+        "why did the turn end when it did" from the journal alone. Reset and
+        compatibility setup preserve their historical silent behavior with
+        ``observe=False`` while still invalidating outstanding activity leases.
 
         The debug log line is derived from the real ``from_state`` /
         ``to_state`` / ``reason`` so it can never disagree with the journal
@@ -358,8 +404,15 @@ class TurnManager:
         drift from the actual transition — e.g. a barge-in from PROCESSING
         used to falsely log a from-state of BOT_SPEAKING).
         """
-        from_state = self._state
-        self._state = to_state
+        from_state = self.state
+        generation = self._activity.bump(to_state)
+        lease = self._activity.capture()
+        if __debug__:
+            assert lease.generation == generation
+            assert lease.value is to_state
+            assert lease.is_current()
+        if not observe:
+            return lease
         logger.debug("Turn: %s -> %s (%s)", from_state.value, to_state.value, reason)
         hook = self._journal_state_change
         if hook is not None:
@@ -367,6 +420,7 @@ class TurnManager:
                 hook(from_state, to_state, reason, self._current_turn_id)
             except Exception:
                 logger.debug("journal state-change hook raised", exc_info=True)
+        return lease
 
     def bind_endpoint_stage(
         self,
@@ -450,17 +504,14 @@ class TurnManager:
         elif isinstance(event, VADStopSpeaking):
             await self._handle_speech_stop()
 
-    def on_stt_final(self, text: str, *, pause_generation: int) -> None:
+    def on_stt_final(self, text: str, *, pause: Lease[None]) -> None:
         """Notify the originating pause that STT finalized a complete sentence.
 
         Only terminal punctuation from the active pause can shorten its fixed
-        endpoint timer. The generation check prevents a delayed segment final
+        endpoint timer. The lease guard prevents a delayed segment final
         from an earlier pause from leaking into a later pause.
         """
-        if (
-            self._state != TurnManagerState.USER_PAUSED
-            or pause_generation != self._pause_generation
-        ):
+        if self._state != TurnManagerState.USER_PAUSED or not pause.guard():
             return
         normalized = text.rstrip().rstrip("\"'”’)]}")
         if normalized.endswith(("...", "…")):
@@ -519,16 +570,36 @@ class TurnManager:
         """
         if cancel_previous_token and self._cancel_token is not None:
             self._cancel_token.cancel()
-        self._cancel_token = CancelToken()
+        cancel_token = CancelToken()
+        self._cancel_token = cancel_token
         self._flush_pre_roll_into_turn_audio()
         self._turn_counter += 1
-        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
-        self._transition(
+        turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+        self._current_turn_id = turn_id
+        activity = self._transition(
             TurnManagerState.USER_SPEAKING,
             reason=reason,
         )
+        publication = TurnPublication(
+            source="voice",
+            session_id=self._session_id,
+            turn_id=turn_id,
+            cancel_token=cancel_token,
+            activity=activity,
+        )
+        callback = self._turn_publication_callback
+        if callback is not None:
+            publication = await callback(publication)
+            if __debug__:
+                assert publication.activity is activity
+                assert publication.cancel_token is cancel_token
+                if publication.identity is not None:
+                    assert publication.identity.value is not None
+                    assert publication.identity.value.id == turn_id
         await self._event_bus.emit(
-            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+            _mark_turn_started_observation(
+                TurnStarted(session_id=self._session_id, turn_id=turn_id)
+            )
         )
 
     async def _complete_user_turn(self, reason: str) -> None:
@@ -548,7 +619,8 @@ class TurnManager:
 
         self._cancel_silence_timer()
         self._silence_start_time = time.monotonic()
-        self._pause_generation += 1
+        self._pause_epoch.bump(None)
+        pause = self._pause_epoch.capture()
         self._punctuated_transcript_event.clear()
         self._transition(
             TurnManagerState.USER_PAUSED,
@@ -558,8 +630,7 @@ class TurnManager:
         # Bind the timer to this exact pause. A detector is third-party code
         # and may suppress cancellation, so state alone cannot distinguish an
         # old timer from a newer pause after speech resumes.
-        pause_generation = self._pause_generation
-        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause_generation))
+        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause))
         self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
@@ -584,7 +655,7 @@ class TurnManager:
                 break
         return list(window)
 
-    async def _silence_timeout(self, pause_generation: int) -> None:
+    async def _silence_timeout(self, pause: Lease[None]) -> None:
         """Wait for end-of-turn silence timeout, then transition to Processing.
 
         When an endpoint detector is configured, it is queried first.  If the
@@ -629,10 +700,7 @@ class TurnManager:
                     else:
                         is_complete = result.prediction == 1
                     if is_complete:
-                        if (
-                            self._state == TurnManagerState.USER_PAUSED
-                            and pause_generation == self._pause_generation
-                        ):
+                        if self._state == TurnManagerState.USER_PAUSED and pause.guard():
                             await self._complete_user_turn("smart_turn_complete")
                         return
                     logger.debug(
@@ -652,10 +720,7 @@ class TurnManager:
             else:
                 punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
-            if (
-                self._state == TurnManagerState.USER_PAUSED
-                and pause_generation == self._pause_generation
-            ):
+            if self._state == TurnManagerState.USER_PAUSED and pause.guard():
                 await self._complete_user_turn(
                     "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
@@ -812,36 +877,39 @@ class TurnManager:
 
     # ── Bot speaking lifecycle ──────────────────────────────────
 
-    async def bot_started_speaking(self) -> None:
-        """Called when TTS playback begins."""
+    async def bot_started_speaking(self) -> Lease[TurnManagerState] | None:
+        """Enter bot playback and return the exact published activity lease."""
         if self._state in (TurnManagerState.USER_SPEAKING, TurnManagerState.USER_PAUSED):
             logger.warning(
                 "bot_started_speaking called in unexpected state %s, ignoring",
                 self._state.value,
             )
-            return
+            return None
         # Defensive cleanup: there should be no pending silence timer once a
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
         self._cancel_silence_timer()
-        self._transition(
+        activity = self._transition(
             TurnManagerState.BOT_SPEAKING,
             reason="bot_started",
         )
         await self._event_bus.emit(
             BotStartedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
         )
+        return activity
 
-    async def bot_stopped_speaking(self) -> None:
-        """Called when TTS playback completes."""
+    async def bot_stopped_speaking(self) -> Lease[TurnManagerState] | None:
+        """Leave bot playback and return the exact published activity lease."""
         if self._state == TurnManagerState.BOT_SPEAKING:
-            self._transition(
+            activity = self._transition(
                 TurnManagerState.IDLE,
                 reason="bot_done",
             )
             await self._event_bus.emit(
                 BotStoppedSpeaking(session_id=self._session_id, turn_id=self._current_turn_id)
             )
+            return activity
+        return None
 
     # ── State management ────────────────────────────────────────
 
@@ -865,7 +933,11 @@ class TurnManager:
         dropped, but the token is left uncancelled.
         """
         self._cancel_silence_timer()
-        self._state = TurnManagerState.IDLE
+        self._transition(
+            TurnManagerState.IDLE,
+            reason="reset",
+            observe=False,
+        )
         self._turn_audio.clear()
         self._turn_audio_duration_ms = 0.0
         self._pre_roll_buffer.clear()

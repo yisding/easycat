@@ -30,6 +30,9 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
 from easycat.audio_format import AudioChunk
+from easycat.teardown_budgets import (
+    WEBRTC_OFFER_CANCEL_DRAIN_TIMEOUT_S as _OFFER_CANCEL_DRAIN_TIMEOUT_S,
+)
 from easycat.transports._base import (
     AudioQueueMixin,
     _raise_rollback_cancellation,
@@ -70,10 +73,6 @@ _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
 # Browser-created data channel carrying session events to the playground.
 _EVENTS_CHANNEL_LABEL = "events"
-# A request handler normally observes cancellation immediately. Keep a small
-# bound anyway: third-party request/SDP code can swallow cancellation, and
-# transport teardown must report incomplete cleanup rather than wait forever.
-_OFFER_CANCEL_DRAIN_TIMEOUT_S = 0.5
 
 
 def _inspect_static_dir(static_dir: str | Path) -> tuple[Path, bool, bool]:

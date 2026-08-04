@@ -24,6 +24,10 @@ from easycat._numeric import is_finite_number
 # does not pull aiohttp or any heavy SDK and keeps ``import easycat.server`` light.
 from easycat.server.auth import AuthPolicy
 from easycat.server.transports import _validate_max_sessions
+from easycat.teardown_budgets import (
+    SERVER_DRAIN_TIMEOUT_S,
+    SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
+)
 
 _DRAIN_MODES = frozenset({"stop_sessions", "await_natural_end"})
 
@@ -52,8 +56,8 @@ class VoiceServerConfig:
     port: int = 8080
     public_base_url: str | None = None
     max_sessions: int = 64
-    drain_timeout_s: float = 30.0
-    force_shutdown_timeout_s: float = 10.0
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S
+    force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
     drain_mode: Literal["stop_sessions", "await_natural_end"] = "stop_sessions"
     # The unified auth policy (M5). ``None`` means no token policy — subject to
     # the non-loopback bind guard, which still raises for a non-loopback host

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -197,6 +199,7 @@ def test_ruff_lint_uses_v016_defaults_and_repository_extensions() -> None:
         "LOG",
         "PERF203",
         "PERF403",
+        "TID251",
     } <= set(lint["extend-select"])
 
 
@@ -209,6 +212,39 @@ def test_ruff_flake8_bugbear_treats_typer_defaults_as_immutable() -> None:
     """typer.Option / typer.Argument defaults are the Typer idiom, not B008 bugs."""
     bugbear = _ruff_lint()["flake8-bugbear"]
     assert bugbear["extend-immutable-calls"] == ["typer.Option", "typer.Argument"]
+
+
+def test_ruff_hard_bans_the_zero_baseline_uncancel_api(tmp_path: Path) -> None:
+    """Qualified uncancel access is rejected in addition to the AST instance-call guard."""
+    tidy_imports = _ruff_lint()["flake8-tidy-imports"]
+    assert "asyncio.Task.uncancel" in tidy_imports["banned-api"]
+
+    fixture = tmp_path / "qualified_uncancel.py"
+    fixture.write_text(
+        "import asyncio\n\nqualified_uncancel = asyncio.Task.uncancel\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--config",
+            str(REPO_ROOT / "pyproject.toml"),
+            "--select",
+            "TID251",
+            str(fixture),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "TID251" in result.stdout
+    assert "easycat._concurrency cancellation accounting" in result.stdout
 
 
 def test_rule_list_docs_stay_in_sync_with_ruff_extensions() -> None:

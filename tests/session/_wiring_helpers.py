@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from easycat._epoch import Epoch, Lease
 from easycat._turn_context import TurnContext
 from easycat.session._wiring import SessionWiringContext
 
@@ -32,6 +33,7 @@ async def _noop_async(*_args: Any, **_kwargs: Any) -> None:
 def make_wiring(
     *,
     current_turn: Callable[[], TurnContext | None] | None = None,
+    capture_identity: Callable[[], Lease[TurnContext | None]] | None = None,
     correlation_ids: Callable[[], tuple[str | None, str | None]] | None = None,
     with_correlation: Callable[[Any], Any] | None = None,
     emit: Callable[[Any], Awaitable[None]] | None = None,
@@ -58,8 +60,10 @@ def make_wiring(
     stop: Callable[[], Awaitable[None]] | None = None,
 ) -> SessionWiringContext:
     """Return a wiring context with no-op defaults; override what a test needs."""
+    default_identity: Epoch[TurnContext | None] = Epoch(None)
     return SessionWiringContext(
         current_turn=current_turn or (lambda: None),
+        capture_identity=capture_identity or default_identity.capture,
         correlation_ids=correlation_ids or (lambda: (None, None)),
         with_correlation=with_correlation or (lambda event: event),
         emit=emit or _noop_emit,

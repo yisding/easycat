@@ -49,7 +49,9 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
+    cancellation_drain_state,
     close_top_ended_cursors,
+    route_tool_cancellation_events,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
@@ -604,6 +606,12 @@ class LangGraphBridge:
         # intermediate value).  Model double-speak is still handled by
         # ``chains_with_chat_model_descendants``.
         tool_state: dict[str, Any] = {}
+        cancelled = False
+
+        async def commit_cancelled_turn() -> None:
+            await self._commit_partial_assistant(acc.accumulated, recorder)
+            if not acc.accumulated:
+                self._turn_produced_no_assistant = True
 
         input_payload = self._build_input(turn_input.text, turn_input.context)
         # Honour a caller-pinned resume/time-travel checkpoint for *this*
@@ -627,11 +635,14 @@ class LangGraphBridge:
         try:
             stream = self._graph.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
-                if cancel_token and cancel_token.is_cancelled:
-                    recorder.record_cancellation_boundary(
-                        mode=CancellationMode.IMMEDIATE_STOP,
-                        reason="cancel_token_set",
-                    )
+                requested = bool(cancel_token and cancel_token.is_cancelled)
+                cancelled, stop_now = cancellation_drain_state(
+                    requested=requested,
+                    active=cancelled,
+                    state=tool_state,
+                    recorder=recorder,
+                )
+                if stop_now:
                     # A cancel token set mid-stream (barge-in) breaks out
                     # through the *normal* completion path below, not the
                     # ``BaseException`` cleanup — so the cancelled node's
@@ -643,13 +654,7 @@ class LangGraphBridge:
                     # truncates *this* turn's AI message instead of
                     # rewriting the previous turn's and corrupting prior
                     # LangGraph conversation state.
-                    await self._commit_partial_assistant(acc.accumulated, recorder)
-                    if not acc.accumulated:
-                        # Nothing committed (cancelled before the first
-                        # token): there is no current-turn AI message,
-                        # so the follow-up interruption rewrite must
-                        # no-op rather than hit the previous turn.
-                        self._turn_produced_no_assistant = True
+                    await commit_cancelled_turn()
                     break
 
                 # ``astream_events`` is a third-party streaming boundary;
@@ -657,30 +662,22 @@ class LangGraphBridge:
                 if (event := _stream_event_object(event)) is None:
                     continue
 
-                if graph_chunk := self._extract_graph_stream_chunk(event):
-                    mode_name, payload = graph_chunk
-                    for bridge_event in self._handle_graph_stream_chunk(
-                        mode_name, payload, recorder
-                    ):
-                        if bridge_event.kind == "text_delta":
-                            acc.accumulated += bridge_event.text
-                        yield bridge_event
-                    continue
-
-                self._handle_cursor_lifecycle(
-                    event,
-                    recorder,
-                    agent_cursor,
-                    open_cursors,
-                    last_node_by_ns,
-                    ended_runs,
+                bridge_events, stop_after_event = self._route_stream_event(
+                    event=event,
+                    recorder=recorder,
+                    agent_cursor=agent_cursor,
+                    open_cursors=open_cursors,
+                    last_node_by_ns=last_node_by_ns,
+                    ended_runs=ended_runs,
+                    tool_state=tool_state,
+                    acc=acc,
+                    cancelled=cancelled,
                 )
-
-                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
-                    if bridge_event.kind == "text_delta":
-                        acc.accumulated += bridge_event.text
-                        acc.model_text_streamed = True
+                for bridge_event in bridge_events:
                     yield bridge_event
+                if stop_after_event:
+                    await commit_cancelled_turn()
+                    break
         except Exception as exc:
             for cursor in reversed(list(open_cursors.values())):
                 recorder.safe_exit_cursor(cursor)
@@ -723,6 +720,48 @@ class LangGraphBridge:
             # its callback tasks and transports do not outlive the cancelled
             # voice turn.
             await aclose_quietly(stream)
+
+    def _route_stream_event(
+        self,
+        *,
+        event: dict[str, Any],
+        recorder: AgentRecorder,
+        agent_cursor: ExecutionCursor,
+        open_cursors: dict[str, ExecutionCursor],
+        last_node_by_ns: dict[tuple[str, ...], tuple[str, Any]],
+        ended_runs: set[str],
+        tool_state: dict[str, Any],
+        acc: _LangGraphTurnAccumulator,
+        cancelled: bool,
+    ) -> tuple[tuple[AgentBridgeEvent, ...], bool]:
+        if graph_chunk := self._extract_graph_stream_chunk(event):
+            if cancelled:
+                return (), False
+            mode_name, payload = graph_chunk
+            bridge_events = tuple(self._handle_graph_stream_chunk(mode_name, payload, recorder))
+            for bridge_event in bridge_events:
+                if bridge_event.kind == "text_delta":
+                    acc.accumulated += bridge_event.text
+            return bridge_events, False
+
+        self._handle_cursor_lifecycle(
+            event,
+            recorder,
+            agent_cursor,
+            open_cursors,
+            last_node_by_ns,
+            ended_runs,
+        )
+        bridge_events, stop_after_event = route_tool_cancellation_events(
+            translate_stream_event(event, recorder, state=tool_state),
+            tool_state,
+            cancelled=cancelled,
+        )
+        for bridge_event in bridge_events:
+            if bridge_event.kind == "text_delta":
+                acc.accumulated += bridge_event.text
+                acc.model_text_streamed = True
+        return bridge_events, stop_after_event
 
     async def _finalize_done(
         self,

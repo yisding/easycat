@@ -39,6 +39,7 @@ from easycat.events import (
     TTSAudio,
     TTSEvent,
     TTSEventType,
+    TurnEnded,
     TurnStarted,
     VADStartSpeaking,
     VADStopSpeaking,
@@ -58,7 +59,7 @@ from easycat.session.actions import SessionActions
 from easycat.stt.base import STTBase
 from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
-from easycat.turn_manager import TurnManagerConfig, TurnManagerState
+from easycat.turn_manager import TurnManagerConfig, TurnManagerState, TurnPublication
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -242,10 +243,15 @@ async def test_turn_runner_constructed_with_session() -> None:
     """Session installs a TurnRunner instance under ``_turn_runner``."""
     session = Session(_config())
     assert isinstance(session._turn_runner, TurnRunner)
-    # The runner's subscription handlers are bound to the bus.
-    handlers = session.event_bus._handlers.get(TurnStarted, [])
+    # The lifecycle command handler is reserved ahead of every public observer.
+    handlers = session.event_bus._reserved_handlers.get(TurnStarted, [])
     bound_names = [getattr(h, "__qualname__", "") for h in handlers]
     assert any("TurnRunner.on_turn_started" in name for name in bound_names)
+    public_names = [
+        getattr(handler, "__qualname__", "")
+        for handler in session.event_bus._handlers.get(TurnStarted, [])
+    ]
+    assert not any("TurnRunner.on_turn_started" in name for name in public_names)
     stt_handlers = session.event_bus._handlers.get(STTFinal, [])
     stt_bound_names = [getattr(h, "__qualname__", "") for h in stt_handlers]
     assert any("TurnRunner.on_stt_final" in name for name in stt_bound_names)
@@ -285,6 +291,42 @@ async def test_on_turn_started_does_not_leave_task_bound_to_turn() -> None:
         assert _current_turn_log_context() == "-"
     finally:
         await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_stale_publication_cannot_replace_successor_after_admission_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    session._is_running = True
+    runner = session._turn_runner
+    admission_waiting = asyncio.Event()
+    release_admission = asyncio.Event()
+
+    async def _wait_during_admission() -> None:
+        admission_waiting.set()
+        await release_admission.wait()
+
+    monkeypatch.setattr(runner, "cancel_preemptive_generation", _wait_during_admission)
+    publication = TurnPublication(
+        source="hand_built",
+        session_id=session.session_id,
+        turn_id="stale-request",
+        cancel_token=CancelToken(),
+        activity=session._turn_manager.capture_activity(),
+    )
+    publishing = asyncio.create_task(runner.on_turn_publication(publication))
+    await admission_waiting.wait()
+
+    successor = TurnContext("successor", CancelToken())
+    runner._turn.set(successor)
+    session._turn_manager._state = TurnManagerState.USER_SPEAKING
+    release_admission.set()
+    await publishing
+
+    assert session._turn is successor
+    assert not successor.cancel_token.is_cancelled
+    assert not session._stt_committer.is_active
 
 
 @pytest.mark.asyncio
@@ -544,6 +586,38 @@ async def test_on_turn_started_start_failure_tears_down_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stt_start_failure_does_not_reset_republished_activity() -> None:
+    class BlockingStartFailureSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.started.set()
+            await self.release.wait()
+            raise RuntimeError("late start failure")
+
+    stt = BlockingStartFailureSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    starting = asyncio.create_task(
+        session._turn_runner.on_turn_started(TurnStarted(turn_id="reissued-start"))
+    )
+    await stt.started.wait()
+    turn = session._turn
+    assert turn is not None
+
+    session._turn_manager._state = TurnManagerState.IDLE
+    stt.release.set()
+    await starting
+
+    assert session._turn is turn
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    session._reset_turn_state()
+
+
+@pytest.mark.asyncio
 async def test_on_turn_started_preroll_failure_tears_down_and_closes_stream() -> None:
     """A failure while priming pre-roll closes the (open) stream and tears down.
 
@@ -587,6 +661,45 @@ async def test_handle_end_of_speech_empty_transcript_resets() -> None:
     await runner.handle_end_of_speech(turn=turn)
     # Turn pointer is reset.
     assert session._turn is None
+
+
+@pytest.mark.asyncio
+async def test_transcript_finalize_rechecks_identity_after_inflight_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("reissued-during-stt-drain", CancelToken())
+    turn.append_stt_segment("ready")
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    identity = runner._turn.capture_identity()
+    activity = session._turn_manager.capture_activity()
+    drain_started = asyncio.Event()
+    release_drain = asyncio.Event()
+
+    async def _block_inflight_commit() -> None:
+        drain_started.set()
+        await release_drain.wait()
+
+    await_pending = AsyncMock(return_value=True)
+    monkeypatch.setattr(session._stt_committer, "await_inflight_commit", _block_inflight_commit)
+    monkeypatch.setattr(session._stt_committer, "await_pending", await_pending)
+    finalizing = asyncio.create_task(
+        runner._finalize_turn_transcript(
+            turn,
+            identity=identity,
+            activity=activity,
+        )
+    )
+    await drain_started.wait()
+
+    runner._turn.set(turn)
+    release_drain.set()
+
+    assert await finalizing == ""
+    assert turn.stt_final_time is None
+    await_pending.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -644,6 +757,7 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
         def __init__(self) -> None:
             super().__init__(transcript="")
             self.send_count = 0
+            self.commit_calls = 0
             self.send_busy = False
             self.send_started = asyncio.Event()
             self.release_send = asyncio.Event()
@@ -659,6 +773,7 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
                 self.send_busy = False
 
         async def commit_segment(self) -> bool:
+            self.commit_calls += 1
             if self.send_busy:
                 self.commit_raced.set()
             return False
@@ -687,6 +802,13 @@ async def test_vad_stop_commit_waits_for_stop_frame_stt_send() -> None:  # noqa:
 
         stt.release_send.set()
         await processing_stop
+        pause_commit = session._stt_committer._pause_commit_task
+        assert pause_commit is not None
+        await pause_commit
+        await session._stt_committer.await_inflight_commit()
+
+        assert stt.commit_calls == 1
+        assert not stt.commit_raced.is_set()
     finally:
         stt.release_send.set()
         if processing_stop is not None and not processing_stop.done():
@@ -1050,6 +1172,49 @@ async def test_preemptive_wait_uses_session_timeout_then_runs_confirmed_path() -
         {"role": "assistant", "content": "Confirmed reply to hello."},
     ]
     assert any(isinstance(event.exception, AgentTimeoutError) for event in errors)
+
+
+@pytest.mark.asyncio
+async def test_preemptive_provider_dispatch_rechecks_identity_when_task_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingAgent:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            return "unused"
+
+    agent = RecordingAgent()
+    session = Session(_config(agent=_preemptive_runner(agent)))
+    runner = session._turn_runner
+    turn = TurnContext("preemptive-task-admission", CancelToken())
+    runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+    scheduled = asyncio.Event()
+    release_task = asyncio.Event()
+    create_journaled_task = session._runtime_scope.create_journaled_task
+
+    def _delay_task(coro, **kwargs):
+        async def _run_after_release():
+            scheduled.set()
+            await release_task.wait()
+            return await coro
+
+        return create_journaled_task(_run_after_release(), **kwargs)
+
+    monkeypatch.setattr(session._runtime_scope, "create_journaled_task", _delay_task)
+    await runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    task = runner._preemptive_task
+    assert task is not None
+    await scheduled.wait()
+
+    runner._turn.set(turn)
+    release_task.set()
+    await task
+
+    assert agent.calls == []
 
 
 @pytest.mark.asyncio
@@ -1420,7 +1585,8 @@ async def test_stale_tts_settlement_preserves_successor_turn() -> None:
     runner._turn.set(old_turn)
     state = _StreamingTtsState(
         turn=old_turn,
-        turn_gen=old_turn.generation,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
         token=old_turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -1439,6 +1605,125 @@ async def test_stale_tts_settlement_preserves_successor_turn() -> None:
     assert session._turn_generation == successor.generation
     assert not successor.cancel_token.is_cancelled
     assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_stale_tts_settlement_rejects_same_object_republication() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-reissued", CancelToken())
+    runner._turn.set(turn)
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.agent_output_settled.set()
+
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.USER_SPEAKING
+
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is turn
+    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_stale_tts_settlement_rejects_same_state_activity_republication() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-activity-reissued", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = True
+    state.agent_output_settled.set()
+
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is turn
+    assert session._turn_manager.state is TurnManagerState.BOT_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_tts_result_does_not_stamp_republished_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("reissued-during-tts", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.queue.put_nowait(TTSInput("Reply."))
+    state.queue.put_nowait(None)
+    synthesis_started = asyncio.Event()
+    release_synthesis = asyncio.Event()
+
+    async def _synthesize(
+        _payload: TTSInput,
+        _token: CancelToken | None,
+        *,
+        is_active: object,
+    ) -> TTSSynthResult:
+        _ = is_active
+        synthesis_started.set()
+        await release_synthesis.wait()
+        return TTSSynthResult(first_audio_time=123.0)
+
+    monkeypatch.setattr(session._tts_scheduler.synthesizer, "synthesize", _synthesize)
+    consuming = asyncio.create_task(runner._synthesize_queued_payloads(state))
+    await synthesis_started.wait()
+
+    runner._turn.set(turn)
+    release_synthesis.set()
+    await consuming
+
+    assert turn.first_tts_audio_time is None
+
+
+@pytest.mark.asyncio
+async def test_on_turn_ended_rejects_same_state_activity_republication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-processing-reissued", CancelToken())
+    runner._turn.set(turn)
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    identity = runner._turn.capture_identity()
+    activity = session._turn_manager.capture_activity()
+    handle_end_of_speech = AsyncMock()
+    monkeypatch.setattr(runner, "handle_end_of_speech", handle_end_of_speech)
+
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    await runner.on_turn_ended(
+        TurnEnded(turn_id=turn.id),
+        identity,
+        activity,
+    )
+
+    handle_end_of_speech.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1757,6 +2042,27 @@ async def test_send_text_runs_agent_without_audio() -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_turn_started_observation_never_installs_voice_identity() -> None:
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+        )
+    )
+    session._is_running = True
+    observed_identity: list[TurnContext | None] = []
+    session.event_bus.subscribe(
+        TurnStarted, lambda _event: observed_identity.append(session._turn)
+    )
+
+    response = await session.send_text("hello")
+
+    assert response == "Reply."
+    assert observed_identity == [None]
+    assert session.current_turn is None
+
+
+@pytest.mark.asyncio
 async def test_send_text_rechecks_admission_after_waiting_for_prior_work() -> None:
     """A stop that begins mid-admission cannot publish a new text task."""
     session = Session(
@@ -1971,6 +2277,73 @@ async def test_first_tts_provider_overlaps_agent_delta_handler() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_tts_lifecycle_rechecks_identity_after_delta_handler() -> None:
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    bot_started: list[BotStartedSpeaking] = []
+    session = Session(_config())
+    turn = TurnContext("reissued-during-first-tts-lifecycle", CancelToken())
+    session._turn_runner._turn.set(turn)
+
+    async def _block_delta(_event: AgentDelta) -> None:
+        handler_started.set()
+        await release_handler.wait()
+
+    session.event_bus.subscribe(AgentDelta, _block_delta)
+    session.event_bus.subscribe(BotStartedSpeaking, bot_started.append)
+    running = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    await handler_started.wait()
+
+    session._turn_runner._turn.set(turn)
+    release_handler.set()
+    await running
+
+    assert bot_started == []
+    assert session._turn_manager.state is TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_voice_stream_suppresses_output_yielded_after_identity_republication() -> None:
+    class DelayedDeltaAgent(_TestBridgeBase):
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            return text
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            self.started.set()
+            await self.release.wait()
+            yield AgentBridgeEvent(kind="text_delta", text="stale")
+            yield AgentBridgeEvent(kind="done", text="stale")
+
+    agent = DelayedDeltaAgent()
+    tts = FakeTTS()
+    session = Session(_config(agent=agent, tts=tts))
+    turn = TurnContext("reissued-before-agent-delta", CancelToken())
+    session._turn_runner._turn.set(turn)
+    output: list[Event] = []
+    session.event_bus.subscribe(AgentDelta, output.append)
+    session.event_bus.subscribe(AgentFinal, output.append)
+    running = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    await agent.started.wait()
+
+    session._turn_runner._turn.set(turn)
+    agent.release.set()
+
+    assert await running == ""
+    assert output == []
+    assert tts.synthesized_texts == []
+
+
+@pytest.mark.asyncio
 async def test_first_tts_provider_starts_before_terminal_agent_event() -> None:
     class StartSignalingTTS(FakeTTS):
         def __init__(self) -> None:
@@ -2090,7 +2463,8 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
     session._turn = turn
     state = _StreamingTtsState(
         turn=turn,
-        turn_gen=session._turn.generation,
+        identity=session._turn_runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
         token=turn.cancel_token,
         queue=asyncio.Queue(),
     )
@@ -2102,8 +2476,9 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
         *,
         is_active: object,
         lifecycle_ready: asyncio.Future[bool] | None = None,
+        activity_started: object = None,
     ) -> asyncio.Task[TTSSynthResult]:
-        _ = is_active, lifecycle_ready
+        _ = is_active, lifecycle_ready, activity_started
 
         async def _blocked_provider() -> TTSSynthResult:
             provider_started.set()

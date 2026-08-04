@@ -75,6 +75,23 @@ def _can_bind_localhost() -> bool:
 _HAS_LOCALHOST_SOCKET_ACCESS = _can_bind_localhost()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the explicit, review-auditable ratchet baseline update mode."""
+    group = parser.getgroup("source-ratchets")
+    group.addoption(
+        "--update-baseline",
+        action="store_true",
+        default=False,
+        help="Rewrite checked-in ratchet baselines (requires --baseline-rationale).",
+    )
+    group.addoption(
+        "--baseline-rationale",
+        default=None,
+        metavar="TEXT",
+        help="Reviewed reason for an intentional --update-baseline change.",
+    )
+
+
 def _format_task(task: asyncio.Task[object]) -> str:
     coroutine = task.get_coro()
     name = getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None)

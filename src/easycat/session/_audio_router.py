@@ -57,6 +57,16 @@ from easycat.stages.base import audio_capture_allowed
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
 from easycat.stages.vad import VADStage
+from easycat.teardown_budgets import (
+    SESSION_AUDIO_DRAIN_TIMEOUT_S as _AUDIO_DRAIN_TIMEOUT_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_AUDIO_PLAYOUT_MARGIN_S as _AUDIO_PLAYOUT_MARGIN_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_INLINE_SEND_CANCEL_GRACE_TIMEOUT_S,
+    SESSION_INLINE_SEND_TIMEOUT_S,
+)
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
@@ -142,8 +152,8 @@ class AudioRouter:
     # caller cancellation so a frame is never half-submitted. Keep that shield
     # bounded: a half-open transport must not make barge-in or force-stop
     # permanently uncancellable.
-    _INLINE_SEND_TIMEOUT_S = 0.5
-    _INLINE_SEND_CANCEL_GRACE_S = 0.1
+    _INLINE_SEND_TIMEOUT_S = SESSION_INLINE_SEND_TIMEOUT_S
+    _INLINE_SEND_CANCEL_GRACE_S = SESSION_INLINE_SEND_CANCEL_GRACE_TIMEOUT_S
 
     def __init__(
         self,
@@ -344,7 +354,7 @@ class AudioRouter:
         await self._runtime_scope.cancel_and_drain(self._INLINE_SEND_TASK_NAME)
         self._outbound_task = None
 
-    async def await_drain(self, timeout: float = 2.0) -> None:
+    async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
         """Wait for outbound audio to fully drain, with a timeout.
 
         "Drained" means the outbound queue is empty *and* no chunk is
@@ -388,7 +398,10 @@ class AudioRouter:
         playout_deadline = deadline
         remaining_ms = pending_playout_ms(self._transport)
         if remaining_ms is not None and remaining_ms > 0:
-            playout_deadline = max(deadline, loop.time() + remaining_ms / 1000.0 + 0.5)
+            playout_deadline = max(
+                deadline,
+                loop.time() + remaining_ms / 1000.0 + _AUDIO_PLAYOUT_MARGIN_S,
+            )
         await self._await_playout_drain(playout_deadline)
 
     async def _await_playout_drain(self, deadline: float) -> None:
@@ -890,8 +903,14 @@ class AudioRouter:
             # replay every later event after the send attempt so the original
             # provider ordering is preserved.
             for vad_event in deferred_vad_events:
+                # Open the pause epoch before publishing VADStopSpeaking.
+                # STTCommitter subscribes to that event and must capture the
+                # exact new pause lease when it creates the delayed commit.
+                if isinstance(vad_event, VADStopSpeaking):
+                    await self._turn_manager.on_vad_event(vad_event)
                 await self._emit(vad_event)
-                await self._turn_manager.on_vad_event(vad_event)
+                if not isinstance(vad_event, VADStopSpeaking):
+                    await self._turn_manager.on_vad_event(vad_event)
 
     async def _send_chunk_to_stt(self, chunk: AudioChunk) -> None:
         """Start auto-turn STT when needed and send one active-turn frame."""

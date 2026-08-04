@@ -426,6 +426,46 @@ def test_eventbus_subscribers_empty_for_unknown_type():
 
 
 @pytest.mark.asyncio
+async def test_eventbus_reserved_handler_precedes_global_and_public_observers() -> None:
+    bus = EventBus()
+    order: list[str] = []
+    reserved = bus._subscribe_reserved(STTFinal, lambda _event: order.append("reserved"))
+    bus.subscribe_all(lambda _event: order.append("global"))
+    public = bus.subscribe(STTFinal, lambda _event: order.append("public"))
+
+    await bus.emit(STTFinal(text="first"))
+
+    assert order == ["reserved", "global", "public"]
+    assert len(bus.subscribers(STTFinal)) == 1
+
+    reserved.unsubscribe()
+    public.unsubscribe()
+    order.clear()
+    await bus.emit(STTFinal(text="second"))
+
+    assert not reserved.active
+    assert order == ["global"]
+
+
+@pytest.mark.asyncio
+async def test_eventbus_reserved_failure_prevents_public_observation() -> None:
+    bus = EventBus(handler_error_policy="continue")
+    observed: list[STTFinal] = []
+
+    def fail(_event: STTFinal) -> None:
+        raise RuntimeError("private lifecycle failed")
+
+    bus._subscribe_reserved(STTFinal, fail)
+    bus.subscribe_all(observed.append)
+    bus.subscribe(STTFinal, observed.append)
+
+    with pytest.raises(RuntimeError, match="private lifecycle failed"):
+        await bus.emit(STTFinal(text="hidden"))
+
+    assert observed == []
+
+
+@pytest.mark.asyncio
 async def test_eventbus_multiple_handlers():
     bus = EventBus()
     results: list[str] = []

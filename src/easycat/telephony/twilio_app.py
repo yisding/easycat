@@ -10,6 +10,10 @@ from hmac import compare_digest
 from typing import TYPE_CHECKING, Any
 
 from easycat.events import CallAnswered, CallEnded, CallFailed, EventBus
+from easycat.teardown_budgets import (
+    SERVER_DRAIN_TIMEOUT_S,
+    SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
+)
 
 if TYPE_CHECKING:
     from easycat.telephony.outbound import OutboundCallManager
@@ -85,8 +89,8 @@ class TwilioAppSettings:
     max_sessions: int = 64
     start_timeout_s: float = 10.0
     public_twiml_url: str = ""
-    drain_timeout_s: float = 30.0
-    force_shutdown_timeout_s: float = 10.0
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S
+    force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:
@@ -224,12 +228,12 @@ def twilio_app_settings_from_env(
         drain_timeout_s=_non_negative_float_setting(
             env,
             "TWILIO_DRAIN_TIMEOUT_S",
-            default=30.0,
+            default=SERVER_DRAIN_TIMEOUT_S,
         ),
         force_shutdown_timeout_s=_non_negative_float_setting(
             env,
             "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
-            default=10.0,
+            default=SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
         ),
     )
 

@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import logging
+import weakref
 
 import pytest
 
+from easycat._concurrency import (
+    OwnerState,
+    RuntimeSupervisor,
+    SurvivorCapacityError,
+    SurvivorRegistry,
+    reap,
+    start_owned,
+)
 from easycat.server import transports as server_transports
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session_manager import SessionManager
@@ -100,6 +110,8 @@ async def test_runtime_keeps_connection_open_until_graceful_session_drain() -> N
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: session,
     )
 
@@ -129,6 +141,7 @@ async def test_runtime_keeps_connection_open_until_graceful_session_drain() -> N
     assert events.index("listener_close:False") < events.index("session_graceful_start")
     assert events.index("session_graceful_done") < events.index("connection_close")
     assert "session_force" not in events
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED
 
 
 async def test_runtime_rejects_new_connection_after_drain_starts() -> None:
@@ -138,6 +151,8 @@ async def test_runtime_rejects_new_connection_after_drain_starts() -> None:
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: _Session(events),
     )
     runtime.start_draining(server)
@@ -167,6 +182,8 @@ async def test_runtime_drains_after_listener_close_failure() -> None:
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: session,
     )
     handler = asyncio.create_task(runtime.handle(connection))
@@ -207,6 +224,8 @@ async def test_runtime_surfaces_failed_manager_sweep_and_retains_ledgers_for_ret
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: session,
     )
     runtime._sessions[key] = session
@@ -244,6 +263,8 @@ async def test_cancelled_drain_preserves_connection_bookkeeping_for_retry() -> N
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: session,
     )
     key = id(connection)
@@ -290,6 +311,8 @@ async def test_runtime_allows_async_preflight_to_reject_before_session_creation(
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=reject_after_preflight,
     )
 
@@ -318,6 +341,8 @@ async def test_drain_closes_connection_while_async_preflight_is_pending() -> Non
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=slow_preflight,
     )
     handler = asyncio.create_task(runtime.handle(connection))
@@ -365,6 +390,8 @@ async def test_drain_cancels_startup_before_session_becomes_active() -> None:
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: session,
     )
     handler = asyncio.create_task(runtime.handle(connection))
@@ -442,6 +469,8 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     runtime = WebSocketSessionRuntime(
         manager=_StuckManager(),
         max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: None,
     )
     runtime._connections[1] = _StuckConnection()
@@ -463,6 +492,222 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     release.set()
     await asyncio.gather(
         handler,
+        *runtime.survivor_registry.supervisor.tasks(),
         *tuple(server_transports._BACKGROUND_TIMEOUT_TASKS),
         return_exceptions=True,
     )
+
+
+class _CancellationResistantServer:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.cancel_seen = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = asyncio.Event()
+
+    def close(self, close_connections: bool = True) -> None:
+        pass
+
+    async def wait_closed(self) -> None:
+        self.calls += 1
+        self.started.set()
+        try:
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    self.cancel_seen.set()
+        finally:
+            self.finished.set()
+
+
+async def test_owned_listener_timeout_is_anchored_attributed_and_retryable() -> None:
+    records: list[tuple[str, dict[str, object]]] = []
+    supervisor = RuntimeSupervisor(
+        capacity=1,
+        journal=lambda event, data: records.append((event, dict(data))),
+    )
+    events: list[str] = []
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager(events),
+        max_sessions=1,
+        runtime_supervisor=supervisor,
+        runtime_id="owned-listener-runtime",
+        session_factory=lambda _connection: None,
+    )
+    server = _CancellationResistantServer()
+
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=0.01)
+
+    await asyncio.wait_for(server.cancel_seen.wait(), timeout=1)
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED_WITH_SURVIVORS
+    assert runtime.listener_cleanup_metadata[0].root_id == "owned-listener-runtime"
+    assert runtime.listener_cleanup_metadata[0].task_name == "websocket.listener_wait_closed"
+    assert any(
+        event == "owned_task_transition"
+        and data["root_id"] == "owned-listener-runtime"
+        and data["state"] == "parked"
+        for event, data in records
+    )
+
+    server.release.set()
+    await asyncio.wait_for(server.finished.wait(), timeout=1)
+    await asyncio.sleep(0)
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert server.calls == 1
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED
+    assert runtime.listener_cleanup_metadata == ()
+    assert supervisor.active_count == 0
+
+
+async def test_external_drain_cancellation_parks_listener_before_reraise() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager([]),
+        max_sessions=1,
+        runtime_supervisor=supervisor,
+        runtime_id="cancelled-listener-runtime",
+        session_factory=lambda _connection: None,
+    )
+    server = _CancellationResistantServer()
+    draining = asyncio.create_task(
+        runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=60.0)
+    )
+    await server.started.wait()
+
+    draining.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+
+    await asyncio.wait_for(server.cancel_seen.wait(), timeout=1)
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED_WITH_SURVIVORS
+    assert supervisor.survivor_count == 1
+
+    server.release.set()
+    await asyncio.wait_for(server.finished.wait(), timeout=1)
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+    assert server.calls == 1
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED
+
+
+async def test_runtime_owner_drop_leaves_listener_task_supervisor_anchored() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager([]),
+        max_sessions=1,
+        runtime_supervisor=supervisor,
+        runtime_id="dropped-listener-runtime",
+        session_factory=lambda _connection: None,
+    )
+    runtime_ref = weakref.ref(runtime)
+    server = _CancellationResistantServer()
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=0.01)
+    assert supervisor.survivor_count == 1
+
+    del runtime
+    gc.collect()
+
+    assert runtime_ref() is None
+    assert len(supervisor.tasks()) == 1
+    server.release.set()
+    await asyncio.wait_for(server.finished.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert supervisor.active_count == 0
+
+
+@pytest.mark.parametrize("quota", ["root", "runtime"])
+async def test_listener_factory_is_not_invoked_when_survivor_quota_is_full(
+    quota: str,
+) -> None:
+    supervisor = RuntimeSupervisor(capacity=2 if quota == "root" else 1)
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager([]),
+        max_sessions=1,
+        runtime_supervisor=supervisor,
+        runtime_id=f"{quota}-quota-runtime",
+        survivor_capacity=1 if quota == "root" else 2,
+        session_factory=lambda _connection: None,
+    )
+    blocker_registry = (
+        runtime.survivor_registry
+        if quota == "root"
+        else SurvivorRegistry(supervisor=supervisor, root_id="other-root", capacity=1)
+    )
+    release = asyncio.Event()
+    blocker = await start_owned(
+        release.wait,
+        registry=blocker_registry,
+        owner_id="quota-blocker",
+        task_name="quota.blocker",
+    )
+    events: list[str] = []
+    server = _Server(events)
+
+    with pytest.raises(SurvivorCapacityError) as exc_info:
+        await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert exc_info.value.quota == quota
+    assert "listener_wait_closed" not in events
+    error = await reap(blocker)
+    assert isinstance(error, asyncio.CancelledError)
+
+
+async def test_owned_listener_preserves_cleanup_exception_policy() -> None:
+    class _FailingWaitServer(_Server):
+        async def wait_closed(self) -> None:
+            self.events.append("listener_wait_closed")
+            raise RuntimeError("listener wait failed")
+
+    events: list[str] = []
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager(events),
+        max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="failing-listener-runtime",
+        session_factory=lambda _connection: None,
+    )
+
+    with pytest.raises(RuntimeError, match="listener wait failed"):
+        await runtime.drain(
+            _FailingWaitServer(events),
+            drain_timeout_s=0.0,
+            force_timeout_s=1.0,
+        )
+
+    assert "manager_stop_all" not in events
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED
+
+
+async def test_cooperative_hard_timeout_retries_without_raising_expected_cancel() -> None:
+    class _CooperativeServer:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                self.started.set()
+                await asyncio.Event().wait()
+
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager([]),
+        max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="cooperative-listener-runtime",
+        session_factory=lambda _connection: None,
+    )
+    server = _CooperativeServer()
+
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=0.01)
+    await server.started.wait()
+    await asyncio.sleep(0)
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert server.calls == 2
+    assert runtime.listener_cleanup_state is OwnerState.CLOSED

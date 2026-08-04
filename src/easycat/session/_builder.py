@@ -287,7 +287,8 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         journal_enabled=journal is not None,
     )
-    session._subscribe_owned(TurnStarted, turn_runner.on_turn_started)
+    session._turn_manager.bind_turn_publication(turn_runner.on_turn_publication)
+    session._subscribe_owned_reserved(TurnStarted, turn_runner.on_turn_started)
     session._subscribe_owned(STTFinal, turn_runner.on_stt_final)
     session._subscribe_owned(TurnEnded, turn_runner.schedule_turn_ended)
 

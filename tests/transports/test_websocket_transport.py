@@ -103,6 +103,28 @@ class _ClosedServer:
         return None
 
 
+class _DeferredEndWebSocket:
+    def __init__(self) -> None:
+        self.receive_started = asyncio.Event()
+        self.release_receive = asyncio.Event()
+
+    def __aiter__(self) -> _DeferredEndWebSocket:
+        return self
+
+    async def __anext__(self) -> bytes:
+        self.receive_started.set()
+        await self.release_receive.wait()
+        raise StopAsyncIteration
+
+
+class _TailOnlyResampler:
+    def __init__(self, _target_rate: int) -> None:
+        pass
+
+    def finish(self) -> bytes:
+        return b"stale-resampler-tail"
+
+
 def test_repository_websocket_servers_set_message_size_limit():
     """Every shipped WebSocket listener must bound decoded message size."""
     repository_root = Path(__file__).resolve().parents[2]
@@ -153,6 +175,33 @@ def test_websocket_transports_share_wire_protocol_methods(method_name: str):
         WebSocketConnectionTransport,
         method_name,
     )
+
+
+@pytest.mark.asyncio
+async def test_replaced_websocket_drops_prior_connection_resampler_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_ws = _DeferredEndWebSocket()
+    replacement_ws = object()
+    transport = WebSocketTransport()
+    transport._connection_generation = 1
+    transport._ws = old_ws  # type: ignore[assignment]
+
+    monkeypatch.setattr(
+        "easycat.transports.websocket.PCM16StreamResampler",
+        _TailOnlyResampler,
+    )
+    receive_task = asyncio.create_task(transport._receive_loop(old_ws))  # type: ignore[arg-type]
+    await old_ws.receive_started.wait()
+
+    transport._connection_generation = 2
+    transport._ws = replacement_ws  # type: ignore[assignment]
+    transport._reset_audio_queue()
+    old_ws.release_receive.set()
+    await receive_task
+
+    assert transport._ws is replacement_ws
+    assert transport._in_queue.empty()
 
 
 def test_connection_transport_handles_start_and_stop_control_messages(

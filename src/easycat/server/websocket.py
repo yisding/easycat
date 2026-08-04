@@ -12,6 +12,7 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat._net import normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websocket
@@ -69,6 +70,8 @@ async def serve_websocket_sessions(
     runtime = WebSocketSessionRuntime(
         manager=manager,
         max_sessions=settings.max_sessions,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="standalone-websocket-server",
         session_factory=session_factory,
         runtime_feedback=runtime_feedback,
     )

@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from easycat._epoch import Lease
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 
@@ -74,9 +75,13 @@ class _SessionTurnHandle:
         return self._session.begin_turn(turn_id, cancel_token)
 
     def set(self, turn: TurnContext | None) -> None:
-        self._session._turn = turn
-        if turn is not None:
-            self._session._turn_generation = turn.generation
+        if turn is None:
+            self._session._turn_lifecycle.clear_identity()
+        else:
+            self._session._turn_lifecycle.publish_identity(turn)
+
+    def capture_identity(self) -> Lease[TurnContext | None]:
+        return self._session._turn_lifecycle.capture_identity()
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,7 @@ class SessionWiringContext:
 
     # ── Turn pointer / correlation ───────────────────────────────
     current_turn: Callable[[], TurnContext | None]
+    capture_identity: Callable[[], Lease[TurnContext | None]]
     correlation_ids: Callable[[], tuple[str | None, str | None]]
     with_correlation: Callable[[Any], Any]
     emit: Callable[[Any], Awaitable[None]]
@@ -159,10 +165,11 @@ def build_wiring(session: Session) -> SessionWiringContext:
         session._is_running = value
 
     def _clear_turn() -> None:
-        session._turn = None
+        session._turn_lifecycle.clear_identity()
 
     return SessionWiringContext(
         current_turn=lambda: session._turn,
+        capture_identity=session._turn_lifecycle.capture_identity,
         correlation_ids=lambda: (
             session.session_id,
             active.id if (active := session._active_turn()) else None,

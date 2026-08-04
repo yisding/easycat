@@ -63,6 +63,10 @@ from typing import TYPE_CHECKING, Any, cast
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
 from easycat.server.transports import _await_with_hard_timeout
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
+from easycat.teardown_budgets import (
+    SERVER_DRAIN_TIMEOUT_S,
+    STANDALONE_WEBRTC_FORCE_SHUTDOWN_TIMEOUT_S,
+)
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports._webrtc_stats import WebRTCStatsState
 
@@ -678,8 +682,8 @@ async def serve_webrtc_config_sessions(
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
-    drain_timeout_s: float = 30.0,
-    force_shutdown_timeout_s: float = 5.0,
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S,
+    force_shutdown_timeout_s: float = STANDALONE_WEBRTC_FORCE_SHUTDOWN_TIMEOUT_S,
 ) -> None:
     """Serve one EasyCat session per browser WebRTC offer."""
     from easycat._extras import require_module
@@ -752,8 +756,8 @@ def run_webrtc_config_server(
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
-    drain_timeout_s: float = 30.0,
-    force_shutdown_timeout_s: float = 5.0,
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S,
+    force_shutdown_timeout_s: float = STANDALONE_WEBRTC_FORCE_SHUTDOWN_TIMEOUT_S,
 ) -> None:
     """Run a multi-session WebRTC signaling server synchronously."""
     asyncio.run(

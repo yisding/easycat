@@ -32,6 +32,9 @@ from easycat.integrations.agents.base import (
     apply_standard_interruption,
 )
 from easycat.runtime.records import ErrorInfo
+from easycat.teardown_budgets import (
+    LLAMA_POST_CANCEL_AWAIT_TIMEOUT_S as _POST_CANCEL_AWAIT_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +54,6 @@ _TEXT_FIELDS = (
     "output",
     "result",
 )
-
-# Upper bound on the best-effort await of a cancelled local handler. The
-# real WorkflowHandler.cancel_run() already gave the workflow time to honor
-# cancellation; this is only a safety net so a non-cooperative step can
-# never wedge the interrupted turn.
-_POST_CANCEL_AWAIT_TIMEOUT = 2.0
 
 
 class LlamaAgentsBridge:
