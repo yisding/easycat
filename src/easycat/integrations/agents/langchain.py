@@ -27,7 +27,9 @@ from easycat.integrations.agents._helpers import (
 )
 from easycat.integrations.agents._langchain_events import (
     _plain_chunk_text,
+    cancellation_drain_state,
     close_top_ended_cursors,
+    route_tool_cancellation_events,
     translate_stream_event,
 )
 from easycat.integrations.agents.base import (
@@ -348,12 +350,14 @@ class LangChainBridge:
 
             stream = self._runnable.astream_events(input_payload, **stream_kwargs)
             async for event in stream:
-                if cancel_token and cancel_token.is_cancelled:
-                    recorder.record_cancellation_boundary(
-                        mode=CancellationMode.IMMEDIATE_STOP,
-                        reason="cancel_token_set",
-                    )
-                    acc.cancelled = True
+                requested = bool(cancel_token and cancel_token.is_cancelled)
+                acc.cancelled, stop_now = cancellation_drain_state(
+                    requested=requested,
+                    active=acc.cancelled,
+                    state=tool_state,
+                    recorder=recorder,
+                )
+                if stop_now:
                     break
 
                 # ``astream_events`` is a third-party streaming boundary;
@@ -374,13 +378,20 @@ class LangChainBridge:
                         acc.captured_output = data_dict.get("output") if data_dict else None
                         acc.captured_output_set = True
 
-                self._handle_cursor_lifecycle(
-                    event, recorder, agent_cursor, open_cursors, ended_runs
+                bridge_events, stop_after_event = self._route_stream_event(
+                    event=event,
+                    recorder=recorder,
+                    agent_cursor=agent_cursor,
+                    open_cursors=open_cursors,
+                    ended_runs=ended_runs,
+                    tool_state=tool_state,
+                    acc=acc,
+                    cancelled=acc.cancelled,
                 )
-                for bridge_event in translate_stream_event(event, recorder, state=tool_state):
-                    if bridge_event.kind == "text_delta":
-                        acc.accumulated += bridge_event.text
+                for bridge_event in bridge_events:
                     yield bridge_event
+                if stop_after_event:
+                    break
         except Exception as exc:
             for cursor in reversed(list(open_cursors.values())):
                 recorder.safe_exit_cursor(cursor)
@@ -428,6 +439,29 @@ class LangChainBridge:
             # so release them before the bridge returns control to a follow-up
             # turn or interruption rewrite.
             await aclose_quietly(stream)
+
+    def _route_stream_event(
+        self,
+        *,
+        event: dict[str, Any],
+        recorder: AgentRecorder,
+        agent_cursor: ExecutionCursor,
+        open_cursors: dict[str, ExecutionCursor],
+        ended_runs: set[str],
+        tool_state: dict[str, Any],
+        acc: _LangChainTurnAccumulator,
+        cancelled: bool,
+    ) -> tuple[tuple[AgentBridgeEvent, ...], bool]:
+        self._handle_cursor_lifecycle(event, recorder, agent_cursor, open_cursors, ended_runs)
+        bridge_events, stop_after_event = route_tool_cancellation_events(
+            translate_stream_event(event, recorder, state=tool_state),
+            tool_state,
+            cancelled=cancelled,
+        )
+        for bridge_event in bridge_events:
+            if bridge_event.kind == "text_delta":
+                acc.accumulated += bridge_event.text
+        return bridge_events, stop_after_event
 
     async def _finalize_done(
         self,

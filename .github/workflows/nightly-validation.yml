@@ -168,6 +168,9 @@ jobs:
     needs: extras-plan
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      BRIDGE_EXTRAS_EVIDENCE_DIR: .easycat/validation/nightly/bridge-extras/${{ matrix.extra }}-${{ github.run_id }}-${{ github.run_attempt }}
+      TRANSPORT_EXTRAS_EVIDENCE_DIR: .easycat/validation/nightly/transport-extras/${{ matrix.extra }}-${{ github.run_id }}-${{ github.run_attempt }}
     strategy:
       fail-fast: false
       matrix:
@@ -176,6 +179,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Select exact bridge contract for this extra
+        id: bridge-contract
+        env:
+          EXTRA_NAME: ${{ matrix.extra }}
+        run: python3 scripts/bridge_extras_evidence.py node "$EXTRA_NAME" >> "$GITHUB_OUTPUT"
+      - name: Select exact transport backend tests for this extra
+        id: transport-contract
+        env:
+          EXTRA_NAME: ${{ matrix.extra }}
+        run: python3 scripts/transport_extras_evidence.py node "$EXTRA_NAME" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           version: "0.12.0"
@@ -198,11 +211,62 @@ jobs:
         run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
       # The unused requires_extra pytest marker was dropped (it marked zero
       # tests). Extras coverage relies on the import smoke above, the offline
-      # contract tests, and the SDK-gated bridge tests. The latter live under
-      # tests/integrations/agents and execute for real in the matching extras
-      # cell while self-skipping in unrelated cells.
+      # contract tests, and exact real-SDK/backend tests selected below for
+      # bridge and transport extras.
       - name: Offline contracts and SDK-gated bridge tests
         run: uv run --no-sync --python 3.12 pytest tests/contracts tests/integrations/agents -q -m "not integration_live"
+      - name: Run exact optional-SDK bridge contract
+        if: always() && steps.bridge-contract.outputs.node != ''
+        env:
+          CONTRACT_NODE: ${{ steps.bridge-contract.outputs.node }}
+          JUNIT_PREFIX: bridge-extra-${{ matrix.extra }}
+        run: |
+          mkdir -p "$BRIDGE_EXTRAS_EVIDENCE_DIR"
+          uv run --no-sync --python 3.12 pytest "$CONTRACT_NODE" -q -m integration_external --junitxml="$BRIDGE_EXTRAS_EVIDENCE_DIR/junit.xml" --junit-prefix "$JUNIT_PREFIX"
+      - name: Verify exact candidate SHA and contract result
+        if: always() && steps.bridge-contract.outputs.node != ''
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          EXTRA_NAME: ${{ matrix.extra }}
+        run: >-
+          python3 scripts/bridge_extras_evidence.py report
+          --extra "$EXTRA_NAME"
+          --expected-sha "$CANDIDATE_SHA"
+          --junit "$BRIDGE_EXTRAS_EVIDENCE_DIR/junit.xml"
+          --output "$BRIDGE_EXTRAS_EVIDENCE_DIR/evidence.json"
+      - name: Upload exact-SHA bridge extras evidence
+        if: always() && steps.bridge-contract.outputs.node != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bridge-extras-proof-${{ matrix.extra }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BRIDGE_EXTRAS_EVIDENCE_DIR }}
+          retention-days: 30
+      - name: Run exact optional-backend transport tests
+        if: always() && steps.transport-contract.outputs.node != ''
+        env:
+          CONTRACT_NODE: ${{ steps.transport-contract.outputs.node }}
+          JUNIT_PREFIX: transport-extra-${{ matrix.extra }}
+        run: |
+          mkdir -p "$TRANSPORT_EXTRAS_EVIDENCE_DIR"
+          uv run --no-sync --python 3.12 pytest "$CONTRACT_NODE" -q --junitxml="$TRANSPORT_EXTRAS_EVIDENCE_DIR/junit.xml" --junit-prefix "$JUNIT_PREFIX"
+      - name: Verify exact candidate SHA and transport backend result
+        if: always() && steps.transport-contract.outputs.node != ''
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          EXTRA_NAME: ${{ matrix.extra }}
+        run: >-
+          python3 scripts/transport_extras_evidence.py report
+          --extra "$EXTRA_NAME"
+          --expected-sha "$CANDIDATE_SHA"
+          --junit "$TRANSPORT_EXTRAS_EVIDENCE_DIR/junit.xml"
+          --output "$TRANSPORT_EXTRAS_EVIDENCE_DIR/evidence.json"
+      - name: Upload exact-SHA transport extras evidence
+        if: always() && steps.transport-contract.outputs.node != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: transport-extras-proof-${{ matrix.extra }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.TRANSPORT_EXTRAS_EVIDENCE_DIR }}
+          retention-days: 30
 
   live-canaries:
     name: Live Provider Canaries

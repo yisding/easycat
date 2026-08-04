@@ -98,7 +98,7 @@ async def test_smart_turn_incomplete_falls_back_to_timeout():
     for _ in range(3):
         tm.on_audio_frame(_chunk())
     await tm.on_vad_event(VADStopSpeaking())
-    tm.on_stt_final("This looks complete.", pause_generation=tm.pause_generation)
+    tm.on_stt_final("This looks complete.", pause=tm.capture_pause())
 
     # Should NOT have ended immediately
     await asyncio.sleep(0.01)

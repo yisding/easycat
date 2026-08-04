@@ -195,6 +195,20 @@ class TurnStarted(Event):
     """A new user turn has begun (VAD triggered)."""
 
 
+_TURN_STARTED_OBSERVATION_MARKER = object()
+
+
+def _mark_turn_started_observation(event: TurnStarted) -> TurnStarted:
+    """Mark an internally published TurnStarted as observation-only."""
+    object.__setattr__(event, "_easycat_observation_marker", _TURN_STARTED_OBSERVATION_MARKER)
+    return event
+
+
+def _is_turn_started_observation(event: TurnStarted) -> bool:
+    """Return whether private lifecycle publication preceded this public event."""
+    return getattr(event, "_easycat_observation_marker", None) is _TURN_STARTED_OBSERVATION_MARKER
+
+
 @dataclass(frozen=True)
 class TurnEnded(Event):
     """User turn has ended (speech capture complete)."""
@@ -664,11 +678,12 @@ class EventBus:
     Dispatch is inline by default: ``emit()`` invokes matching handlers in
     subscription order and awaits async handlers. The default
     ``handler_error_policy="continue"`` logs handler exceptions and keeps
-    dispatching remaining handlers. Use ``handler_error_policy="raise"`` in
-    tests or strict app code when a handler failure should abort dispatch and
-    propagate to the emitter. Use the returned :class:`EventSubscription` when
-    lifecycle ownership matters; the older ``unsubscribe(event_type, handler)``
-    form remains supported.
+    dispatching remaining public handlers. Reserved internal lifecycle handlers
+    always fail closed before public observation. Use
+    ``handler_error_policy="raise"`` in tests or strict app code when any public
+    handler failure should abort dispatch and propagate to the emitter. Use the
+    returned :class:`EventSubscription` when lifecycle ownership matters; the
+    older ``unsubscribe(event_type, handler)`` form remains supported.
     """
 
     def __init__(
@@ -687,6 +702,7 @@ class EventBus:
         if handler_error_policy not in {"continue", "raise"}:
             raise ValueError("handler_error_policy must be either 'continue' or 'raise'")
         self._handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
+        self._reserved_handlers: defaultdict[type, list[EventHandler]] = defaultdict(list)
         self._all_handlers: list[EventHandler] = []
         self._handler_failures = 0
         self._last_handler_error: HandlerDispatchError | None = None
@@ -718,9 +734,27 @@ class EventBus:
         self._handlers[event_type].append(handler)
         return EventSubscription(self, event_type, handler)
 
+    def _subscribe_reserved(
+        self,
+        event_type: type,
+        handler: EventHandler,
+    ) -> EventSubscription:
+        """Register an internal handler that runs before every public observer."""
+        self._reserved_handlers[event_type].append(handler)
+        return EventSubscription(self, event_type, handler, reserved=True)
+
     def unsubscribe(self, event_type: type, handler: EventHandler) -> None:
         """Remove a handler for a specific event type."""
         handlers = self._handlers.get(event_type)
+        if not handlers:
+            return
+        try:
+            handlers.remove(handler)
+        except ValueError:
+            pass
+
+    def _unsubscribe_reserved(self, event_type: type, handler: EventHandler) -> None:
+        handlers = self._reserved_handlers.get(event_type)
         if not handlers:
             return
         try:
@@ -760,21 +794,29 @@ class EventBus:
         Handlers registered for the exact event type **and** any of its
         parent classes (up to and including :class:`Event`) are invoked.
         Sync handlers are called directly; async handlers are awaited.
-        Exceptions in handlers are logged but do not prevent other handlers from running.
+        Public handler exceptions follow ``handler_error_policy``. Reserved
+        lifecycle handler exceptions always abort before public observation.
         """
         event_type = type(event)
+        # Reserved exact-type handlers establish private lifecycle state before
+        # the event becomes visible to subscribe_all(), exact-type, or parent
+        # observers. They are intentionally excluded from ``subscribers()``.
+        reserved = self._reserved_handlers.get(event_type)
+        handlers: list[EventHandler] = list(reserved) if reserved else []
+        reserved_count = len(handlers)
         # Build the handler list lazily.  This runs on the per-audio-chunk hot
         # path, so avoid the ``list(...)`` copy when there are no global
         # handlers, and read ``_handlers`` with ``.get`` so an emit with no
         # subscriber does not mutate the defaultdict with an empty bucket.
-        handlers: list[EventHandler] = list(self._all_handlers) if self._all_handlers else []
+        if self._all_handlers:
+            handlers.extend(self._all_handlers)
         for cls in event_type.__mro__:
             bucket = self._handlers.get(cls)
             if bucket:
                 handlers.extend(bucket)
             if cls is Event:
                 break
-        for handler in handlers:
+        for index, handler in enumerate(handlers):
             started = time.perf_counter()
             try:
                 result = handler(event)
@@ -792,7 +834,10 @@ class EventBus:
                     _handler_name(handler),
                     event_type.__name__,
                 )
-                if self._handler_error_policy == "raise":
+                # A reserved handler establishes private lifecycle invariants;
+                # exposing the event after it failed would invert the promised
+                # ordering. Reserved failures therefore always fail closed.
+                if index < reserved_count or self._handler_error_policy == "raise":
                     raise
             finally:
                 elapsed = time.perf_counter() - started
@@ -830,11 +875,13 @@ class EventSubscription:
         handler: EventHandler,
         *,
         all_events: bool = False,
+        reserved: bool = False,
     ) -> None:
         self._bus = bus
         self.event_type = event_type
         self.handler = handler
         self.all_events = all_events
+        self.reserved = reserved
         self._active = True
 
     @property
@@ -848,6 +895,8 @@ class EventSubscription:
             return
         if self.all_events:
             self._bus.unsubscribe_all(self.handler)
+        elif self.reserved and self.event_type is not None:
+            self._bus._unsubscribe_reserved(self.event_type, self.handler)
         elif self.event_type is not None:
             self._bus.unsubscribe(self.event_type, self.handler)
         self._active = False

@@ -10,8 +10,8 @@ that a stale callback from the previous turn cannot resolve a future on
 the next turn — the futures naturally die when the ``TurnContext`` is
 replaced.
 
-This lives at the package root (a leaf, depending only on
-``easycat.cancel``) rather than under ``session/`` so both the
+This lives at the package root (a leaf, depending only on the package-root
+Epoch and cancellation primitives) rather than under ``session/`` so both the
 ``session`` layer *and* the lower ``stages`` layer can import it
 *downward*.  Stages receive a ``TurnContext`` per ``execute`` call but
 must not depend on the ``session`` package; keeping the type here
@@ -27,6 +27,7 @@ import time
 from collections import deque
 from typing import Protocol, runtime_checkable
 
+from easycat._epoch import Lease
 from easycat.cancel import CancelToken
 
 TURN_AUDIO_LOG_MAXLEN = 10_000
@@ -51,6 +52,8 @@ class TurnHandle(Protocol):
     def no_turn(self) -> TurnContext: ...
 
     def begin(self, turn_id: str, cancel_token: CancelToken | None = None) -> TurnContext: ...
+
+    def capture_identity(self) -> Lease[TurnContext | None]: ...
 
     def set(self, turn: TurnContext | None) -> None: ...
 

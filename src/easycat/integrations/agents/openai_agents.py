@@ -102,6 +102,39 @@ def _resolve_model_id(candidate: Any) -> str | None:
     return None
 
 
+def _history_role(item: Any) -> Any:
+    if isinstance(item, dict):
+        return item.get("role")
+    return getattr(item, "role", None)
+
+
+def _replace_assistant_content(item: Any, replacement: str) -> str | None:
+    if isinstance(item, dict):
+        content = item.get("content")
+        if isinstance(content, list):
+            parts = [
+                part
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "output_text"
+            ]
+            if not parts:
+                return None
+            originals = [str(part.get("text", "")) for part in parts]
+            replacements = split_replacement_by_original_parts(originals, replacement)
+            for part, text in zip(parts, replacements):
+                part["text"] = text
+            return "".join(originals)
+        if isinstance(content, str):
+            item["content"] = replacement
+            return content
+        return None
+    if hasattr(item, "content"):
+        original = getattr(item, "content", None)
+        item.content = replacement
+        return original
+    return None
+
+
 class OpenAIAgentsBridge:
     """Bridge wrapping an OpenAI Agents SDK ``Agent``.
 
@@ -462,29 +495,14 @@ class OpenAIAgentsBridge:
         replacement = plan.framework_instructions["replacement"]
         for i in range(len(self._message_history) - 1, -1, -1):
             item = self._message_history[i]
-            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            role = _history_role(item)
+            if role == "user":
+                # The latest user entry starts the current turn. Reaching it
+                # without an assistant reply means this turn produced no
+                # rewritable output, so the prior turn must remain intact.
+                break
             if role == "assistant":
-                if isinstance(item, dict) and "content" in item:
-                    content = item["content"]
-                    if isinstance(content, list):
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "output_text":
-                                parts_list = [
-                                    p
-                                    for p in content
-                                    if isinstance(p, dict) and p.get("type") == "output_text"
-                                ]
-                                originals = [str(p.get("text", "")) for p in parts_list]
-                                replacements = split_replacement_by_original_parts(
-                                    originals, replacement
-                                )
-                                for p, r in zip(parts_list, replacements):
-                                    p["text"] = r
-                                break
-                    elif isinstance(content, str):
-                        item["content"] = replacement
-                elif not isinstance(item, dict) and hasattr(item, "content"):
-                    item.content = replacement
+                _replace_assistant_content(item, replacement)
                 break
         if self._use_previous_response_id and self._previous_response_id is not None:
             self._pending_interruption = (
@@ -522,29 +540,14 @@ class OpenAIAgentsBridge:
         original: str | None = None
         for i in range(len(self._message_history) - 1, -1, -1):
             item = self._message_history[i]
-            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            role = _history_role(item)
+            if role == "user":
+                # Do not let post-processing for an empty current turn reach
+                # behind its user boundary and edit a prior assistant reply.
+                break
             if role != "assistant":
                 continue
-            if isinstance(item, dict) and "content" in item:
-                content = item["content"]
-                if isinstance(content, list):
-                    parts_list = [
-                        p
-                        for p in content
-                        if isinstance(p, dict) and p.get("type") == "output_text"
-                    ]
-                    if parts_list:
-                        originals = [str(p.get("text", "")) for p in parts_list]
-                        original = "".join(originals)
-                        replacements = split_replacement_by_original_parts(originals, text)
-                        for p, r in zip(parts_list, replacements):
-                            p["text"] = r
-                elif isinstance(content, str):
-                    original = content
-                    item["content"] = text
-            elif not isinstance(item, dict) and hasattr(item, "content"):
-                original = getattr(item, "content", None)
-                item.content = text
+            original = _replace_assistant_content(item, text)
             break
 
         # When chaining by response_id the server maintains its own

@@ -315,6 +315,7 @@ async def consume_agent_stream(
     turn: TurnContext,
     first_tts_payload_ready: asyncio.Future[bool] | None = None,
     abort_event: asyncio.Event | None = None,
+    is_active: Callable[[], bool] | None = None,
 ) -> AgentStreamResult:
     """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
@@ -339,6 +340,7 @@ async def consume_agent_stream(
         turn=turn,
         first_tts_payload_ready=first_tts_payload_ready,
         abort_event=abort_event,
+        is_active=is_active,
     )
     return await consumer.run(stream_factory)
 
@@ -363,6 +365,7 @@ class _AgentStreamConsumer:
         turn: TurnContext,
         first_tts_payload_ready: asyncio.Future[bool] | None,
         abort_event: asyncio.Event | None,
+        is_active: Callable[[], bool] | None,
     ) -> None:
         self._cancel_token = cancel_token
         self._tts_queue = tts_queue
@@ -370,6 +373,7 @@ class _AgentStreamConsumer:
         self._turn = turn
         self._first_tts_payload_ready = first_tts_payload_ready
         self._abort_event = abort_event
+        self._is_active_callback = is_active
         self._buffer = _SentenceStreamBuffer(
             tts_queue=tts_queue,
             prepare_tts_payload=prepare_tts_payload,
@@ -401,6 +405,8 @@ class _AgentStreamConsumer:
             if kind is None:
                 continue
             if self._done_received:
+                break
+            if not self._is_active():
                 break
             if self._cancel_token and self._cancel_token.is_cancelled:
                 if not await self._consume_cancelled(event, kind):
@@ -455,6 +461,8 @@ class _AgentStreamConsumer:
         gate = self._first_tts_payload_ready
         if gate is None or gate.done():
             await self._emit(AgentDelta(text=event.text))
+            if not self._is_active():
+                return
             if self._turn.first_agent_time is None:
                 self._turn.first_agent_time = time.monotonic()
             await self._buffer.add_delta(event.text)
@@ -518,6 +526,7 @@ class _AgentStreamConsumer:
             self.result.error is None
             and (not self._cancel_token or not self._cancel_token.is_cancelled)
             and not (self._abort_event and self._abort_event.is_set())
+            and self._is_active()
         )
         if stream_succeeded:
             queued = await self._buffer.flush()
@@ -551,3 +560,7 @@ class _AgentStreamConsumer:
         gate = self._first_tts_payload_ready
         if queued and gate is not None and not gate.done():
             gate.set_result(True)
+
+    def _is_active(self) -> bool:
+        callback = self._is_active_callback
+        return callback is None or callback()

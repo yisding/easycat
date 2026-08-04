@@ -88,6 +88,7 @@ from easycat.session._builder import (
 from easycat.session._caller_id import CallerIdState
 from easycat.session._debug_backends import SessionDebugBackends
 from easycat.session._telephony_facade import TelephonyFacade
+from easycat.session._turn_lifecycle import TurnLifecycle
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
     Agent,
@@ -111,11 +112,17 @@ from easycat.stubs import (
     NoopTTS,
     NoopVAD,
 )
+from easycat.teardown_budgets import (
+    SESSION_BARGE_IN_CUTOFF_TIMEOUT_S as _BARGE_IN_CUTOFF_TIMEOUT_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_FORCE_START_LOCK_TIMEOUT_S,
+    SESSION_SUPERSEDED_STOP_TIMEOUT_S,
+)
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
-_BARGE_IN_CUTOFF_TIMEOUT_S = 0.4
 _EventT = TypeVar("_EventT", bound=Event)
 
 
@@ -357,11 +364,9 @@ class Session:
         self._session_log_token = None
         self._event_subscription_owner = object()
         self._event_subscriptions: list[EventSubscription] = []
-        # Per-turn state — created fresh at each turn start.
-        # _turn_generation is a monotonic counter incremented at turn start
-        # so stale callbacks from previous turns are detectable.
-        self._turn: TurnContext | None = None
-        self._turn_generation: int = 0
+        # Canonical turn-identity owner. Private compatibility properties below
+        # keep existing focused harnesses on the same publication seam.
+        self._turn_lifecycle = TurnLifecycle()
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
@@ -512,6 +517,27 @@ class Session:
         return None
 
     @property
+    def _turn(self) -> TurnContext | None:
+        """Compatibility view over the canonical Session identity owner."""
+        return self._turn_lifecycle.current
+
+    @_turn.setter
+    def _turn(self, turn: TurnContext | None) -> None:
+        if turn is None:
+            self._turn_lifecycle.clear_identity()
+        else:
+            self._turn_lifecycle.publish_identity(turn)
+
+    @property
+    def _turn_generation(self) -> int:
+        """Legacy generation view, dual-written from the identity epoch."""
+        return self._turn_lifecycle.generation
+
+    @_turn_generation.setter
+    def _turn_generation(self, generation: int) -> None:
+        self._turn_lifecycle.assert_legacy_generation(generation)
+
+    @property
     def current_turn(self) -> TurnContext | None:
         """Return the live turn context, including post-playback bookkeeping.
 
@@ -536,8 +562,7 @@ class Session:
         if not turn_id.strip():
             raise ValueError("turn_id must be a non-empty string")
         turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-        self._turn = turn
-        self._turn_generation = turn.generation
+        self._turn_lifecycle.publish_identity(turn)
         return turn
 
     def _with_correlation(self, event: Any) -> Any:
@@ -661,7 +686,7 @@ class Session:
         self._stt_committer.cancel_scheduled()
         self._stt_committer.cancel_inflight()
         self._stt_committer.resolve_pending(turn, "")
-        self._turn = None
+        self._turn_lifecycle.clear_identity()
         self._audio_router.reset_speech_detection()
         self._audio_router.reset_replay_chunks()
         self._turn_manager.reset()
@@ -751,6 +776,18 @@ class Session:
 
         scoped_handler = self._scope_event_handler(handler)
         subscription = self.event_bus.subscribe(event_type, scoped_handler)
+        self._event_subscriptions.append(subscription)
+        return subscription
+
+    def _subscribe_owned_reserved(
+        self,
+        event_type: type,
+        handler: EventHandler,
+    ) -> EventSubscription:
+        """Reserve a Session-owned lifecycle handler ahead of public observers."""
+
+        scoped_handler = self._scope_event_handler(handler)
+        subscription = self.event_bus._subscribe_reserved(event_type, scoped_handler)
         self._event_subscriptions.append(subscription)
         return subscription
 
@@ -1510,7 +1547,10 @@ class Session:
             if start_task is not None and not start_task.done():
                 start_task.cancel()
             try:
-                await asyncio.wait_for(self._start_lock.acquire(), timeout=0.5)
+                await asyncio.wait_for(
+                    self._start_lock.acquire(),
+                    timeout=SESSION_FORCE_START_LOCK_TIMEOUT_S,
+                )
             except TimeoutError:
                 # Force teardown must not hang forever behind startup code that
                 # ignores cancellation. Cleanup below proceeds with the
@@ -1560,7 +1600,10 @@ class Session:
         stop_error: Exception | None = None
         try:
             if superseded_task is not None:
-                done, _ = await asyncio.wait({superseded_task}, timeout=0.5)
+                done, _ = await asyncio.wait(
+                    {superseded_task},
+                    timeout=SESSION_SUPERSEDED_STOP_TIMEOUT_S,
+                )
                 if done:
                     try:
                         superseded_task.result()
@@ -1718,7 +1761,7 @@ class Session:
             except Exception:
                 logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
-            self._turn = None
+            self._turn_lifecycle.clear_identity()
             self._finalize_debug_backends()
             self._mark_closed()
             # Drop this session's armed emergency-export exporter from the

@@ -331,6 +331,77 @@ async def test_failed_second_session_does_not_poison_private_bus_compatibility()
 
 
 @pytest.mark.asyncio
+async def test_hand_built_turn_started_installs_identity_before_public_observation() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    observed_turn_ids: list[tuple[str, str | None]] = []
+
+    def observe(source: str, _event: TurnStarted) -> None:
+        turn = session.current_turn
+        observed_turn_ids.append((source, turn.id if turn is not None else None))
+
+    global_external = bus.subscribe_all(lambda event: observe("global", event))
+    external = bus.subscribe(TurnStarted, lambda event: observe("exact", event))
+    session = Session(_full_config(event_bus=bus, session_id="command-session"))
+    session._is_running = True
+    try:
+        await bus.emit(TurnStarted(session_id=session.session_id, turn_id="hand-built-turn"))
+
+        assert session.current_turn is not None
+        assert session.current_turn.id == "hand-built-turn"
+        assert observed_turn_ids == [
+            ("global", "hand-built-turn"),
+            ("exact", "hand-built-turn"),
+        ]
+    finally:
+        global_external.unsubscribe()
+        external.unsubscribe()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_internal_voice_publication_precedes_existing_public_observers() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    observations: list[tuple[str, str | None, bool]] = []
+    public_events: list[TurnStarted] = []
+
+    def observe(source: str, _event: TurnStarted) -> None:
+        turn = session.current_turn
+        observations.append(
+            (
+                source,
+                turn.id if turn is not None else None,
+                session._stt_committer.is_active,
+            )
+        )
+
+    global_external = bus.subscribe_all(lambda event: observe("global", event))
+
+    def observe_exact(event: TurnStarted) -> None:
+        public_events.append(event)
+        observe("exact", event)
+
+    external = bus.subscribe(TurnStarted, observe_exact)
+    session = Session(_full_config(event_bus=bus, session_id="private-publication-session"))
+    session._is_running = True
+    try:
+        await session._turn_manager.start_turn()
+
+        assert session.current_turn is not None
+        turn_id = session.current_turn.id
+        assert observations == [
+            ("global", turn_id, True),
+            ("exact", turn_id, True),
+        ]
+        assert len(public_events) == 1
+        assert not hasattr(public_events[0], "activity")
+        assert not hasattr(public_events[0], "identity")
+    finally:
+        global_external.unsubscribe()
+        external.unsubscribe()
+        await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_session_stop_releases_only_session_owned_event_handlers() -> None:
     bus = EventBus(handler_error_policy="raise")
     observed: list[TurnStarted] = []
@@ -352,6 +423,7 @@ async def test_session_stop_releases_only_session_owned_event_handlers() -> None
 
     assert external.active is True
     assert bus.subscribers(TurnStarted) == [observe]
+    assert bus._reserved_handlers.get(TurnStarted, []) == []
     for event_type in (
         PlaybackMarkAck,
         TransportAudioDelivered,
@@ -394,6 +466,7 @@ async def test_failed_session_stop_releases_owned_event_handlers() -> None:
 
     assert external.active is True
     assert bus.subscribers(TurnStarted) == [observe]
+    assert bus._reserved_handlers.get(TurnStarted, []) == []
     assert session._event_subscriptions == []
 
     replacement = Session(
@@ -564,10 +637,7 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
 
         new_turn = session.begin_turn("new-turn")
 
-        await session._tts_scheduler.finalize_speaking_turn(
-            old_turn,
-            turn_generation=old_turn.generation,
-        )
+        await session._tts_scheduler.finalize_speaking_turn(old_turn)
 
         assert transport.playback_marks == []
         assert old_turn.bytes_since_last_mark == 320

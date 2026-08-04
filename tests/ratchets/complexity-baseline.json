@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "Initial WS0.3 freeze after the verified WS0.1b adoption",
+  "rationale": "WS3.1d3 extracts shared OpenAI Agents history rewriting below the branch threshold",
   "counts": {
-    "C901": 59,
-    "PLR0912": 32,
+    "C901": 58,
+    "PLR0912": 31,
     "PLR0915": 26
   },
   "entries": [
@@ -50,7 +50,6 @@
     "src/easycat/integrations/agents/langchain.py\tPLR0912\tLangChainBridge._history_store",
     "src/easycat/integrations/agents/langgraph.py\tC901\tLangGraphBridge._drive_stream",
     "src/easycat/integrations/agents/langgraph.py\tC901\tLangGraphBridge._flush_pending_state_mutations",
-    "src/easycat/integrations/agents/langgraph.py\tPLR0912\tLangGraphBridge._drive_stream",
     "src/easycat/integrations/agents/langgraph.py\tPLR0912\tLangGraphBridge._flush_pending_state_mutations",
     "src/easycat/integrations/agents/llama_agents.py\tC901\tLlamaAgentsBridge._invoke_local",
     "src/easycat/integrations/agents/llama_agents.py\tC901\tLlamaAgentsBridge._invoke_remote",
@@ -59,7 +58,6 @@
     "src/easycat/integrations/agents/llama_agents.py\tPLR0912\tLlamaAgentsBridge._invoke_remote",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0915\tLlamaAgentsBridge._invoke_local",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0915\tLlamaAgentsBridge._invoke_remote",
-    "src/easycat/integrations/agents/openai_agents.py\tC901\tOpenAIAgentsBridge._apply_planned_mutation",
     "src/easycat/integrations/agents/openai_agents.py\tC901\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0912\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0915\tOpenAIAgentsBridge.invoke",

@@ -173,6 +173,42 @@ async def test_invoke_records_history():
 
 
 @pytest.mark.asyncio
+async def test_commit_guard_rolls_back_simple_agent_history_after_provider_wait():
+    class BlockingAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            await self.release.wait()
+            return "stale"
+
+    agent = BlockingAgent()
+    runner = AgentRunner(agent)
+    current = True
+
+    async def _invoke() -> list[AgentBridgeEvent]:
+        return [
+            event
+            async for event in runner.invoke(
+                AgentTurnInput.from_text("hello"),
+                NullAgentRecorder(),
+                commit_guard=lambda: current,
+            )
+        ]
+
+    invocation = asyncio.create_task(_invoke())
+    await agent.started.wait()
+    current = False
+    agent.release.set()
+
+    assert await invocation == []
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
 async def test_prepare_response_defers_history_until_invoke_prepared():
     runner = _preemptive_runner(EchoAgent())
 
@@ -216,6 +252,25 @@ async def test_cancelled_prepared_response_never_commits_history():
     token.cancel()
 
     events = [event async for event in runner.invoke_prepared(prepared, _recorder(), token)]
+
+    assert events == []
+    assert runner.history == []
+    assert not prepared.committed
+
+
+@pytest.mark.asyncio
+async def test_stale_prepared_response_never_commits_history():
+    runner = _preemptive_runner(EchoAgent())
+    prepared = await runner.prepare_response(AgentTurnInput.from_text("stale"))
+
+    events = [
+        event
+        async for event in runner.invoke_prepared(
+            prepared,
+            _recorder(),
+            commit_guard=lambda: False,
+        )
+    ]
 
     assert events == []
     assert runner.history == []

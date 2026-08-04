@@ -47,6 +47,7 @@ from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_na
 from easycat.turn_manager import TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._epoch import Lease
     from easycat._turn_context import TurnContext
     from easycat.session._wiring import SessionWiringContext
     from easycat.turn_manager import TurnManager
@@ -91,6 +92,7 @@ class STTCommitter:
         self._segment_silence_ms = segment_silence_ms
         self._no_turn = no_turn
         self._current_turn = wiring.current_turn
+        self._capture_identity = wiring.capture_identity
         self._turn_manager = turn_manager
         self._emit = wiring.emit
         self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
@@ -101,7 +103,7 @@ class STTCommitter:
         self._stt_task: asyncio.Task[None] | None = None
         self._pause_commit_task: asyncio.Task[None] | None = None
         self._segment_commit_task: asyncio.Task[None] | None = None
-        self._pause_generation_by_future: dict[asyncio.Future[str], int] = {}
+        self._pause_by_future: dict[asyncio.Future[str], Lease[None]] = {}
 
     # ── Track labelling ───────────────────────────────────────────
 
@@ -197,7 +199,7 @@ class STTCommitter:
             return
         while turn.pending_stt_segment_futures:
             future = turn.pending_stt_segment_futures.pop(0)
-            self._pause_generation_by_future.pop(future, None)
+            self._pause_by_future.pop(future, None)
             if not future.done():
                 future.set_result(value)
 
@@ -213,41 +215,75 @@ class STTCommitter:
             return
         self.cancel_scheduled()
         delay_s = self._segment_silence_ms / 1000.0
+        identity = self._capture_turn_identity(turn)
+        pause = self._turn_manager.capture_pause()
         self._pause_commit_task = self._runtime_scope.create_journaled_task(
-            self._commit_segment_after(delay_s, turn=turn),
+            self._commit_segment_after(
+                delay_s,
+                turn=turn,
+                identity=identity,
+                pause=pause,
+            ),
             name="stt_pause_commit",
             journal_sink=self._journal_sink,
         )
         self._pause_commit_task.add_done_callback(self._runtime_scope.log_task_exception)
 
-    async def _commit_segment_after(self, delay_s: float, turn: TurnContext | None) -> None:
+    async def _commit_segment_after(
+        self,
+        delay_s: float,
+        turn: TurnContext | None,
+        *,
+        identity: Lease[TurnContext | None] | None = None,
+        pause: Lease[None],
+    ) -> None:
         if delay_s > 0:
             await asyncio.sleep(delay_s)
-        if self._turn_manager.state != TurnManagerState.USER_PAUSED:
+        activity = self._turn_manager.capture_activity()
+        if (
+            not self._identity_is_current(identity, turn)
+            or not self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+            or not pause.guard()
+        ):
             return
         await self._start_segment_commit(
             turn=turn,
-            pause_generation=self._turn_manager.pause_generation,
+            pause=pause,
+            activity=activity,
+            identity=identity,
         )
 
     async def _start_segment_commit(
         self,
         turn: TurnContext | None = None,
         *,
-        pause_generation: int | None = None,
+        pause: Lease[None] | None = None,
+        activity: Lease[TurnManagerState] | None = None,
+        identity: Lease[TurnContext | None] | None = None,
     ) -> None:
         if (
             turn is None
             or turn is self._no_turn
+            or not self._identity_is_current(identity, turn)
             or turn.cancel_token.is_cancelled
             or not self._active
             or not turn.stt_has_uncommitted_audio
+            or (pause is not None and not pause.guard())
+            or (
+                activity is not None
+                and not self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+            )
         ):
             return
         if self._segment_commit_task is not None and not self._segment_commit_task.done():
             return
         self._segment_commit_task = self._runtime_scope.create_journaled_task(
-            self.commit_now(turn=turn, pause_generation=pause_generation),
+            self.commit_now(
+                turn=turn,
+                pause=pause,
+                activity=activity,
+                identity=identity,
+            ),
             name="stt_segment_commit",
             journal_sink=self._journal_sink,
             turn_id=turn.id,
@@ -258,16 +294,24 @@ class STTCommitter:
         self,
         turn: TurnContext | None,
         *,
-        pause_generation: int | None = None,
+        pause: Lease[None] | None = None,
+        activity: Lease[TurnManagerState] | None = None,
+        identity: Lease[TurnContext | None] | None = None,
     ) -> None:
         owner_task = asyncio.current_task()
         commit_segment = getattr(self._stt_getter(), "commit_segment", None)
         if (
             turn is None
             or turn is self._no_turn
+            or not self._identity_is_current(identity, turn)
             or not callable(commit_segment)
             or turn.cancel_token.is_cancelled
             or not turn.stt_has_uncommitted_audio
+            or (pause is not None and not pause.guard())
+            or (
+                activity is not None
+                and not self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+            )
         ):
             return
 
@@ -292,8 +336,8 @@ class STTCommitter:
         turn.stt_has_uncommitted_audio = False
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         turn.pending_stt_segment_futures.append(future)
-        if pause_generation is not None:
-            self._pause_generation_by_future[future] = pause_generation
+        if pause is not None:
+            self._pause_by_future[future] = pause
         committed = False
         try:
             committed = await commit_segment()
@@ -312,14 +356,54 @@ class STTCommitter:
                 },
             )
             if not committed:
-                turn.stt_has_uncommitted_audio = True
+                if (
+                    self._identity_is_current(identity, turn)
+                    and (
+                        activity is None
+                        or self._activity_is_current(activity, TurnManagerState.USER_PAUSED)
+                    )
+                    and (pause is None or pause.guard())
+                ):
+                    turn.stt_has_uncommitted_audio = True
                 if future in turn.pending_stt_segment_futures:
                     turn.pending_stt_segment_futures.remove(future)
-                self._pause_generation_by_future.pop(future, None)
+                self._pause_by_future.pop(future, None)
                 if not future.done():
                     future.set_result("")
             if self._segment_commit_task is owner_task:
                 self._segment_commit_task = None
+
+    @staticmethod
+    def _activity_is_current(
+        activity: Lease[TurnManagerState],
+        state: TurnManagerState,
+    ) -> bool:
+        """Whether a delayed segment commit still owns the pause activity."""
+        return activity.value is state and activity.guard()
+
+    def _capture_turn_identity(
+        self,
+        turn: TurnContext | None,
+    ) -> Lease[TurnContext | None] | None:
+        """Capture identity when ``turn`` comes from live Session wiring.
+
+        Direct-construction compatibility harnesses historically pass detached
+        turns while their wiring has no Session identity owner. Those calls
+        retain their local-object semantics; production turns always match the
+        live pointer and therefore carry an exact lease.
+        """
+        identity = self._capture_identity()
+        if identity.value is turn:
+            return identity
+        return None
+
+    @staticmethod
+    def _identity_is_current(
+        identity: Lease[TurnContext | None] | None,
+        turn: TurnContext | None,
+    ) -> bool:
+        """Whether a Session-owned STT effect still belongs to ``turn``."""
+        return identity is None or (identity.value is turn and identity.guard())
 
     async def await_pending(self, turn: TurnContext | None) -> bool:
         if turn is None or turn is self._no_turn:
@@ -350,7 +434,7 @@ class STTCommitter:
                     and turn.pending_stt_segment_futures[0] is future
                 ):
                     turn.pending_stt_segment_futures.pop(0)
-                self._pause_generation_by_future.pop(future, None)
+                self._pause_by_future.pop(future, None)
         return True
 
     async def await_inflight_commit(self) -> None:
@@ -398,26 +482,34 @@ class STTCommitter:
 
     # ── Background STT event consumer ─────────────────────────────
 
-    def start_event_loop(self, turn: TurnContext | None = None) -> None:
+    def start_event_loop(
+        self,
+        turn: TurnContext | None = None,
+        *,
+        identity: Lease[TurnContext | None] | None = None,
+    ) -> None:
         """Start background consumption of provider-scoped STT events."""
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
+        identity = identity or self._capture_turn_identity(turn)
 
         async def _consume() -> None:
             my_task = asyncio.current_task()
             try:
                 async for stt_event in self._stt_getter().events():
+                    if not self._identity_is_current(identity, turn):
+                        break
                     if turn and turn.cancel_token.is_cancelled:
                         break
                     track = self._resolve_track(stt_event.track)
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text, track=track))
                     elif stt_event.type == STTEventType.FINAL:
-                        pause_generation = self._take_next_pause_generation(turn)
-                        if pause_generation is not None:
+                        pause = self._take_next_pause(turn)
+                        if pause is not None:
                             self._turn_manager.on_stt_final(
                                 stt_event.text,
-                                pause_generation=pause_generation,
+                                pause=pause,
                             )
                         if turn and turn is not self._no_turn:
                             if not turn.pending_stt_segment_futures:
@@ -446,6 +538,8 @@ class STTCommitter:
                                 data=data,
                             )
                         await self._emit(STTFinal(text=stt_event.text, track=track))
+                        if not self._identity_is_current(identity, turn):
+                            break
                         if turn and turn is not self._no_turn and turn.pending_stt_segment_futures:
                             future = turn.pending_stt_segment_futures.pop(0)
                             if not future.done():
@@ -471,11 +565,11 @@ class STTCommitter:
         )
         self._stt_task.add_done_callback(self._runtime_scope.log_task_exception)
 
-    def _take_next_pause_generation(self, turn: TurnContext | None) -> int | None:
+    def _take_next_pause(self, turn: TurnContext | None) -> Lease[None] | None:
         """Consume correlation for the next pending segment final, if present."""
         if turn is None or turn is self._no_turn or not turn.pending_stt_segment_futures:
             return None
-        return self._pause_generation_by_future.pop(turn.pending_stt_segment_futures[0], None)
+        return self._pause_by_future.pop(turn.pending_stt_segment_futures[0], None)
 
     # ── Cancellation ──────────────────────────────────────────────
 

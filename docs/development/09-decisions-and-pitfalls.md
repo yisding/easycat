@@ -327,7 +327,7 @@ The most failure-prone awaits cross ownership changes:
 
 | Boundary | Stale-state risk | Guard |
 | --- | --- | --- |
-| VAD pause → delayed STT final | later pause receives old punctuation | pause generation |
+| VAD pause → delayed STT final | later pause receives old punctuation | exact pause lease |
 | agent/TTS work → new barge-in turn | old task mutates successor | captured `TurnContext` + generation |
 | dequeued audio → send lock | drain sees false idle | claim in-flight before await |
 | graceful stop → force escalation | two teardown owners | stop-task ownership transfer |

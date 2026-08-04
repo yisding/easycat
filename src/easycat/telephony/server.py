@@ -40,6 +40,10 @@ from easycat._concurrency import RuntimeSupervisor
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
 from easycat.server.transports import WebSocketSessionRuntime
+from easycat.teardown_budgets import (
+    SERVER_DRAIN_TIMEOUT_S,
+    SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
+)
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 if TYPE_CHECKING:
@@ -168,8 +172,8 @@ class TwilioVoiceServerConfig:
     max_sessions: int = 64
     start_timeout_s: float = 10.0
     public_twiml_url: str | None = None
-    drain_timeout_s: float = 30.0
-    force_shutdown_timeout_s: float = 10.0
+    drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S
+    force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 
 
 async def _start_twiml_http_listener(
