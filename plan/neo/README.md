@@ -92,7 +92,7 @@ Read these in order:
 ## Source Baseline
 
 An authoritative code-ground-truth review
-([neo-plan-review.md](neo-plan-review.md)) has since been completed against the
+([neo-plan-review.md](../archive/neo-plan-review.md)) has since been completed against the
 current tree and folded into this packet. Every symbol named in the plan was
 verified to exist at a compatible signature, so the original staleness caveat
 **did not bite for symbol existence**. The corrections that were applied are

@@ -16,7 +16,7 @@ subdirectory README for the area you are working on.
   implementation backlog, and source research.
 - [operating-model.md](operating-model.md): rules for keeping this folder
   useful as plans age, land, or become historical.
-- [roadmap/combined-cleanup-tasks.md](roadmap/combined-cleanup-tasks.md):
+- [archive/2026-04-combined-cleanup-audit.md](archive/2026-04-combined-cleanup-audit.md):
   consolidated cleanup backlog derived from earlier audit notes.
 - [peripherals/README.md](peripherals/README.md): separable follow-up
   initiatives, including DX, CLI, redaction, observability, provider, and
@@ -28,7 +28,7 @@ subdirectory README for the area you are working on.
 |---|---|
 | [neo/](neo/README.md) | Active next-major product/platform plan for app-first APIs, production server runtime, and feedback loops. |
 | [validation/](validation/README.md) | Validation strategy, recurring checks, latency/provider coverage, and implementation tasks. |
-| [roadmap/](roadmap/README.md) | Cross-cutting product and architecture plans. |
+| [roadmap/](roadmap/current-code-status.md) | Cross-cutting product and architecture plans. |
 | [workstreams/](workstreams/README.md) | Historical workstream records for the debug-first runtime redesign. |
 | [session-decomposition/](session-decomposition/README.md) | Historical extraction phases plus residual guidance for reducing `Session` ownership. |
 | [peripherals/](peripherals/README.md) | Valuable but separable follow-up initiatives. |

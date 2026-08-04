@@ -129,7 +129,7 @@ with the codebase. Counts below come from tracked files and exclude
 - Treat [../session-decomposition/](../session-decomposition/README.md) as
   partially implemented cleanup guidance. The remaining target is shrinking
   and clarifying `Session`, not starting decomposition from scratch.
-- Treat [combined-cleanup-tasks.md](combined-cleanup-tasks.md) as a backlog
+- Treat [../archive/2026-04-combined-cleanup-audit.md](../archive/2026-04-combined-cleanup-audit.md) as a backlog
   that needs triage before execution because several April findings are now
   done.
 - Treat [../validation/](../validation/README.md) as the active validation
