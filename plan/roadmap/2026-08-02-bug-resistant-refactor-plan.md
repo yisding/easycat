@@ -35,15 +35,23 @@ proposal first; sections referenced as §N below are its sections.
 
 ## Blocking decision: the peer set
 
-The critique's T1 recommends demoting several agent bridges to out-of-tree
-and deleting WebTransport; as of 2026-08-02 none of those cuts has been
-decided or made. **Record the peer-set decision before any per-peer
-implementation migration starts.** It gates WS1.4, WS2.3, WS2.6, WS3.2+,
-WS4.2+, and WS5.1's backend migrations. Contract suites and peer-neutral
-primitives may proceed; urgent product/security fixes do not wait. Every gated
-item migrates the *retained* set only.
-Building shared machinery around peers whose existence is an open question
-either wastes the work or forecloses the decision by momentum.
+**Resolved 2026-08-03 by [the peer-set ADR](2026-08-03-peer-set-adr.md):**
+every shipped transport and agent bridge is retained in-tree; nothing is
+demoted or deleted, reversing T1's recommendation on the grounds that WS3.1 and
+WS4.1 supplied the compatibility signal whose absence was T1's mechanism. The
+*retained set* is therefore the full shipped set, and WS1.4, WS2.3, WS2.6,
+WS3.2+, WS4.2+, and WS5.1's backend migrations are unblocked. Remaining
+obligation: lock both Tier-B cohort `members` arrays in
+`plan/metrics/refactor-families.json` to the ADR's twelve peers before the
+first production treatment commit of any of those slices.
+
+Original framing, retained for context: the critique's T1 recommended demoting
+several agent bridges to out-of-tree and deleting WebTransport; as of
+2026-08-02 none of those cuts had been decided or made. **Record the peer-set
+decision before any per-peer implementation migration starts.** Contract suites
+and peer-neutral primitives may proceed; urgent product/security fixes do not
+wait. Building shared machinery around peers whose existence is an open
+question either wastes the work or forecloses the decision by momentum.
 
 Acceptance for the decision: a checked-in ADR names every transport and agent
 bridge, its retained/in-tree/out-of-tree/deleted disposition, compatibility or
