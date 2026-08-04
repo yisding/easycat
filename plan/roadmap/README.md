@@ -21,6 +21,10 @@ Cross-cutting plans that shape multiple implementation areas.
 - [2026-08-02-bug-resistant-refactor-plan.md](2026-08-02-bug-resistant-refactor-plan.md):
   the PR-level backlog for that design — tiered workstreams with acceptance
   criteria, the peer-set blocking decision, and re-measurement gates.
+- [2026-08-03-peer-set-adr.md](2026-08-03-peer-set-adr.md): the accepted
+  peer-set decision that unblocks the plan's per-peer migrations — every
+  shipped transport and agent bridge is retained in-tree, with obligations,
+  the Llama Agents concurrency exemption, and revisit triggers.
 
 ## Historical Architecture
 
