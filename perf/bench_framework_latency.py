@@ -30,21 +30,55 @@ Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
 _WORKER_EOF = object()
 ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
-LOCK_EXCLUDE_NEWER_BY_FRAMEWORK = {
-    framework: str(
-        tomllib.loads((ENVIRONMENT_ROOT / framework / "uv.lock").read_text())["options"][
-            "exclude-newer"
-        ]
-    )
-    for framework in ("livekit", "pipecat")
+COMPETITORS: tuple[Framework, ...] = ("livekit", "pipecat")
+
+
+def _lock_exclude_newer(framework: Framework) -> str | None:
+    """Read a competitor lock's pinned resolution cutoff.
+
+    The competitor environments are deliberately frozen: ``uv lock
+    --exclude-newer`` records the cutoff in the lock's ``[options]`` table so
+    the benchmark resolves the same transitive snapshot on every run.
+    Regenerating a lock without that flag drops the table entirely, which is
+    what a Dependabot bump to one of these directories does.
+
+    Return ``None`` in that case rather than raising. This runs at import, so a
+    ``KeyError`` here fails collection for the whole module and reports an
+    opaque missing key; the callers below and the perf tests turn ``None`` into
+    a message that names the lock and how to regenerate it.
+    """
+    lock = tomllib.loads((ENVIRONMENT_ROOT / framework / "uv.lock").read_text())
+    cutoff = lock.get("options", {}).get("exclude-newer")
+    return None if cutoff is None else str(cutoff)
+
+
+LOCK_EXCLUDE_NEWER_BY_FRAMEWORK: dict[str, str | None] = {
+    framework: _lock_exclude_newer(framework) for framework in COMPETITORS
 }
+
+
+def require_lock_exclude_newer(framework: Framework) -> str:
+    """Return the pinned cutoff, explaining how to restore a regenerated lock."""
+    cutoff = LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework]
+    if cutoff is None:
+        project = f"perf/framework_environments/{framework}"
+        raise RuntimeError(
+            f"{project}/uv.lock has no [options] exclude-newer, so the benchmark can no "
+            "longer resolve the reviewed snapshot. This lock is pinned on purpose -- "
+            "revert the regeneration, or re-pin it with `uv lock --project "
+            f"{project} --exclude-newer <cutoff>` and update the reviewed cutoff in "
+            "tests/perf/test_framework_latency_benchmark.py."
+        )
+    return cutoff
+
+
 PINS = {
     framework: tuple(
         tomllib.loads((ENVIRONMENT_ROOT / framework / "pyproject.toml").read_text())["project"][
             "dependencies"
         ]
     )
-    for framework in ("livekit", "pipecat")
+    for framework in COMPETITORS
 }
 RESPONSE_TEXT = "Hello there."
 EXPECTED_TTS_TEXT = {
@@ -83,7 +117,7 @@ def worker_specs(
                 "--no-progress",
                 "--no-config",
                 "--exclude-newer",
-                LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework],
+                require_lock_exclude_newer(framework),
                 "--isolated",
                 "--project",
                 str(project),
@@ -101,13 +135,13 @@ def worker_specs(
 
 def _lock_metadata() -> dict[str, dict[str, str]]:
     metadata: dict[str, dict[str, str]] = {}
-    for framework in ("livekit", "pipecat"):
+    for framework in COMPETITORS:
         lock_path = ENVIRONMENT_ROOT / framework / "uv.lock"
         digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
         metadata[framework] = {
             "path": str(lock_path.relative_to(Path(__file__).parents[1])),
             "sha256": digest,
-            "exclude_newer": LOCK_EXCLUDE_NEWER_BY_FRAMEWORK[framework],
+            "exclude_newer": require_lock_exclude_newer(framework),
         }
     return metadata
 
