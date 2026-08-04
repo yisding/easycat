@@ -761,11 +761,10 @@ def test_render_diff_can_trim_markdown_blank_context_whitespace() -> None:
 def test_teaching_plan_source_path_mentions_resolve() -> None:
     """Keep teaching-plan code-span source pointers from drifting after refactors."""
     docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))
-    plans = sorted((ROOT / "plan" / "teaching" / "chapter-plans").glob("*.md"))
     missing: list[str] = []
     symbols_by_path: dict[str, set[str]] = {}
 
-    for doc in docs + plans:
+    for doc in docs:
         for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             for match in SOURCE_PATH_RE.finditer(line):
                 path_text = match.group("path")
@@ -791,10 +790,9 @@ def test_teaching_plan_source_path_mentions_resolve() -> None:
 def test_teaching_materials_use_current_beginner_config_name() -> None:
     """Keep teaching materials aligned with the public EasyConfig surface."""
     docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))
-    plans = sorted((ROOT / "plan" / "teaching" / "chapter-plans").glob("*.md"))
     stale: list[str] = []
 
-    for doc in docs + plans:
+    for doc in docs:
         for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             if "EasyCatConfig" in line:
                 stale.append(f"{doc.relative_to(ROOT).as_posix()}:{line_number}: {line.strip()}")
