@@ -1,5 +1,20 @@
 # Cartesia STT + TTS Provider — Peripheral
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/peripherals/peripheral-cartesia-provider.md`. Fully shipped. Current
+> source of truth: `src/easycat/stt/cartesia_provider.py` and
+> `src/easycat/tts/cartesia_tts.py` with their module docstrings, the STT/TTS
+> factories, and their tests — all of which are now more accurate about the
+> provider API than this file is.
+> Retained for one decision that appears in no docstring, no `docs/` page, and
+> no other plan: **no vendor SDK dependency**, and the three reasons behind
+> it. That decision governs every WebSocket provider adapter in the tree,
+> including Deepgram and ElevenLabs, not just Cartesia.
+> Known drift: the model names pinned here are behind the code. This file
+> names `ink-whisper` and `sonic-3`/`sonic-2`/`sonic-turbo`; the STT provider
+> defaults to `ink-2` and treats `ink-whisper` as the prior model retained for
+> multilingual work (`cartesia_provider.py:27-38`).
+
 > **Status (2026-05-21): landed.** Current code includes
 > `src/easycat/stt/cartesia_provider.py`, `src/easycat/tts/cartesia_tts.py`,
 > factory registration, `CARTESIA_API_KEY` CLI/env handling, and unit tests.

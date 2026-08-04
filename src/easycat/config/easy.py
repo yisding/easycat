@@ -1003,7 +1003,6 @@ class EasyConfig(_AgentSessionConfig):
     # phone) and the text REPL used for agent iteration.  Users can
     # still override any field via keyword argument — the preset only
     # fills the transport default when the caller didn't supply one.
-    # Documented in ``peripheral-dx-onboarding.md``.
 
     @classmethod
     def mic(cls, **kwargs: Unpack[_EasyConfigPresetKwargs]) -> EasyConfig:

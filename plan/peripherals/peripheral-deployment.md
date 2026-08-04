@@ -1,28 +1,35 @@
 # Peripheral: Deployment
 
-> **Status (2026-05-21): partially landed.** Docker deployment docs exist
-> under `docs/deployment/`; broader platform runbooks, SQLite tuning, and
-> per-platform health checks remain planned.
->
-> **Peripheral follow-up to `../roadmap/essential-debug-first-runtime.md`.**
-> The essential plan pins the deployment constraints (non-negotiable
-> requirements, tier assignments, and the two shipped journal
-> backend adapters). This file is the concrete per-platform
-> runbook, SQLite-vs-alternative decision tree, and tuning guide.
->
-> **Scope status:** peripheral but **not deferred**. Deployment
-> guidance should land alongside WS1 (the journal backend adapters
-> here depend on WS1 T1.4's adapter plug-point) so early adopters
-> have a supported deployment story from the first alpha.
->
-> **Sibling peripherals:**
->
-> - `peripheral-dx-onboarding.md`
-> - `peripheral-cli.md`
-> - `peripheral-eval-and-debugger-ui.md`
-> - `peripheral-observability-and-cost.md`
-> - `peripheral-provider-ecosystem.md`
-> - `peripheral-redaction.md`
+Status: active backlog.
+
+Snapshot: 2026-08-04. `docs/deployment/` contains only `docker.md` and
+`production-servers.md`, so every Tier-1, Tier-2, and Tier-3 runbook below is
+still unwritten — there is no Fly.io, ECS/Fargate, Modal, or Cloud Run page in
+the maintained docs tree. The journal backends this file assumes are real:
+`src/easycat/runtime/journal_factory.py` offers `sqlite`, `sqlite+litestream`,
+and `libsql`.
+
+This file is self-contained. It previously delegated the non-negotiable
+constraints to the essential debug-first runtime plan; that plan is now
+archived, so the constraints are folded in here and this document owns them.
+
+## Non-negotiable constraints
+
+Any deployment target EasyCat officially supports must:
+
+- sustain a long-lived WebSocket (or equivalent bidirectional stream) for the
+  full duration of a voice call — no HTTP request-timeout ceiling shorter than
+  the longest expected call;
+- preserve session affinity: once a call lands on an instance, it stays there
+  until the call ends;
+- meet the latency budget (P50 <1.0s, P90 <1.6s turn latency; ≤50ms P99
+  cumulative instrumentation overhead);
+- run native-Linux Python with `numpy`, `onnxruntime`, `webrtcvad`, `librosa`,
+  PortAudio bindings, and other audio-adjacent native wheels (Pyodide and
+  WASI-only runtimes are excluded by construction); and
+- either provide durable disk for the SQLite journal, or a first-class
+  alternative this plan targets (WAL shipping to object storage via Litestream,
+  embedded libSQL/Turso replicas, or a managed relational database).
 
 ## Context
 

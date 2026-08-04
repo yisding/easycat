@@ -104,8 +104,7 @@ class CartesiaTTSConfig:
             raise ValueError(
                 f"Unsupported Cartesia encoding: {self.encoding!r}. "
                 f"Only PCM encodings are supported in v1: {supported}. "
-                "μ-law / float32 support is tracked separately in "
-                "peripheral-telephony-tts-output.md."
+                "μ-law / float32 support is tracked separately."
             )
         if self.speed is not None and not 0.6 <= self.speed <= 1.5:
             raise ValueError(f"Cartesia speed must be in [0.6, 1.5], got {self.speed}")

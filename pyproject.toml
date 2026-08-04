@@ -103,7 +103,7 @@ funasr-vad = [
     "onnxruntime>=1.28.0",
 ]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.28.0"]
-# Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
+# Interactive debugger UI.
 debugger = [
     "aiohttp>=3.13.3",
 ]

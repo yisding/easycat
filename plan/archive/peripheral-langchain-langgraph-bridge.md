@@ -1,5 +1,19 @@
 # LangChain and LangGraph Bridge — Historical Plan
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/peripherals/peripheral-langchain-langgraph-bridge.md`. Current source
+> of truth: `src/easycat/integrations/agents/langchain.py` and `langgraph.py`
+> with their module docstrings,
+> [../../docs/extending/agent-bridge.md](../../docs/extending/agent-bridge.md),
+> and the six `tests/integrations/agents/test_bridge_lifecycle_*.py` suites.
+> Retained as the design record for a live extension seam, not as a checklist.
+> Its one non-historical section, "Deferred Design Decisions," is fully
+> resolved in code with richer reasoning than this plan carried: `stream_mode`
+> resolved to `["custom", "updates"]` (`langgraph.py:12-14`), and the
+> `interrupt()`-versus-barge-in question resolved by failing loudly, because a
+> voice runtime has no path to resume a paused graph — the human in the loop
+> *is* the caller (`langgraph.py:18`).
+
 > **Status (2026-05-21): landed.** Current code includes
 > `src/easycat/integrations/agents/langchain.py`,
 > `src/easycat/integrations/agents/langgraph.py`, the shared

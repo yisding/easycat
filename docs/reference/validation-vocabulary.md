@@ -150,14 +150,14 @@ Shared planned options:
 
 ```bash
 --json
---report PATH
---junit PATH
---artifacts-dir PATH
---provider NAME
---surface NAME
---python VERSION
---extra NAME
---timeout SECONDS
+--report <PATH>
+--junit <PATH>
+--artifacts-dir <PATH>
+--provider <NAME>
+--surface <NAME>
+--python <VERSION>
+--extra <NAME>
+--timeout <SECONDS>
 --fail-fast / --no-fail-fast
 --strict / --no-strict
 ```
