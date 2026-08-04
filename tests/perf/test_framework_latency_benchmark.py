@@ -11,10 +11,12 @@ from perf.bench_framework_latency import (
     PINS,
     Worker,
     WorkerSpec,
+    _lock_exclude_newer,
     _lock_metadata,
     _validate_sample,
     percentile,
     rank_by_latency,
+    require_lock_exclude_newer,
     run_benchmark,
     worker_specs,
 )
@@ -131,6 +133,45 @@ def test_worker_startup_exit_fails_without_waiting_for_response_timeout(tmp_path
             WorkerSpec(framework="easycat", command=(sys.executable, str(worker))),
             timeout_s=0.5,
         )
+
+
+def test_regenerated_lock_without_cutoff_reads_as_missing_instead_of_raising(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A Dependabot bump to perf/framework_environments/<framework> regenerates
+    # the lock without `--exclude-newer`, which drops the whole [options]
+    # table. Reading that at import time raised KeyError('options') and failed
+    # collection for this entire module, so every perf test reported an opaque
+    # missing key instead of the one real problem.
+    project = tmp_path / "pipecat"
+    project.mkdir()
+    (project / "uv.lock").write_text('version = 1\n\n[[package]]\nname = "aiohttp"\n')
+    monkeypatch.setattr("perf.bench_framework_latency.ENVIRONMENT_ROOT", tmp_path)
+
+    assert _lock_exclude_newer("pipecat") is None
+
+
+def test_missing_lock_cutoff_names_the_lock_and_how_to_re_pin_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(LOCK_EXCLUDE_NEWER_BY_FRAMEWORK, "pipecat", None)
+
+    with pytest.raises(RuntimeError, match="exclude-newer") as excinfo:
+        require_lock_exclude_newer("pipecat")
+
+    message = str(excinfo.value)
+    assert "perf/framework_environments/pipecat/uv.lock" in message
+    assert "uv lock --project perf/framework_environments/pipecat" in message
+
+    # The isolated-environment command must never be built from a lock that no
+    # longer pins the snapshot it claims to reproduce.
+    with pytest.raises(RuntimeError, match="exclude-newer"):
+        worker_specs(("pipecat",))
+
+    # Nor may a benchmark report record a cutoff the lock no longer carries.
+    with pytest.raises(RuntimeError, match="exclude-newer"):
+        _lock_metadata()
 
 
 def test_competitor_lock_metadata_is_content_addressed() -> None:

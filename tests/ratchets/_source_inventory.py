@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.ratchets._ast_digest import ast_digest
 
 RAW_TASK_EXEMPT = frozenset({"_concurrency.py", "runtime/scope.py"})
 CANCELLING_EXEMPT = RAW_TASK_EXEMPT
@@ -475,5 +476,4 @@ def _assigned_leaf_names(target: ast.AST) -> list[str]:
 
 
 def _normalized_hash(node: ast.AST) -> str:
-    normalized = ast.dump(node, annotate_fields=True, include_attributes=False)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return ast_digest(node)
