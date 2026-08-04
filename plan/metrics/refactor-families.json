@@ -180,7 +180,7 @@
       "name": "Tier-B retained agent bridges",
       "tier": "B",
       "gate": "bridge_B60",
-      "status": "blocked_peer_decision",
+      "status": "preregistered",
       "treatment_slices": [
         "WS2.6"
       ],
@@ -189,7 +189,7 @@
         "staleness_fencing",
         "peer_fix_divergence"
       ],
-      "candidate_members": [
+      "members": [
         {
           "id": "generic_workflow",
           "paths": [
@@ -233,12 +233,11 @@
           ]
         }
       ],
-      "members": [],
       "member_selection": {
         "source": "peer-set ADR",
-        "rule": "Copy exactly the retained in-tree candidate members before the first WS2.6 production commit; do not add a peer after treatment begins.",
-        "decision_sha": null,
-        "locked_at": null
+        "rule": "The peer-set ADR retained every candidate in-tree, so members is the full candidate set copied verbatim. Do not add a peer after treatment begins; removing one invalidates this cohort.",
+        "decision_sha": "df517aeca8409b9cd5eab3b0767d837ec41b0afe",
+        "locked_at": "2026-08-04"
       },
       "controls": [
         {
@@ -276,7 +275,7 @@
       "non_inferiority_epsilon": 0.01,
       "attribution_reviewer": "yisding",
       "anchor": {
-        "status": "blocked",
+        "status": "pending",
         "completion_sha": null,
         "completion_date": null,
         "migration_commits": [],
@@ -290,7 +289,7 @@
       "name": "Tier-B retained transports",
       "tier": "B",
       "gate": "transport_B60",
-      "status": "blocked_peer_decision",
+      "status": "preregistered",
       "treatment_slices": [
         "WS1.4",
         "WS2.3",
@@ -301,7 +300,7 @@
         "staleness_fencing",
         "peer_fix_divergence"
       ],
-      "candidate_members": [
+      "members": [
         {
           "id": "local",
           "paths": [
@@ -333,12 +332,11 @@
           ]
         }
       ],
-      "members": [],
       "member_selection": {
         "source": "peer-set ADR",
-        "rule": "Copy exactly the retained in-tree candidate members before the first WS1.4, WS2.3, or WS5.1 production commit; do not add a peer after treatment begins.",
-        "decision_sha": null,
-        "locked_at": null
+        "rule": "The peer-set ADR retained every candidate in-tree, so members is the full candidate set copied verbatim. Do not add a peer after treatment begins; removing one invalidates this cohort.",
+        "decision_sha": "df517aeca8409b9cd5eab3b0767d837ec41b0afe",
+        "locked_at": "2026-08-04"
       },
       "controls": [
         {
@@ -375,7 +373,7 @@
       "non_inferiority_epsilon": 0.01,
       "attribution_reviewer": "yisding",
       "anchor": {
-        "status": "blocked",
+        "status": "pending",
         "completion_sha": null,
         "completion_date": null,
         "migration_commits": [],

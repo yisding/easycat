@@ -114,9 +114,17 @@ measurement for that family.
 
 ### Measurement membership must be locked before treatment begins
 
-`plan/metrics/refactor-families.json` freezes both Tier-B cohorts at
+**Done on 2026-08-04**, against this ADR's merge SHA
+`df517aeca8409b9cd5eab3b0767d837ec41b0afe`. Both Tier-B cohorts are now
+`status: preregistered` / `anchor.status: pending` with all twelve peers as
+members — seven agent bridges, five transports — and `candidate_members`
+removed. `tests/test_refactor_metrics.py` pins the exact member ids, so a later
+addition or removal fails loudly instead of silently changing what a B60 result
+means. The rest of this section records why it was done this way.
+
+`plan/metrics/refactor-families.json` froze both Tier-B cohorts at
 `status: blocked_peer_decision` with empty `members` arrays. Before the first
-production commit of WS1.4, WS2.3, WS2.6, or WS5.1, both cohorts must move to
+production commit of WS1.4, WS2.3, WS2.6, or WS5.1, both cohorts had to move to
 `status: preregistered` with `anchor.status: pending`, and every
 `candidate_members` entry copied verbatim into `members` — twelve peers, no
 additions and no omissions.
