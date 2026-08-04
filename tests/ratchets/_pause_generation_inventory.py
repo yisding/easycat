@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.ratchets._ast_digest import ast_digest
 
 TARGETS = frozenset({"session/_stt_committer.py", "turn_manager.py"})
 
@@ -229,14 +230,14 @@ class _PauseGenerationVisitor(ast.NodeVisitor):
             self._record("future_map_write", "store future correlation", surrounding)
 
     def _record(self, category: str, construct: str, node: ast.AST) -> None:
-        normalized = ast.dump(node, annotate_fields=True, include_attributes=False)
+        ast_hash = ast_digest(node)
         self.candidates.append(
             _Candidate(
                 category=category,
                 path=self.relative_path,
                 qualname=self.qualname,
                 construct=construct,
-                ast_hash=hashlib.sha256(normalized.encode()).hexdigest()[:16],
+                ast_hash=ast_hash,
                 line=getattr(node, "lineno", 0),
             )
         )

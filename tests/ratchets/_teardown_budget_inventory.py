@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.ratchets._ast_digest import ast_digest, canonical_dump
 
 CLASSIFICATIONS = frozenset({"configurable", "lifecycle_budget", "not_teardown", "protocol_local"})
 _BUDGET_WORDS = ("deadline", "timeout")
@@ -228,7 +229,9 @@ class _BudgetVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         resolved = self._resolve(node.func)
         if self._in_lifecycle_closure and _is_budget_call(node, resolved):
-            construct = resolved or ast.dump(node.func, include_attributes=False)
+            # The fallback label lands in the manifest, so it needs the same
+            # interpreter-stable serialization as the hashes.
+            construct = resolved or canonical_dump(node.func)
             self._record("lifecycle_call", f"call {construct}", node)
         self.generic_visit(node)
 
@@ -370,5 +373,4 @@ def _assigned_leaf_names(target: ast.AST) -> list[str]:
 
 
 def _normalized_hash(node: ast.AST) -> str:
-    normalized = ast.dump(node, annotate_fields=True, include_attributes=False)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return ast_digest(node)

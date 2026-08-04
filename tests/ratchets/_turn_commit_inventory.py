@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.ratchets._ast_digest import ast_digest
 
 TARGETS = frozenset(
     {
@@ -239,8 +240,7 @@ class _TurnCommitVisitor(ast.NodeVisitor):
 
     def _record(self, category: str, effect: str, node: ast.AST) -> None:
         suspension = self._suspension_kind(node)
-        normalized = ast.dump(node, annotate_fields=True, include_attributes=False)
-        ast_hash = hashlib.sha256(normalized.encode()).hexdigest()[:16]
+        ast_hash = ast_digest(node)
         self.candidates.append(
             _Candidate(
                 category=category,
