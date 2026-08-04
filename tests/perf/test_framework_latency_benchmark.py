@@ -169,6 +169,10 @@ def test_missing_lock_cutoff_names_the_lock_and_how_to_re_pin_it(
     with pytest.raises(RuntimeError, match="exclude-newer"):
         worker_specs(("pipecat",))
 
+    # Nor may a benchmark report record a cutoff the lock no longer carries.
+    with pytest.raises(RuntimeError, match="exclude-newer"):
+        _lock_metadata()
+
 
 def test_competitor_lock_metadata_is_content_addressed() -> None:
     metadata = _lock_metadata()
