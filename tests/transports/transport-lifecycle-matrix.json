@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d1 wires complete Local and WebSocket capability drivers, closing the three Local pre-harness gaps while retaining the frozen five-by-eight cross-product.",
+  "update_rationale": "WS4.1d5 closes the execution registry with a zero-pending ratchet while preserving five complete drivers and forty exact evidence cells.",
   "transports": [
     "local",
     "twilio",
@@ -20,8 +20,7 @@
   },
   "driver_execution": {
     "counts": {
-      "complete": 2,
-      "pending": 3
+      "complete": 5
     },
     "transports": {
       "local": {
@@ -39,14 +38,32 @@
         ]
       },
       "twilio": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "webrtc": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webrtc.py::TestWebRTCTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       },
       "websocket": {
         "status": "complete",
@@ -63,9 +80,18 @@
         ]
       },
       "webtransport": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webtransport.py::TestWebTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
       }
     }
   },
@@ -74,8 +100,7 @@
       "required": 40
     },
     "coverage": {
-      "existing": 39,
-      "missing": 1
+      "existing": 40
     }
   },
   "cells": {
@@ -196,9 +221,11 @@
       },
       "queue_overflow": {
         "applicability": "required",
-        "coverage": "missing",
-        "rationale": "Twilio inherits bounded audio queues but lacks a direct built-in overflow policy assertion.",
-        "evidence": []
+        "coverage": "existing",
+        "rationale": "The Twilio capability driver fills the one-slot accepted-socket ingress queue and proves the second frame is dropped with one canonical degraded event.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios::test_queue_overflow"
+        ]
       },
       "startup_rollback": {
         "applicability": "required",

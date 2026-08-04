@@ -67,19 +67,13 @@ def test_transport_lifecycle_matrix_is_a_complete_classified_cross_product() -> 
     assert set(execution["transports"]) == TRANSPORTS
     statuses: Counter[str] = Counter()
     for transport, driver in execution["transports"].items():
-        assert driver["status"] in {"complete", "pending"}, transport
-        if driver["status"] == "pending":
-            assert driver == {
-                "status": "pending",
-                "suite_node": None,
-                "scenarios": [],
-            }, transport
-        else:
-            assert isinstance(driver["suite_node"], str), transport
-            _assert_lifecycle_suite_exists(driver["suite_node"])
-            assert set(driver["scenarios"]) == SCENARIOS, transport
+        assert driver["status"] == "complete", f"{transport} lifecycle driver regressed to pending"
+        assert isinstance(driver["suite_node"], str), transport
+        _assert_lifecycle_suite_exists(driver["suite_node"])
+        assert set(driver["scenarios"]) == SCENARIOS, transport
         statuses[driver["status"]] += 1
-    assert execution["counts"] == dict(sorted(statuses.items()))
+    assert execution["counts"] == {"complete": len(TRANSPORTS)}
+    assert statuses == Counter({"complete": len(TRANSPORTS)})
 
 
 def _load_manifest() -> dict[str, Any]:

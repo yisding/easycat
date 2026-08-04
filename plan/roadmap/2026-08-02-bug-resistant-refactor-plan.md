@@ -1158,6 +1158,46 @@ now has two complete and three pending drivers; thirty-nine of forty
 pre-harness cells have exact evidence, with only Twilio queue overflow still
 missing.
 
+WS4.1d2 result: `TwilioConnectionTransport` now runs every shared lifecycle
+row through a credential-free accepted-socket driver. Deferred-start gating
+proves single-flight connect leadership and disconnect invalidation outside
+the lifecycle lock; the explicit socket-close ledger proves interrupted
+cleanup and retry; the real Media Streams SID filters prove late-frame
+fencing; and the inherited bounded ingress queue proves the missing overflow
+drop plus canonical degraded event. Three drivers are complete and two remain
+pending. All forty pre-harness matrix cells now have exact evidence.
+
+WS4.1d3 result: `WebRTCTransport` now runs every shared lifecycle row without
+network sockets or optional aiortc/aiohttp installations. The capability
+driver separates signaling-stack leadership and rollback from peer-offer
+cancellation and generation fencing, while using the real inbound/outbound
+queues, degraded publication, receiver boundary, consumer reaping, and
+retained cleanup ledger. Four drivers are complete; only WebTransport remains
+pending. The forty-cell pre-harness evidence inventory remains closed.
+
+WS4.1d4 result: WebTransport now runs every shared lifecycle row without
+network sockets or the optional aioquic installation. The capability driver
+uses the outer transport for serialized QUIC-server startup and the real
+accepted-session transport for writer cancellation, rollback, bounded queues,
+and receive termination. Its generation row admits an active session through
+the real server dispatch path, closes admission during stop, and proves a late
+session is force-closed without spawning a handler. All five drivers are now
+complete and all forty pre-harness evidence cells remain closed; WS4.1d5 owns
+the separate zero-pending execution ratchet.
+
+WS4.1d5 result: the execution registry is now closed rather than merely
+progress-bearing: all five shipped transports must remain `complete`, and the
+ratchet rejects any reintroduced `pending` state. The nightly extras matrix
+selects the deterministic real aiortc/PyAV audio tests for the `webrtc` cell
+and the real aioquic protocol/server tests for the `webtransport` cell. Each
+exact node rejects zero tests, skips, failures, errors, or a checkout SHA that
+differs from the candidate SHA, then uploads its JUnit result and JSON
+attestation under an artifact name containing that SHA. Local PortAudio
+device behavior is not claimed as portable CI evidence: the local extra keeps
+its install/import smoke, while the credential-free capability driver remains
+the deterministic lifecycle proof. WS4.1 is complete as the Tier-A transport
+safety net.
+
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
 After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,

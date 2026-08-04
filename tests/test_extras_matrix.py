@@ -148,6 +148,70 @@ def test_bridge_extras_evidence_rejects_wrong_sha_or_skips(tmp_path: Path) -> No
     assert any("1 skipped" in problem for problem in problems)
 
 
+def test_transport_backend_extras_have_exact_nodes_and_sha_evidence() -> None:
+    evidence = _load_script("transport_extras_evidence")
+    declared = _declared_extras()
+
+    assert evidence.TRANSPORT_CONTRACT_NODES == {
+        "webrtc": "tests/transports/test_webrtc_outbound_audio.py",
+        "webtransport": "tests/transports/test_webtransport_server_protocol.py",
+    }
+    assert set(evidence.TRANSPORT_CONTRACT_NODES) <= declared
+
+    workflow = (REPO_ROOT / ".github" / "workflows" / "nightly-validation.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "scripts/transport_extras_evidence.py node" in workflow
+    assert "scripts/transport_extras_evidence.py report" in workflow
+    assert '--expected-sha "$CANDIDATE_SHA"' in workflow
+    assert '--junitxml="$TRANSPORT_EXTRAS_EVIDENCE_DIR/junit.xml"' in workflow
+    assert "transport-extras-proof-${{ matrix.extra }}-${{ github.sha }}" in workflow
+
+
+def test_transport_extras_evidence_requires_exact_sha_and_unskipped_tests(
+    tmp_path: Path,
+) -> None:
+    evidence = _load_script("transport_extras_evidence")
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuites><testsuite tests="17" failures="0" errors="0" skipped="0" /></testsuites>',
+        encoding="utf-8",
+    )
+
+    report, problems = evidence.build_evidence(
+        extra="webtransport",
+        expected_sha="a" * 40,
+        checkout_sha="a" * 40,
+        junit_path=junit,
+    )
+
+    assert problems == []
+    assert report["status"] == "passed"
+    assert report["exact_candidate_checkout"] is True
+    assert report["junit"] == {"tests": 17, "failures": 0, "errors": 0, "skipped": 0}
+
+
+def test_transport_extras_evidence_rejects_wrong_sha_or_skips(tmp_path: Path) -> None:
+    evidence = _load_script("transport_extras_evidence")
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuite tests="17" failures="0" errors="0" skipped="1" />',
+        encoding="utf-8",
+    )
+
+    report, problems = evidence.build_evidence(
+        extra="webrtc",
+        expected_sha="a" * 40,
+        checkout_sha="b" * 40,
+        junit_path=junit,
+    )
+
+    assert report["status"] == "failed"
+    assert report["exact_candidate_checkout"] is False
+    assert any("does not match candidate SHA" in problem for problem in problems)
+    assert any("1 skipped" in problem for problem in problems)
+
+
 def test_smoke_adapter_targets_derive_from_required_extra_mapping() -> None:
     extras_smoke = _load_script("extras_smoke")
     from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
