@@ -110,6 +110,7 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
     _ws: ServerConnection | None
     _audio_format: AudioFormat
     _outbound_rate: int | None
+    _connection_generation: int
 
     @property
     def audio_format(self) -> AudioFormat:
@@ -125,10 +126,14 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
             self._note_client_disconnected(exc)
             return False
 
-    async def _run_receive_loop(self, ws: ServerConnection) -> None:
+    async def _run_receive_loop(
+        self,
+        ws: ServerConnection,
+        connection_generation: int,
+    ) -> None:
         """Run the shared receiver with common disconnect handling."""
         try:
-            await self._receive_loop(ws)
+            await self._receive_loop(ws, connection_generation)
         except websockets.exceptions.ConnectionClosed as exc:
             self._note_client_disconnected(exc)
         finally:
@@ -187,13 +192,19 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
         """Tell the client to stop already-received and scheduled playback."""
         await self._send_client_event({"type": "clear"})
 
-    async def _receive_loop(self, ws: ServerConnection | None = None) -> None:
+    async def _receive_loop(
+        self,
+        ws: ServerConnection | None = None,
+        connection_generation: int | None = None,
+    ) -> None:
         """Route inbound binary audio and JSON control messages."""
         manage_lifecycle = ws is None
         if ws is None:
             ws = self._ws
         if ws is None:
             return
+        if connection_generation is None:
+            connection_generation = self._connection_generation
         target_rate = self._config.audio_format.sample_rate
         resampler = PCM16StreamResampler(target_rate)
         try:
@@ -205,7 +216,11 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
             self._note_client_disconnected(exc)
         finally:
             tail = resampler.finish()
-            if tail:
+            if (
+                tail
+                and connection_generation == self._connection_generation
+                and self._websocket_is_active(ws)
+            ):
                 self._enqueue_chunk(
                     AudioChunk(data=tail, format=self._config.audio_format),
                     context="WebSocket",
@@ -312,6 +327,7 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
         )
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
+        self._connection_generation = 0
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -344,6 +360,8 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
             await ws.close(4000, "Only one session at a time")
             return
 
+        self._connection_generation += 1
+        connection_generation = self._connection_generation
         self._ws = ws
         self._client_connected.set()
         self._outbound_rate = None
@@ -358,7 +376,7 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
 
         try:
             if await self._send_ready(ws):
-                await self._run_receive_loop(ws)
+                await self._run_receive_loop(ws, connection_generation)
         finally:
             self._finish_websocket(ws)
 
@@ -468,7 +486,7 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             raise
         if generation != self._connection_generation or not self._connected or self._ws is not ws:
             raise ConnectionError("WebSocket transport disconnected during connect")
-        self._receive_task = asyncio.create_task(self._run_receive_loop(ws))
+        self._receive_task = asyncio.create_task(self._run_receive_loop(ws, generation))
 
     async def disconnect(self) -> None:
         current = asyncio.current_task()

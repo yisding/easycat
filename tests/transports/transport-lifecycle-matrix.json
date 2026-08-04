@@ -1,0 +1,438 @@
+{
+  "version": 1,
+  "update_rationale": "WS4.1d5 closes the execution registry with a zero-pending ratchet while preserving five complete drivers and forty exact evidence cells.",
+  "transports": [
+    "local",
+    "twilio",
+    "webrtc",
+    "websocket",
+    "webtransport"
+  ],
+  "scenarios": {
+    "connect_leadership_race": "concurrent connect callers publish exactly one live backend generation and share its outcome",
+    "degraded_emission": "a lifecycle or queue fault emits the transport-specific non-secret degraded observation",
+    "disconnect_during_connect": "disconnect racing startup owns or joins cleanup without publishing the late candidate",
+    "interrupted_disconnect_publication": "caller cancellation cannot publish disconnected before retained cleanup ownership is safe",
+    "late_frames": "frames or callbacks from an obsolete generation cannot mutate the active generation",
+    "mid_stream_teardown": "teardown during active receive work terminates consumers and releases owned work",
+    "queue_overflow": "bounded ingress or egress overflow follows the transport's declared drop and degraded policy",
+    "startup_rollback": "partial startup failure rolls back every resource already acquired and permits the declared retry path"
+  },
+  "driver_execution": {
+    "counts": {
+      "complete": 5
+    },
+    "transports": {
+      "local": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      },
+      "twilio": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      },
+      "webrtc": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webrtc.py::TestWebRTCTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      },
+      "websocket": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestWebSocketTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      },
+      "webtransport": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_webtransport.py::TestWebTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      }
+    }
+  },
+  "counts": {
+    "applicability": {
+      "required": 40
+    },
+    "coverage": {
+      "existing": 40
+    }
+  },
+  "cells": {
+    "local": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The Local capability driver proves two concurrent callers create exactly one input/output stream generation.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_connect_leadership_race"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Microphone callback overflow must surface a bounded degraded event.",
+        "evidence": [
+          "tests/transports/test_local_transport.py::TestLocalTransport::test_mic_queue_full_emits_inbound_queue_full"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Local device startup is synchronous on the event loop, so the capability driver proves a concurrently scheduled disconnect runs after one published generation and closes that pair exactly once.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_disconnect_during_connect"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The Local capability driver cancels the first asynchronous disconnect boundary after synchronous device closure and proves no cleanup ownership remains stranded.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios::test_interrupted_disconnect_publication"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Off-loop PortAudio callbacks can arrive after a reconnect and must retain their original generation.",
+        "evidence": [
+          "tests/transports/test_local_transport.py::TestLocalTransport::test_late_prior_stream_callbacks_do_not_touch_reconnected_transport"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The inbound iterator must terminate when active local streams disconnect.",
+        "evidence": [
+          "tests/transports/test_local_transport.py::TestLocalTransport::test_receive_audio_returns_on_disconnect"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The off-loop microphone queue is bounded and declares a drop-on-full policy.",
+        "evidence": [
+          "tests/transports/test_local_transport.py::TestLocalTransport::test_mic_queue_full_emits_inbound_queue_full"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Speaker startup can fail after microphone acquisition and must close both streams.",
+        "evidence": [
+          "tests/transports/test_local_transport.py::TestLocalTransport::test_connect_rolls_back_input_when_output_start_fails"
+        ]
+      }
+    },
+    "twilio": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Concurrent accepted-socket startup must share one tentative start outcome.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamTokenValidation::test_concurrent_connect_waits_for_and_shares_tentative_start_failure"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Sequence and media timestamp gaps must produce correlated degraded observations.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamGapDiagnostics::test_server_transport_emits_sequence_and_timestamp_gap_diagnostics"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Disconnect may arrive while deferred start validation still owns the accepted socket.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamTokenValidation::test_disconnect_during_deferred_start_does_not_spawn_receiver"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Caller cancellation while reaping the receiver must preserve exact cleanup ownership.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamTokenValidation::test_disconnect_preserves_caller_cancellation_while_reaping_receiver"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Stop and media frames from a replaced stream SID cannot affect the active call.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamLifecycleRaces::test_server_transport_ignores_stale_stop_and_media_after_new_start"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Remote EOF must consume the accepted socket once and defer reusable state cleanup to disconnect.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamTokenValidation::test_remote_eof_consumes_accepted_socket_until_disconnect_cleanup"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The Twilio capability driver fills the one-slot accepted-socket ingress queue and proves the second frame is dropped with one canonical degraded event.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios::test_queue_overflow"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Deferred start-handler failure must close the socket and erase tentative call state.",
+        "evidence": [
+          "tests/transports/test_twilio_transport.py::TestTwilioStreamTokenValidation::test_deferred_start_handler_failure_rolls_back_connection"
+        ]
+      }
+    },
+    "webrtc": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Concurrent signaling startup must publish one runner and site.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCIngressQueueOwnership::test_concurrent_connects_publish_one_signaling_stack"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Outbound backpressure must emit a non-fatal degraded observation.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCDegradedEvents::test_outbound_queue_full_emits_degraded"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Disconnect must cancel an active offer before acquiring its lifecycle lock.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCIngressQueueOwnership::test_disconnect_cancels_active_offer_before_waiting_for_offer_lock"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "A cancelled disconnect must reap its active offer and remain safely retryable.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCIngressQueueOwnership::test_cancelled_disconnect_reaps_active_offer_and_remains_retryable"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "A replacement offer must drain stale inbound audio without replacing the published queue.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCIngressQueueOwnership::test_repeated_offer_drains_stale_audio_without_replacing_queue"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Receive iteration must terminate when a connected peer is torn down.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCTransportLifecycle::test_receive_audio_ends_on_disconnect"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "A full inbound queue must still admit the terminal sentinel.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestConsumeAudioSentinel::test_sentinel_delivered_when_queue_is_full"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Cancellation during signaling startup must stop the partial site and runner.",
+        "evidence": [
+          "tests/transports/test_webrtc_lifecycle_server.py::TestWebRTCIngressQueueOwnership::test_cancelled_connect_rolls_back_partial_signaling_stack"
+        ]
+      }
+    },
+    "websocket": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Concurrent server startup must publish one listener.",
+        "evidence": [
+          "tests/transports/test_websocket_transport.py::test_concurrent_server_connects_publish_one_listener"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Malformed control input must emit a bounded degraded observation.",
+        "evidence": [
+          "tests/transports/test_degraded_events.py::TestWebSocketDegradedEvents::test_control_decode_failed_emits"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Disconnect queued behind listener startup must close the late browser forwarder.",
+        "evidence": [
+          "tests/transports/test_websocket_transport.py::test_disconnect_queued_behind_connect_closes_late_browser_forwarder"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Caller cancellation during socket close must retain cleanup ownership for retry.",
+        "evidence": [
+          "tests/transports/test_websocket_transport.py::test_connection_disconnect_preserves_caller_cancellation_and_cleanup_ownership"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "A stale connection handler cannot clear a replacement client's state.",
+        "evidence": [
+          "tests/transports/test_degraded_events.py::TestWebSocketDegradedEvents::test_stale_connection_cleanup_does_not_clear_new_client"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Client disconnect must signal the inbound stream terminal boundary.",
+        "evidence": [
+          "tests/transports/test_websocket_transport.py::TestWebSocketTransport::test_client_disconnect_signals_end"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Connection ingress overflow must drop and emit exactly one degraded reason.",
+        "evidence": [
+          "tests/transports/test_degraded_events.py::TestWebSocketDegradedEvents::test_connection_transport_inbound_queue_full_emits"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Accepted-socket readiness failure must leave the socket owned by deterministic disconnect cleanup.",
+        "evidence": [
+          "tests/transports/test_websocket_transport.py::test_connection_transport_ready_error_keeps_socket_for_disconnect"
+        ]
+      }
+    },
+    "webtransport": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Concurrent outer transport startup must publish one QUIC server generation.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportTransportConformance::test_concurrent_connects_publish_exactly_one_internal_server"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Inbound session overflow must emit the WebTransport degraded reason.",
+        "evidence": [
+          "tests/transports/test_webtransport_degraded_events.py::TestWebTransportDegradedEvents::test_inbound_queue_full_emits_degraded"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Disconnect racing internal server startup must clean that exact generation.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportTransportConformance::test_disconnect_waits_for_connect_and_cleans_the_same_server"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Caller cancellation while reaping the writer must preserve terminal cleanup ownership.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportConnectionTransport::test_disconnect_preserves_caller_cancellation_while_reaping_writer"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "A late session arriving while the server closes must be rejected without spawning a handler.",
+        "evidence": [
+          "tests/transports/test_webtransport_server_protocol.py::TestWebTransportServerWiring::test_stop_rejects_late_session_during_wait_closed"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The outer receive iterator must terminate when the inner session ends.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportTransportConformance::test_receive_audio_exits_after_inner_session_ends"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Bounded outbound session queues must report a dropped send instead of blocking.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportConnectionTransport::test_send_audio_returns_false_when_queue_full"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Writer startup failure must stop the partial session before a retry is admitted.",
+        "evidence": [
+          "tests/transports/test_webtransport_connection_transport.py::TestWebTransportConnectionTransport::test_connect_failure_rolls_back_before_retry_is_allowed"
+        ]
+      }
+    }
+  }
+}

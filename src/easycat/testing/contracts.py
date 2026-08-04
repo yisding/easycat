@@ -385,7 +385,9 @@ class TransportContractSuite(ProviderContractSuite):
 
     Override ``expects_send_accepted_after_connect = False`` for transports
     whose offline factory connects without a peer (so ``send_audio`` legally
-    drops chunks even after ``connect()``).
+    drops chunks even after ``connect()``). The factory needs no lifecycle
+    injection hooks: the portable rows observe only public connect,
+    disconnect, receive, and send behavior.
     """
 
     sample_audio_format: ClassVar[AudioFormat] = PCM16_MONO_16K
@@ -401,6 +403,30 @@ class TransportContractSuite(ProviderContractSuite):
         """A disconnected transport reports the drop instead of raising."""
         assert await provider.send_audio(self.sample_audio_chunk()) is False
 
+    async def test_connect_is_idempotent(self, provider: Any) -> None:
+        """Repeated connect calls keep the transport usable."""
+        await provider.connect()
+        await provider.connect()
+        try:
+            accepted = await provider.send_audio(self.sample_audio_chunk())
+            assert isinstance(accepted, bool), "send_audio() must return a bool"
+            if self.expects_send_accepted_after_connect:
+                assert accepted is True, "send_audio() after connect() must accept the chunk"
+        finally:
+            await provider.disconnect()
+
+    async def test_concurrent_connect_callers_complete(self, provider: Any) -> None:
+        """Concurrent connect callers share one usable lifecycle outcome."""
+        async with asyncio.timeout(self.event_timeout):
+            await asyncio.gather(provider.connect(), provider.connect())
+        try:
+            accepted = await provider.send_audio(self.sample_audio_chunk())
+            assert isinstance(accepted, bool), "send_audio() must return a bool"
+            if self.expects_send_accepted_after_connect:
+                assert accepted is True, "send_audio() after connect() must accept the chunk"
+        finally:
+            await provider.disconnect()
+
     async def test_connect_send_disconnect_lifecycle(self, provider: Any) -> None:
         """connect → send → disconnect; the inbound stream then terminates."""
         await provider.connect()
@@ -414,6 +440,32 @@ class TransportContractSuite(ProviderContractSuite):
         )
         for chunk in received:
             assert isinstance(chunk, AudioChunk)
+
+    async def test_disconnect_terminates_an_active_receiver(self, provider: Any) -> None:
+        """Disconnect wakes an iterator that is already waiting for inbound audio."""
+        await provider.connect()
+        received: list[Any] = []
+
+        async def _collect() -> None:
+            received.extend(
+                await self.collect_events(
+                    provider.receive_audio(), source="active Transport.receive_audio()"
+                )
+            )
+
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(_collect())
+            await asyncio.sleep(0)
+            await provider.disconnect()
+        for chunk in received:
+            assert isinstance(chunk, AudioChunk)
+
+    async def test_disconnect_is_idempotent(self, provider: Any) -> None:
+        """Repeated disconnect calls remain safe and leave sends rejected."""
+        await provider.connect()
+        await provider.disconnect()
+        await provider.disconnect()
+        assert await provider.send_audio(self.sample_audio_chunk()) is False
 
     async def test_clear_audio_is_idempotent(self, provider: Any) -> None:
         clear_audio = getattr(provider, "clear_audio", None)
@@ -435,6 +487,7 @@ class AgentBridgeContractSuite(ContractSuite):
     sample_user_text: ClassVar[str] = "hello there"
     interrupted_text: ClassVar[str] = "hel"
     expects_interruption_journal: ClassVar[bool] = True
+    rotating_reset_snapshot_fields: ClassVar[frozenset[str]] = frozenset()
 
     @pytest.fixture
     def recorder(self) -> RecordingAgentRecorder:
@@ -448,6 +501,16 @@ class AgentBridgeContractSuite(ContractSuite):
             bridge.invoke(AgentTurnInput.from_text(self.sample_user_text), recorder),
             source="ExternalAgentBridge.invoke()",
         )
+
+    async def settle_interruption(self, provider: Any) -> None:
+        """Wait for framework-specific deferred persistence, when required.
+
+        Synchronous bridges need no override. A bridge whose public
+        ``apply_interruption()`` queues an async state write can override this
+        hook in its contract-suite subclass and wait for that write through a
+        public lifecycle boundary such as ``aclose()``.
+        """
+        del provider
 
     async def test_satisfies_external_agent_bridge_protocol(self, provider: Any) -> None:
         assert isinstance(provider, ExternalAgentBridge)
@@ -516,6 +579,7 @@ class AgentBridgeContractSuite(ContractSuite):
         )
         if not self.expects_interruption_journal:
             return
+        await self.settle_interruption(provider)
         kinds = recorder.kinds()
         assert "state_committed" in kinds, (
             "apply_interruption() must journal a state_committed record before mutating"
@@ -544,4 +608,17 @@ class AgentBridgeContractSuite(ContractSuite):
         reset = provider.snapshot_state()
         assert isinstance(reset, FrameworkStateSnapshot)
         json.dumps(reset.fields)
-        assert reset == initial, "reset() must restore the bridge's fresh-session state"
+        rotating = self.rotating_reset_snapshot_fields
+        initial_fields = dict(initial.fields)
+        reset_fields = dict(reset.fields)
+        for field_name in rotating:
+            assert field_name in initial_fields, f"missing initial rotating field {field_name!r}"
+            assert field_name in reset_fields, f"missing reset rotating field {field_name!r}"
+            assert reset_fields.pop(field_name) != initial_fields.pop(field_name), (
+                f"reset() must rotate declared isolation identity {field_name!r}"
+            )
+        assert reset.kind == initial.kind
+        assert reset.state_ref == initial.state_ref
+        assert reset_fields == initial_fields, (
+            "reset() must restore every stable field to its fresh-session value"
+        )

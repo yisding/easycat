@@ -88,15 +88,12 @@ def test_bridge_lifecycle_matrix_is_a_complete_classified_cross_product() -> Non
             for scenario, cell in cells[bridge].items()
             if cell["applicability"] == "required"
         }
-        assert driver["status"] in {"pending", "wired"}, bridge
-        if driver["status"] == "wired":
-            assert set(driver["scenarios"]) == required, bridge
-            _assert_suite_exists(driver["suite_node"])
-        else:
-            assert driver["scenarios"] == [], bridge
-            assert driver["suite_node"] is None, bridge
+        assert driver["status"] == "wired", f"{bridge} lifecycle driver regressed to pending"
+        assert set(driver["scenarios"]) == required, bridge
+        _assert_suite_exists(driver["suite_node"])
         statuses[driver["status"]] += 1
-    assert execution["counts"] == dict(sorted(statuses.items()))
+    assert execution["counts"] == {"wired": len(BRIDGES)}
+    assert statuses == Counter({"wired": len(BRIDGES)})
 
 
 def _load_manifest() -> dict[str, Any]:

@@ -54,8 +54,7 @@
   },
   "driver_execution": {
     "counts": {
-      "pending": 3,
-      "wired": 4
+      "wired": 7
     },
     "bridges": {
       "generic_workflow": {
@@ -91,19 +90,36 @@
         ]
       },
       "llama_agents": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_llama_agents.py::TestLlamaAgentsBridgeLifecycleScenarios",
+        "scenarios": [
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "openai_agents": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_openai_agents.py::TestOpenAIAgentsBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "pydantic_ai": {
-        "status": "pending",
-        "suite_node": null,
-        "scenarios": []
+        "status": "wired",
+        "suite_node": "tests/integrations/agents/test_bridge_lifecycle_pydantic_ai.py::TestPydanticAIBridgeLifecycleScenarios",
+        "scenarios": [
+          "interruption_prior_turn_isolation",
+          "recorder_transient_cleanup",
+          "stream_close_cleanup",
+          "tool_inflight_cancellation_drain",
+          "unknown_event_tolerance"
+        ]
       },
       "remote_responses_api": {
         "status": "wired",
