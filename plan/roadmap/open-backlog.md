@@ -54,16 +54,6 @@ redaction-policy layer lands", and no `--raw` option is registered in that
 module. 1.1 and this item should share one redaction entry point rather than
 growing two.
 
-### 1.3 Say in reader-facing docs that exported bundles are unredacted
-
-`grep -rin 'not redacted' docs/` returns zero hits. The behavior is stated only
-in the `src/easycat/runtime/safe_defaults.py:1-8` module docstring — "its default
-deliberately preserves normal transcript, agent-output, and tool-result text …
-Journal records and exported bundles therefore remain sensitive" — which users
-never read. Home: [../../docs/teaching/07-tools/README.md](../../docs/teaching/07-tools/README.md)
-or [../../docs/observability.md](../../docs/observability.md). This is a docs
-change, not a code change, and is the cheapest item in this file.
-
 ---
 
 ## 2. Contract gaps — the shipped surface promises behavior the runtime lacks
@@ -276,24 +266,23 @@ for both) and carrying the pre-workstream `git_sha 13051d2fd5f5`, so it asserts 
 post-workstream measurement that was never taken. Already adjudicated as a
 housekeeping nit, not a finding — carry it as cleanup, never as a gate.
 
-### 6.7 Fix the shipped-source and docs citations naming `plan/` files
+### 6.7 Guard source and docs citations of `plan/` filenames
 
-`plan` and `plan/**` are source-excluded at `pyproject.toml:203-204`, so `plan/`
-reaches no installed user. Seven artifacts still cite plan basenames:
+`plan` and `plan/**` are source-excluded at `pyproject.toml:203-204`, so a
+`plan/` filename cited from shipped code or a published docs page is a path no
+installed user can follow. Seven such citations existed and were fixed by the
+same reorganization that created this file — including
+`src/easycat/tts/cartesia_tts.py`, which emitted a planning filename in a
+runtime message shown to end users.
 
-| Site | Severity |
-|---|---|
-| `src/easycat/tts/cartesia_tts.py:108` | **Worst** — emits the filename in a runtime message shown to end users |
-| `src/easycat/debugger/__init__.py:3` | docstring |
-| `src/easycat/cli/debug/bundles.py:15` | docstring |
-| `src/easycat/config/easy.py:1006` | comment |
-| `pyproject.toml:106` | comment |
-| `tests/test_dx_helpers.py:1` | docstring |
-| `docs/teaching/13-swap-providers-and-transports/README.md:297` | published mkdocs page |
+What remains is the recurrence guard: **no test scans source docstrings,
+comments, or docs pages for `.md` citations**, so this class rots silently and
+will come back. `tests/test_markdown_links.py` only validates Markdown link
+syntax in maintained Markdown files; a bare filename in a Python docstring is
+invisible to it.
 
-No guard scans source docstrings for `.md` citations, so this rots silently.
-Consider adding that guard as part of the fix.
-
+Work: add a guard that fails when shipped source or a published docs page names
+a `plan/` document, by path or by bare basename.
 ---
 
 ## 7. Decided: do not revive
