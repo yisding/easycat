@@ -48,7 +48,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "observability.md",
         "../src/easycat/runtime/DURABILITY.md",
         "validation.md",
-        "../plan/validation/reference.md",
+        "reference/validation-vocabulary.md",
     ]
 
     missing = [link for link in required_links if link not in text]

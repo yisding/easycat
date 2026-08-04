@@ -294,8 +294,7 @@ numbers from your own environment:
 
 Cost is not a measured axis in this chapter — it's an annotation
 from provider pricing pages. Chapter 12 deliberately stops short
-of cost; the plan for `peripheral-observability-and-cost.md`
-promotes it to a measured column.
+of cost.
 
 ## Try breaking it
 

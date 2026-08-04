@@ -1,5 +1,23 @@
 # Observability Export and Cost — Peripheral
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/peripherals/peripheral-observability-and-cost.md`. Current source of
+> truth: [../../docs/observability.md](../../docs/observability.md) and
+> `src/easycat/_observability.py` for the observability half, which shipped in
+> a different shape than this file proposed (an enforced metric registry that
+> raises on unregistered names, exported as Layer D). Warmup shipped as a
+> plain boolean.
+> Nothing here is executable. It is retained for one reason: it is the only
+> written record of **why** the runtime cost surface was deleted. Commit
+> `db3ca9cc` removed `max_session_cost_usd`, the `cost_budget_*` records, the
+> debugger `/api/cost` rollup, and the stage-record latency-budget tagging as
+> undercooked and duplicative with the journal, and
+> [../critique/2026-07-26-full-critique.md](../critique/2026-07-26-full-critique.md)
+> cites this file as the sole record of that decision. It is also why
+> `easycat cost` is a standing CLI non-goal. Reviving cost budgets needs a new
+> decision, not a resumed plan; see the do-not-revive section of
+> [../roadmap/open-backlog.md](../roadmap/open-backlog.md).
+
 > **Cost monitoring removed; not a current direction.** The runtime
 > cost-monitoring surface that had partially landed (the debugger `/api/cost`
 > rollup, `max_session_cost_usd`, `cost_budget_*` records + `stop(force=True)`

@@ -11,8 +11,7 @@ output; it is not a separate bundle file format.
 ``bundles list``
     Print every bundle found in ``.easycat/recordings`` and
     ``.easycat/crash-dumps`` (or an explicit ``--path`` directory) with
-    size and modification time. This mirrors the UX
-    ``peripheral-cli.md`` promises: ``easycat bundles list`` is the
+    size and modification time. ``easycat bundles list`` is the
     fastest way to answer "what got recorded last night?" without
     opening a Python REPL.
 

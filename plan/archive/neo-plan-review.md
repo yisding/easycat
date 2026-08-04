@@ -1,5 +1,26 @@
 # Neo Next-Major Plan Review
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/neo/neo-plan-review.md`. Current source of truth:
+> [neo-milestone-ledger.md](neo-milestone-ledger.md) for what each milestone
+> became, and [../roadmap/open-backlog.md](../roadmap/open-backlog.md) for the
+> Phase 3 work that is still open. All twelve of this review's corrections are
+> resolved, shipped, or moot.
+> Retained for two things that exist nowhere else: it is the only adversarial
+> verification record for the neo packet, and its "Strengths to Preserve"
+> section is the only place four cross-cutting security properties are stated
+> as **invariants** rather than as incidental behavior — replay tool-DENY by
+> default, the `_observability.py` allow-list as an enforced PII firewall,
+> constant-time `hmac.compare_digest` across all five auth surfaces, and
+> `debug='full'` never autolaunching on its own. New work must not bypass any
+> of them.
+> Correction to this review's own findings: **TEST-5 is closed.** It reported
+> that `tests/cli/test_json_schema.py` had no walk over the command registry,
+> so a new `--json` command could ship with no envelope assertion. That guard
+> now exists as `test_every_json_command_has_an_envelope_assertion`, which
+> walks the registered CLI tree and matches assertions by AST rather than
+> substring. It landed in `01584756` and passes today.
+
 ## Executive Summary
 
 **Overall recommendation: PROCEED WITH CHANGES.**

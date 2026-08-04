@@ -1,5 +1,17 @@
 # EasyCat: full critique
 
+> **Status: historical record.** This audit is dated 2026-07-26 and is kept
+> for its findings, not for its status. Verified on 2026-08-04: 19 of the 20
+> HIGH findings are closed. The exception is #14, which not only remains open
+> but regressed —
+> `ruff --isolated --select C901,PLR0912,PLR0915 src/easycat/session/_session.py`
+> now reports C901 40 against a limit of 10, PLR0912 44 against 12, and
+> PLR0915 156 against 50. Every finding here that was still live on that date
+> was relocated to `plan/roadmap/open-backlog.md`; work the backlog, not this
+> file. The body below is unchanged and is cited by finding number and by
+> heading anchor from other documents, so it is not compressed, renumbered, or
+> moved.
+
 **Date:** 2026-07-26 · **Commit:** `adc346e7` · **Scope:** the whole repository
 
 ## What this is

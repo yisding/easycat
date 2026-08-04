@@ -101,3 +101,62 @@ rg 'easycat validate|scripts/validate.py|EventTraceLogger|SpanManager|InMemoryMe
 Then inspect whether the matches are intentionally current, planned, or
 historical. For larger reorganizations, also run a Markdown relative-link
 check before committing.
+
+## Amendments (2026-08-04)
+
+Added after the reorganization that retired `neo/`, `workstreams/`,
+`session-decomposition/`, `teaching/`, `testing/`, and `validation/`. The
+document types and promotion flow above were sound; the tree simply stopped
+complying with them. These amendments close the gaps that allowed that.
+
+### Two more status labels
+
+Eleven files independently invented their own status strings, which is evidence
+the original four were incomplete. Add:
+
+- `Status: shipped` for a plan whose work is fully in code, tests, and user
+  docs, kept only until it is archived.
+- `Status: index` for a README whose entire job is routing to other documents.
+
+Every document in `plan/` carries exactly one status label. A document with no
+status line is a defect — 21 of 50 files had none before this reorganization,
+and they were the hardest to judge.
+
+### A directory must not exist solely to host its own index
+
+If a subdirectory's only content is its README, delete the directory and fold
+the content into the parent index. Three directories failed this test.
+
+Related admission rule, carried forward from the retired `testing/` index: add a
+document only for material that is **not** already represented by a current test
+module, a maintained docs route, or shipped code. Prefer a test over a plan.
+
+### Archive rather than delete, but archive decisively
+
+Move a superseded document to `archive/` with a `Status: historical record`
+banner naming the current source of truth. Do this as a pure `git mv` and add
+the banner in a separate commit, so rename detection stays at R100 and
+`git log --follow` keeps working.
+
+`archive/` has no index by design: each file carries its own banner, and nothing
+routes work through the directory. Deleting is reserved for genuine duplicates
+and for documents fully superseded by shipped code plus tests.
+
+### Corrected directory roles
+
+- `roadmap/`: the active program, the open backlog, the completion log, and the
+  source-tree snapshot.
+- `peripherals/`: separable follow-up initiatives, each item pinned to a source
+  path.
+- `metrics/`: pre-registered measurement inputs. The JSON files are frozen by
+  test; never edit them to make a gate pass.
+- `critique/`: adversarial audits, kept for their findings, not their status.
+- `archive/`: retired plans.
+
+### Word count is a symptom, not the target
+
+`plan/` reached 229k words while the repo's own critique named the meta-layer a
+second product competing for the same maintenance budget. The metric that
+matters is the **reading path** — what a maintainer must read to decide what to
+do next — not the total. Archiving reduces the first without reducing the
+second, and that is the correct trade.

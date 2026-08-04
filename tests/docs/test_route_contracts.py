@@ -814,8 +814,10 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
 
 def test_validation_reference_docs_route_matches_json_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
-    reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
-    route_commands = entries["plan/validation/reference.md"].get("commands", ())
+    reference = (REPO_ROOT / "docs" / "reference" / "validation-vocabulary.md").read_text(
+        encoding="utf-8"
+    )
+    route_commands = entries["docs/reference/validation-vocabulary.md"].get("commands", ())
 
     for command in (
         "easycat docs --audience release-maintainers --json",

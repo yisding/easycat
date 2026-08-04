@@ -122,16 +122,13 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Planning Implications
 
-- Treat [../workstreams/](../workstreams/README.md) mostly as historical
-  acceptance records. Their checked boxes are implementation history, not
-  authoritative source truth. Re-open individual items only after checking
-  current code.
-- Treat [../session-decomposition/](../session-decomposition/README.md) as
-  partially implemented cleanup guidance. The remaining target is shrinking
-  and clarifying `Session`, not starting decomposition from scratch.
-- Treat [combined-cleanup-tasks.md](combined-cleanup-tasks.md) as a backlog
-  that needs triage before execution because several April findings are now
-  done.
-- Treat [../validation/](../validation/README.md) as the active validation
-  status and backlog; do not use older cleanup notes for validation current
-  state without re-checking the code and workflows.
+The active program is the bug-resistant refactor; start from
+[../README.md](../README.md), which orders the whole tree. Two standing rules
+survive the 2026-08-04 reorganization:
+
+- Anything under `archive/` is history, not a queue. Its checked boxes are
+  implementation records, not authoritative source truth. Re-open an item only
+  after verifying against current code — several findings there are now done.
+- Work that is genuinely still open was consolidated into
+  [open-backlog.md](open-backlog.md) with per-item evidence. Prefer it over any
+  older checklist for deciding what to pick up.

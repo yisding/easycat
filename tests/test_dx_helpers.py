@@ -1,4 +1,4 @@
-"""Tests for the DX helpers added from peripheral-dx-onboarding.md."""
+"""Tests for the public DX helpers."""
 
 from __future__ import annotations
 

@@ -1,5 +1,21 @@
 # Debug-First Runtime Redesign — Essential Plan
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/roadmap/essential-debug-first-runtime.md`. Current source of truth:
+> [../../docs/architecture.md](../../docs/architecture.md) for the
+> architecture, [../roadmap/current-code-status.md](../roadmap/current-code-status.md)
+> for source-tree status, and
+> [../roadmap/2026-08-02-bug-resistant-refactor-plan.md](../roadmap/2026-08-02-bug-resistant-refactor-plan.md)
+> for the active work. Two blocks were promoted out before archiving and are
+> maintained elsewhere: the "Chained Only: Why Voice-to-Voice Is Out of Scope"
+> reasoning now lives in `docs/architecture.md`, and the non-negotiable
+> deployment constraints now live in
+> [../peripherals/peripheral-deployment.md](../peripherals/peripheral-deployment.md).
+> Known drift beyond the file's own caveat: `InterruptionController` and
+> `VoiceDeliveryLedger` never landed and return no hits in `src/`. Other
+> retired plans cite this file in backticked prose; those citations are
+> historical too.
+
 > **Status: historical architecture plan.** Core journal, bridge, replay,
 > bundle, debugger, and session-collaborator pieces have landed, but detailed
 > line counts, class names, and sequencing in this document are no longer

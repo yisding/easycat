@@ -1,4 +1,4 @@
-# EasyCat Validation Reference
+# Validation vocabulary reference
 
 Status: design reference.
 
@@ -7,9 +7,10 @@ the current repo inventory, target validation vocabulary, artifact shapes,
 marker/CI design, provider-contract guidance, observability notes, and
 external research links.
 
-Implementation order lives in [tasks.md](tasks.md). The current-state entry
-point lives in [README.md](README.md). This reference preserves planned design
-notes, so command sections distinguish shipped commands from remaining backlog.
+The validation workflow itself is documented in
+[../validation.md](../validation.md). This page is the vocabulary reference:
+provider and surface markers, artifact shapes, report fields, and the
+provider-contract matrix.
 
 ## Goal
 
@@ -149,14 +150,14 @@ Shared planned options:
 
 ```bash
 --json
---report PATH
---junit PATH
---artifacts-dir PATH
---provider NAME
---surface NAME
---python VERSION
---extra NAME
---timeout SECONDS
+--report <PATH>
+--junit <PATH>
+--artifacts-dir <PATH>
+--provider <NAME>
+--surface <NAME>
+--python <VERSION>
+--extra <NAME>
+--timeout <SECONDS>
 --fail-fast / --no-fail-fast
 --strict / --no-strict
 ```

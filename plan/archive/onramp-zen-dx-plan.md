@@ -1,5 +1,22 @@
 # EasyCat Onramp DX Plan — Radically Simpler, Still Powerful, Zen-Aligned
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/peripherals/onramp-zen-dx-plan.md`. Current source of truth:
+> [../../docs/public-api.md](../../docs/public-api.md) for the public surface
+> and [../peripherals/README.md](../peripherals/README.md) for the DX items
+> that are still open. Its backlog is empty — all thirteen ranked changes are
+> marked landed, folded, or dropped.
+> Retained for section 7, "What we deliberately KEEP and do NOT change," and
+> chiefly for the reasoned decision **not** to shrink `easycat.__all__`. That
+> decision is recorded nowhere else — neither `docs/public-api.md` nor
+> `tests/test_public_api.py`, whose `len(easycat.__all__) <= 121` assertion is
+> an auto-ratcheting ceiling, not a rationale — and it directly contests the
+> "cut `__all__` to at most 70" item now carried in
+> [../roadmap/open-backlog.md](../roadmap/open-backlog.md). Read both before
+> acting on either.
+> Known drift: the "tested 92-name `__all__` contract" pinned throughout this
+> file is now 121 names.
+
 > Status: current implementation record plus remaining DX backlog. Every change
 > below has been checked against the source tree and an adversarial verifier
 > pass. Sections marked **landed** are backed by tests named in the verifier

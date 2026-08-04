@@ -1,5 +1,19 @@
 # Combined Cleanup Tasks
 
+> **Status: historical record.** Archived 2026-08-04 from
+> `plan/roadmap/combined-cleanup-tasks.md` and renamed to carry its date.
+> Current source of truth: [../roadmap/open-backlog.md](../roadmap/open-backlog.md),
+> which received the roughly fourteen items from this audit that are still
+> genuinely absent from the tree, each cross-referenced to the bug-resistant
+> slice that will execute it so no section is executed twice.
+> Retained for its 45 explicit `Done:` markers and for the
+> "Do Not Implement As Written" section, which is a decision record and not a
+> backlog.
+> Known drift: this audit describes the tree of 2026-04-25. Its §1.1 central
+> task renames `EasyCatConfig`, which returns zero hits in `src/`; its §5.3
+> headline of 1,573 lines for `stages/` is 45% below today's 2,853. Do not
+> execute anything here without re-checking the current tree.
+
 Status: active backlog with historical audit notes.
 
 This plan was distilled from three raw cleanup audits after checking the

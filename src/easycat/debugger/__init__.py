@@ -1,7 +1,6 @@
 """Interactive debugger UI for EasyCat sessions and bundles.
 
-Implements the peripheral-eval-and-debugger-ui.md interactive debugger:
-a single-process aiohttp server with a timeline view, per-turn
+The interactive debugger: a single-process aiohttp server with a timeline view, per-turn
 waterfall, record inspector, and audio playback.  Reads the journal +
 artifact store directly — no separate telemetry pipeline.
 

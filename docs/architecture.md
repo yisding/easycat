@@ -407,6 +407,80 @@ example servers, unbounded transport queues, and soft timeouts presented as
 hard deadlines. Enforce it with transport contracts, server lifecycle tests,
 telephony authentication tests, and public configuration compatibility tests.
 
+## Layer Ownership
+
+The highest-risk architectural failure mode is overlapping abstractions that
+each own a different version of session construction, provider planning, server
+lifecycle, or debugging. The **Must Not Own** column is the load-bearing half:
+
+| Layer | Owns | Must Not Own |
+|---|---|---|
+| `Session` | One conversation/call/client pipeline and lifecycle. | Process routing, multi-client server policy, manifests, deployment auth. |
+| `EasyConfig` | Detailed session/provider/transport/observability config. | Product-level run modes or process-level server lifecycle. |
+| Journals/bundles | Durable truth for runtime inspection and replay. | Project/application manifest semantics. |
+| Evals | CI-friendly assertions over conversations, journals, and runtime metrics. | Live transport implementation details. |
+
+`Session` is the per-call pipeline object: STT, TTS, VAD, noise reduction, echo
+cancellation, transport, agent bridge, event bus, turn state, the
+start/stop/cancel/reset/send-text lifecycle, the journal sink, and telephony
+helper attachment for a single session. Do not turn it into a server or a
+registry — active session limits, readiness, auth, route mounting, and graceful
+process shutdown belong above it.
+
+`EasyConfig` is the complete declaration for one session. Anything that
+constructs sessions should produce `EasyConfig` objects or accept user
+factories that produce them, rather than bypassing `create_session()`.
+
+## Non-goals
+
+Permanently out of bounds: voice-to-voice realtime APIs, an EasyCat-native tool
+API, an EasyCat-native MCP client or tool registry, an EasyCat-native
+planner/router, EasyCat-native memory or a prompt compiler, an EasyCat-native
+multi-agent abstraction beyond compatibility bridges, and a hosted
+observability backend.
+
+### Chained only: why voice-to-voice is out of scope
+
+Chained voice pipelines (STT → agent → TTS) and voice-to-voice realtime
+sessions (bidirectional audio streamed through one model) look similar at
+30,000 feet and are fundamentally different at every altitude that matters for
+a runtime:
+
+| Axis | Chained pipeline | Voice-to-voice realtime |
+|---|---|---|
+| Audio flow | Discrete turns: user audio → transcript → agent → audio | Continuous bidirectional stream, no turn boundary |
+| Latency target | P50 <1.0s, P90 <1.6s (acceptable conversational) | P50 <300ms, P90 <500ms (human-native) |
+| State shape | Text history + delivered-audio ledger | Live multimodal session state owned by the model |
+| Transcripts | Always available (STT output) | Partial, delayed, or absent |
+| Interruption | Cancel TTS queue + patch text history | Session-level cancel signal to live model |
+| Tool calls | Between turns | Mid-audio-stream while audio flows both ways |
+| Cost model | STT seconds + text tokens + TTS characters | Audio input/output tokens (10–30× per-word cost) |
+| Provider landscape | Deepgram, Cartesia, ElevenLabs, OpenAI STT/TTS | OpenAI Realtime, Gemini Live |
+| Failure modes | STT errors, VAD false positives, TTS drift | Model hallucinations, WebSocket drops, audio token overruns |
+| Debugging primitives | STT cassette replay, TTS cassette replay, turn-by-turn journal | Bidirectional audio cassette replay against live provider |
+
+Serving both with one runtime would force every abstraction to satisfy both the
+"discrete turn with clean STT/Agent/TTS boundaries" model and the "continuous
+multimodal session" model, so every abstraction would compromise on both. The
+`Stage` protocol would grow fused-stage escape hatches, the journal would need
+partial deferred records, the interruption contract would need two code paths,
+replay would need two fidelity stories, the debugger UI would need two views,
+and users would need two mental models. The common-runtime savings are small;
+the per-abstraction compromises compound everywhere.
+
+The debug-first thesis is *only* credible if the runtime can answer "what
+happened and can I replay it" uniformly. Chained pipelines support that
+completely: STT outputs are captured, VAD and Smart Turn decisions are
+byte-reproducible, TTS is cassette-replayable, and every stage boundary is
+journaled. Voice-to-voice sessions do not: transcripts are provider-decided,
+audio is bidirectional and huge, tool calls happen mid-stream without commit
+boundaries, replay depends on the live provider API, and "which stage was slow"
+collapses into "the model was slow, we don't know why".
+
+Users who want voice-to-voice should use the provider SDK directly (OpenAI
+Realtime, Gemini Live). EasyCat's contribution is a debug-first runtime for the
+chained pipeline, and that is what it optimizes for end to end.
+
 ## Related Pages
 
 - [Developer textbook](development/) — the chapter-by-chapter newcomer path
