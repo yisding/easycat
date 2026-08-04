@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import SurvivorCapacityError
 from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
@@ -467,6 +468,16 @@ class AudioRouter:
                 self._INLINE_SEND_TASK_NAME,
                 send_owned,
             )
+        except SurvivorCapacityError:
+            # The inline path is an optimization, not a delivery guarantee. A
+            # parked predecessor send (or a sibling session sharing the
+            # supervisor) can hold the only survivor slot; report the fast path
+            # as unavailable so the caller queues the chunk normally instead of
+            # aborting synthesis and dropping first audio.
+            if not owned_send_started:
+                await self._finish_outbound_send(replayed_chunk=False)
+            logger.debug("Inline first-audio send rejected by survivor capacity; queueing")
+            return False
         except BaseException:
             if not owned_send_started:
                 await self._finish_outbound_send(replayed_chunk=False)

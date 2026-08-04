@@ -788,6 +788,43 @@ class EventBus:
         except ValueError:
             pass
 
+    def _dispatch_list(self, event_type: type) -> tuple[list[EventHandler], int]:
+        """Return the ordered handler list and how many of them are reserved.
+
+        Reserved handlers establish private lifecycle state before the event
+        becomes visible to ``subscribe_all()``, exact-type, or parent
+        observers. They walk the same MRO as public subscriptions so a
+        subclassed lifecycle event (e.g. a custom ``TurnStarted``) cannot reach
+        public observers while skipping Session's own installation. They are
+        intentionally excluded from ``subscribers()``.
+        """
+        handlers: list[EventHandler] = []
+        if self._reserved_handlers:
+            self._extend_from_mro(handlers, self._reserved_handlers, event_type)
+        reserved_count = len(handlers)
+        # Build the rest lazily. This runs on the per-audio-chunk hot path, so
+        # avoid work when there are no global handlers, and read the buckets
+        # with ``.get`` so an emit with no subscriber does not mutate the
+        # defaultdict with an empty bucket.
+        if self._all_handlers:
+            handlers.extend(self._all_handlers)
+        self._extend_from_mro(handlers, self._handlers, event_type)
+        return handlers, reserved_count
+
+    @staticmethod
+    def _extend_from_mro(
+        handlers: list[EventHandler],
+        buckets: defaultdict[type, list[EventHandler]],
+        event_type: type,
+    ) -> None:
+        """Append handlers registered for ``event_type`` and its Event bases."""
+        for cls in event_type.__mro__:
+            bucket = buckets.get(cls)
+            if bucket:
+                handlers.extend(bucket)
+            if cls is Event:
+                break
+
     async def emit(self, event: Event) -> None:
         """Emit an event to matching and global handlers.
 
@@ -798,24 +835,7 @@ class EventBus:
         lifecycle handler exceptions always abort before public observation.
         """
         event_type = type(event)
-        # Reserved exact-type handlers establish private lifecycle state before
-        # the event becomes visible to subscribe_all(), exact-type, or parent
-        # observers. They are intentionally excluded from ``subscribers()``.
-        reserved = self._reserved_handlers.get(event_type)
-        handlers: list[EventHandler] = list(reserved) if reserved else []
-        reserved_count = len(handlers)
-        # Build the handler list lazily.  This runs on the per-audio-chunk hot
-        # path, so avoid the ``list(...)`` copy when there are no global
-        # handlers, and read ``_handlers`` with ``.get`` so an emit with no
-        # subscriber does not mutate the defaultdict with an empty bucket.
-        if self._all_handlers:
-            handlers.extend(self._all_handlers)
-        for cls in event_type.__mro__:
-            bucket = self._handlers.get(cls)
-            if bucket:
-                handlers.extend(bucket)
-            if cls is Event:
-                break
+        handlers, reserved_count = self._dispatch_list(event_type)
         for index, handler in enumerate(handlers):
             started = time.perf_counter()
             try:

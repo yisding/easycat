@@ -8,6 +8,12 @@ from easycat._turn_context import TurnContext
 __all__ = ["TurnLifecycle"]
 
 
+def _stamp_turn_generation(turn: TurnContext | None, generation: int) -> None:
+    """Mirror the published generation onto the turn inside the epoch lock."""
+    if turn is not None:
+        turn.generation = generation
+
+
 class TurnLifecycle:
     """Own one Session's turn-identity epoch and legacy generation dual-write.
 
@@ -36,26 +42,23 @@ class TurnLifecycle:
         return self._identity.capture()
 
     def publish_identity(self, turn: TurnContext) -> Lease[TurnContext | None]:
-        """Install ``turn``, invalidate prior leases, and dual-write its generation."""
-        next_generation = self._identity.generation + 1
-        turn.generation = next_generation
-        published_generation = self._identity.bump(turn)
-        lease = self._identity.capture()
+        """Install ``turn``, invalidate prior leases, and dual-write its generation.
+
+        Stamping and publication share one critical section, so a competing
+        publish or clear cannot land between them and leave the installed turn
+        carrying a generation that disagrees with its lease.
+        """
+        lease = self._identity.publish(turn, stamp=_stamp_turn_generation)
         if __debug__:
-            assert published_generation == next_generation
             assert lease.generation == turn.generation
             assert lease.value is turn
-            assert lease.is_current()
         return lease
 
     def clear_identity(self) -> Lease[TurnContext | None]:
         """Clear the installed turn and invalidate every outstanding identity lease."""
-        cleared_generation = self._identity.bump(None)
-        lease = self._identity.capture()
+        lease = self._identity.publish(None)
         if __debug__:
-            assert lease.generation == cleared_generation
             assert lease.value is None
-            assert lease.is_current()
         return lease
 
     def assert_legacy_generation(self, generation: int) -> None:

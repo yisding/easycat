@@ -189,3 +189,79 @@ def test_epoch_is_generic_at_runtime_without_copying_payload() -> None:
 
     assert lease.value is payload
     assert lease.value == {"turn": 2}
+
+
+def test_epoch_publish_returns_the_lease_it_installed() -> None:
+    """publish() must not leave a bump/capture gap another writer can fill."""
+    epoch: Epoch[str] = Epoch("first")
+
+    lease = epoch.publish("second")
+
+    assert lease.value == "second"
+    assert lease.is_current()
+    assert lease.generation == epoch.generation
+
+
+def test_epoch_publish_stamps_under_the_same_lock() -> None:
+    """The stamp hook sees the generation actually published."""
+    seen: list[tuple[str, int]] = []
+    epoch: Epoch[str] = Epoch("first")
+
+    lease = epoch.publish("second", stamp=lambda value, gen: seen.append((value, gen)))
+
+    assert seen == [("second", lease.generation)]
+
+
+def test_epoch_bump_releases_replaced_payload_outside_the_lock() -> None:
+    """A finalizer on the replaced payload must not deadlock on the epoch mutex.
+
+    CPython drops the epoch's last reference to the old payload during
+    ``bump``. Releasing it inside the critical section would run ``__del__``
+    there, so a finalizer reading the same epoch would wait on a non-reentrant
+    mutex that is already held.
+    """
+    observed: list[int] = []
+
+    class ReadsEpochOnDelete:
+        epoch: Epoch[Any] | None = None
+
+        def __del__(self) -> None:
+            if ReadsEpochOnDelete.epoch is not None:
+                observed.append(ReadsEpochOnDelete.epoch.generation)
+
+    epoch: Epoch[Any] = Epoch(ReadsEpochOnDelete())
+    ReadsEpochOnDelete.epoch = epoch
+    # Run in a worker so a regression fails this test instead of wedging the
+    # whole suite on the deadlock it is guarding against.
+    worker = threading.Thread(target=epoch.bump, args=(None,), daemon=True)
+    try:
+        worker.start()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive(), "bump() deadlocked releasing the replaced payload"
+    finally:
+        ReadsEpochOnDelete.epoch = None
+
+    assert observed == [1]
+
+
+def test_epoch_publish_is_atomic_under_concurrent_writers() -> None:
+    """Every publisher's lease matches the payload it installed."""
+    epoch: Epoch[int] = Epoch(0)
+    mismatches: list[tuple[int, int]] = []
+    barrier = threading.Barrier(4)
+
+    def publish(worker: int) -> None:
+        barrier.wait()
+        for _ in range(200):
+            lease = epoch.publish(worker)
+            if lease.value != worker:
+                mismatches.append((worker, lease.value))
+
+    threads = [threading.Thread(target=publish, args=(worker,)) for worker in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert mismatches == []
+    assert epoch.generation == 800

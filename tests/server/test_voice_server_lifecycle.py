@@ -88,6 +88,60 @@ async def test_cancel_ws_handler_tasks_logs_unexpected_finalizer_failure(
     assert "websocket finalizer failed" in caplog.text
 
 
+async def test_cancel_ws_handler_tasks_logs_failures_when_a_sibling_outlives_the_deadline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A hard timeout must not discard the handlers that already failed.
+
+    The abandoned gather keeps child errors as result values that nothing
+    reads, so returning early on timeout would silently drop them.
+    """
+    started = asyncio.Event()
+    stubborn_started = asyncio.Event()
+
+    async def fail_during_cancellation() -> None:
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            raise RuntimeError("websocket finalizer failed")
+
+    release = asyncio.Event()
+
+    async def ignore_cancellation() -> None:
+        stubborn_started.set()
+        while True:
+            try:
+                await release.wait()
+                return
+            except asyncio.CancelledError:
+                if release.is_set():
+                    raise
+                continue
+
+    server = _idle_server()
+    failing = asyncio.create_task(
+        fail_during_cancellation(),
+        name="test-failing-websocket-handler",
+    )
+    stubborn = asyncio.create_task(ignore_cancellation(), name="test-stubborn-handler")
+    server._ws_handler_tasks.update({failing, stubborn})
+    await started.wait()
+    await stubborn_started.wait()
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+            await server._cancel_ws_handler_tasks(timeout_s=0.05)
+    finally:
+        # Always release the cancellation-resistant handler, or a failed
+        # assertion would leak it into the suite's task-leak check.
+        release.set()
+        await asyncio.gather(stubborn, return_exceptions=True)
+
+    assert "test-failing-websocket-handler" in caplog.text
+    assert "websocket finalizer failed" in caplog.text
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 

@@ -63,6 +63,7 @@ from typing import TYPE_CHECKING, Any, cast
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
 from easycat.server.transports import (
     _await_with_hard_timeout,
+    _log_settled_task_failures,
     _log_unexpected_task_results,
 )
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
@@ -561,6 +562,15 @@ class WebRTCRoutes:
             else:
                 completed = await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
                 if not completed:
+                    # The gather is abandoned to the hard timeout, so its
+                    # result list never arrives. Report the finalizers that
+                    # already failed rather than discarding them.
+                    _log_settled_task_failures(
+                        tasks,
+                        explicitly_cancelled=[task for task, _key in pending],
+                        context="WebRTC route cleanup teardown",
+                        log=logger,
+                    )
                     return
                 results = cleanup.result()
             _log_unexpected_task_results(

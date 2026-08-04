@@ -626,6 +626,11 @@ async def hard_timeout(owned: OwnedTask[Any], deadline: float) -> HardTimeoutOut
             if owned.task not in done:
                 owned.task.cancel()
                 park_error = _park_or_close(owned)
+                # Parking can emit a journal record whose injected callback
+                # synchronously requests caller cancellation. Deliver it here,
+                # as the completed path does, so this function never returns
+                # normally to a caller that is already cancelling.
+                await _checkpoint_or_park_on_cancel(owned, current=current)
                 if park_error is not None:
                     return HardTimeoutOutcome(
                         HardTimeoutStatus.PARK_REJECTED_LOCK_HELD,
@@ -651,16 +656,12 @@ async def shielded_cleanup(  # noqa: C901 - cancellation loop is intentionally e
     """Join cleanup to settlement while recording caller cancellation requests."""
     if inspect.iscoroutine(factory):
         cast(Coroutine[Any, Any, Any], factory).close()
-        return CleanupSettlement(
-            result=None,
-            error=TypeError("shielded_cleanup requires a factory, not a bare coroutine"),
-            cancellation_requests=0,
+        return await _settle_cleanup_setup_failure(
+            TypeError("shielded_cleanup requires a factory, not a bare coroutine")
         )
     if not callable(factory):
-        return CleanupSettlement(
-            result=None,
-            error=TypeError("shielded_cleanup factory must be callable"),
-            cancellation_requests=0,
+        return await _settle_cleanup_setup_failure(
+            TypeError("shielded_cleanup factory must be callable")
         )
     try:
         coroutine = factory()
@@ -672,7 +673,7 @@ async def shielded_cleanup(  # noqa: C901 - cancellation loop is intentionally e
             coroutine.close()
             raise
     except BaseException as exc:  # noqa: BLE001 - settlement carries cancellation too
-        return CleanupSettlement(result=None, error=exc, cancellation_requests=0)
+        return await _settle_cleanup_setup_failure(exc)
 
     current = asyncio.current_task()
     cancellation_requests = 0
@@ -711,6 +712,26 @@ async def shielded_cleanup(  # noqa: C901 - cancellation loop is intentionally e
     return CleanupSettlement(
         result=task.result(),
         error=None,
+        cancellation_requests=cancellation_requests,
+    )
+
+
+async def _settle_cleanup_setup_failure(error: BaseException) -> CleanupSettlement[Any]:
+    """Report a setup failure without hiding the caller's pending cancellation.
+
+    No cleanup task exists on this path, so there is nothing left to shield.
+    Deliver any pending request here and count it, exactly as the join loop
+    does, or a caller weighing cancellation against a cleanup error would read
+    ``cancellation_requests == 0`` while it is in fact cancelling.
+    """
+    cancellation_requests = 0
+    try:
+        await checkpoint_pending_cancellation()
+    except asyncio.CancelledError:
+        cancellation_requests = 1
+    return CleanupSettlement(
+        result=None,
+        error=error,
         cancellation_requests=cancellation_requests,
     )
 

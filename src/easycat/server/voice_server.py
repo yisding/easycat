@@ -43,6 +43,7 @@ from easycat.server.routes import (
 from easycat.server.transports import (
     CapacityGate,
     _await_with_hard_timeout,
+    _log_settled_task_failures,
     _log_unexpected_task_results,
 )
 from easycat.session_manager import (
@@ -911,6 +912,15 @@ class VoiceServer:
             else:
                 completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
                 if not completed:
+                    # One handler outlived the deadline, so the gather result is
+                    # unavailable. Report the siblings that already failed
+                    # instead of discarding them with the abandoned gather.
+                    _log_settled_task_failures(
+                        tasks,
+                        explicitly_cancelled=tasks,
+                        context="VoiceServer WebSocket handler teardown",
+                        log=logger,
+                    )
                     return
                 results = gathered.result()
             _log_unexpected_task_results(
