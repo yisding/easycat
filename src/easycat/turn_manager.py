@@ -251,7 +251,7 @@ class TurnManager:
         self._silence_start_time: float | None = None
         self._silence_timer_task: asyncio.Task[None] | None = None
         self._punctuated_transcript_event = asyncio.Event()
-        self._pause_generation = 0
+        self._pause_epoch: Epoch[None] = Epoch(None)
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
@@ -316,10 +316,9 @@ class TurnManager:
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
 
-    @property
-    def pause_generation(self) -> int:
-        """Monotonic identifier for the most recently opened VAD pause."""
-        return self._pause_generation
+    def capture_pause(self) -> Lease[None]:
+        """Capture the exact current pause identity."""
+        return self._pause_epoch.capture()
 
     @property
     def turn_audio(self) -> list[AudioChunk]:
@@ -505,17 +504,14 @@ class TurnManager:
         elif isinstance(event, VADStopSpeaking):
             await self._handle_speech_stop()
 
-    def on_stt_final(self, text: str, *, pause_generation: int) -> None:
+    def on_stt_final(self, text: str, *, pause: Lease[None]) -> None:
         """Notify the originating pause that STT finalized a complete sentence.
 
         Only terminal punctuation from the active pause can shorten its fixed
-        endpoint timer. The generation check prevents a delayed segment final
+        endpoint timer. The lease guard prevents a delayed segment final
         from an earlier pause from leaking into a later pause.
         """
-        if (
-            self._state != TurnManagerState.USER_PAUSED
-            or pause_generation != self._pause_generation
-        ):
+        if self._state != TurnManagerState.USER_PAUSED or not pause.guard():
             return
         normalized = text.rstrip().rstrip("\"'”’)]}")
         if normalized.endswith(("...", "…")):
@@ -623,7 +619,8 @@ class TurnManager:
 
         self._cancel_silence_timer()
         self._silence_start_time = time.monotonic()
-        self._pause_generation += 1
+        self._pause_epoch.bump(None)
+        pause = self._pause_epoch.capture()
         self._punctuated_transcript_event.clear()
         self._transition(
             TurnManagerState.USER_PAUSED,
@@ -633,8 +630,7 @@ class TurnManager:
         # Bind the timer to this exact pause. A detector is third-party code
         # and may suppress cancellation, so state alone cannot distinguish an
         # old timer from a newer pause after speech resumes.
-        pause_generation = self._pause_generation
-        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause_generation))
+        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause))
         self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
@@ -659,7 +655,7 @@ class TurnManager:
                 break
         return list(window)
 
-    async def _silence_timeout(self, pause_generation: int) -> None:
+    async def _silence_timeout(self, pause: Lease[None]) -> None:
         """Wait for end-of-turn silence timeout, then transition to Processing.
 
         When an endpoint detector is configured, it is queried first.  If the
@@ -704,10 +700,7 @@ class TurnManager:
                     else:
                         is_complete = result.prediction == 1
                     if is_complete:
-                        if (
-                            self._state == TurnManagerState.USER_PAUSED
-                            and pause_generation == self._pause_generation
-                        ):
+                        if self._state == TurnManagerState.USER_PAUSED and pause.guard():
                             await self._complete_user_turn("smart_turn_complete")
                         return
                     logger.debug(
@@ -727,10 +720,7 @@ class TurnManager:
             else:
                 punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
-            if (
-                self._state == TurnManagerState.USER_PAUSED
-                and pause_generation == self._pause_generation
-            ):
+            if self._state == TurnManagerState.USER_PAUSED and pause.guard():
                 await self._complete_user_turn(
                     "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )

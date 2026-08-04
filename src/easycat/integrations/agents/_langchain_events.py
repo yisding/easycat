@@ -13,11 +13,17 @@ so tests can run without it installed.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder, ExecutionCursor
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentRecorder,
+    CancellationMode,
+    ExecutionCursor,
+)
 
 
 def _chunk_text(chunk: Any) -> str:
@@ -239,6 +245,94 @@ def close_top_ended_cursors(
         cursor = open_cursors.pop(last_run_id)
         ended_runs.discard(last_run_id)
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+
+
+_PENDING_TOOL_CALLS_KEY = "easycat_pending_tool_call_counts"
+
+
+def has_pending_tool_calls(state: dict[str, Any]) -> bool:
+    """Return whether translated framework events have an unfinished tool call."""
+    pending = state.get(_PENDING_TOOL_CALLS_KEY)
+    return isinstance(pending, Counter) and bool(pending)
+
+
+def cancellation_drain_state(
+    *,
+    requested: bool,
+    active: bool,
+    state: dict[str, Any],
+    recorder: AgentRecorder,
+) -> tuple[bool, bool]:
+    """Record cancellation once and decide whether a framework loop can stop."""
+    if requested and not active:
+        recorder.record_cancellation_boundary(
+            mode=CancellationMode.IMMEDIATE_STOP,
+            reason="cancel_token_set",
+        )
+        active = True
+    return active, requested and not has_pending_tool_calls(state)
+
+
+def route_tool_cancellation_events(
+    events: Iterable[AgentBridgeEvent],
+    state: dict[str, Any],
+    *,
+    cancelled: bool,
+) -> tuple[tuple[AgentBridgeEvent, ...], bool]:
+    """Return deliverable translated events plus a stop-after-event flag."""
+    routed: list[AgentBridgeEvent] = []
+    stop_after_event = False
+    for event in events:
+        decision = route_tool_cancellation_event(event, state, cancelled=cancelled)
+        if decision == "stop":
+            return tuple(routed), True
+        if decision == "drop":
+            continue
+        routed.append(event)
+        if decision == "emit_stop":
+            stop_after_event = True
+    return tuple(routed), stop_after_event
+
+
+def route_tool_cancellation_event(
+    event: AgentBridgeEvent,
+    state: dict[str, Any],
+    *,
+    cancelled: bool,
+) -> Literal["emit", "emit_stop", "drop", "stop"]:
+    """Drain tool calls observed before cancellation, suppressing other output.
+
+    LangChain and LangGraph expose the same ``astream_events`` tool grammar.
+    Track starts before cancellation, then allow only the matching delta/result
+    events through.  The last result is emitted before the caller stops the
+    framework stream, preserving a balanced tool lifecycle without leaking
+    post-cancel model text.
+    """
+    pending = state.setdefault(_PENDING_TOOL_CALLS_KEY, Counter())
+    assert isinstance(pending, Counter)
+    call_id = event.call_id or ""
+    if not cancelled:
+        if event.kind == "tool_started":
+            pending[call_id] += 1
+        elif event.kind == "tool_result":
+            _finish_pending_tool_call(pending, call_id)
+        return "emit"
+    if not pending or event.kind == "done":
+        return "stop"
+    if event.kind == "tool_delta" and pending[call_id] > 0:
+        return "emit"
+    if event.kind == "tool_result" and pending[call_id] > 0:
+        _finish_pending_tool_call(pending, call_id)
+        return "emit_stop" if not pending else "emit"
+    return "drop"
+
+
+def _finish_pending_tool_call(pending: Counter[str], call_id: str) -> None:
+    remaining = pending[call_id] - 1
+    if remaining > 0:
+        pending[call_id] = remaining
+    else:
+        pending.pop(call_id, None)
 
 
 # ── Per-event-type handlers ───────────────────────────────────────

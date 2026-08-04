@@ -319,6 +319,15 @@ class TTSScheduler:
                     barrier.set()
                     await asyncio.gather(task, return_exceptions=True)
                     return task
+            # The lifecycle wait above can run arbitrary event handlers. An
+            # exact identity/activity guard must still admit this turn before
+            # it publishes BOT_SPEAKING; cancellation is only cooperative and
+            # cannot stand in for this commit boundary.
+            if is_active is not None and not is_active():
+                task.cancel()
+                barrier.set()
+                await asyncio.gather(task, return_exceptions=True)
+                return task
             activity = await self._turn_manager.bot_started_speaking()
             if activity is not None and activity_started is not None:
                 activity_started(activity)

@@ -593,6 +593,41 @@ zero identity-pointer, and zero legacy identity-generation liveness reads; only
 the explicitly independent cancellation, token-owner, null-object, and phase-
 latch predicates remain.
 
+WS1.2e is split into WS1.2e1 commit-edge inventory and WS1.2e2 guard completion
+so discovery drift is independently reviewable from the behavioral migration.
+WS1.2e1 freezes 66 turn-scoped effects across the STT committer, TTS scheduler,
+and turn runner: five manager-activity commits, eight identity commits, one
+one-way phase-latch commit, eleven provider dispatches, thirty-one public
+observations, one Session lifecycle commit, and nine turn-bookkeeping writes.
+The location-free manifest records each effect's own AST fingerprint plus its
+suspension relationship: forty-five are directly awaited, sixteen occur after
+an earlier await, and five are synchronous. A structural guard also pins the
+existing behavioral regression for a trailing STT final racing `end_stream`,
+including its end-of-speech take, late-final injection, and agent-call witness.
+WS1.2e2 will classify liveness requirements for these frozen effects and add or
+prove the commit-time identity/activity/token/phase guards without using
+cancellation as a substitute.
+
+WS1.2e2 migration result: all 66 effects now carry an explicit reviewed
+boundary — three admission guards, four identity guards, thirty-three combined
+identity/activity guards, one identity/phase guard, one one-way phase latch,
+six publication-scoped effects, two Session-scoped effects, five serialized
+text-task effects, and eleven correlated diagnostic observations that
+intentionally survive stale cleanup. Private publication admission re-guards
+activity after preemptive and predecessor drains; STT pause commits carry exact
+identity beside activity and recheck both after provider suspension; STT event
+consumers reject stale same-object republications; transcript and first-audio
+bookkeeping re-guard immediately before mutation; and first-payload lifecycle,
+queued synthesis, voice output, application-text output, raw-stage history,
+simple-agent history, bridge-shadow history, and prepared-response history all
+use an exact commit predicate. Adversarial contracts cover identity and
+same-state activity republication during every newly guarded suspension class.
+The predicate ratchet remains at 46 sites with no identity-pointer, legacy
+generation, or manager-state liveness reads; one cancellation-as-stream-
+admission check was removed, leaving thirteen cancellation checks, while the
+application-text ownership branch adds one explicit null-object check. The
+late-STT-final phase contract remains independent and unchanged.
+
 Acceptance: both state-machine inventories and guards are complete; gated
 replay keeps identity current while invalidating activity; every effect has a
 commit-time guard; public-event compatibility is either preserved or separately
@@ -604,6 +639,27 @@ than a catch-all counter.
 `turn_manager.py:216,432-441,540-541,613,636` `_pause_generation` and the
 `_pause_generation_by_future` plumbing in `_stt_committer.py:104` become an
 Epoch owned by TurnManager with leases carried by the futures.
+
+WS1.3 is split into WS1.3a inventory and WS1.3b migration so integer/future
+correlation discovery is independently reviewable from the Epoch conversion.
+WS1.3a freezes 21 sites: two owner writes and five private owner reads in
+TurnManager, one public generation read in STTCommitter, four receivers and
+three call-boundary handoffs, plus one future-map owner, one correlation write,
+and four correlation takes. Location-free fingerprints reject structural
+replacement drift. Structural guards also pin the cancellation-resistant
+smart-turn timer race and the delayed segment-final race, proving that neither
+an old timer nor an old future correlation may shorten a later pause.
+
+WS1.3b migration result: TurnManager now owns a dedicated `Epoch[None]` and
+opens each pause before `VADStopSpeaking` becomes observable. The silence
+timer and STT commit path carry exact `Lease[None]` values; segment futures
+retain their originating lease until the matching final or cleanup consumes
+it. Seven commit guards reject stale timers, provider continuations, failed-
+commit recovery, and punctuation hints. The public integer generation seam
+and integer future map are gone. The evolved location-free inventory freezes
+27 epoch, capture, carrier, guard, and correlation sites, while end-to-end
+audio-router evidence proves a zero-delay commit both follows the boundary
+audio write and captures the newly opened pause.
 
 ### WS1.4 — Transport connection epochs [M per transport] (Tier B; peer-gated)
 
@@ -756,6 +812,21 @@ Three PRs:
   order in `Session.stop`). Do not assert an incidental total order among
   siblings inside one broadcast cohort. Pass/fail scenarios cannot see these
   edges; barrier assertions can.
+
+WS2.7a inventory result: the checked-in coverage map freezes 27 observable
+scenarios against concrete pytest nodes — twelve entry/admission and
+supersession cases, five turn-work policies, five ordering contracts, three
+resource-ownership rules, and two postmortem guarantees. Existing tests
+already covered prompt policy, retry admission, startup cancellation, runtime-
+owned reentrancy, barge-in cleanup while providers are live, scoped STT work,
+provider/queue ownership, and journal preservation. The two missing concepts
+now have observation-based nets: force stop requests cancellation for the
+pipeline, TTS, outbound, and scoped members before any member settles; and
+both force/graceful modes preserve the reviewed branch plus common-finalizer
+partial-order edges through ingress, health, helpers, queue, outbound,
+transport, manager, agent, provider siblings, identity, journal, and closed
+publication. Provider siblings deliberately have no asserted total order.
+
 - **b. Mapping table (Tier B, after WS2.1).** In the PR description (or a
   short note in this
   file): every step of the complete `Session.stop()` symbol — entry admission,
@@ -802,6 +873,175 @@ extras cells in PR CI or a successful nightly artifact built from the exact
 candidate SHA. Any bridge fix is its own PR. This is rows **and capability
 wiring**, not an assertion that today's `provider_factory` can inject these
 faults.
+
+Deliver WS3.1 as four one-concern PRs:
+
+- **a. Scenario matrix inventory.** Freeze the seven shipped bridges by five
+  lifecycle capabilities, plus the universal reset-isolation and JSON-safe
+  snapshot postconditions. Classify every bridge/scenario cell as required or
+  not applicable, with the exact pre-harness evidence or a named gap.
+- **b. Internal suite + offline driver.** Introduce the internal scenario and
+  capability-driver protocols, then run all shared row logic against an
+  unmarked deterministic model bridge on every PR.
+- **c. Portable public rows.** Add only lifecycle behavior observable through
+  the existing provider factory to the source-compatible public
+  `AgentBridgeContractSuite`.
+- **d. Built-in capability drivers.** Wire each applicable built-in cell,
+  close every gap in (a), and produce the required-extras or exact-candidate-
+  SHA nightly evidence. Bridge defects discovered here remain separate PRs.
+  Deliver this as framework-bounded child slices: **d1** Generic Workflow plus
+  Remote Responses and the matrix-to-suite binding; **d2** the
+  LangChain/LangGraph event-stream family; **d3** OpenAI Agents; **d4**
+  PydanticAI; **d5** Llama Agents; and **d6** the zero-pending matrix ratchet
+  plus exact-candidate-SHA extras artifact. Each child updates the same
+  execution registry, and a production bridge fix interrupts the sequence as
+  its own PR.
+
+WS3.1a inventory result: the checked-in 7-by-5 matrix freezes 35 cells. Thirty-
+three are required and two are not applicable: generic workflows have no
+provider event taxonomy, while Llama interruption metadata does not rewrite
+assistant history. Existing focused tests cover twenty required cells; thirteen
+capability-level gaps remain for WS3.1d. The matrix records reset isolation and
+JSON-safe snapshotting as postconditions of every applicable scenario. This
+inventory slice changes no production behavior; later WS3.1 slices must evolve
+the same matrix until no required cell remains `missing`.
+
+WS3.1b result: the private `BridgeLifecycleScenarioSuite` now owns the five
+framework-neutral assertions and the universal after-scenario postconditions.
+Its driver protocol exposes direct events, recorder cursor ids, inner-stream
+close counts, transient-item counts, delivered-text history, and normalized
+history projections; SDK-specific drivers therefore cannot substitute a bare
+pass/fail flag for observable evidence. An unmarked deterministic model bridge
+exercises malformed and future events before a valid terminal response, a
+gated in-flight tool cancellation that drains only the tool result, consumer
+close propagation, balanced recorder cleanup, and an empty current-turn
+interruption after seeded prior history. Every row also proves JSON-safe state
+before and after `reset()`, with the post-reset normalized state empty. The
+internal module reuses the public contract kit's reviewed timeout and is not
+re-exported from `easycat.testing`; this slice changes neither public API nor a
+built-in bridge.
+
+WS3.1c result: the source-compatible public suite adds two portable lifecycle
+rows. A consumer close after the first bridge event must complete within the
+existing contract timeout, balance every recorder unit entered during the
+turn, and leave a JSON-safe snapshot. Separately, `reset()` after a completed
+turn must restore the exact fresh-session stable state, not merely return some
+serializable value; a suite subclass may declare isolation-identity fields
+that must rotate while every other snapshot field stays exact. The first row
+exposed the reference contract fake's straight-line cursor exits; the fake now
+owns them in `finally`, so it models the contract on both exhaustion and early
+close. The public suite also exposes a no-op settlement hook for frameworks
+whose interruption boundary is correctly deferred until async state
+persistence. Both credential-free shipped factories satisfy the default rows.
+The five optional-SDK classes remain the WS3.1d extras-matrix responsibility;
+when the extras are absent they skip explicitly under `integration_external`.
+No built-in bridge implementation or public import was changed.
+
+WS3.1d1 result: the execution registry is now a second, progress-bearing layer
+of the checked-in matrix. It derives each wired suite's scenario set from the
+same required/not-applicable cells, verifies the pytest suite class exists, and
+keeps all unwired bridges explicitly `pending`; the discovery-time
+`coverage` counts remain preserved as the audit baseline. Generic Workflow's
+four applicable rows and Remote Responses' five rows are wired, leaving five
+bridge drivers pending. The shared tool observation now splits recorder phases
+before and after cancellation, so a deep generic workflow can prove a gated
+tool result drained even though its portable stream exposes text rather than
+`tool_*` events. History isolation compares the normalized prior-turn
+projection, allowing a framework to retain current user input without changing
+the prior assistant message. Controlled workflow and SSE innermost streams
+prove exact close propagation, balanced cursors, purged transient state,
+delivered-text history, unknown-event tolerance for Responses, and reset/
+snapshot postconditions. Generic's sole skipped row is the matrix-declared
+unknown-event non-applicability; no required row skips.
+
+WS3.1d2 prerequisite fix result: the first LangChain/LangGraph driver probe
+found that both bridges observed the cancel token before translating a pending
+`on_tool_end`, so their framework stream stopped without delivering the
+matching tool result to the runtime's drain policy. The correction is isolated
+from driver wiring: the shared event-family module now tracks tool starts seen
+before cancellation, records the boundary once, forwards only matching tool
+deltas/results while draining, suppresses post-cancel model text, and stops
+after the final pending result. LangChain then commits only the delivered text
+to its history; LangGraph commits the same partial assistant message before
+interruption. A shared regression proves both result phases arrive, innermost
+event streams close, and a follow-up interruption rewrites the current partial
+turn without touching the prior assistant reply. WS3.1d2 remains pending until
+the five-row driver suites land in the next PR.
+
+WS3.1d2 result: a single credential-free, close-aware `astream_events` harness
+now drives the LangChain and LangGraph bridges through all five required
+scenarios on every PR. It injects a non-mapping value and future event before a
+valid model delta, gates a tool result across cancellation, measures exact
+innermost-stream close propagation, opens nested framework/model recorder
+cursors before consumer close, and cancels an empty current turn after seeding
+prior history. The drivers normalize typed and dict-shaped messages, include
+LangGraph's pending mutation and transient-context lists in cleanup state, and
+model `reset()`'s thread rotation explicitly in the one-state graph double.
+Both bridges prove balanced cursors, zero remaining transient work, delivered-
+text-only tool cancellation history, prior-assistant isolation, JSON-safe
+snapshots, and empty post-reset state. The execution registry advances from two
+to four wired bridges; OpenAI Agents, PydanticAI, and Llama Agents remain the
+three explicit pending drivers.
+
+WS3.1d3 prerequisite fix result: the OpenAI Agents history-isolation probe
+reproduced an empty-current-turn corruption: both interruption rewriting and
+post-processing scanned backward past the latest user entry and edited the
+prior assistant reply. Both reverse scans now treat that user entry as the
+current-turn boundary. Reaching it before an assistant message makes the
+rewrite a no-op, preserving both prior history and an active response-id chain;
+normal current-turn assistant rewrites retain their existing behavior. WS3.1d3
+driver wiring remains pending in the next PR.
+
+WS3.1d3 result: a credential-free controlled `RunResultStreaming` driver now
+runs all five required OpenAI Agents scenarios on every PR. Its close-aware SDK
+iterator injects an unknown future run item before valid text, gates a function
+result across `after_turn` cancellation, verifies hard close calls immediate
+run cancellation and closes the delegated iterator, balances the agent cursor
+while a tool is pending, and snapshots an empty current turn with its user
+boundary before applying interruption. The normalized driver observes only
+user/assistant history and counts both live SDK work and pending interruption
+metadata as transient state. Every row proves JSON-safe snapshots and empty
+post-reset state. The execution registry advances to five wired bridges and
+two pending drivers: PydanticAI and Llama Agents.
+
+WS3.1d4 result: a credential-free PydanticAI `agent.iter()` driver now runs all
+five required scenarios on every PR. Controlled `ModelRequestNode` and
+`CallToolsNode` streams inject an unknown future event before valid text, gate
+a function result across cancellation while suppressing later text, expose
+exact inner context close state, and snapshot SDK-shaped current-turn messages
+on consumer close. The recorder row closes with a tool pending; the history row
+cancels after the current user message and exercises PydanticAI's existing
+user-boundary guard without touching the prior response. Per-test fake message
+modules keep the driver deterministic without the optional package, while the
+real bridge's dynamic message imports and full `agent.iter()` choreography are
+still exercised. Every row proves balanced cursors, zero live run/stream state,
+JSON-safe snapshots, and empty post-reset history. The execution registry
+advances to six wired bridges with only Llama Agents pending.
+
+WS3.1d5 result: a credential-free local-workflow driver now runs all four
+applicable Llama Agents scenarios on every PR; prior-turn assistant rewriting
+remains the matrix-declared non-applicable row. A controlled workflow stream
+injects a future custom event before valid text, exposes exact source close
+state, and models a blocked workflow step as the tool boundary: it records tool
+start before cancellation and the drained result from `cancel_run()` while the
+bridge suppresses all later deltas. The recorder cleanup row closes a pending
+step whose handler remains nonterminal, proving the bridge balances its
+workflow cursor, closes the source, clears active/pending handler fields, and
+drops the unsafe retained Context. Every row proves JSON-safe snapshots and
+empty post-reset state. All seven bridge drivers are now wired; WS3.1d6 owns
+the explicit zero-pending ratchet and exact-candidate-SHA optional-extras proof.
+
+WS3.1d6 result: the execution registry is now closed rather than merely
+progress-bearing: every one of the seven shipped bridges must remain `wired`,
+and the ratchet rejects any reintroduced `pending` state. The existing nightly
+extras matrix now identifies the six real-SDK bridge cells (including both
+supported PydanticAI generations), reruns the exact public contract class after
+the isolated extra install, and rejects zero tests, skips, failures, or errors.
+Each such cell compares `git rev-parse HEAD` with the workflow's `github.sha`
+and uploads the JUnit result plus a deterministic JSON attestation whose name
+includes that candidate SHA. A manually dispatched run at a PR ref therefore
+produces the same auditable exact-candidate evidence required by the Tier-A
+gate without making optional SDKs part of the default developer environment.
 
 ### WS3.2 — LangChain/LangGraph shared core [L] (Tier C; peer-gated)
 
@@ -856,6 +1096,107 @@ The execution matrix is checked in; applicable rows cannot silently skip.
 Seed it from duplicated edge cases, including each semantic clause of Twilio's
 disconnect predicate. The current provider fake alone is not proof that a
 built-in passes.
+
+Deliver WS4.1 as reviewable, progress-bearing child slices:
+
+- **a. Scenario matrix inventory.** Freeze the five shipped transport families
+  by the eight lifecycle scenarios, record exact pre-harness evidence, and
+  leave every built-in capability driver explicitly pending.
+- **b. Internal suite + model driver.** Introduce the private scenario/driver
+  protocols and run every row against an unmarked deterministic transport
+  model on each PR.
+- **c. Portable public rows.** Add only lifecycle behavior observable through
+  the source-compatible public `TransportContractSuite` factory.
+- **d. Built-in capability drivers.** Wire framework-bounded children: **d1**
+  Local plus WebSocket, **d2** Twilio, **d3** WebRTC, **d4** WebTransport, and
+  **d5** the zero-pending ratchet plus any exact-candidate optional-backend
+  evidence. Every child updates the same execution registry; production fixes
+  discovered by a driver interrupt the sequence as separate PRs.
+
+WS4.1a inventory result: the checked-in 5-by-8 matrix freezes forty required
+cells across Local, WebSocket, Twilio, WebRTC, and WebTransport. Thirty-six
+cells have exact pre-harness tests and four remain named gaps: Local connect
+leadership, Local disconnect-during-connect, Local interrupted-disconnect
+publication, and Twilio queue overflow. All five capability drivers remain
+explicitly pending. This inventory changes no transport behavior; later WS4.1
+slices must evolve the same registry until every required row is wired and no
+pending driver remains.
+
+WS4.1b result: the private `TransportLifecycleScenarioSuite` now owns all
+eight framework-neutral assertions and JSON-safe, quiescent postconditions.
+Its capability-driver protocol exposes backend start/close counts, caller
+generation results, lifecycle publications, retained cleanup ownership,
+delivered frames, queue acceptance/drop observations, normalized degraded
+events, receiver termination, and rollback resource state rather than opaque
+pass/fail flags. An unmarked deterministic transport model runs every row on
+each PR with gated startup and cleanup, shared connect/disconnect task
+ownership, a one-frame bounded queue, exact generation fencing, and a live
+receive iterator. The internal module is not re-exported from
+`easycat.testing`; this slice changes neither public API nor a built-in
+transport.
+
+WS4.1c result: the source-compatible public `TransportContractSuite` now
+checks repeated and concurrent connect callers, repeated disconnect, and
+disconnect-driven termination of an already-active inbound iterator. These
+rows use only the existing public factory and transport methods. Backend
+leadership counts, gated races, rollback resources, late-frame injection,
+queue pressure, degraded events, and lifecycle publication remain internal
+capability-driver responsibilities rather than new third-party hooks.
+
+WS4.1d1 result: Local and WebSocket now run all eight shared lifecycle rows
+through credential-free capability drivers. The Local driver replaces only
+module resolution with deterministic input/output stream resources while the
+real transport owns rollback, callback-generation fencing, queue policy,
+receiver termination, and cleanup. The WebSocket driver covers both shipped
+lifecycle models: listener leadership/serialization on `WebSocketTransport`
+and accepted-socket rollback/retained cleanup on
+`WebSocketConnectionTransport`. Internal class policy values preserve the
+reviewed difference between cancellation and lock-queued startup, and between
+public disconnect publication and retained cleanup, without weakening shared
+resource, generation, queue, or quiescence assertions. The execution registry
+now has two complete and three pending drivers; thirty-nine of forty
+pre-harness cells have exact evidence, with only Twilio queue overflow still
+missing.
+
+WS4.1d2 result: `TwilioConnectionTransport` now runs every shared lifecycle
+row through a credential-free accepted-socket driver. Deferred-start gating
+proves single-flight connect leadership and disconnect invalidation outside
+the lifecycle lock; the explicit socket-close ledger proves interrupted
+cleanup and retry; the real Media Streams SID filters prove late-frame
+fencing; and the inherited bounded ingress queue proves the missing overflow
+drop plus canonical degraded event. Three drivers are complete and two remain
+pending. All forty pre-harness matrix cells now have exact evidence.
+
+WS4.1d3 result: `WebRTCTransport` now runs every shared lifecycle row without
+network sockets or optional aiortc/aiohttp installations. The capability
+driver separates signaling-stack leadership and rollback from peer-offer
+cancellation and generation fencing, while using the real inbound/outbound
+queues, degraded publication, receiver boundary, consumer reaping, and
+retained cleanup ledger. Four drivers are complete; only WebTransport remains
+pending. The forty-cell pre-harness evidence inventory remains closed.
+
+WS4.1d4 result: WebTransport now runs every shared lifecycle row without
+network sockets or the optional aioquic installation. The capability driver
+uses the outer transport for serialized QUIC-server startup and the real
+accepted-session transport for writer cancellation, rollback, bounded queues,
+and receive termination. Its generation row admits an active session through
+the real server dispatch path, closes admission during stop, and proves a late
+session is force-closed without spawning a handler. All five drivers are now
+complete and all forty pre-harness evidence cells remain closed; WS4.1d5 owns
+the separate zero-pending execution ratchet.
+
+WS4.1d5 result: the execution registry is now closed rather than merely
+progress-bearing: all five shipped transports must remain `complete`, and the
+ratchet rejects any reintroduced `pending` state. The nightly extras matrix
+selects the deterministic real aiortc/PyAV audio tests for the `webrtc` cell
+and the real aioquic protocol/server tests for the `webtransport` cell. Each
+exact node rejects zero tests, skips, failures, errors, or a checkout SHA that
+differs from the candidate SHA, then uploads its JUnit result and JSON
+attestation under an artifact name containing that SHA. Local PortAudio
+device behavior is not claimed as portable CI evidence: the local extra keeps
+its install/import smoke, while the credential-free capability driver remains
+the deterministic lifecycle proof. WS4.1 is complete as the Tier-A transport
+safety net.
 
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -195,6 +195,7 @@ class AgentStage:
         system_prefix: str | None = None,
         prepared_response: PreparedAgentResponse | None = None,
         input_role: Literal["system", "user"] = "user",
+        commit_guard: Callable[[], bool] | None = None,
     ) -> AsyncGenerator[AgentBridgeEvent, None]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
 
@@ -261,11 +262,25 @@ class AgentStage:
                         raise RuntimeError("prepared response requires AgentRunner")
                     if prepared_response.input_text != input_text:
                         raise RuntimeError("prepared response transcript does not match input")
-                    stream = bridge.invoke_prepared(prepared_response, recorder, cancel_token)
+                    stream = bridge.invoke_prepared(
+                        prepared_response,
+                        recorder,
+                        cancel_token,
+                        commit_guard=commit_guard,
+                    )
+                elif isinstance(bridge, AgentRunner):
+                    stream = bridge.invoke(
+                        turn_input,
+                        recorder,
+                        cancel_token,
+                        commit_guard=commit_guard,
+                    )
                 else:
                     stream = bridge.invoke(turn_input, recorder, cancel_token)
                 try:
                     async for event in stream:
+                        if commit_guard is not None and not commit_guard():
+                            break
                         kind = getattr(event, "kind", None)
                         text = getattr(event, "text", "")
                         if kind == "text_delta" and text:
@@ -379,7 +394,10 @@ class AgentStage:
                 # commit boundary so unheard terminal text cannot enter the
                 # raw-bridge shadow history or stage completion record.
                 final_text = (
-                    "" if cancel_token and cancel_token.is_cancelled else "".join(accumulated)
+                    ""
+                    if (cancel_token and cancel_token.is_cancelled)
+                    or (commit_guard is not None and not commit_guard())
+                    else "".join(accumulated)
                 )
                 if (
                     self._tracks_history

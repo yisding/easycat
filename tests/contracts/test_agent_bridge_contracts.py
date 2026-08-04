@@ -52,25 +52,29 @@ class _ContractBridge:
         )
         recorder.record_unit_entered(cursor)
         recorder.record_unit_entered(tool_cursor)
-        recorder.record_tool_call("start", "lookup", call_id="call-1")
-        recorder.record_tool_call("result", "lookup", result_ref="result-ref", call_id="call-1")
-        recorder.record_framework_handoff("agent-1", "agent-2", reason="handoff")
-        recorder.record_state_snapshot("snapshot-ref", payload=b'{"history_len":0}')
-        self.history.append(turn_input.text)
-        # Cursor / handoff / state-snapshot transitions are journaled via the
-        # recorder above; bridges never mirror them onto the stream, which
-        # carries only text / tool / done events.
-        yield AgentBridgeEvent(kind="text_delta", text="hello")
-        yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call-1")
-        yield AgentBridgeEvent(
-            kind="tool_result",
-            tool_name="lookup",
-            call_id="call-1",
-            result="ok",
-        )
-        yield AgentBridgeEvent(kind="done", text="hello")
-        recorder.record_unit_exited(tool_cursor.with_committable(True), reason=None)
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        try:
+            recorder.record_tool_call("start", "lookup", call_id="call-1")
+            recorder.record_tool_call(
+                "result", "lookup", result_ref="result-ref", call_id="call-1"
+            )
+            recorder.record_framework_handoff("agent-1", "agent-2", reason="handoff")
+            recorder.record_state_snapshot("snapshot-ref", payload=b'{"history_len":0}')
+            self.history.append(turn_input.text)
+            # Cursor / handoff / state-snapshot transitions are journaled via
+            # the recorder above; bridges never mirror them onto the stream,
+            # which carries only text / tool / done events.
+            yield AgentBridgeEvent(kind="text_delta", text="hello")
+            yield AgentBridgeEvent(kind="tool_started", tool_name="lookup", call_id="call-1")
+            yield AgentBridgeEvent(
+                kind="tool_result",
+                tool_name="lookup",
+                call_id="call-1",
+                result="ok",
+            )
+            yield AgentBridgeEvent(kind="done", text="hello")
+        finally:
+            recorder.record_unit_exited(tool_cursor.with_committable(True), reason=None)
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         return FrameworkStateSnapshot(fields={"history": list(self.history)}, kind="fake")
@@ -106,6 +110,55 @@ class _ContractBridge:
 
     def reset(self) -> None:
         self.history.clear()
+
+
+class _DeferredIdentityContractBridge(_ContractBridge):
+    """Model deferred persistence plus a reset-scoped framework identity."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.thread_id = 1
+        self._pending_journal: tuple[AgentRecorder, CancellationMode, str | None] | None = None
+
+    def snapshot_state(self) -> FrameworkStateSnapshot:
+        return FrameworkStateSnapshot(
+            fields={"history": list(self.history), "thread_id": self.thread_id},
+            kind="deferred-fake",
+        )
+
+    def apply_interruption(
+        self,
+        delivered_text: str,
+        mode: CancellationMode,
+        recorder: AgentRecorder | None = None,
+        caused_by_signal_id: str | None = None,
+    ) -> None:
+        self.interruptions.append((delivered_text, mode))
+        if recorder is None:
+            return
+        recorder.record_state_snapshot("pre", payload=b"{}")
+        recorder.record_state_committed(
+            "interrupt_truncate",
+            pre_state_ref="pre",
+            post_state_ref="post",
+        )
+        self._pending_journal = (recorder, mode, caused_by_signal_id)
+
+    async def aclose(self) -> None:
+        if self._pending_journal is None:
+            return
+        recorder, mode, caused_by_signal_id = self._pending_journal
+        self._pending_journal = None
+        recorder.record_state_snapshot("post", payload=b"{}")
+        recorder.record_cancellation_boundary(
+            mode,
+            reason="contract",
+            caused_by_signal_id=caused_by_signal_id,
+        )
+
+    def reset(self) -> None:
+        super().reset()
+        self.thread_id += 1
 
 
 def test_agent_bridge_contract_matrix_has_rows_for_supported_bridges() -> None:
@@ -204,6 +257,16 @@ class TestAgentBridgeContractSuite(AgentBridgeContractSuite):
         assert snapshot.fields == {"history": ["hello"]}
         assert snapshot.kind == "fake"
         assert provider.history == []
+
+
+class TestDeferredIdentityAgentBridgeContractSuite(AgentBridgeContractSuite):
+    """Prove the suite's deferred-write and rotating-identity extension hooks."""
+
+    provider_factory = _DeferredIdentityContractBridge
+    rotating_reset_snapshot_fields = frozenset({"thread_id"})
+
+    async def settle_interruption(self, provider: _DeferredIdentityContractBridge) -> None:
+        await provider.aclose()
 
 
 def test_interruption_protocol_swallows_post_commit_journal_failure() -> None:

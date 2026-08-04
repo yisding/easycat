@@ -17,7 +17,7 @@ import contextlib
 import logging
 import time
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal, TypeVar
 from uuid import uuid4
@@ -321,13 +321,17 @@ class AgentRunner:
         prepared: PreparedAgentResponse,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
+        *,
+        commit_guard: Callable[[], bool] | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Commit and emit a response previously produced by :meth:`prepare_response`."""
         if not self.supports_preemptive_generation:
             raise RuntimeError("agent does not support preemptive generation")
         if prepared.committed:
             raise RuntimeError("prepared agent response has already been committed")
-        if cancel_token and cancel_token.is_cancelled:
+        if (commit_guard is not None and not commit_guard()) or (
+            cancel_token and cancel_token.is_cancelled
+        ):
             return
 
         cursor = ExecutionCursor(
@@ -353,15 +357,19 @@ class AgentRunner:
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None = None,
+        *,
+        commit_guard: Callable[[], bool] | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Run one turn, yielding bridge events as they occur."""
-        if cancel_token and cancel_token.is_cancelled:
+        if (commit_guard is not None and not commit_guard()) or (
+            cancel_token and cancel_token.is_cancelled
+        ):
             return
 
         stream = (
-            self._invoke_bridge(turn_input, recorder, cancel_token)
+            self._invoke_bridge(turn_input, recorder, cancel_token, commit_guard)
             if self._is_bridge
-            else self._invoke_simple(turn_input, recorder, cancel_token)
+            else self._invoke_simple(turn_input, recorder, cancel_token, commit_guard)
         )
         try:
             async for event in stream:
@@ -378,6 +386,7 @@ class AgentRunner:
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
+        commit_guard: Callable[[], bool] | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Drive a wrapped stateful bridge and mirror only completed turns."""
         # Forward runner-managed history so stateless multi-turn bridges that
@@ -436,7 +445,8 @@ class AgentRunner:
                     accumulated += text
                 elif kind == "done":
                     await close_stream_after_done(inner_iter)
-                    self._append_completed_turn(turn_input, text or accumulated)
+                    if commit_guard is None or commit_guard():
+                        self._append_completed_turn(turn_input, text or accumulated)
                     yield event
                     return
                 yield event
@@ -465,6 +475,7 @@ class AgentRunner:
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
+        commit_guard: Callable[[], bool] | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Drive a simple ``run(text)`` agent with rollback-safe history."""
         if cancel_token and cancel_token.is_cancelled:
@@ -508,6 +519,10 @@ class AgentRunner:
             self._close_simple_cursor(recorder, cursor, safe=True)
             raise
 
+        if commit_guard is not None and not commit_guard():
+            self._history.pop()
+            self._close_simple_cursor(recorder, cursor, reason="stale")
+            return
         self._history.append({"role": "assistant", "content": response})
         self._close_simple_cursor(recorder, cursor, committable=True)
 

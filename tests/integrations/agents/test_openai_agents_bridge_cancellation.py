@@ -20,7 +20,7 @@ import pytest
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._recorder import JournalAgentRecorder
-from easycat.integrations.agents.base import AgentTurnInput, RecorderContext
+from easycat.integrations.agents.base import AgentTurnInput, CancellationMode, RecorderContext
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 from easycat.runtime import InMemoryRingBuffer
 
@@ -124,6 +124,34 @@ def _tool_output_event(call_id: str, output: str) -> SimpleNamespace:
 
 def _barge_in(token: CancelToken) -> Callable[[], None]:
     return lambda: token.cancel()
+
+
+def test_empty_current_turn_interruption_does_not_rewrite_prior_assistant() -> None:
+    bridge = OpenAIAgentsBridge(_Agent())
+    bridge._message_history = [
+        {"role": "user", "content": "prior question"},
+        {"role": "assistant", "content": "prior answer"},
+        {"role": "user", "content": "current question"},
+    ]
+
+    bridge.apply_interruption("", CancellationMode.IMMEDIATE_STOP)
+
+    assert bridge._message_history[1]["content"] == "prior answer"
+
+
+def test_empty_current_turn_postprocessing_does_not_rewrite_prior_assistant() -> None:
+    bridge = OpenAIAgentsBridge(_Agent())
+    bridge._previous_response_id = "resp-current"
+    bridge._message_history = [
+        {"role": "user", "content": "prior question"},
+        {"role": "assistant", "content": "prior answer"},
+        {"role": "user", "content": "current question"},
+    ]
+
+    bridge.replace_last_assistant_text("must not replace prior answer")
+
+    assert bridge._message_history[1]["content"] == "prior answer"
+    assert bridge._previous_response_id == "resp-current"
 
 
 @pytest.mark.asyncio

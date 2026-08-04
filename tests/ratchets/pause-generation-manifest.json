@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "update_rationale": "WS1.3b replaces integer pause identity and generation-carrying futures with exact Pause Epoch leases",
+  "counts": {
+    "categories": {
+      "api_capture": 1,
+      "epoch_bump": 1,
+      "epoch_owner": 1,
+      "future_map_owner": 1,
+      "future_map_take": 4,
+      "future_map_write": 1,
+      "lease_guard": 7,
+      "lease_handoff": 4,
+      "lease_receiver": 5,
+      "owner_capture": 2
+    },
+    "roles": {
+      "borrower": 8,
+      "carrier": 9,
+      "correlation_owner": 6,
+      "pause_owner": 4
+    }
+  },
+  "entries": [
+    "api_capture\tsession/_stt_committer.py\tSTTCommitter.schedule\tcapture pause through public seam\t1c124534b2bef8a2\t0\tborrower\tBorrows the exact current pause lease through TurnManager's public seam.",
+    "epoch_bump\tturn_manager.py\tTurnManager._handle_speech_stop\tadvance pause epoch\td30a4c4124496f3c\t0\tpause_owner\tAdvances pause identity at the VAD-stop linearization point.",
+    "epoch_owner\tturn_manager.py\tTurnManager.__init__\tassign pause epoch\t58c39dff2bbbbdc0\t0\tpause_owner\tOwns TurnManager's exact pause identity epoch.",
+    "future_map_owner\tsession/_stt_committer.py\tSTTCommitter.__init__\tassign future correlation map\t6f4fdec2ca1a07f2\t0\tcorrelation_owner\tOwns future-to-pause correlation storage in STTCommitter.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter._take_next_pause\tpop future correlation\t933af9f13da24c43\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.await_pending\tpop future correlation\tb0aedff6e2ed0d63\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.commit_now\tpop future correlation\tb0aedff6e2ed0d63\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_take\tsession/_stt_committer.py\tSTTCommitter.resolve_pending\tpop future correlation\tb0aedff6e2ed0d63\t0\tcorrelation_owner\tConsumes one future's pause correlation at completion or cleanup.",
+    "future_map_write\tsession/_stt_committer.py\tSTTCommitter.commit_now\tstore future correlation\t78a65f84b8df0ff5\t0\tcorrelation_owner\tBinds one pending STT future to its originating pause.",
+    "lease_guard\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tsession/_stt_committer.py\tSTTCommitter.commit_now\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tsession/_stt_committer.py\tSTTCommitter.commit_now\tguard exact pause lease\t4354303a3a7ffe23\t1\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tturn_manager.py\tTurnManager._silence_timeout\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tturn_manager.py\tTurnManager._silence_timeout\tguard exact pause lease\t4354303a3a7ffe23\t1\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_guard\tturn_manager.py\tTurnManager.on_stt_final\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
+    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
+    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
+    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter.schedule\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
+    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
+    "lease_receiver\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tparameter pause lease\ta4df33cffd7447aa\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",
+    "lease_receiver\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tparameter pause lease\t3f1555727158ab1c\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",
+    "lease_receiver\tsession/_stt_committer.py\tSTTCommitter.commit_now\tparameter pause lease\t3f1555727158ab1c\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",
+    "lease_receiver\tturn_manager.py\tTurnManager._silence_timeout\tparameter pause lease\ta4df33cffd7447aa\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",
+    "lease_receiver\tturn_manager.py\tTurnManager.on_stt_final\tparameter pause lease\ta4df33cffd7447aa\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",
+    "owner_capture\tturn_manager.py\tTurnManager._handle_speech_stop\tcapture pause lease\t7d17c5ebcc3abde2\t0\tpause_owner\tCaptures the exact current lease from TurnManager's pause epoch.",
+    "owner_capture\tturn_manager.py\tTurnManager.capture_pause\tcapture pause lease\t7d17c5ebcc3abde2\t0\tpause_owner\tCaptures the exact current lease from TurnManager's pause epoch."
+  ]
+}

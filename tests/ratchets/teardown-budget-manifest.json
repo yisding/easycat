@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "update_rationale": "WS0.2b4 centralizes configurable server lifecycle defaults",
+  "update_rationale": "WS3.1c adds bounded portable bridge contract probes",
   "counts": {
     "configurable": 20,
     "lifecycle_budget": 82,
-    "not_teardown": 30,
+    "not_teardown": 32,
     "protocol_local": 41
   },
   "entries": [
@@ -93,6 +93,8 @@
     "lifecycle_call\tsession/_turn_runner.py\tTurnRunner.cancel_application_prompt\tcall asyncio.wait\t26ef1e1a0bc222a1\t0\tlifecycle_budget\tBounds application-prompt drain before cancellation.",
     "lifecycle_call\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\tcall asyncio.wait_for\tf3004ab296dcff32\t0\tprotocol_local\tBounds the provider WebSocket close exchange.",
     "lifecycle_call\ttelephony/server.py\t_shutdown_twilio_voice_app\tcall runtime.drain\t00540fd5c7274e3f\t0\tlifecycle_budget\tBounds Twilio application session drain.",
+    "lifecycle_call\ttesting/contracts.py\tAgentBridgeContractSuite.test_consumer_close_balances_recorded_units\tcall asyncio.timeout\t0ec59286f1f9983e\t0\tnot_teardown\tBounds the public contract assertion while it closes a model bridge stream.",
+    "lifecycle_call\ttesting/contracts.py\tAgentBridgeContractSuite.test_consumer_close_balances_recorded_units\tcall asyncio.timeout\t179575d17576259a\t0\tnot_teardown\tBounds the public contract probe while it waits for the model bridge's first event.",
     "lifecycle_call\ttransports/_webrtc_audio.py\tOutboundAudioSource.aclose\tcall asyncio.wait\te2adbf7dee1f8214\t0\tlifecycle_budget\tBounds outbound WebRTC audio-source closure.",
     "lifecycle_call\ttransports/webrtc.py\tWebRTCTransport._stop_active_offer_for_disconnect\tcall asyncio.wait\tf399507a08f6cbb3\t0\tlifecycle_budget\tBounds active-offer drain during disconnect.",
     "lifecycle_call\ttransports/webtransport.py\tWebTransportConnectionTransport.wait_closed\tcall asyncio.wait_for\tc83a375961230650\t0\tlifecycle_budget\tBounds WebTransport connection closure.",
