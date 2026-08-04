@@ -109,8 +109,10 @@ automation entry points are `uv run easycat validate quick --json`,
 `uv run easycat validate release --json`, and
 `uv run easycat validate report .easycat/validation/latest.json --json`, which
 re-emits the latest saved validation report inside the same envelope for
-coding-agent consumers. For the lower-level marker/direct entry points, see
-[`plan/validation/README.md`](../plan/validation/README.md).
+coding-agent consumers. The lower-level entry points are the markers registered
+in `pyproject.toml` under `strict_markers = true` and enforced by
+`tests/conftest.py`; their vocabulary is documented in
+[`docs/reference/validation-vocabulary.md`](reference/validation-vocabulary.md).
 
 In GitHub Actions, pass `--show-output` to validation lanes. Validation still
 writes `report.json`, `latest.json`, JUnit XML, and stdout/stderr logs, but
@@ -124,6 +126,6 @@ collection. Quick and socket validation exclude flaky tests.
 
 Provider validation scope is tracked with provider and surface markers such as
 `provider_openai` and `surface_stt`. See
-[`plan/validation/reference.md`](../plan/validation/reference.md) for the
+[`docs/reference/validation-vocabulary.md`](reference/validation-vocabulary.md) for the
 provider-surface matrix vocabulary covering extras, credential env vars,
 contract status, cassette status, and live canaries.

@@ -177,7 +177,7 @@ them. Multi-word audience filters accept hyphens or underscores, so
   automation needs validation output inside the standard CLI
   envelope. Then use the
   [validation workflow](validation.md) and the
-  [validation reference](../plan/validation/reference.md) for provider and
+  [validation reference](reference/validation-vocabulary.md) for provider and
   report vocabulary. Run `just guard-validation` when editing these
   validation-facing docs or the validate CLI behavior they describe.
 

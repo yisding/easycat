@@ -196,6 +196,7 @@ nav:
       - EasyConfig fields: reference/easyconfig.md
       - Journal records: reference/journal-records.md
       - Session lifecycle: reference/session-lifecycle.md
+      - Validation vocabulary: reference/validation-vocabulary.md
       - Public API contract: public-api.md
       - Extending providers:
           - extending/README.md

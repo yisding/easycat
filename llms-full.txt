@@ -917,8 +917,8 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 ## Validation reference
 
-- Path: plan/validation/reference.md
-- URL: https://github.com/yisding/easycat/blob/main/plan/validation/reference.md
+- Path: docs/reference/validation-vocabulary.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/validation-vocabulary.md
 - Audience: release maintainers
 - Read provider and report vocabulary used by validation.
 

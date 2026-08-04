@@ -1029,7 +1029,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
     {
         "label": "Validation reference",
-        "path": "plan/validation/reference.md",
+        "path": "docs/reference/validation-vocabulary.md",
         "audience": "release maintainers",
         "diataxis": "reference",
         "description": "Read provider and report vocabulary used by validation.",

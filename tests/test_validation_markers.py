@@ -186,7 +186,9 @@ def test_required_validation_markers_are_registered() -> None:
 def test_local_and_external_markers_are_documented_for_contributors() -> None:
     descriptions = _registered_marker_descriptions()
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
+    reference = (REPO_ROOT / "docs" / "reference" / "validation-vocabulary.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "integration_local" in descriptions
     assert "integration_external" in descriptions

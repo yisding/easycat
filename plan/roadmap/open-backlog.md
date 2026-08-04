@@ -233,7 +233,7 @@ comparison helper, not a provider-keyed registry — every rule is constructed
 inline in the test file. The cassette JSON format and the schema-registry design
 travel with this item; they were carried out of the retired validation reference
 and now sit alongside the shipped vocabulary in
-[../validation/reference.md](../validation/reference.md).
+[../../docs/reference/validation-vocabulary.md](../../docs/reference/validation-vocabulary.md).
 
 ### 6.2 Automate browser-driven WebRTC validation
 
