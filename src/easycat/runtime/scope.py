@@ -8,15 +8,11 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
+from easycat._concurrency import checkpoint_pending_cancellation
+
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
-
-
-async def _checkpoint_pending_cancellation(task: asyncio.Task[Any] | None) -> None:
-    """Deliver a pending request while ignoring a previously caught one."""
-    if task is not None and task.cancelling():
-        await asyncio.sleep(0)
 
 
 class BackgroundTaskScope:
@@ -321,7 +317,7 @@ class RuntimeScope:
             # was entered before sampling the stale-request baseline below.
             # A previously caught request leaves cancelling() non-zero but
             # does not raise at this checkpoint.
-            await _checkpoint_pending_cancellation(current)
+            await checkpoint_pending_cancellation(current)
             cancellation_requests = current.cancelling() if current is not None else 0
             try:
                 await asyncio.shield(task)

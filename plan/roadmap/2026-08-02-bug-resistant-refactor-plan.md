@@ -99,8 +99,12 @@ composes them in WS2.1.
   bound. Standalone lifecycles obtain that same supervisor rather than creating
   private ones. The supervisor stores task + stable `owner_id` metadata, never
   a Session/object reference, and remains the strong anchor after owner drop.
-- `start_owned(factory, *, registry, owner_id, task_name) -> OwnedTask` — the
-  only parkable-task constructor. It reserves capacity before invoking the
+- `await start_owned(factory, *, registry, owner_id, task_name) -> OwnedTask` —
+  the only parkable-task constructor. This is deliberately async: the helper
+  must checkpoint a pending caller cancellation both before reservation and
+  after the injected `reserved` journal callback, then retain a task if its
+  factory requests cancellation while creating it. A synchronous constructor
+  cannot distinguish those phases. It reserves capacity before invoking the
   awaitable factory. Bare coroutine objects are rejected, and an already
   running task can be adopted only when its reservation was allocated at its
   original spawn.
@@ -141,7 +145,10 @@ composes them in WS2.1.
   parking is forbidden while the parked task holds a lifecycle lock;
   teardown paths must release locks before parkable awaits (see the twilio
   `_lifecycle_lock` hazard — a parked lock-holder bricks the transport
-  permanently).
+  permanently). WS0.1a therefore introduces a supervisor-aware
+  `LifecycleLock`: plain `asyncio.Lock` exposes only `locked()`, not the owning
+  task, so it cannot enforce this contract. The WS0.1b vertical adoption must
+  validate this surface before the concurrency API is frozen.
 - `swallow_cancel()` — **an async context manager** (`async with`): the
   checkpoint must be awaited in `__aenter__` before the `cancelling()`
   baseline is captured; a sync CM cannot distinguish a pre-entry pending
@@ -476,7 +483,7 @@ The final API in `runtime/scope.py` includes:
 
 All child scopes share the lifecycle root registry and charge the runtime
 supervisor quota. `closed_with_survivors` is distinct from clean `closed`;
-capacity is reserved by `start_owned` before factory invocation. Survivor
+capacity is reserved by `await start_owned` before factory invocation. Survivor
 completion may transition the owner to clean `closed`; retry escalation and
 postmortem inspection remain available while terminal-with-survivors.
 

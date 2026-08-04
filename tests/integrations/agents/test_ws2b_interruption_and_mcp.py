@@ -846,12 +846,14 @@ class TestNoToolRegistryAfterMCP:
         # routes audio between transport and pipeline stages; it is not
         # a tool router. ``SessionIndex`` is the dev debugger's process-local
         # registry of LIVE SESSIONS (observability bookkeeping for the session
-        # selector) — not an agent/MCP tool registry. Both are whitelisted here.
+        # selector) — not an agent/MCP tool registry. ``SurvivorRegistry`` is
+        # the package-leaf lifecycle quota/ownership ledger; it contains no
+        # agent tools or MCP routing. These are whitelisted here.
         regex_patterns = [
             r"class \w*Registry",
             r"class \w*Router",
         ]
-        whitelist = {"class AudioRouter", "class SessionIndex"}
+        whitelist = {"class AudioRouter", "class SessionIndex", "class SurvivorRegistry"}
         for pattern in regex_patterns:
             result = subprocess.run(
                 ["grep", "-rE", pattern, "src/easycat/"],
