@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import SurvivorCapacityError
 from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
@@ -70,6 +71,7 @@ from easycat.teardown_budgets import (
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 if TYPE_CHECKING:
+    from easycat._epoch import Lease
     from easycat._turn_context import TurnContext
     from easycat.session._wiring import SessionWiringContext
 
@@ -189,6 +191,7 @@ class AudioRouter:
         self._event_bus = event_bus
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
+        self._inline_send_scope = runtime_scope.create_child("_audio_router.inline_send")
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
@@ -249,6 +252,11 @@ class AudioRouter:
 
         # Gated replay
         self._replay_chunks_pending: int = 0
+        # The most recent manager activity this router published on behalf of a
+        # gated replay. The streaming turn that produced the buffered audio is
+        # suspended elsewhere while this happens, so it cannot capture the
+        # transition itself; it claims this lease instead.
+        self._gated_playback_activity: Lease[TurnManagerState] | None = None
 
         # Outbound send-failure streak.  A transient ``send_audio`` failure
         # is expected to be swallowed (a turn must still complete after one
@@ -351,7 +359,7 @@ class AudioRouter:
         # A cancelled first-frame caller can leave its transport write running
         # briefly while the transport is being terminated. Keep shutdown
         # joined to that lifecycle-owned write before reporting outbound idle.
-        await self._runtime_scope.cancel_and_drain(self._INLINE_SEND_TASK_NAME)
+        await self._inline_send_scope.cancel_and_drain()
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
@@ -448,13 +456,31 @@ class AudioRouter:
 
         self._claim_outbound_send()
         turn = self._current_turn()
+        owned_send_started = False
+
+        async def send_owned() -> bool:
+            nonlocal owned_send_started
+            owned_send_started = True
+            return await self._send_first_audio_inline_owned(chunk, outbound_task, turn)
+
         try:
-            send_task = self._runtime_scope.create_task(
+            send_task = await self._inline_send_scope.create_owned_task(
                 self._INLINE_SEND_TASK_NAME,
-                self._send_first_audio_inline_owned(chunk, outbound_task, turn),
+                send_owned,
             )
+        except SurvivorCapacityError:
+            # The inline path is an optimization, not a delivery guarantee. A
+            # parked predecessor send (or a sibling session sharing the
+            # supervisor) can hold the only survivor slot; report the fast path
+            # as unavailable so the caller queues the chunk normally instead of
+            # aborting synthesis and dropping first audio.
+            if not owned_send_started:
+                await self._finish_outbound_send(replayed_chunk=False)
+            logger.debug("Inline first-audio send rejected by survivor capacity; queueing")
+            return False
         except BaseException:
-            await self._finish_outbound_send(replayed_chunk=False)
+            if not owned_send_started:
+                await self._finish_outbound_send(replayed_chunk=False)
             raise
         return await self._await_non_cancellable_send(
             send_task,
@@ -529,6 +555,7 @@ class AudioRouter:
                     timeout=self._INLINE_SEND_CANCEL_GRACE_S,
                 )
             if not done:
+                self._inline_send_scope.park(task)
                 logger.warning("Cancelled inline transport audio send remains lifecycle-owned")
 
         raise cancellation
@@ -555,6 +582,23 @@ class AudioRouter:
     def reset_replay_chunks(self) -> None:
         """Zero the gated-replay pending counter (Session calls this on turn reset)."""
         self._replay_chunks_pending = 0
+        self._gated_playback_activity = None
+
+    def _record_gated_playback_activity(self, activity: Lease[TurnManagerState] | None) -> None:
+        """Retain a playback transition this router published for a gated turn."""
+        if activity is not None:
+            self._gated_playback_activity = activity
+
+    def gated_playback_activity(self) -> Lease[TurnManagerState] | None:
+        """Return the newest playback activity published for the gated replay.
+
+        The gated turn's streaming state captured its activity before the
+        application flushed the classification gate, so it cannot observe the
+        replay's BOT_SPEAKING → IDLE window by polling: a short replay can
+        drain before the turn reaches its next commit boundary. Handing the
+        published lease over keeps the transfer exact instead of racy.
+        """
+        return self._gated_playback_activity
 
     def discard_pending_capture_audio(self) -> None:
         """Discard raw far-end frames queued before capture became allowed."""
@@ -580,7 +624,9 @@ class AudioRouter:
         if chunks:
             self._replay_chunks_pending += len(chunks)
             if not already_replaying:
-                await self._turn_manager.bot_started_speaking()
+                self._record_gated_playback_activity(
+                    await self._turn_manager.bot_started_speaking()
+                )
             for chunk in chunks:
                 # Tag each replay chunk so the drain loop only decrements
                 # ``_replay_chunks_pending`` (and only fires
@@ -1037,7 +1083,7 @@ class AudioRouter:
             self._replay_chunks_pending = 0
             replay_pending_finished = True
         if replay_pending_finished and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-            await self._turn_manager.bot_stopped_speaking()
+            self._record_gated_playback_activity(await self._turn_manager.bot_stopped_speaking())
 
     async def flush_trailing_playback_mark(self, turn: TurnContext | None = None) -> None:
         """Emit a playback mark for queued tail bytes that missed the throttle interval."""

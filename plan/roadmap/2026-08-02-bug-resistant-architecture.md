@@ -463,8 +463,9 @@ Migration order is semantic. The writer/phase inventory, canonical owners,
 private publication compatibility, predicate conversion, phase-latch
 classification, and commit guards land in Tier A.
 `_cancel_cleanup_owns_turn` remains until the named scope slice passes its
-14-day soak, the WS2.1 foundation is complete, and every turn child belongs to
-the bound scope. Replacement preserves manager-started, session-only,
+merge-anchored acceptance gate, the WS2.1 foundation is complete, and every
+turn child belongs to the bound scope. Replacement preserves manager-started,
+session-only,
 application, VAD, push-to-talk, replay, hand-built-event, reset/clear, and
 successor-during-cleanup behavior. Scope cancellation does not remove commit
 guards. Only then may the old identity generation carrier be removed.
@@ -663,9 +664,11 @@ the evidence stops supporting it.
   standalone.
 - **Tier B foundation — structurally gated.** When all Tier-A contracts,
   parity tests, source ratchets, and inventories are green, one peer-neutral
-  scope-tree vertical slice may land. A 14-day no-P1/P2 soak then permits the
-  rest of the peer-neutral scope foundation and epoch-to-scope binding, but
-  not bulk adoption.
+  scope-tree vertical slice may land. A merge-anchored acceptance review of
+  exact lifecycle tests, required CI, and P1/P2 evidence then permits the rest
+  of the peer-neutral scope foundation and epoch-to-scope binding, but not bulk
+  adoption. Elapsed time without an exposure floor is not evidence; A60 remains
+  the production-outcome gate.
 - **Tier B bulk — conditional on the Tier-A 60-day outcome.** The remaining
   package-by-package scope adoption, the
   `Session.stop()` rewrite, remaining epoch conversions
@@ -684,8 +687,9 @@ commits), plus `post-pre` deltas against controls. Zero denominators,
 underexposure, and treated controls are `insufficient_data`, not success;
 healthy zero-fix baselines use zero-post/non-inferiority instead of impossible
 strict decrease. Tier A measures Session lifecycle/staleness members; peer
-families use peers at B60. The 14-day incident source, severity, attribution,
-and exact formulas live in the refactor plan. Raw rolling-90-day share remains
+families use peers at B60. The vertical-slice incident source, severity,
+attribution, acceptance evidence, and exact formulas live in the refactor plan.
+Raw rolling-90-day share remains
 context, never a gate.
 
 ## 11. Non-goals and rejected alternatives

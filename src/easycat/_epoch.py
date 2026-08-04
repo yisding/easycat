@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar, overload
 
@@ -81,10 +82,40 @@ class Epoch(Generic[_T]):
 
     def bump(self, value: _T) -> int:
         """Publish ``value``, invalidate outstanding leases, and return the generation."""
-        with self._lock:
-            self._generation += 1
-            self._value = value
-            return self._generation
+        return self.publish(value).generation
+
+    def publish(
+        self,
+        value: _T,
+        *,
+        stamp: Callable[[_T, int], None] | None = None,
+    ) -> Lease[_T]:
+        """Publish ``value`` and return its lease, all under one critical section.
+
+        Prefer this over ``bump()`` followed by ``capture()``: those take the
+        mutex twice, so a competing writer can land between them and the caller
+        then holds a lease it did not publish.
+
+        ``stamp`` runs inside the critical section with the new payload and its
+        generation, letting a domain owner mirror the generation onto the
+        payload without a second, racy read. It runs under a non-reentrant
+        mutex, so it must stay trivial and must not re-enter this epoch.
+        """
+        # Hold the replaced payload past the critical section. If the epoch owns
+        # its last reference, dropping it inside the lock would run ``__del__``
+        # or a weakref callback there; a finalizer that reads or bumps this same
+        # epoch would then deadlock on the non-reentrant mutex.
+        replaced: _T | None = None
+        try:
+            with self._lock:
+                replaced = self._value
+                self._generation += 1
+                if stamp is not None:
+                    stamp(value, self._generation)
+                self._value = value
+                return Lease(_epoch=self, generation=self._generation, value=value)
+        finally:
+            del replaced
 
     def _current_generation(self) -> int:
         with self._lock:

@@ -405,12 +405,11 @@ class TurnManager:
         used to falsely log a from-state of BOT_SPEAKING).
         """
         from_state = self.state
-        generation = self._activity.bump(to_state)
-        lease = self._activity.capture()
+        # One critical section: a bump/capture pair would let a competing writer
+        # land between them and hand this caller a lease it did not publish.
+        lease = self._activity.publish(to_state)
         if __debug__:
-            assert lease.generation == generation
             assert lease.value is to_state
-            assert lease.is_current()
         if not observe:
             return lease
         logger.debug("Turn: %s -> %s (%s)", from_state.value, to_state.value, reason)

@@ -448,6 +448,29 @@ async def test_eventbus_reserved_handler_precedes_global_and_public_observers() 
 
 
 @pytest.mark.asyncio
+async def test_eventbus_reserved_handler_runs_for_event_subclasses() -> None:
+    """A subclassed lifecycle event must not reach observers unprivately.
+
+    Public subscriptions walk the MRO, so an application emitting a subclass
+    would otherwise be observed by everyone while skipping the Session-owned
+    reserved handler that installs turn identity.
+    """
+
+    class CustomSTTFinal(STTFinal):
+        pass
+
+    bus = EventBus()
+    order: list[str] = []
+    bus._subscribe_reserved(STTFinal, lambda _event: order.append("reserved"))
+    bus.subscribe_all(lambda _event: order.append("global"))
+    bus.subscribe(STTFinal, lambda _event: order.append("public"))
+
+    await bus.emit(CustomSTTFinal(text="subclassed"))
+
+    assert order == ["reserved", "global", "public"]
+
+
+@pytest.mark.asyncio
 async def test_eventbus_reserved_failure_prevents_public_observation() -> None:
     bus = EventBus(handler_error_policy="continue")
     observed: list[STTFinal] = []

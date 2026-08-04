@@ -40,7 +40,12 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate, _await_with_hard_timeout
+from easycat.server.transports import (
+    CapacityGate,
+    _await_with_hard_timeout,
+    _log_settled_task_failures,
+    _log_unexpected_task_results,
+)
 from easycat.session_manager import (
     SessionManager,
     SessionStopReport,
@@ -903,9 +908,28 @@ class VoiceServer:
         if tasks:
             gathered = asyncio.gather(*tasks, return_exceptions=True)
             if timeout_s is None:
-                await gathered
+                results = await gathered
             else:
-                await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                if not completed:
+                    # One handler outlived the deadline, so the gather result is
+                    # unavailable. Report the siblings that already failed
+                    # instead of discarding them with the abandoned gather.
+                    _log_settled_task_failures(
+                        tasks,
+                        explicitly_cancelled=tasks,
+                        context="VoiceServer WebSocket handler teardown",
+                        log=logger,
+                    )
+                    return
+                results = gathered.result()
+            _log_unexpected_task_results(
+                tasks,
+                results,
+                explicitly_cancelled=tasks,
+                context="VoiceServer WebSocket handler teardown",
+                log=logger,
+            )
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -1299,6 +1323,7 @@ class VoiceServer:
         # block forever on the surviving handler).
         task = asyncio.current_task()
         if task is not None:
+            task.set_name(f"easycat-voice-websocket-handler-{id(ws)}")
             self._ws_handler_tasks.add(task)
         try:
             if self._gate.is_draining:

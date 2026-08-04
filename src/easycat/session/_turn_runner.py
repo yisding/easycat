@@ -134,6 +134,9 @@ class _StreamingTtsState:
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
     gated: bool = False
+    #: True once this gated turn adopted the BOT_SPEAKING activity published by
+    #: the classification gate's replay (see ``_adopt_gated_playback_activity``).
+    gated_playback_adopted: bool = False
     playback_started: bool = False
     # True only if playback was cut off mid-stream by a cancelled token
     # (a genuine barge-in), as opposed to the queue draining naturally.
@@ -1200,7 +1203,38 @@ class TurnRunner:
 
     def _streaming_turn_is_current(self, st: _StreamingTtsState) -> bool:
         """Re-guard streaming identity and activity at one commit boundary."""
-        return self._identity_owns_turn(st.identity, st.turn) and st.activity.guard()
+        if not self._identity_owns_turn(st.identity, st.turn):
+            return False
+        return st.activity.guard() or self._adopt_gated_playback_activity(st)
+
+    def _adopt_gated_playback_activity(self, st: _StreamingTtsState) -> bool:
+        """Claim the playback activity the gate's replay published for this turn.
+
+        A gated first payload is synthesized into the classification buffer, so
+        ``begin_synthesis_with_bot_start`` never runs for it and no
+        ``activity_started`` callback refreshes ``st.activity``. Playback for
+        the *same* turn starts later, when the application flushes the gate
+        through ``Session.replay_gated_audio``.
+
+        Polling the manager cannot recover that publication: the replay's
+        BOT_SPEAKING → IDLE window closes as soon as the queue drains, which a
+        short replay can do before this turn reaches its next commit boundary.
+        AudioRouter therefore retains every activity it published on the
+        replay's behalf, and the turn claims the current one.
+
+        ``_streaming_turn_is_current`` calls this only after its own identity
+        guard passed and ``st.activity`` went stale, so a retained lease that
+        still guards is necessarily this turn's own newer publication — a
+        superseded generation can never become current again.
+        """
+        if not st.gated:
+            return False
+        published = self._audio.gated_playback_activity()
+        if published is None or not published.guard():
+            return False
+        st.activity = published
+        st.gated_playback_adopted = True
+        return True
 
     @staticmethod
     async def _await_owned_first_synthesis(
@@ -1223,7 +1257,7 @@ class TurnRunner:
         # Cancellation can unwind this old consumer while barge-in has already
         # installed a successor turn. Never finalize or reset shared turn state
         # on behalf of a stale generation.
-        if not self._identity_owns_turn(st.identity, st.turn) or not st.activity.guard():
+        if not self._streaming_turn_is_current(st):
             return
         if st.synth_started and self._activity_is_current(
             st.activity, TurnManagerState.BOT_SPEAKING

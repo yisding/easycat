@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import RuntimeSupervisor, start_owned
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
 from easycat.cancel import CancelToken
@@ -152,7 +153,12 @@ def _make_router(
     bus = EventBus()
     emitted: list = []
     journal = journal if journal is not None else InMemoryRingBuffer(capacity=64)
-    runtime_scope = RuntimeScope()
+    runtime_supervisor = RuntimeSupervisor(capacity=1)
+    runtime_scope = RuntimeScope.create_root(
+        "session:s",
+        supervisor=runtime_supervisor,
+        survivor_capacity=1,
+    )
 
     async def _emit(event):
         emitted.append(event)
@@ -196,6 +202,7 @@ def _make_router(
         "bus": bus,
         "journal": journal,
         "runtime_scope": runtime_scope,
+        "runtime_supervisor": runtime_supervisor,
     }
 
     wiring = make_wiring(
@@ -495,9 +502,13 @@ async def test_inline_send_keeps_stubborn_transport_owned_until_it_finishes(
     assert router._outbound_send_lock.locked()
     assert not router._outbound_idle.is_set()
     assert state["runtime_scope"].tasks("audio_inline_send")
+    assert router._inline_send_scope.parent is state["runtime_scope"]
+    assert state["runtime_supervisor"].survivor_count == 1
 
     release.set()
     await state["runtime_scope"].drain("audio_inline_send")
+    await asyncio.sleep(0)
+    assert state["runtime_supervisor"].active_count == 0
     assert router._outbound_in_flight == 0
     assert not router._outbound_send_lock.locked()
     assert router._outbound_idle.is_set()
@@ -1403,4 +1414,37 @@ async def test_await_drain_is_noop_without_playout_hook():
 
     await router.await_drain(timeout=0.05)
 
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_inline_send_falls_back_to_queue_when_survivor_capacity_is_exhausted() -> None:
+    """A rejected inline reservation must not abort synthesis and drop audio.
+
+    ``try_send_first_audio_inline`` is an optimization over the outbound queue.
+    A parked predecessor send — or a sibling session sharing the supervisor —
+    can hold the only survivor slot, and ``SurvivorCapacityError`` escaping here
+    would propagate out of ``TTSSynthesizer._send_or_queue_audio`` instead of
+    letting the caller queue the chunk.
+    """
+    router, state = _make_router()
+    router.start_outbound()
+
+    # Exhaust the shared root quota with an unrelated owned task.
+    registry = state["runtime_scope"].survivor_registry
+    blocker = await start_owned(
+        lambda: asyncio.Event().wait(),
+        registry=registry,
+        owner_id="test:blocker:1",
+        task_name="blocker",
+    )
+
+    assert await router.try_send_first_audio_inline(_make_chunk()) is False
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+    assert not router._outbound_send_lock.locked()
+
+    blocker.cancel()
+    await asyncio.gather(blocker.task, return_exceptions=True)
+    state["running"] = False
     await router.stop_outbound()

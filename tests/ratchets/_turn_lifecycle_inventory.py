@@ -209,14 +209,18 @@ class _TurnLifecycleVisitor(ast.NodeVisitor):
             )
         activity_target = callee.rsplit(".", 1)[0]
         activity_owner, _, activity_attribute = activity_target.rpartition(".")
+        # ``publish`` and ``bump`` are both activity-epoch writes: publish is
+        # the single-critical-section form that also returns the lease. Treat
+        # them alike so moving between them cannot drop the write out of the
+        # sole-owner/sole-writer inventory.
         if (
-            leaf == "bump"
+            leaf in {"bump", "publish"}
             and activity_attribute == "_activity"
             and self._is_turn_manager_owner(activity_owner)
         ):
             self._record(
                 "activity_epoch_bump",
-                "bump self._activity",
+                f"{leaf} self._activity",
                 node,
             )
 

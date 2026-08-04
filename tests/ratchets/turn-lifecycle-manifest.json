@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2c routes internal turn starts through private publications before marked public observations",
+  "update_rationale": "Serialize activity and identity publication with their generation (Codex review on #814): TurnManager._transition and TurnLifecycle.publish_identity now use Epoch.publish, which returns the installed lease and stamps the generation inside one critical section, so a competing writer cannot land between a bump and its capture. The scanner treats publish and bump alike as activity-epoch writes.",
   "counts": {
     "categories": {
       "activity_epoch_bump": 1,
@@ -31,7 +31,7 @@
     }
   },
   "entries": [
-    "activity_epoch_bump\tturn_manager.py\tTurnManager._transition\tbump self._activity\t7e9b3d381c8119ed\t0\tactivity_transition\tSole writer atomically publishes each manager phase and invalidates prior activity leases.",
+    "activity_epoch_bump\tturn_manager.py\tTurnManager._transition\tpublish self._activity\t6950332cfc58a538\t0\tactivity_transition\tSole activity-epoch writer; publishes the state and returns its lease in one critical section so callers never hold a lease they did not publish.",
     "activity_owner_assignment\tturn_manager.py\tTurnManager.__init__\tassign self._activity\t45c30128467ea343\t0\tactivity_initialize\tInitializes the TurnManager-owned activity Epoch in IDLE.",
     "activity_reset_call\tsession/_session.py\tSession._reset_turn_state\tcall self._turn_manager.reset\tc784e162b528b927\t0\tactivity_reset\tResets manager activity whenever Session clears voice-turn identity.",
     "activity_reset_call\tsession/_turn_runner.py\tTurnRunner._reset_turn_manager_preserving_token\tcall self._turn_manager.reset\t3c0a3930c95e301f\t0\tactivity_reset\tEnds manager activity while gated replay deliberately retains turn identity and token.",
@@ -48,7 +48,7 @@
     "identity_carrier_assignment\t_turn_context.py\tTurnContext\tassign _generation_counter\t55cd5b40868efabb\t0\tidentity_carrier\tSeeds the legacy process-wide turn generation counter.",
     "identity_carrier_assignment\t_turn_context.py\tTurnContext.__init__\tassign self.generation\tfa24c1112ec3c5cf\t0\tidentity_carrier\tCopies the allocated legacy generation onto a new TurnContext.",
     "identity_carrier_assignment\t_turn_context.py\tTurnContext.__init__\tupdate TurnContext._generation_counter\t602b69516b4ac6fc\t0\tidentity_carrier\tAllocates the next legacy TurnContext generation.",
-    "identity_carrier_assignment\tsession/_turn_lifecycle.py\tTurnLifecycle.publish_identity\tassign turn.generation\tfbc8d8a71762237f\t0\tidentity_carrier\tDual-writes the legacy TurnContext generation from the canonical identity epoch.",
+    "identity_carrier_assignment\tsession/_turn_lifecycle.py\t_stamp_turn_generation\tassign turn.generation\t79697fe872f4982a\t0\tidentity_carrier\tMirrors the published generation onto the turn inside Epoch.publish's critical section, so no competing writer can land between the stamp and the publication.",
     "identity_clear_call\tsession/_session.py\tSession._finish_turn_cancel\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity after non-barge-in turn cancellation still owns the turn.",
     "identity_clear_call\tsession/_session.py\tSession._reset_turn_state\tcall self._turn_lifecycle.clear_identity\t84c87971555b95fc\t0\tidentity_clear\tRoutes the canonical Session reset through identity invalidation.",
     "identity_clear_call\tsession/_session.py\tSession._rollback_interrupted_start\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity while rolling back interrupted Session startup.",

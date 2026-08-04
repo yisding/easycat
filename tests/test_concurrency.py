@@ -7,13 +7,14 @@ import asyncio
 import gc
 import inspect
 import weakref
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from easycat._concurrency import (
+    CleanupSettlement,
     HardTimeoutStatus,
     LifecycleLock,
     LifecycleLockHeldError,
@@ -851,3 +852,68 @@ async def test_swallow_cancel_composes_with_asyncio_timeout() -> None:
         async with asyncio.timeout(0.01):
             async with swallow_cancel():
                 await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_shielded_cleanup_setup_failure_reports_pending_cancellation() -> None:
+    """A setup failure must not hide that the caller is already cancelling.
+
+    No cleanup task exists on this path, so there is nothing to shield. A
+    caller weighing cancellation against a cleanup error would otherwise read
+    ``cancellation_requests == 0`` while it is in fact cancelling.
+    """
+    settlements: list[CleanupSettlement[object]] = []
+
+    def cancels_then_raises() -> Any:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        raise RuntimeError("factory exploded")
+
+    async def caller() -> None:
+        settlements.append(await shielded_cleanup(cancels_then_raises))
+
+    task = asyncio.create_task(caller())
+    await task
+
+    assert len(settlements) == 1
+    settlement = settlements[0]
+    assert isinstance(settlement.error, RuntimeError)
+    assert settlement.cancellation_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_hard_timeout_parked_path_delivers_pending_cancellation() -> None:
+    """Parking must not return normally to a caller that is already cancelling.
+
+    The journal hook fires while ``hard_timeout`` records the parked
+    transition and can synchronously request caller cancellation; the
+    completed path already checkpoints, so the timeout path must too.
+    """
+    loop = asyncio.get_running_loop()
+    caller_holder: dict[str, asyncio.Task[Any]] = {}
+
+    def journal(event: str, _data: Mapping[str, object]) -> None:
+        if event == "owned_task_transition" and _data.get("state") == "parked":
+            caller_holder["task"].cancel()
+
+    supervisor = RuntimeSupervisor(capacity=1, journal=journal)
+    registry = SurvivorRegistry(supervisor=supervisor, root_id="root", capacity=1)
+    outcomes: list[Any] = []
+
+    async def run() -> None:
+        caller_holder["task"] = asyncio.current_task()  # type: ignore[assignment]
+        owned = await start_owned(
+            lambda: asyncio.Event().wait(),
+            registry=registry,
+            owner_id="owner-1",
+            task_name="stubborn",
+        )
+        outcomes.append(await hard_timeout(owned, loop.time()))
+
+    task = asyncio.create_task(run())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert outcomes == []
+    assert task.cancelled()

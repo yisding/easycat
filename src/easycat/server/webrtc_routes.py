@@ -61,7 +61,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
-from easycat.server.transports import _await_with_hard_timeout
+from easycat.server.transports import (
+    _await_with_hard_timeout,
+    _log_settled_task_failures,
+    _log_unexpected_task_results,
+)
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
@@ -473,7 +477,10 @@ class WebRTCRoutes:
             self._emit_connections_changed()
             transport._ensure_browser_event_forwarder()
             self._released_cleanup_keys.discard(key)
-            task = asyncio.create_task(self._cleanup_session(key, transport))
+            task = asyncio.create_task(
+                self._cleanup_session(key, transport),
+                name=f"easycat-webrtc-cleanup-{key}",
+            )
             self._cleanup_tasks.add(task)
             self._cleanup_task_keys[task] = key
             task.add_done_callback(self._cleanup_task_done)
@@ -538,19 +545,41 @@ class WebRTCRoutes:
             task.cancel()
         if pending:
             finalizers = [
-                asyncio.create_task(self._finalize_session_cleanup(key, force=True))
+                asyncio.create_task(
+                    self._finalize_session_cleanup(key, force=True),
+                    name=f"easycat-webrtc-finalizer-{key}",
+                )
                 for _task, key in pending
                 if key is not None
             ]
+            tasks = [*(task for task, _key in pending), *finalizers]
             cleanup = asyncio.gather(
-                *(task for task, _key in pending),
-                *finalizers,
+                *tasks,
                 return_exceptions=True,
             )
             if timeout_s is None:
-                await cleanup
+                results = await cleanup
             else:
-                await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+                completed = await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+                if not completed:
+                    # The gather is abandoned to the hard timeout, so its
+                    # result list never arrives. Report the finalizers that
+                    # already failed rather than discarding them.
+                    _log_settled_task_failures(
+                        tasks,
+                        explicitly_cancelled=[task for task, _key in pending],
+                        context="WebRTC route cleanup teardown",
+                        log=logger,
+                    )
+                    return
+                results = cleanup.result()
+            _log_unexpected_task_results(
+                tasks,
+                results,
+                explicitly_cancelled=[task for task, _key in pending],
+                context="WebRTC route cleanup teardown",
+                log=logger,
+            )
 
     async def _stop_managed_session(self, key: int, force: bool) -> None:
         """Route drain teardown through the manager's keyed stop ownership."""

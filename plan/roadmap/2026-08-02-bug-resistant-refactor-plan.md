@@ -63,7 +63,7 @@ WS2.7a, WS3.1, WS4.1, WS5.2, WS6.1b                     [Tier A]
         deterministic Tier-A exit ──→ named WS2.1 vertical slice
                                               │
                                               ▼
-                                        14-day slice soak
+                                  merge-anchored acceptance gate
                                               │
                                               ├──→ WS2.1 foundation complete
                                               └──→ WS1.2f-g
@@ -401,6 +401,14 @@ preceding explicit teardown cancellation as expected, and journal unexpected
 exceptions. Tests: expected cancellation emits no failure, while a genuine
 finalizer exception is observable with its task name.
 
+Implementation clarification (2026-08-02): neither server lifecycle owns an
+`ExecutionJournal`, and reaching through its connection registry to a
+per-session journal would introduce the coupling WS2 is intended to remove.
+For this pre-scope slice, "journal" therefore means an error record in the
+owning module's operational logger, with stable task identity and traceback.
+WS2's journal-injected scopes can translate the same terminal outcome into
+structured task records without changing the cancellation classification.
+
 ### WS0.5 — Websocket resampler-tail fence [S] [behavior fix]
 
 Moved forward from the epoch workstream on review: this is a live race
@@ -504,8 +512,9 @@ bookkeeping intentionally remain live.
   `preemptive_take_closed` phase latch; it is not an identity Epoch. Freeze the
   late-STT-final-during-`end_stream` race.
 - **f. Turn child scope + compound-predicate deletion (Tier B).** Only after
-  the 14-day slice soak, completed WS2.1 foundation, and a membership inventory
-  of every per-turn task, bind identity invalidation to prompt scope unwinding.
+  the WS2.1a acceptance gate, completed WS2.1 foundation, and a membership
+  inventory of every per-turn task, bind identity invalidation to prompt scope
+  unwinding.
   Then replace `_cancel_cleanup_owns_turn` and remaining generation checks with
   identity/activity/token guards, still re-guarding at commits. Tests freeze
   manager-started, session-only, application, VAD, push-to-talk, replay,
@@ -688,15 +697,15 @@ are arithmetic over stream positions, not liveness fences.
 
 ### WS2.1 — Extend `RuntimeScope` [L, three PRs]
 
-Keep this foundation reviewable and make the soak SHA unambiguous:
+Keep this foundation reviewable and make the acceptance SHA unambiguous:
 
 - **2.1a — named vertical slice:** after the Tier-A structural gate, add child
   hierarchy, explicit parent/root attachment, the WS0.1 supervisor/registry,
   and one Session-owned `_audio_router` inline-send cohort in
-  `runtime/scope.py` + `session/_audio_router.py`. Its merge SHA starts the
-  14-day soak; no other package adoption is part of it.
-- **2.1b — policy/cohort engine:** after that soak, add mode-dependent policy,
-  named phase barriers, escalation, and graceful-to-force supersession.
+  `runtime/scope.py` + `session/_audio_router.py`. Its merge SHA anchors the
+  deterministic acceptance gate; no other package adoption is part of it.
+- **2.1b — policy/cohort engine:** after that gate passes, add mode-dependent
+  policy, named phase barriers, escalation, and graceful-to-force supersession.
 - **2.1c — finalization/result model:** add ordered finalizer nodes and retained
   terminal results, then run the full current-stop mapping before WS1.2f.
 
@@ -1255,6 +1264,13 @@ runs without skip; duplicated lifecycle code is deleted.
   registry. A drift guard compares that registry with public exports. Do not
   use the internal transport union as a proxy for all configs or recursively
   import optional-SDK packages.
+
+  Implementation decision (2026-08-02):
+  `easycat._public_api.PUBLIC_CONFIG_EXPORTS` is the authoritative top-level
+  classification. The guard intersects lazy exports with an AST-discovered
+  config-dataclass inventory and keeps an exact source inventory of direct
+  credential fields, so drift is detected without recursively importing
+  optional provider SDKs.
 - **WS5.3 TTS residue [M] (Tier B)**: fold `_get_mgr`, `_route_key`,
   `_on_global_frame`, `_reset_persistent_audio_alignment`,
   `_discard_persistent_audio_state`, `_decode_message`
@@ -1300,10 +1316,12 @@ description explains why the omitted targets cannot observe the change.
 | WS3 | `uv run pytest tests/contracts/test_agent_bridge_contracts.py tests/integrations/agents/test_bridge_lifecycle_scenarios.py -q` | required extras cells, or successful nightly artifact at the exact candidate SHA |
 | WS4 | `uv run pytest tests/contracts/test_transport_contracts.py tests/transports/test_transport_conformance.py tests/transports/test_lifecycle_scenarios.py -q` | retained-backend cells when an offline SDK/backend is optional |
 | WS5 | `uv run pytest tests/config/test_secret_reprs.py tests/server/test_auth.py tests/transports/test_webrtc_auth_browser_playground.py -q` | retained aioquic cell for WebTransport bind migration |
-| WS6 | `uv run pytest tests/test_refactor_metrics.py tests/ratchets -q` | none |
+| WS6 | `uv run pytest tests/test_refactor_metrics.py -q` | none |
 
-New paths in this table are deliverables of their owning slice. The SDK-gated
-real bridge suite is not silently treated as part of local `just check`.
+New paths in this table are deliverables of their owning slice. In particular,
+`tests/ratchets` is created by WS0 and is not a prerequisite for the earlier
+WS6 measurement-infrastructure slices. The SDK-gated real bridge suite is not
+silently treated as part of local `just check`.
 
 ---
 
@@ -1338,22 +1356,25 @@ and `treated_delta <= control_delta + epsilon`; when `pre_density > 0`, it also
 requires `post_density < pre_density`. A healthy zero-fix pre-window instead
 requires zero post fixes and non-inferiority, not impossible strict decrease.
 
-The soak incident source is `plan/metrics/incidents.json`, populated from
-linked issues, regression PRs, reverts, and release-blocking CI failures. The
-rubric is frozen in WS6.1a: P1 is security/cross-session corruption, data loss,
-or service-wide unavailability; P2 is a supported lifecycle path that hangs,
-leaks owned work, misroutes state, or requires a hotfix/rollback. The manifest's
-named reviewer records attribution evidence; an unresolved attribution dispute
-does not pass the soak.
+The vertical-slice acceptance source is `plan/metrics/incidents.json`, populated
+with the immutable merge anchor, exact required command results, required
+GitHub checks, and searches of linked issues, regression PRs, reverts, and
+release-blocking CI failures. The rubric is frozen in WS6.1a: P1 is
+security/cross-session corruption, data loss, or service-wide unavailability;
+P2 is a supported lifecycle path that hangs, leaks owned work, misroutes state,
+or requires a hotfix/rollback. The named reviewer records attribution evidence;
+an unresolved attribution dispute does not pass the gate.
 
 The gates are deliberately separate:
 
 1. **Tier-A structural exit (immediate):** all Tier-A contracts, behavior-
    parity tests, source ratchets, and inventories are green. This permits one
    peer-neutral WS2.1 vertical slice, and nothing else from Tier B.
-2. **Vertical-slice soak (14 days from WS2.1a's merge SHA/date):** no attributable
-   P1/P2 incident under the rubric above. This permits WS2.1b-c; WS1.2f-g also
-   require that foundation and the per-turn membership inventory.
+2. **Vertical-slice acceptance (at WS2.1a's merge SHA/date):** the exact WS2
+   lifecycle suite and `just check` pass, required GitHub checks are green, and
+   the named incident-source review finds no attributable P1/P2 under the rubric
+   above. There is no elapsed-time condition. This permits WS2.1b-c; WS1.2f-g
+   also require that foundation and the per-turn membership inventory.
 3. **Tier-A 60-day outcome (A60):** apply the formula above to the pre-registered
    Session lifecycle/staleness cohort. Any fail or `insufficient_data` stops
    bulk Tier B and triggers reassessment.
@@ -1364,7 +1385,8 @@ The gates are deliberately separate:
 After each eligible window, regenerate the persisted report and run:
 
 ```bash
-uv run python scripts/refactor_metrics.py --manifest plan/metrics/refactor-families.json
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time>
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time> --check
 uv run pytest tests/ratchets -q
 uv run ruff check .
 ```

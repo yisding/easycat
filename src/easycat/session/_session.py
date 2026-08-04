@@ -25,6 +25,7 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
 from easycat._turn_context import TurnContext
@@ -234,6 +235,7 @@ class Session:
     def __init__(self, config: SessionConfig) -> None:
         cfg = config
         self._config = cfg
+        self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
 
         # ── Providers (fall back to no-op stubs) ─────────────────
         self.stt = cfg.stt or NoopSTT()
@@ -329,7 +331,14 @@ class Session:
 
         # ── Session-owned services ───────────────────────────────
         self._health_checkers: list[PeriodicHealthChecker] = []
-        self._runtime_scope = RuntimeScope()
+        runtime_supervisor = cfg.runtime_supervisor or RuntimeSupervisor(
+            capacity=cfg.runtime_survivor_capacity
+        )
+        self._runtime_scope = RuntimeScope.create_root(
+            f"session:{self.session_id}",
+            supervisor=runtime_supervisor,
+            survivor_capacity=cfg.runtime_survivor_capacity,
+        )
         self._session_actions = cfg.session_actions
         self._action_executors: list[SessionActionExecutor] = [
             *cfg.action_executors,
@@ -368,7 +377,6 @@ class Session:
         # keep existing focused harnesses on the same publication seam.
         self._turn_lifecycle = TurnLifecycle()
 
-        self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):

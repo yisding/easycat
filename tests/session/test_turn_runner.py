@@ -1658,6 +1658,122 @@ async def test_stale_tts_settlement_rejects_same_state_activity_republication() 
     assert session._turn_manager.state is TurnManagerState.BOT_SPEAKING
 
 
+def _gated_streaming_state(
+    session: Session,
+    turn: TurnContext,
+) -> _StreamingTtsState:
+    """Build the streaming state a gated first payload leaves behind.
+
+    ``_synthesize_first_payload`` skips ``begin_synthesis_with_bot_start``
+    while the classification gate is buffering, so the state keeps the
+    PROCESSING activity it captured and never marks playback as started.
+    """
+    session._turn_manager._state = TurnManagerState.PROCESSING
+    state = _StreamingTtsState(
+        turn=turn,
+        identity=session._turn_runner._turn.capture_identity(),
+        activity=session._turn_manager.capture_activity(),
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.gated = True
+    state.agent_output_settled.set()
+    return state
+
+
+@pytest.mark.asyncio
+async def test_gated_settlement_claims_in_flight_replay_playback() -> None:
+    """A gated turn owns the BOT_SPEAKING transition its own replay publishes.
+
+    Playback starts when the application flushes the gate through
+    ``Session.replay_gated_audio``. The finalizer must follow that transition
+    rather than treat its own playback as a stale successor and leave the
+    manager wedged in BOT_SPEAKING.
+    """
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-gated-replay", CancelToken())
+    runner._turn.set(turn)
+    state = _gated_streaming_state(session, turn)
+
+    await session._audio_router.gated_replay([TTSAudio(chunk=_chunk())])
+
+    await runner._settle_turn_after_tts(state)
+
+    assert state.gated_playback_adopted
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn is None
+    assert not turn.cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_gated_settlement_claims_drained_replay_playback() -> None:
+    """A short replay that already drained still hands its activity over.
+
+    ``AudioRouter._finish_outbound_send`` publishes IDLE as soon as the replay
+    tally clears, so polling the manager for BOT_SPEAKING would miss the
+    window entirely — the turn would stay fenced off from its own playback and
+    suppress ``AgentFinal``. The gated branch must still run.
+    """
+    session = Session(_config())
+    runner = session._turn_runner
+    router = session._audio_router
+    turn = TurnContext("turn-gated-drained", CancelToken())
+    runner._turn.set(turn)
+    state = _gated_streaming_state(session, turn)
+
+    await router.gated_replay([TTSAudio(chunk=_chunk())])
+    router._replay_chunks_pending = 1
+    await router._finish_outbound_send(replayed_chunk=True)
+    assert session._turn_manager.state is TurnManagerState.IDLE
+
+    assert runner._streaming_turn_is_current(state)
+    await runner._settle_turn_after_tts(state)
+
+    assert state.gated_playback_adopted
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    # The gated branch keeps the turn alive for replay mark accounting.
+    assert session._turn is turn
+    assert not turn.cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_gated_settlement_still_rejects_successor_turn_playback() -> None:
+    """Adoption is scoped to the gated turn that still owns the turn pointer."""
+    session = Session(_config())
+    runner = session._turn_runner
+    turn = TurnContext("turn-gated-superseded", CancelToken())
+    runner._turn.set(turn)
+    state = _gated_streaming_state(session, turn)
+
+    successor = TurnContext("turn-gated-successor", CancelToken())
+    runner._turn.set(successor)
+    await session._audio_router.gated_replay([TTSAudio(chunk=_chunk())])
+
+    await runner._settle_turn_after_tts(state)
+
+    assert not state.gated_playback_adopted
+    assert session._turn is successor
+    assert session._turn_manager.state is TurnManagerState.BOT_SPEAKING
+
+
+@pytest.mark.asyncio
+async def test_gated_playback_activity_is_dropped_on_turn_reset() -> None:
+    """A later turn must not claim the previous turn's replay publication."""
+    session = Session(_config())
+    router = session._audio_router
+    session._turn_manager._state = TurnManagerState.PROCESSING
+
+    await router.gated_replay([TTSAudio(chunk=_chunk())])
+    assert router.gated_playback_activity() is not None
+
+    router.reset_replay_chunks()
+
+    assert router.gated_playback_activity() is None
+
+
 @pytest.mark.asyncio
 async def test_tts_result_does_not_stamp_republished_turn(
     monkeypatch: pytest.MonkeyPatch,

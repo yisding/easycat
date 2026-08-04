@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS3.1c adds bounded portable bridge contract probes",
+  "update_rationale": "WS0.4 preserves the existing hard-timeout enforcement calls while inspecting gathered teardown results; refresh the two structurally moved lifecycle-call fingerprints.",
   "counts": {
     "configurable": 20,
     "lifecycle_budget": 82,
@@ -69,7 +69,7 @@
     "lifecycle_call\tserver/transports.py\tcancel_handler_tasks\tcall _safe_await\tef052665e3f97fe6\t0\tlifecycle_budget\tBounds best-effort handler-task cancellation.",
     "lifecycle_call\tserver/transports.py\tclose_websocket_connections\tcall _safe_await\t768ec4176f5a8ad9\t0\tlifecycle_budget\tBounds best-effort WebSocket connection closure.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._await_natural_drain_or_escalate\tcall self._gate.wait_drained\t25e9f93b378ca23d\t0\tlifecycle_budget\tBounds natural server drain before escalation.",
-    "lifecycle_call\tserver/voice_server.py\tVoiceServer._cancel_ws_handler_tasks\tcall easycat.server.transports._await_with_hard_timeout\t542029c7f26fe4b8\t0\tlifecycle_budget\tHard-bounds WebSocket handler cancellation.",
+    "lifecycle_call\tserver/voice_server.py\tVoiceServer._cancel_ws_handler_tasks\tcall easycat.server.transports._await_with_hard_timeout\t4fa824b6a4cc3e79\t0\tlifecycle_budget\tHard-bounds WebSocket handler cancellation.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._close_active_ws_connections\tcall easycat.server.transports._await_with_hard_timeout\t4d4f60904d8d66b3\t0\tlifecycle_budget\tHard-bounds active WebSocket connection closure.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._drain_sessions_for_stop\tcall self._gate.drain\t78055688853e0e9f\t0\tlifecycle_budget\tBounds session drain during server stop.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._stop_unlocked\tcall easycat.server.transports._await_with_hard_timeout\t0dcd4f66746d2e73\t0\tlifecycle_budget\tHard-bounds listener cleanup during server stop.",
@@ -77,7 +77,7 @@
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._stop_unlocked\tcall self._cancel_ws_handler_tasks\te96ea8c2bd592bfc\t0\tlifecycle_budget\tPropagates the handler-cancellation stop budget.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._stop_unlocked\tcall self._webrtc_routes.cancel_cleanup_tasks\te4e9f9feede33930\t0\tlifecycle_budget\tPropagates the WebRTC cleanup stop budget.",
     "lifecycle_call\tserver/voice_server.py\tVoiceServer._wait_for_listener_cleanup_task\tcall asyncio.wait\tdec44807ce7fc4ab\t0\tlifecycle_budget\tBounds waiting for listener cleanup completion.",
-    "lifecycle_call\tserver/webrtc_routes.py\tWebRTCRoutes.cancel_cleanup_tasks\tcall easycat.server.transports._await_with_hard_timeout\t9f7524dd4fe787f9\t0\tlifecycle_budget\tHard-bounds WebRTC route cleanup cancellation.",
+    "lifecycle_call\tserver/webrtc_routes.py\tWebRTCRoutes.cancel_cleanup_tasks\tcall easycat.server.transports._await_with_hard_timeout\t5451995edb614251\t0\tlifecycle_budget\tHard-bounds WebRTC route cleanup cancellation.",
     "lifecycle_call\tserver/webrtc_routes.py\t_shutdown_standalone_webrtc\tcall _standalone_sweep_error\t8ed8ddb88957e83f\t0\tlifecycle_budget\tChecks the bounded standalone cleanup sweep.",
     "lifecycle_call\tserver/webrtc_routes.py\t_shutdown_standalone_webrtc\tcall easycat.server.transports._await_with_hard_timeout\t6cb6c2f46ad3b1b7\t0\tlifecycle_budget\tHard-bounds standalone WebRTC cleanup sweep.",
     "lifecycle_call\tserver/webrtc_routes.py\t_shutdown_standalone_webrtc\tcall gate.drain\t7f550670b46c945f\t0\tlifecycle_budget\tBounds standalone WebRTC session drain.",

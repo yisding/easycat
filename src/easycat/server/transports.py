@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Hashable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Hashable, Iterable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
@@ -53,6 +53,54 @@ KeyT = TypeVar("KeyT", bound=Hashable)
 ConnectionT = TypeVar("ConnectionT")
 SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
+
+
+def _log_unexpected_task_results(
+    tasks: Sequence[asyncio.Task[Any]],
+    results: Sequence[object],
+    *,
+    explicitly_cancelled: Collection[asyncio.Task[Any]],
+    context: str,
+    log: logging.Logger,
+) -> None:
+    """Log exceptional teardown results without misreporting requested cancellation."""
+    for task, result in zip(tasks, results, strict=True):
+        if not isinstance(result, BaseException):
+            continue
+        if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
+            continue
+        log.error(
+            "%s task %r failed",
+            context,
+            task.get_name(),
+            exc_info=result,
+        )
+
+
+def _log_settled_task_failures(
+    tasks: Iterable[asyncio.Task[Any]],
+    *,
+    explicitly_cancelled: Collection[asyncio.Task[Any]],
+    context: str,
+    log: logging.Logger,
+) -> None:
+    """Log failures of already-settled teardown tasks after a hard timeout.
+
+    When one sibling resists cancellation past the deadline the caller returns
+    without the gather's result list, so the children that *did* fail would
+    otherwise be discarded: ``return_exceptions=True`` keeps their errors as
+    result values that nothing ever reads.
+    """
+    for task in tasks:
+        if not task.done():
+            continue
+        if task.cancelled():
+            if task not in explicitly_cancelled:
+                log.error("%s task %r was cancelled unexpectedly", context, task.get_name())
+            continue
+        error = task.exception()
+        if error is not None:
+            log.error("%s task %r failed", context, task.get_name(), exc_info=error)
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
@@ -336,6 +384,47 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             return False, None
         return True, future.result()
 
+    def _retained_listener_wait(self) -> OwnedTask[object] | None:
+        """Return a listener task the registry retained for the current attempt."""
+        owner_id = self._listener_wait_owner_id
+        if owner_id is None:
+            return None
+        retained = self._survivor_registry.owned_tasks(owner_id)
+        return retained[0] if retained else None
+
+    async def _start_listener_wait(
+        self,
+        factory: Callable[[], Awaitable[object]],
+    ) -> OwnedTask[object]:
+        """Reserve and start one listener-cleanup attempt, retaining it on failure."""
+        if self._listener_wait_owner_id is None:
+            self._listener_wait_attempt += 1
+            self._listener_wait_terminal_state = OwnerState.OPEN
+            self._listener_wait_owner_id = (
+                f"{self._survivor_registry.root_id}:listener_wait_closed:"
+                f"{self._listener_wait_attempt}"
+            )
+
+        async def wait_closed() -> object:
+            return await factory()
+
+        try:
+            owned = await start_owned(
+                wait_closed,
+                registry=self._survivor_registry,
+                owner_id=self._listener_wait_owner_id,
+                task_name="websocket.listener_wait_closed",
+            )
+        except BaseException:
+            # ``start_owned`` parks and re-raises when the caller is cancelled
+            # after the task was activated. Reclaim that retained task, or the
+            # next drain would call ``start_owned`` again for an owner the park
+            # already closed and raise instead of rejoining the cleanup.
+            self._listener_wait_owned = self._retained_listener_wait()
+            raise
+        self._listener_wait_owned = owned
+        return owned
+
     async def _bounded_listener_wait(
         self,
         factory: Callable[[], Awaitable[object]],
@@ -347,26 +436,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         if self._listener_wait_completed:
             return True, None
         while True:
-            owned = self._listener_wait_owned
-            if owned is None:
-                if self._listener_wait_owner_id is None:
-                    self._listener_wait_attempt += 1
-                    self._listener_wait_terminal_state = OwnerState.OPEN
-                    self._listener_wait_owner_id = (
-                        f"{self._survivor_registry.root_id}:listener_wait_closed:"
-                        f"{self._listener_wait_attempt}"
-                    )
-
-                async def wait_closed() -> object:
-                    return await factory()
-
-                owned = await start_owned(
-                    wait_closed,
-                    registry=self._survivor_registry,
-                    owner_id=self._listener_wait_owner_id,
-                    task_name="websocket.listener_wait_closed",
-                )
-                self._listener_wait_owned = owned
+            owned = self._listener_wait_owned or await self._start_listener_wait(factory)
 
             try:
                 outcome = await hard_timeout(owned, deadline)
