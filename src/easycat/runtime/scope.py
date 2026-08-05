@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from functools import partial
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, Self, TypeVar, runtime_checkable
 
-from easycat._concurrency import checkpoint_pending_cancellation
+from easycat._concurrency import (
+    RuntimeSupervisor,
+    SurvivorRegistry,
+    checkpoint_pending_cancellation,
+    start_owned,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +133,126 @@ class JournalSink(Protocol):
 
 
 class RuntimeScope:
-    """Track named runtime tasks and provide consistent cancellation/drain."""
+    """Track named runtime tasks in an explicit lifecycle hierarchy.
 
-    def __init__(self) -> None:
+    Legacy standalone scopes may still be constructed with ``RuntimeScope()``.
+    A lifecycle root that needs parkable ownership uses :meth:`create_root`,
+    and descendants are registered through :meth:`create_child`. Every child
+    shares the root's :class:`SurvivorRegistry`, so reservations charge both
+    the lifecycle-root quota and its runtime-wide supervisor quota.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "runtime",
+        parent: RuntimeScope | None = None,
+        survivor_registry: SurvivorRegistry | None = None,
+    ) -> None:
+        if not name:
+            raise ValueError("RuntimeScope name must be non-empty")
+        if parent is not None and survivor_registry is not parent.survivor_registry:
+            raise ValueError("Child RuntimeScope must share its parent's survivor registry")
+        self._name = name
+        self._parent = parent
+        self._root = self if parent is None else parent.root
+        self._survivor_registry = survivor_registry
+        self._owner_id = name if parent is None else f"{parent.owner_id}/{name}"
+        self._children: dict[str, RuntimeScope] = {}
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
+
+    @classmethod
+    def create_root(
+        cls,
+        *,
+        name: str,
+        root_id: str,
+        supervisor: RuntimeSupervisor,
+        survivor_capacity: int,
+    ) -> Self:
+        """Create an explicitly attached lifecycle root."""
+        registry = SurvivorRegistry(
+            supervisor=supervisor,
+            root_id=root_id,
+            capacity=survivor_capacity,
+        )
+        return cls(name=name, survivor_registry=registry)
+
+    @property
+    def name(self) -> str:
+        """Stable name within the parent scope."""
+        return self._name
+
+    @property
+    def owner_id(self) -> str:
+        """Stable hierarchy-qualified owner label used by the registry."""
+        return self._owner_id
+
+    @property
+    def parent(self) -> RuntimeScope | None:
+        """Parent scope, or ``None`` for a lifecycle root."""
+        return self._parent
+
+    @property
+    def root(self) -> RuntimeScope:
+        """Lifecycle root shared by this scope and all descendants."""
+        return self._root
+
+    @property
+    def survivor_registry(self) -> SurvivorRegistry | None:
+        """Root registry shared by attached descendants."""
+        return self._survivor_registry
+
+    def children(self) -> tuple[RuntimeScope, ...]:
+        """Return directly registered child scopes in creation order."""
+        return tuple(self._children.values())
+
+    def create_child(self, name: str) -> RuntimeScope:
+        """Create and register one named child under this lifecycle."""
+        if self._survivor_registry is None:
+            raise RuntimeError("Child scopes require an explicitly attached lifecycle root")
+        if not name:
+            raise ValueError("RuntimeScope child name must be non-empty")
+        if name in self._children:
+            raise RuntimeError(f"RuntimeScope child {name!r} already exists")
+        child = RuntimeScope(
+            name=name,
+            parent=self,
+            survivor_registry=self._survivor_registry.for_child(),
+        )
+        self._children[name] = child
+        return child
+
+    async def start_owned_task(
+        self,
+        name: str,
+        factory: Callable[[], Coroutine[Any, Any, _T]],
+        *,
+        task_name: str | None = None,
+    ) -> asyncio.Task[_T]:
+        """Reserve capacity, start a task, and retain it in this scope."""
+        if not name:
+            raise ValueError("RuntimeScope task name must be non-empty")
+        registry = self._survivor_registry
+        if registry is None:
+            raise RuntimeError("Owned tasks require an explicitly attached lifecycle root")
+        label = task_name or name
+        if not label:
+            raise ValueError("RuntimeScope task name must be non-empty")
+        try:
+            owned = await start_owned(
+                factory,
+                registry=registry,
+                owner_id=self._owner_id,
+                task_name=label,
+            )
+        except BaseException:
+            # ``start_owned`` may receive caller cancellation after creating
+            # and parking the child but before returning its handle. Recover
+            # that exact registry-owned task into this scope's drain cohort.
+            self._adopt_registry_tasks(name, task_name=label)
+            raise
+        return self.add_task(name, owned.task)
 
     def create_task(
         self,
@@ -266,10 +387,12 @@ class RuntimeScope:
         return task
 
     def tasks(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
-        """Return tracked tasks that have not been drained yet."""
+        """Return tracked tasks in this scope and its descendants."""
         if name is not None:
-            return tuple(self._tasks.get(name, ()))
-        return tuple(task for tasks in self._tasks.values() for task in tasks)
+            own = tuple(self._tasks.get(name, ()))
+        else:
+            own = tuple(task for tasks in self._tasks.values() for task in tasks)
+        return (*own, *(task for child in self._children.values() for task in child.tasks(name)))
 
     @property
     def empty(self) -> bool:
@@ -357,6 +480,19 @@ class RuntimeScope:
                 if not tasks:
                     self._tasks.pop(name, None)
                 return
+        for child in self._children.values():
+            if task in child.tasks():
+                child._discard_task(task)
+                return
+
+    def _adopt_registry_tasks(self, name: str, *, task_name: str) -> None:
+        registry = self._survivor_registry
+        if registry is None:
+            return
+        tracked = set(self.tasks(name))
+        for owned in registry.owned_tasks(self._owner_id):
+            if owned.task_name == task_name and owned.task not in tracked:
+                self.add_task(name, owned.task)
 
     @staticmethod
     def _validate_new_task_name(name: str, coro: Coroutine[Any, Any, Any]) -> None:

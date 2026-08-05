@@ -25,6 +25,7 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
 from easycat._turn_context import TurnContext
@@ -329,7 +330,6 @@ class Session:
 
         # ── Session-owned services ───────────────────────────────
         self._health_checkers: list[PeriodicHealthChecker] = []
-        self._runtime_scope = RuntimeScope()
         self._session_actions = cfg.session_actions
         self._action_executors: list[SessionActionExecutor] = [
             *cfg.action_executors,
@@ -370,6 +370,13 @@ class Session:
 
         self.session_id = cfg.session_id or f"session-{uuid4().hex[:12]}"
         self._runtime_mode = cfg.runtime_mode
+        self._runtime_supervisor = RuntimeSupervisor(capacity=1)
+        self._runtime_scope = RuntimeScope.create_root(
+            name="session",
+            root_id=f"session:{self.session_id}",
+            supervisor=self._runtime_supervisor,
+            survivor_capacity=1,
+        )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
             self._maybe_bind_session_id(event_producer)

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
 from easycat.runtime.scope import BackgroundTaskScope, JournalSink, RuntimeScope
 
 
@@ -156,6 +158,148 @@ async def test_background_scope_observes_task_exception(
 
     assert scope.empty
     assert "Background task 'timer' failed" in caplog.text
+
+
+def _attached_root(
+    name: str,
+    *,
+    supervisor: RuntimeSupervisor | None = None,
+    survivor_capacity: int = 2,
+) -> RuntimeScope:
+    return RuntimeScope.create_root(
+        name=name,
+        root_id=f"test-root:{name}",
+        supervisor=supervisor or RuntimeSupervisor(capacity=survivor_capacity),
+        survivor_capacity=survivor_capacity,
+    )
+
+
+def test_runtime_scope_child_hierarchy_shares_explicit_root_registry() -> None:
+    root = _attached_root("session")
+    router = root.create_child("audio-router")
+    inline = router.create_child("inline-send")
+
+    assert root.parent is None
+    assert root.root is root
+    assert root.children() == (router,)
+    assert router.parent is root
+    assert router.root is root
+    assert router.children() == (inline,)
+    assert inline.parent is router
+    assert inline.root is root
+    assert inline.owner_id == "session/audio-router/inline-send"
+    assert inline.survivor_registry is root.survivor_registry
+
+
+def test_runtime_scope_child_requires_attached_root_and_unique_name() -> None:
+    with pytest.raises(RuntimeError, match="explicitly attached lifecycle root"):
+        RuntimeScope().create_child("worker")
+
+    root = _attached_root("session")
+    root.create_child("worker")
+    with pytest.raises(RuntimeError, match="already exists"):
+        root.create_child("worker")
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_owned_child_charges_and_releases_both_quotas() -> None:
+    supervisor = RuntimeSupervisor(capacity=2)
+    root = _attached_root("session", supervisor=supervisor, survivor_capacity=2)
+    child = root.create_child("inline-send")
+    release = asyncio.Event()
+
+    task = await child.start_owned_task("send", release.wait)
+
+    registry = root.survivor_registry
+    assert registry is not None
+    assert root.tasks("send") == (task,)
+    assert child.tasks("send") == (task,)
+    assert registry.active_count == 1
+    assert supervisor.active_count == 1
+
+    release.set()
+    await root.drain("send")
+
+    assert root.empty
+    assert registry.active_count == 0
+    assert supervisor.active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_children_share_root_capacity() -> None:
+    supervisor = RuntimeSupervisor(capacity=2)
+    root = _attached_root("session", supervisor=supervisor, survivor_capacity=1)
+    first = root.create_child("first")
+    second = root.create_child("second")
+    release = asyncio.Event()
+
+    task = await first.start_owned_task("worker", release.wait)
+    with pytest.raises(SurvivorCapacityError) as exc_info:
+        await second.start_owned_task("worker", asyncio.Event().wait)
+    assert exc_info.value.quota == "root"
+
+    release.set()
+    await task
+    await root.drain()
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_roots_share_runtime_capacity() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    first_root = _attached_root("first-root", supervisor=supervisor, survivor_capacity=1)
+    second_root = _attached_root("second-root", supervisor=supervisor, survivor_capacity=1)
+    first = first_root.create_child("worker")
+    second = second_root.create_child("worker")
+    release = asyncio.Event()
+
+    task = await first.start_owned_task("job", release.wait)
+    with pytest.raises(SurvivorCapacityError) as exc_info:
+        await second.start_owned_task("job", asyncio.Event().wait)
+    assert exc_info.value.quota == "runtime"
+
+    release.set()
+    await task
+    await first_root.drain()
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_adopts_task_when_caller_is_cancelled_during_start() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    root = _attached_root("session", supervisor=supervisor, survivor_capacity=1)
+    child = root.create_child("inline-send")
+    release = asyncio.Event()
+    cleanup_started = asyncio.Event()
+
+    async def stubborn_work() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release.wait()
+
+    def cancel_during_factory() -> Coroutine[object, object, None]:
+        caller = asyncio.current_task()
+        assert caller is not None
+        caller.cancel()
+        return stubborn_work()
+
+    async def start() -> None:
+        await child.start_owned_task("send", cancel_during_factory)
+
+    caller = asyncio.create_task(start())
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    await cleanup_started.wait()
+
+    retained = child.tasks("send")
+    assert len(retained) == 1
+    assert supervisor.active_count == 1
+    assert supervisor.survivor_count == 1
+
+    release.set()
+    await root.drain("send")
+    assert root.empty
+    assert supervisor.active_count == 0
 
 
 def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:

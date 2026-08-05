@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import RuntimeSupervisor
 from easycat._epoch import Epoch
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
@@ -216,6 +217,12 @@ def _build_scheduler(
         clear_turn=_clear_turn,
     )
 
+    runtime_scope = RuntimeScope.create_root(
+        name="session",
+        root_id="test-tts-scheduler-session",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
     router = AudioRouter(
         wiring=wiring,
         transport=transport,
@@ -226,7 +233,7 @@ def _build_scheduler(
         turn_manager=turn_manager,
         event_bus=bus,
         journal_sink=journal_sink,
-        runtime_scope=RuntimeScope(),
+        runtime_scope=runtime_scope,
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=None,

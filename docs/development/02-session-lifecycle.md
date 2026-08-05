@@ -231,6 +231,13 @@ terminal journal records. It owns runtime work such as:
 - greeting work; and
 - post-cutoff barge-in cleanup.
 
+Session constructs an explicit lifecycle root backed by one
+`RuntimeSupervisor`/`SurvivorRegistry`. Named child scopes register beneath
+that root and share both quotas; a parent drain recursively includes child
+work. The audio router's cancellable first-frame transport write is the first
+adopted child cohort, so a cancellation-resistant inline send remains anchored
+without broadening ownership to unrelated runtime tasks.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Scheduled
