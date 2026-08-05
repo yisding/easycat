@@ -12,7 +12,6 @@ from easycat._concurrency import RuntimeSupervisor
 from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 from easycat.tts import _multi_context_ws as multi_context_ws_module
 from easycat.tts._multi_context_ws import (
-    _CLOSE_FINALIZER,
     _READER_TASK,
     MultiContextAdapter,
     MultiContextWSManager,
@@ -163,7 +162,7 @@ class TestMultiContextWSManager:
         await mgr.connect()
         reader = mgr._reader_task
 
-        state = await root.close(phases=(_CLOSE_FINALIZER, "tts-receive"))
+        state = await root.close()
 
         assert state is RuntimeScopeState.CLOSED
         assert ws.closed is True
@@ -712,6 +711,14 @@ class TestMultiContextWSManager:
 
     async def test_close_wait_preserves_cancellation_pending_at_entry(self):
         ws = FakeMultiContextWS()
+        close_started = asyncio.Event()
+        original_close = ws.close
+
+        async def close() -> None:
+            close_started.set()
+            await original_close()
+
+        ws.close = close
         mgr = MultiContextWSManager(_make_adapter(ws))
         await mgr.connect()
 
@@ -725,9 +732,7 @@ class TestMultiContextWSManager:
 
         with pytest.raises(asyncio.CancelledError):
             await caller
-        assert mgr._close_owner_task is None
-        assert ws.closed is False
-
+        await asyncio.wait_for(close_started.wait(), timeout=1)
         await mgr.aclose()
         assert ws.closed is True
 

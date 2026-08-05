@@ -489,6 +489,23 @@ class RuntimeScope:
             factory=factory,
         )
 
+    def _move_finalizer_to(self, name: str, target: RuntimeScope) -> None:
+        """Move an unstarted finalizer between open lifecycle roots."""
+        self._require_open()
+        target._require_open()
+        node = self._finalizers.get(name)
+        if node is None:
+            raise ValueError(f"RuntimeScope finalizer {name!r} is not registered")
+        if node.task is not None or node.retained_task is not None or node.completed:
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} has already started")
+        if target.root._finalizer_named(name) is not None:
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} already exists")
+        if name in target.root._policy_cohort_names():
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} collides with a task cohort")
+        self._finalizers.pop(name)
+        node.scope = target
+        target._finalizers[name] = node
+
     async def run_finalizer(self, name: str) -> None:
         """Run one registered finalizer without closing ordinary admission.
 
@@ -1179,7 +1196,7 @@ class RuntimeScope:
 
         selected_cohorts = self.cohorts(force=force)
         selected_finalizers = self._pending_finalizer_names()
-        selected = (*selected_cohorts, *selected_finalizers)
+        selected = (*selected_finalizers, *selected_cohorts)
         phase_order = selected if phases is None else phases
         if len(set(phase_order)) != len(phase_order) or any(not phase for phase in phase_order):
             raise ValueError("Runtime close phases must be unique non-empty names")

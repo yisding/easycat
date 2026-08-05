@@ -238,6 +238,7 @@ class MultiContextWSManager:
         source_tasks = source.tasks()
         if self._runtime_scope is not source or any(task is not reader for task in source_tasks):
             raise RuntimeError("Cannot reattach active TTS manager runtime work")
+        reader_moved = False
         if reader is not None and reader in source_tasks:
             source.discard(reader)
             try:
@@ -246,6 +247,7 @@ class MultiContextWSManager:
                     reader,
                     policy=_TTS_RECEIVE_FINISH_POLICY,
                 )
+                reader_moved = True
             except BaseException:
                 source.add_task(
                     _READER_TASK,
@@ -253,6 +255,17 @@ class MultiContextWSManager:
                     policy=_TTS_RECEIVE_FINISH_POLICY,
                 )
                 raise
+        try:
+            source._move_finalizer_to(_CLOSE_FINALIZER, target)
+        except BaseException:
+            if reader_moved:
+                target.discard(reader)
+                source.add_task(
+                    _READER_TASK,
+                    reader,
+                    policy=_TTS_RECEIVE_FINISH_POLICY,
+                )
+            raise
         self._runtime_scope = target
         self._owns_runtime_scope = False
 
@@ -505,6 +518,11 @@ class MultiContextWSManager:
 
     async def _await_close_finalizer(self) -> None:
         """Join the close finalizer without misclassifying child cancellation."""
+        attempt = asyncio.create_task(
+            self._runtime_scope.run_finalizer(_CLOSE_FINALIZER),
+            name="tts_close_finalizer_waiter",
+        )
+        attempt.add_done_callback(self._consume_close_waiter_result)
         waiter = asyncio.current_task()
         # Preserve a cancellation already pending at helper entry. A
         # previously caught request keeps cancelling() non-zero but does not
@@ -513,7 +531,7 @@ class MultiContextWSManager:
             await asyncio.sleep(0)
         cancellation_requests = waiter.cancelling() if waiter is not None else 0
         try:
-            await self._runtime_scope.run_finalizer(_CLOSE_FINALIZER)
+            await asyncio.shield(attempt)
         except asyncio.CancelledError as exc:
             if waiter is not None and waiter.cancelling() > cancellation_requests:
                 # This caller acquired a real cancellation request. Shielding
@@ -532,6 +550,11 @@ class MultiContextWSManager:
                 "Multi-context WebSocket cleanup was cancelled internally; "
                 "retry close() to finish cleanup"
             ) from close_error
+
+    @staticmethod
+    def _consume_close_waiter_result(task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            task.exception()
 
     async def _close_owned_socket(self, ws: Any) -> None:
         """Close one exact wrapper, retaining ownership on every failure."""
