@@ -751,6 +751,30 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._peer_generation == 0
 
     @pytest.mark.asyncio
+    async def test_unpublished_peer_close_settles_before_repeated_cancellation(self) -> None:
+        transport = WebRTCTransport()
+        close_entered = asyncio.Event()
+        release_close = asyncio.Event()
+
+        async def block_close() -> None:
+            close_entered.set()
+            await release_close.wait()
+
+        pc = SimpleNamespace(close=AsyncMock(side_effect=block_close))
+        closing = asyncio.create_task(transport._close_unpublished_peer(pc))
+        await close_entered.wait()
+        for _ in range(2):
+            closing.cancel()
+            await asyncio.sleep(0)
+        release_close.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+
+        pc.close.assert_awaited_once()
+        assert transport._pending_peer_cleanup is None
+
+    @pytest.mark.asyncio
     async def test_cancelled_replacement_retirement_closes_candidate_and_is_retryable(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "rationale": "WebRTC connect rollback now uses the shared shielded cleanup primitive; one raw spawn, cancellation handler, and shield loop removed.",
+  "rationale": "WebRTC unpublished-peer close now uses shared shielded cleanup; one raw spawn, cancellation handler, and shield loop removed.",
   "counts": {
-    "cancelled_error_handler": 109,
+    "cancelled_error_handler": 108,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
     "module_task_set": 2,
-    "raw_task_spawn": 54,
-    "shield_loop": 8,
+    "raw_task_spawn": 53,
+    "shield_loop": 7,
     "task_cancelling": 54
   },
   "entries": [
@@ -101,7 +101,6 @@
     "cancelled_error_handler\ttransports/twilio_media.py\tTwilioConnectionTransport._reap_receive_task_for_disconnect\texcept asyncio.CancelledError\te2ac913a0947fe91\t0",
     "cancelled_error_handler\ttransports/twilio_media.py\tTwilioConnectionTransport._rollback_connect_unlocked\texcept asyncio.CancelledError\ta5205db18331a7b7\t0",
     "cancelled_error_handler\ttransports/twilio_media.py\tTwilioConnectionTransport.disconnect\texcept asyncio.CancelledError\ta5205db18331a7b7\t0",
-    "cancelled_error_handler\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\texcept asyncio.CancelledError\t05255166e8ffd054\t0",
     "cancelled_error_handler\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\texcept asyncio.CancelledError\t053aa1e7eedce380\t0",
     "cancelled_error_handler\ttransports/webrtc.py\tWebRTCTransport._handle_offer_locked\texcept asyncio.CancelledError\t0f3804c3f4105ef3\t0",
     "cancelled_error_handler\ttransports/webrtc.py\tWebRTCTransport._stop_active_offer_for_disconnect\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
@@ -212,7 +211,6 @@
     "raw_task_spawn\ttesting/contracts.py\tSTTProviderContractSuite.test_segment_commit_reports_boolean_acceptance\tasyncio.create_task\t483cedf93995a529\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._drain_diagnostics_for_disconnect\tasyncio.create_task\t54018eae3c55d241\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._start_server_wait_for_disconnect\tasyncio.ensure_future\t576a160d35378590\t0",
-    "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\tasyncio.create_task\t9b98632a4c893ab3\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\tasyncio.ensure_future\t51eac5dd6d9dade1\t0",
     "raw_task_spawn\tturn_manager.py\tTurnManager._handle_speech_stop\tasyncio.create_task\t18054907e4217ac4\t0",
     "raw_task_spawn\tvalidation/reliability.py\tEventLoopLagSampler.start\tasyncio.create_task\t25d2f7444d5cda40\t0",
@@ -223,7 +221,6 @@
     "shield_loop\tsession/_session.py\tSession._finish_interrupted_start\twhile Task.done + asyncio.shield\tb39e7f69337071bc\t0",
     "shield_loop\ttelephony/outbound.py\tOutboundCallManager._complete_call_owned\twhile Task.done + asyncio.shield\te851b3af10556859\t0",
     "shield_loop\ttelephony/outbound.py\tOutboundCallManager._create_call_owned\twhile Task.done + asyncio.shield\tf0d644d2e92143c0\t0",
-    "shield_loop\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\twhile Task.done + asyncio.shield\t18b1bb0cbdb420cc\t0",
     "task_cancelling\t_health_check.py\tPeriodicHealthChecker.stop\tTask.cancelling\t69ec3c7ed4421853\t0",
     "task_cancelling\t_health_check.py\tPeriodicHealthChecker.stop\tTask.cancelling\t9b108507dc69f599\t0",
     "task_cancelling\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.flush_gated_audio\tTask.cancelling\t352bdbd134ab89f2\t0",

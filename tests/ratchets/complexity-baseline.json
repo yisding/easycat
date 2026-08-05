@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "Shared shielded cleanup reduced WebRTC connect rollback below the C901 threshold.",
+  "rationale": "Shared shielded cleanup reduced WebRTC unpublished-peer close below the C901 threshold.",
   "counts": {
-    "C901": 56,
+    "C901": 55,
     "PLR0912": 31,
     "PLR0915": 26
   },
@@ -94,7 +94,6 @@
     "src/easycat/stt/openai_realtime_provider.py\tC901\tOpenAIRealtimeSTT._handle_json_message",
     "src/easycat/stt/openai_realtime_provider.py\tC901\tOpenAIRealtimeSTT._send_commit",
     "src/easycat/stt/openai_realtime_provider.py\tPLR0912\tOpenAIRealtimeSTT._handle_json_message",
-    "src/easycat/transports/webrtc.py\tC901\tWebRTCTransport._close_unpublished_peer",
     "src/easycat/transports/webrtc.py\tC901\tWebRTCTransport._handle_offer_locked",
     "src/easycat/transports/webrtc.py\tPLR0915\tWebRTCTransport._connect_unlocked",
     "src/easycat/transports/webrtc.py\tPLR0915\tWebRTCTransport._handle_offer_locked",

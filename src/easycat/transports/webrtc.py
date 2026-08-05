@@ -834,31 +834,12 @@ class WebRTCTransport(AudioQueueMixin):
         if pc is None:
             return None
         self._pending_peer_cleanup = pc
-        cleanup_task = asyncio.create_task(
-            pc.close(),
-            name="webrtc-unpublished-offer-peer-close",
-        )
-        later_cancellation: asyncio.CancelledError | None = None
-        while not cleanup_task.done():
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as cancellation:
-                if not finish_despite_cancellation:
-                    later_cancellation = cancellation
-                # The caller's original cancellation is preserved by the
-                # surrounding offer path after this owned cleanup settles.
-                continue
-            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                break
-        try:
-            cleanup_task.result()
-        except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            cleanup_error: BaseException | None = exc
-        else:
-            cleanup_error = None
+        settlement = await shielded_cleanup(pc.close)
+        cleanup_error = settlement.error
         if cleanup_error is None and self._pending_peer_cleanup is pc:
             self._pending_peer_cleanup = None
-        if later_cancellation is not None:
+        if settlement.cancellation_requests and not finish_despite_cancellation:
+            later_cancellation = asyncio.CancelledError()
             if cleanup_error is not None:
                 raise later_cancellation from cleanup_error
             raise later_cancellation
