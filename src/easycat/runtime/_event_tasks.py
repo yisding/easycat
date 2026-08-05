@@ -100,6 +100,15 @@ class RuntimeTaskScope:
     def ensure_scope(self) -> RuntimeScope:
         """Return the attached scope or lazily create a standalone root."""
         scope = self._scope
+        if (
+            scope is not None
+            and self._owns_root
+            and scope.state is not RuntimeScopeState.OPEN
+            and scope.empty
+        ):
+            self._scope = None
+            self._owns_root = False
+            scope = None
         if scope is not None:
             return scope
         scope = RuntimeScope(

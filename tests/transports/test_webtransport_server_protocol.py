@@ -700,6 +700,51 @@ class TestWebTransportServerWiring:
         assert not root.tasks("webtransport_listener_close")
 
     @pytest.mark.asyncio
+    async def test_attached_listener_timeout_detaches_waiter_from_root(self) -> None:
+        wait_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+
+        async def ignores_cancellation() -> None:
+            wait_entered.set()
+            while not release_wait_closed.is_set():
+                try:
+                    await release_wait_closed.wait()
+                except asyncio.CancelledError:
+                    pass
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                certfile="cert.pem",
+                keyfile="key.pem",
+                force_shutdown_timeout_s=0.01,
+            ),
+            lambda _transport: asyncio.sleep(0),
+        )
+        root = RuntimeScope.create_root(
+            name="application",
+            root_id="test-root:stubborn-webtransport-listener",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        server.set_runtime_scope(root, name="webtransport-server-runtime")
+        server._server = SimpleNamespace(close=Mock(), wait_closed=ignores_cancellation)
+        server._started = True
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+        signal = root.signal_cohort("transport-listener", force=True)
+        with pytest.raises(RuntimeError, match="listener did not close"):
+            await stopping
+
+        await asyncio.wait_for(root.drain_cohort(signal), timeout=0.1)
+        assert root.empty
+        assert server._detached_listener_task_scope.tasks() == (server._server_wait_closed_task,)
+
+        release_wait_closed.set()
+        await server.stop()
+        await root.close()
+
+    @pytest.mark.asyncio
     async def test_stop_safe_when_called_from_within_handler(self) -> None:
         """A handler that triggers ``server.stop()`` mustn't deadlock by
         gathering its own task (regression for review #3/#8).

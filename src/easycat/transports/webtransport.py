@@ -1792,6 +1792,14 @@ class WebTransportServer:
             failure_message="WebTransport listener close failed",
             drop_if_closed=False,
         )
+        self._detached_listener_task_scope = RuntimeTaskScope(
+            owner_label="webtransport-detached-listener",
+            member_name=_WEBTRANSPORT_LISTENER_TASK_NAME,
+            cohort=_WEBTRANSPORT_LISTENER_COHORT,
+            logger=logger,
+            failure_message="Detached WebTransport listener close failed",
+            drop_if_closed=False,
+        )
         # A handler task can finish after its transport's disconnect fails.
         # Keep the exact transport reachable so stop() can retry that owned
         # cleanup instead of discarding it with the completed handler task.
@@ -1833,11 +1841,13 @@ class WebTransportServer:
     async def _release_standalone_task_scopes(self) -> None:
         """Close empty standalone roots used by handlers and listener wait."""
         await self._listener_task_scope.release_standalone_if_empty()
+        await self._detached_listener_task_scope.release_standalone_if_empty()
         await self._handler_task_scope.release_standalone_if_empty()
 
     def _bind_runtime_scope(self, scope: RuntimeScope) -> None:
         """Share an already-created handler scope owned by a wrapper."""
         self._handler_task_scope.bind(scope)
+        self._listener_task_scope.bind(scope)
 
     def _can_accept_session(self) -> bool:
         """Capacity gate consulted by the protocol *before* it sends the 200.
@@ -2085,7 +2095,9 @@ class WebTransportServer:
                     pass
                 else:
                     self._listener_task_scope.discard_task(task)
+                    self._detached_listener_task_scope.discard_task(task)
                     await self._listener_task_scope.release_standalone_if_empty()
+                    await self._detached_listener_task_scope.release_standalone_if_empty()
                     return True
             task = None
         if task is None:
@@ -2109,7 +2121,12 @@ class WebTransportServer:
         if closed:
             self._server_wait_closed_task = None
             self._listener_task_scope.discard_task(task)
+            self._detached_listener_task_scope.discard_task(task)
             await self._listener_task_scope.release_standalone_if_empty()
+            await self._detached_listener_task_scope.release_standalone_if_empty()
+        elif not self._listener_task_scope.owns_root:
+            self._listener_task_scope.discard_task(task)
+            self._detached_listener_task_scope.adopt_task(task)
         return closed
 
     async def _stop_unlocked(self) -> None:
