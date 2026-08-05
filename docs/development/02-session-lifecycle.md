@@ -238,6 +238,17 @@ work. The audio router's cancellable first-frame transport write is the first
 adopted child cohort, so a cancellation-resistant inline send remains anchored
 without broadening ownership to unrelated runtime tasks.
 
+Scope teardown policy keeps cooperative token signalling separate from Python
+task cancellation. Each member declares graceful and force policies with a
+named cohort, optional token signal, `finish` or `cancel` task action, and
+optional grace/hard budgets. Teardown synchronously signals every member in a
+cohort before awaiting any sibling, then drains cohorts in an explicit phase
+order. A hard deadline parks owned work in the shared survivor registry; the
+scope reports `closed_with_survivors` until that work settles. Closing a scope
+also closes task admission, including callbacks submitted from other threads,
+and a force close can supersede an unbounded graceful close without starting a
+second concurrent teardown controller.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Scheduled

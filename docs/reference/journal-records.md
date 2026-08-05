@@ -122,6 +122,7 @@ remain top-level envelope fields, not `data` keys.
 | `task_cancelled` | `EVENT` | `task_name: str` | - |
 | `task_completed` | `EVENT` | `task_name: str` | - |
 | `task_raised` | `EVENT` | `task_name: str`, `exc_type: str` | - |
+| `task_rejected` | `EVENT` | `task_name: str`, `reason: str` | - |
 | `task_scheduled` | `EVENT` | `task_name: str` | - |
 | `turn_state_changed` | `EVENT` | `from: str`, `to: str`, `reason: str or null` | - |
 | `warmup_completed` | `EVENT` | `elapsed_ms: number`, `components: list[object]` | Each component object contains `component: str` and `elapsed_ms: number`. |

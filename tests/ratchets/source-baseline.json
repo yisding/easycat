@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "WS0.5 intentionally extends the existing WebSocket connection-generation fence to accepted server sockets; refresh its two reviewed epoch fields and structurally moved task fingerprint.",
+  "rationale": "WS2.1b adds reviewed RuntimeScope close cancellation boundaries",
   "counts": {
-    "cancelled_error_handler": 109,
+    "cancelled_error_handler": 114,
     "epoch_field": 17,
     "gather_return_exceptions": 32,
     "module_task_set": 4,
@@ -29,6 +29,11 @@
     "cancelled_error_handler\truntime/journal.py\tappend_journal_record_async\texcept asyncio.CancelledError\t10a466e1f09307e3\t0",
     "cancelled_error_handler\truntime/journal.py\tappend_journal_record_async\texcept asyncio.CancelledError\t4265cd7fb8d52774\t0",
     "cancelled_error_handler\truntime/scope.py\tBackgroundTaskScope._on_done\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._drain_cohort_signal\texcept asyncio.CancelledError\t372387e5140069e5\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._observe_close_controller\texcept asyncio.CancelledError\t83dfdc4399c7cf7f\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_close\texcept asyncio.CancelledError\t6ac28f401e40a6d7\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._settle_cohort_member\texcept asyncio.CancelledError\t544585d4e14ab08a\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope.close\texcept asyncio.CancelledError\td8ba2c83be6ddabb\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.create_journaled_task._on_done\texcept asyncio.CancelledError\t711d6ccc40f29477\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.drain\texcept asyncio.CancelledError\t85b8c5c70ee0413f\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.log_task_exception\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",

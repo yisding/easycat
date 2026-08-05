@@ -223,6 +223,7 @@ Stages record input/output boundaries, but concurrency needs its own evidence.
 ```mermaid
 stateDiagram-v2
     [*] --> task_scheduled
+    [*] --> task_rejected
     task_scheduled --> task_completed
     task_scheduled --> task_cancelled
     task_scheduled --> task_raised

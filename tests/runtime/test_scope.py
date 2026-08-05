@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
+from threading import Thread
 
 import pytest
 
 from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
-from easycat.runtime.scope import BackgroundTaskScope, JournalSink, RuntimeScope
+from easycat.runtime.scope import (
+    BackgroundTaskScope,
+    JournalSink,
+    RuntimeMemberPolicy,
+    RuntimeScope,
+    RuntimeScopeState,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+)
 
 
 def test_background_scope_closes_coroutine_when_task_creation_fails() -> None:
@@ -174,6 +183,37 @@ def _attached_root(
     )
 
 
+def _task_policy(
+    *,
+    graceful_cohort: str = "work",
+    graceful_signal: bool = False,
+    graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
+    graceful_deadline: float | None = None,
+    graceful_hard_deadline: float | None = None,
+    force_cohort: str = "work",
+    force_signal: bool = False,
+    force_action: RuntimeTaskAction = RuntimeTaskAction.CANCEL,
+    force_deadline: float | None = None,
+    force_hard_deadline: float | None = None,
+) -> RuntimeTaskPolicy:
+    return RuntimeTaskPolicy(
+        graceful=RuntimeMemberPolicy(
+            cohort=graceful_cohort,
+            signal_token=graceful_signal,
+            task_action=graceful_action,
+            grace_deadline=graceful_deadline,
+            hard_deadline=graceful_hard_deadline,
+        ),
+        force=RuntimeMemberPolicy(
+            cohort=force_cohort,
+            signal_token=force_signal,
+            task_action=force_action,
+            grace_deadline=force_deadline,
+            hard_deadline=force_hard_deadline,
+        ),
+    )
+
+
 def test_runtime_scope_child_hierarchy_shares_explicit_root_registry() -> None:
     root = _attached_root("session")
     router = root.create_child("audio-router")
@@ -300,6 +340,504 @@ async def test_runtime_scope_adopts_task_when_caller_is_cancelled_during_start()
     await root.drain("send")
     assert root.empty
     assert supervisor.active_count == 0
+
+
+def test_runtime_member_policy_validates_deadline_contract() -> None:
+    with pytest.raises(ValueError, match="must be non-negative"):
+        RuntimeMemberPolicy(
+            cohort="work",
+            signal_token=False,
+            task_action=RuntimeTaskAction.FINISH,
+            grace_deadline=-0.1,
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        RuntimeMemberPolicy(
+            cohort="work",
+            signal_token=False,
+            task_action=RuntimeTaskAction.FINISH,
+            grace_deadline=0.2,
+            hard_deadline=0.1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_policy_requires_signal_and_owned_hard_deadline() -> None:
+    root = _attached_root("session")
+    signal_policy = _task_policy(graceful_signal=True)
+    hard_policy = _task_policy(force_hard_deadline=0.1)
+
+    missing_signal = asyncio.sleep(0)
+    with pytest.raises(ValueError, match="token signal callback"):
+        root.create_task("missing-signal", missing_signal, policy=signal_policy)
+    assert missing_signal.cr_frame is None
+
+    raw_hard_deadline = asyncio.sleep(0)
+    with pytest.raises(ValueError, match="must start as owned tasks"):
+        root.create_task("raw-hard-deadline", raw_hard_deadline, policy=hard_policy)
+    assert raw_hard_deadline.cr_frame is None
+
+
+@pytest.mark.asyncio
+async def test_signal_cohort_is_token_selective_and_does_not_imply_task_cancel() -> None:
+    root = _attached_root("session")
+    tokens: list[str] = []
+    release = asyncio.Event()
+    text_policy = _task_policy(
+        graceful_cohort="text",
+        graceful_signal=True,
+        graceful_action=RuntimeTaskAction.FINISH,
+    )
+    prompt_policy = _task_policy(graceful_cohort="prompt")
+
+    text_task = root.create_task(
+        "text",
+        release.wait(),
+        policy=text_policy,
+        token_signal=lambda: tokens.append("text"),
+    )
+    prompt_task = root.create_task("prompt", release.wait(), policy=prompt_policy)
+
+    signal = root.signal_cohort("text", force=False)
+
+    assert signal.tasks == (text_task,)
+    assert tokens == ["text"]
+    assert not text_task.cancelling()
+    assert not prompt_task.cancelling()
+
+    release.set()
+    await root.drain()
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_policy_selects_independent_mode_cohorts() -> None:
+    root = _attached_root("session")
+    release = asyncio.Event()
+    policy = _task_policy(graceful_cohort="prompt", force_cohort="pipeline")
+    root.create_task("member", release.wait(), policy=policy)
+
+    assert root.cohorts(force=False) == ("prompt",)
+    assert root.cohorts(force=True) == ("pipeline",)
+
+    release.set()
+    await root.drain()
+
+
+@pytest.mark.asyncio
+async def test_graceful_finish_member_completes_without_token_or_task_cancellation() -> None:
+    root = _attached_root("session")
+    token_signalled = False
+    release = asyncio.Event()
+    policy = _task_policy(
+        graceful_cohort="prompt",
+        graceful_signal=False,
+        graceful_action=RuntimeTaskAction.FINISH,
+        force_cohort="prompt",
+        force_signal=True,
+    )
+
+    def signal_token() -> None:
+        nonlocal token_signalled
+        token_signalled = True
+
+    prompt = root.create_task(
+        "prompt",
+        release.wait(),
+        policy=policy,
+        token_signal=signal_token,
+    )
+    closing = asyncio.create_task(root.close(phases=("prompt",)))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert not token_signalled
+    assert not prompt.cancelling()
+    assert not closing.done()
+
+    release.set()
+    assert await closing is RuntimeScopeState.CLOSED
+    assert root.state is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_force_close_signals_entire_cohort_before_awaiting_any_member() -> None:
+    root = _attached_root("session")
+    token_events: list[str] = []
+    cleanup_observations: list[tuple[str, bool]] = []
+    tasks: dict[str, asyncio.Task[None]] = {}
+    policy = _task_policy(
+        force_cohort="pipeline",
+        force_signal=True,
+        force_action=RuntimeTaskAction.CANCEL,
+    )
+
+    async def member(label: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            sibling = "tts" if label == "pipeline" else "pipeline"
+            cleanup_observations.append((label, tasks[sibling].cancelling() > 0))
+            raise
+
+    for label in ("pipeline", "tts"):
+        tasks[label] = root.create_task(
+            label,
+            member(label),
+            policy=policy,
+            token_signal=lambda label=label: token_events.append(label),
+        )
+    await asyncio.sleep(0)
+
+    assert await root.close(force=True, phases=("pipeline",)) is RuntimeScopeState.CLOSED
+
+    assert set(token_events) == {"pipeline", "tts"}
+    assert len(cleanup_observations) == 2
+    assert all(sibling_was_signalled for _label, sibling_was_signalled in cleanup_observations)
+
+
+@pytest.mark.asyncio
+async def test_close_respects_explicit_phase_order_without_total_ordering_siblings() -> None:
+    root = _attached_root("session")
+    events: list[str] = []
+
+    async def member(label: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append(f"{label}:drained")
+
+    prompt_policy = _task_policy(force_cohort="prompt", force_signal=True)
+    pipeline_policy = _task_policy(force_cohort="pipeline", force_signal=True)
+    root.create_task(
+        "prompt",
+        member("prompt"),
+        policy=prompt_policy,
+        token_signal=lambda: events.append("prompt:signal"),
+    )
+    for label in ("pipeline", "tts"):
+        root.create_task(
+            label,
+            member(label),
+            policy=pipeline_policy,
+            token_signal=lambda label=label: events.append(f"{label}:signal"),
+        )
+    await asyncio.sleep(0)
+
+    await root.close(force=True, phases=("prompt", "pipeline"))
+
+    pipeline_signals = {events.index("pipeline:signal"), events.index("tts:signal")}
+    assert events.index("prompt:drained") < min(pipeline_signals)
+    assert max(pipeline_signals) < events.index("pipeline:drained")
+    assert max(pipeline_signals) < events.index("tts:drained")
+
+
+@pytest.mark.asyncio
+async def test_signal_failure_does_not_skip_sibling_signal_or_drain() -> None:
+    root = _attached_root("session")
+    events: list[str] = []
+    policy = _task_policy(force_signal=True)
+
+    def fail_signal() -> None:
+        events.append("first:signal")
+        raise RuntimeError("token signal failed")
+
+    root.create_task(
+        "first",
+        asyncio.Event().wait(),
+        policy=policy,
+        token_signal=fail_signal,
+    )
+    root.create_task(
+        "second",
+        asyncio.Event().wait(),
+        policy=policy,
+        token_signal=lambda: events.append("second:signal"),
+    )
+    await asyncio.sleep(0)
+
+    signal = root.signal_cohort("work", force=True)
+    with pytest.raises(RuntimeError, match="token signal failed"):
+        await root.drain_cohort(signal)
+
+    assert events == ["first:signal", "second:signal"]
+    assert root.empty
+
+
+@pytest.mark.asyncio
+async def test_finish_policy_propagates_failure_after_draining_siblings() -> None:
+    root = _attached_root("session")
+    sibling_drained = asyncio.Event()
+    policy = _task_policy(graceful_action=RuntimeTaskAction.FINISH)
+
+    async def fail() -> None:
+        raise RuntimeError("member failed")
+
+    async def sibling() -> None:
+        await asyncio.sleep(0)
+        sibling_drained.set()
+
+    root.create_task("failure", fail(), policy=policy)
+    root.create_task("sibling", sibling(), policy=policy)
+
+    signal = root.signal_cohort("work", force=False)
+    with pytest.raises(RuntimeError, match="member failed"):
+        await root.drain_cohort(signal)
+
+    assert sibling_drained.is_set()
+    assert root.empty
+
+
+@pytest.mark.asyncio
+async def test_cancel_policy_swallows_cancellation_cleanup_failure() -> None:
+    root = _attached_root("session")
+    policy = _task_policy(force_action=RuntimeTaskAction.CANCEL)
+
+    async def fail_during_cancel() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("cleanup failed") from None
+
+    root.create_task("failure", fail_during_cancel(), policy=policy)
+    await asyncio.sleep(0)
+
+    signal = root.signal_cohort("work", force=True)
+    await root.drain_cohort(signal)
+
+    assert root.empty
+
+
+@pytest.mark.asyncio
+async def test_grace_deadline_escalates_finish_member_to_task_cancellation() -> None:
+    root = _attached_root("session")
+    cancelled = asyncio.Event()
+    policy = _task_policy(
+        graceful_deadline=0.01,
+        graceful_action=RuntimeTaskAction.FINISH,
+    )
+
+    async def work() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    task = root.create_task("work", work(), policy=policy)
+    await asyncio.sleep(0)
+
+    assert await root.close(phases=("work",)) is RuntimeScopeState.CLOSED
+    assert task.cancelled()
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_hard_deadline_parks_owned_survivor_and_completion_closes_scope() -> None:
+    supervisor = RuntimeSupervisor(capacity=1)
+    root = _attached_root("session", supervisor=supervisor, survivor_capacity=1)
+    release = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    policy = _task_policy(force_hard_deadline=0.01)
+
+    async def stubborn_work() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+
+    task = await root.start_owned_task("cleanup", stubborn_work, policy=policy)
+
+    state = await root.close(force=True, phases=("work",))
+
+    assert state is RuntimeScopeState.CLOSED_WITH_SURVIVORS
+    assert root.state is RuntimeScopeState.CLOSED_WITH_SURVIVORS
+    assert cancellation_seen.is_set()
+    assert supervisor.survivor_count == 1
+    assert root.tasks() == (task,)
+
+    release.set()
+    await task
+    await asyncio.sleep(0)
+
+    assert root.state is RuntimeScopeState.CLOSED
+    assert root.empty
+    assert supervisor.active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_force_close_supersedes_unbounded_graceful_close() -> None:
+    root = _attached_root("session")
+    started = asyncio.Event()
+
+    async def work() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    task = root.create_task("work", work(), policy=_task_policy())
+    await started.wait()
+    graceful = asyncio.create_task(root.close(phases=("work",)))
+    while root.state is RuntimeScopeState.OPEN:
+        await asyncio.sleep(0)
+    assert not graceful.done()
+
+    force_state = await root.close(
+        force=True,
+        phases=("work",),
+        supersede_timeout=0.1,
+    )
+
+    assert force_state is RuntimeScopeState.CLOSED
+    assert await graceful is RuntimeScopeState.CLOSED
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_owned_close_callers_are_both_detached_from_force_cohort() -> None:
+    root = _attached_root("session")
+    begin = asyncio.Event()
+
+    async def close_from_member() -> RuntimeScopeState:
+        await begin.wait()
+        return await root.close(force=True, phases=("work",))
+
+    first = asyncio.create_task(close_from_member())
+    second = asyncio.create_task(close_from_member())
+    policy = _task_policy(force_cohort="work")
+    root.add_task("first-close", first, policy=policy)
+    root.add_task("second-close", second, policy=policy)
+    begin.set()
+
+    states = await asyncio.gather(first, second)
+
+    assert states == [RuntimeScopeState.CLOSED, RuntimeScopeState.CLOSED]
+    assert not first.cancelled()
+    assert not second.cancelled()
+    assert root.empty
+
+
+@pytest.mark.asyncio
+async def test_thread_spawn_that_wins_admission_is_owned_by_later_close() -> None:
+    root = _attached_root("session")
+    root.create_task("bind-loop", asyncio.sleep(0))
+    await root.drain("bind-loop")
+    release = asyncio.Event()
+    submitted: list = []
+
+    def submit_from_thread() -> None:
+        submitted.append(
+            root.spawn_from_sync(
+                "thread-worker",
+                release.wait,
+                policy=_task_policy(force_cohort="work"),
+            )
+        )
+
+    thread = Thread(target=submit_from_thread)
+    thread.start()
+    thread.join()
+    closing = asyncio.create_task(root.close(force=True, phases=("work",)))
+    spawned = await asyncio.wrap_future(submitted[0])
+
+    assert await closing is RuntimeScopeState.CLOSED
+    assert spawned.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_thread_spawn_handle_does_not_invoke_factory() -> None:
+    root = _attached_root("session")
+    root.create_task("bind-loop", asyncio.sleep(0))
+    await root.drain("bind-loop")
+    factory_called = False
+
+    def factory() -> Coroutine[object, object, None]:
+        nonlocal factory_called
+        factory_called = True
+        return asyncio.sleep(0)
+
+    handle = root.spawn_from_sync("thread-worker", factory)
+    assert handle.cancel()
+    await asyncio.sleep(0)
+
+    assert not factory_called
+    assert root.empty
+    assert await root.close(force=True) is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_phase_list_that_omits_selected_member() -> None:
+    root = _attached_root("session")
+    root.create_task("work", asyncio.Event().wait(), policy=_task_policy())
+
+    with pytest.raises(ValueError, match="omit selected cohorts"):
+        await root.close(force=True, phases=("other",))
+
+    assert root.state is RuntimeScopeState.CLOSING
+    assert await root.close(force=True, phases=("work",)) is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_closed_scope_rejects_all_admission_paths_without_running_factories() -> None:
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.records: list[dict[str, object]] = []
+
+        def current_turn_id(self, turn_id: str | None = None) -> str | None:
+            return turn_id or "turn-1"
+
+        def append_record(
+            self,
+            *,
+            name: str,
+            turn_id: str | None = None,
+            data: dict[str, object] | None = None,
+        ) -> None:
+            self.records.append({"name": name, "turn_id": turn_id, "data": data})
+
+    root = _attached_root("session")
+    root.create_task("bind-loop", asyncio.sleep(0))
+    await root.close(force=True, phases=("default",))
+    factory_called = False
+
+    rejected = asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="is closed"):
+        root.create_task("rejected", rejected)
+    assert rejected.cr_frame is None
+
+    def factory() -> Coroutine[object, object, None]:
+        nonlocal factory_called
+        factory_called = True
+        return asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        await root.start_owned_task("owned-rejected", factory)
+    assert not factory_called
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        root.create_child("late-child")
+
+    sink = RecordingSink()
+    journaled = asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="is closed"):
+        root.create_journaled_task(journaled, name="journaled-rejected", journal_sink=sink)
+    assert journaled.cr_frame is None
+    assert sink.records == [
+        {
+            "name": "task_rejected",
+            "turn_id": "turn-1",
+            "data": {"task_name": "journaled-rejected", "reason": "scope_closed"},
+        }
+    ]
+
+    handles: list = []
+
+    def submit_from_thread() -> None:
+        handles.append(root.spawn_from_sync("thread-rejected", factory))
+
+    thread = Thread(target=submit_from_thread)
+    thread.start()
+    thread.join()
+    with pytest.raises(RuntimeError, match="is closed"):
+        handles[0].result()
+    assert not factory_called
 
 
 def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:
