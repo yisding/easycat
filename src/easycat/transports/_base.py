@@ -416,7 +416,9 @@ class AudioQueueMixin:
         if self._event_bus is None:
             return
         self._browser_event_forwarder = BrowserEventForwarder(
-            self._event_bus, self._send_client_event
+            self._event_bus,
+            self._send_client_event,
+            runtime_scope=self._emit_scope,
         )
 
     def _close_browser_event_forwarder(self) -> None:

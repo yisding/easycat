@@ -17,6 +17,7 @@ from easycat.events import (
     STTPartial,
     TurnStarted,
 )
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.transports._browser_events import (
     BROWSER_EVENT_SCHEMA_VERSION,
     BROWSER_EVENT_TYPES,
@@ -53,6 +54,54 @@ def sink() -> _Sink:
 
 
 class TestBrowserEventForwarder:
+    async def test_writer_and_send_tasks_attach_to_transport_scope(self, bus: EventBus):
+        root = RuntimeScope.create_root(
+            name="transport-runtime",
+            root_id="test-root:browser-events",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_send(_payload: dict[str, Any]) -> None:
+            entered.set()
+            await release.wait()
+
+        forwarder = BrowserEventForwarder(bus, blocked_send, runtime_scope=root)
+        await bus.emit(STTPartial(text="hi", turn_id="t1"))
+        await entered.wait()
+
+        assert root.tasks("browser_event_writer")
+        assert root.tasks("browser_event_send")
+
+        closing = asyncio.create_task(root.close(phases=("transport-events",)))
+        await asyncio.sleep(0)
+        assert not closing.done()
+        release.set()
+        await closing
+
+        assert not forwarder._send_tasks
+        forwarder.close()
+
+    async def test_closed_transport_scope_drops_and_accounts_queued_event(
+        self, bus: EventBus, sink: _Sink
+    ):
+        root = RuntimeScope.create_root(
+            name="transport-runtime",
+            root_id="test-root:closed-browser-events",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        await root.close()
+        forwarder = BrowserEventForwarder(bus, sink.send, runtime_scope=root)
+
+        await bus.emit(STTPartial(text="late", turn_id="t1"))
+        await _drain(forwarder)
+
+        assert sink.payloads == []
+        forwarder.close()
+
     async def test_forwards_transcript_and_lifecycle_events(self, bus: EventBus, sink: _Sink):
         forwarder = BrowserEventForwarder(bus, sink.send)
 

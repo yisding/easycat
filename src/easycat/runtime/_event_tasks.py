@@ -121,6 +121,7 @@ class RuntimeEventTaskScope:
                 self._member_name,
                 coro,
                 task_name=task_name,
+                policy=self._policy,
             )
         except RuntimeError:
             if scope.state is RuntimeScopeState.OPEN:
@@ -134,7 +135,7 @@ class RuntimeEventTaskScope:
     def adopt_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
         """Adopt an existing task into the same ownership and result policy."""
         scope = self.ensure_scope()
-        scope.add_task(self._member_name, task)
+        scope.add_task(self._member_name, task, policy=self._policy)
         task.add_done_callback(partial(self._on_done, scope))
         return task
 
