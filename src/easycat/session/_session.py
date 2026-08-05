@@ -69,6 +69,7 @@ from easycat.providers import (
     VADProvider,
 )
 from easycat.runtime.capabilities import (
+    RuntimeScopeBindable,
     aclose_if_supported,
     clear_audio_if_supported,
     close_if_supported,
@@ -384,6 +385,11 @@ class Session:
                     self._runtime_scope,
                     name=f"{role}-provider-events",
                 )
+        if isinstance(self.stt, RuntimeScopeBindable):
+            self.stt.set_runtime_scope(
+                self._runtime_scope,
+                name="stt-provider-runtime",
+            )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
             self._maybe_bind_session_id(event_producer)

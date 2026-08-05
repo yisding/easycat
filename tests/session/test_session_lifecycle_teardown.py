@@ -26,6 +26,7 @@ from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._types import TurnState
+from easycat.stt.base import STTBase
 from easycat.turn_manager import TurnManagerState
 from tests.session._session_core_helpers import (
     FakeSTT,
@@ -80,12 +81,12 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
 
 @pytest.mark.asyncio
 async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() -> None:
-    class ScopedFakeSTT(ProviderErrorEmitter, FakeSTT):
+    class ScopedFakeSTT(ProviderErrorEmitter, STTBase):
         _error_stage = ErrorStage.STT
         _provider_error_name = "fake-stt"
 
         def __init__(self) -> None:
-            FakeSTT.__init__(self)
+            STTBase.__init__(self)
             self._init_emit_tasks()
 
     stt = ScopedFakeSTT()
@@ -94,6 +95,9 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
     assert stt._emit_scope is not None
     assert stt._emit_scope.parent is session._runtime_scope
     assert stt._emit_scope.name == "stt-provider-events"
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.parent is session._runtime_scope
+    assert stt._runtime_scope.name == "stt-provider-runtime"
 
     await session.stop(force=True)
 

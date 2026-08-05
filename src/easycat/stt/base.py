@@ -15,6 +15,12 @@ from easycat._audio_utils import pcm_to_wav as _pcm_to_wav
 from easycat._concurrency import shielded_cleanup
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent
+from easycat.runtime.scope import (
+    RuntimeMemberPolicy,
+    RuntimeScope,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +30,20 @@ T = TypeVar("T")
 DEFAULT_MAX_AUDIO_CHUNK_BYTES = 1 * 1024 * 1024
 DEFAULT_MAX_AUDIO_BUFFER_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_AUDIO_DURATION_MS = 5 * 60 * 1000.0
+
+_AUDIO_SEND_TASK = "stt_audio_send"
+_AUDIO_SEND_POLICY = RuntimeTaskPolicy(
+    graceful=RuntimeMemberPolicy(
+        cohort="stt-runtime",
+        signal_token=False,
+        task_action=RuntimeTaskAction.CANCEL,
+    ),
+    force=RuntimeMemberPolicy(
+        cohort="stt-runtime",
+        signal_token=False,
+        task_action=RuntimeTaskAction.CANCEL,
+    ),
+)
 
 
 class AudioBufferLimitExceeded(Exception):
@@ -79,6 +99,8 @@ class STTBase:
         # cannot emit into a replaced queue.
         self._audio_send_lock = asyncio.Lock()
         self._active_audio_send_task: asyncio.Task[None] | None = None
+        self._runtime_scope: RuntimeScope | None = None
+        self._owns_runtime_scope = False
         # Distinguish work queued for an old stream from work admitted after
         # a rapid end/start cycle. Without a generation check, an audio send
         # waiting on ``_audio_send_lock`` can leak into the successor stream.
@@ -95,6 +117,28 @@ class STTBase:
         self._failed_end_cleanup_pending = False
         self._failed_end_cleanup_error: BaseException | None = None
 
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach interruptible provider work to an application lifecycle."""
+        if not name:
+            raise ValueError("STT RuntimeScope name must be non-empty")
+        current = self._runtime_scope
+        active_send = self._active_audio_send_task
+        if current is not None:
+            if current.parent is parent:
+                return
+            if current.tasks() or (active_send is not None and not active_send.done()):
+                raise RuntimeError("Cannot reattach STT runtime work while audio is active")
+        self._runtime_scope = parent.create_child(name)
+        self._owns_runtime_scope = False
+
+    def _ensure_runtime_scope(self) -> RuntimeScope:
+        scope = self._runtime_scope
+        if scope is None:
+            scope = RuntimeScope(name="stt-provider-runtime")
+            self._runtime_scope = scope
+            self._owns_runtime_scope = True
+        return scope
+
     async def start_stream(self) -> None:
         """Begin a new STT stream session."""
         async with self._public_lifecycle_operation():
@@ -108,7 +152,7 @@ class STTBase:
                     raise RuntimeError(
                         "Previous STT audio send is still shutting down; cannot start a new stream"
                     )
-                self._active_audio_send_task = None
+                self._forget_audio_send_if_done(active_send)
             await self._retry_failed_end_cleanup()
             await self._retry_failed_start_cleanup()
             self._event_queue = asyncio.Queue()
@@ -155,9 +199,12 @@ class STTBase:
                 # Run the provider write in an owned task. end_stream() can
                 # cancel that task without cancelling the long-lived audio
                 # ingress task that called send_audio().
-                send_task = asyncio.create_task(
+                scope = self._ensure_runtime_scope()
+                send_task = scope.create_task(
+                    _AUDIO_SEND_TASK,
                     self._on_audio(chunk),
-                    name="stt_audio_send",
+                    task_name=_AUDIO_SEND_TASK,
+                    policy=_AUDIO_SEND_POLICY,
                 )
                 self._active_audio_send_task = send_task
                 current = asyncio.current_task()
@@ -167,7 +214,7 @@ class STTBase:
                 except asyncio.CancelledError:
                     if current is not None and current.cancelling() > cancellation_requests:
                         send_task.cancel()
-                        await asyncio.gather(send_task, return_exceptions=True)
+                        await scope.drain(_AUDIO_SEND_TASK, cancel=True)
                         raise
                     if self._running and stream_generation == self._stream_generation:
                         # Provider-side cancellation unrelated to lifecycle
@@ -177,8 +224,7 @@ class STTBase:
                     # that as an accepted lifecycle cutoff, not cancellation
                     # of the caller's ingress loop.
                 finally:
-                    if send_task.done() and self._active_audio_send_task is send_task:
-                        self._active_audio_send_task = None
+                    self._forget_audio_send_if_done(send_task)
             return
 
         async with self._lifecycle_lock:
@@ -243,8 +289,7 @@ class STTBase:
                             exc_info=True,
                         )
                     finally:
-                        if active_send.done() and self._active_audio_send_task is active_send:
-                            self._active_audio_send_task = None
+                        self._forget_audio_send_if_done(active_send)
                 await self._on_end()
             except BaseException as end_error:
                 # A later close()/start_stream() retries only the cleanup hook,
@@ -280,7 +325,15 @@ class STTBase:
                 "STT retained audio send failed while retrying cleanup",
                 exc_info=True,
             )
-        if active_send.done() and self._active_audio_send_task is active_send:
+        self._forget_audio_send_if_done(active_send)
+
+    def _forget_audio_send_if_done(self, task: asyncio.Task[None]) -> None:
+        """Release a settled audio-send handle from both provider owners."""
+        if not task.done():
+            return
+        if self._runtime_scope is not None:
+            self._runtime_scope.discard(task)
+        if self._active_audio_send_task is task:
             self._active_audio_send_task = None
 
     async def events(self) -> AsyncIterator[STTEvent]:
@@ -296,7 +349,19 @@ class STTBase:
         try:
             await self.end_stream()
         finally:
-            await self._drain_provider_error_tasks()
+            try:
+                await self._drain_provider_error_tasks()
+            finally:
+                await self._close_owned_runtime_scope_if_idle()
+
+    async def _close_owned_runtime_scope_if_idle(self) -> None:
+        scope = self._runtime_scope
+        if not self._owns_runtime_scope or scope is None or not scope.empty:
+            return
+        await scope.close()
+        if self._runtime_scope is scope:
+            self._runtime_scope = None
+            self._owns_runtime_scope = False
 
     # -- Protected helpers for subclasses ----------------------------------
 
