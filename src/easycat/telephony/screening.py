@@ -34,9 +34,11 @@ from easycat.events import (
     STTPartial,
     VoicemailDetected,
 )
+from easycat.runtime.scope import BackgroundTaskScope
 from easycat.telephony.voicemail import _CallBoundaryAcceptor
 
 logger = logging.getLogger(__name__)
+_AGENT_RESPONSE_TIMER_MEMBER = "screening_agent_response_timeout"
 
 ScreeningPlatform = Literal["ios", "android", "carrier", "third_party"]
 
@@ -600,6 +602,7 @@ class CallScreeningDetector:
         self._accumulated_text = ""
         self._screening_turns = 0
         self._started = False
+        self._timer_tasks = BackgroundTaskScope(name="call-screening")
         self._agent_timeout_task: asyncio.Task[None] | None = None
         self._agent_timeout_fallback_started = False
 
@@ -669,9 +672,18 @@ class CallScreeningDetector:
         self._agent_timeout_fallback_started = False
 
     def _cancel_agent_timeout(self) -> None:
-        if self._agent_timeout_task and not self._agent_timeout_task.done():
-            self._agent_timeout_task.cancel()
-        self._agent_timeout_task = None
+        task = self._agent_timeout_task
+        if task is None:
+            return
+        self._timer_tasks.cancel(_AGENT_RESPONSE_TIMER_MEMBER)
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current and not task.done():
+            task.cancel()
+        if task is not current:
+            self._agent_timeout_task = None
 
     def notify_agent_responded(self) -> bool:
         """Signal that the agent has delivered its screening reply.
@@ -760,7 +772,11 @@ class CallScreeningDetector:
             # Start agent timeout BEFORE emitting so the fallback can fire
             # while EventBus.emit() awaits the (potentially slow) agent handler.
             self._agent_timeout_fallback_started = False
-            self._agent_timeout_task = asyncio.create_task(self._agent_timeout_fallback())
+            self._agent_timeout_task = self._timer_tasks.create_task(
+                _AGENT_RESPONSE_TIMER_MEMBER,
+                self._agent_timeout_fallback(),
+                replace=True,
+            )
             await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
         elif self._screening_response:
             self._state = ScreeningState.RESPONDING
@@ -778,8 +794,9 @@ class CallScreeningDetector:
                 await self._event_bus.emit(
                     ScreeningResponse(text=self._screening_response, mode="static")
                 )
-        except asyncio.CancelledError:
-            pass
+        finally:
+            if self._agent_timeout_task is asyncio.current_task():
+                self._agent_timeout_task = None
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle final transcript after screening detected."""
