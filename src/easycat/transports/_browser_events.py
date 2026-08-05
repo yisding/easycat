@@ -127,6 +127,13 @@ class BrowserEventForwarder:
             logger=logger,
             failure_message="Detached browser event send failed",
         )
+        self._detached_send_tasks = RuntimeEventTaskScope(
+            owner_label="browser-event-detached-send",
+            member_name="browser_event_send",
+            cohort=_BROWSER_EVENT_COHORT,
+            logger=logger,
+            failure_message="Detached browser event send failed",
+        )
         if runtime_scope is not None:
             self._writer_tasks.bind(runtime_scope)
             self._send_task_scope.bind(runtime_scope)
@@ -167,6 +174,9 @@ class BrowserEventForwarder:
         for task in self._send_task_scope.tasks():
             if not task.done():
                 task.cancel()
+                if not self._send_task_scope.owns_root:
+                    self._send_task_scope.discard_task(task)
+                    self._detached_send_tasks.adopt_task(task)
 
     # ── Event handlers ────────────────────────────────────────────
 

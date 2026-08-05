@@ -102,6 +102,46 @@ class TestBrowserEventForwarder:
         assert sink.payloads == []
         forwarder.close()
 
+    async def test_close_detaches_cancellation_resistant_timed_out_send(self, bus: EventBus):
+        root = RuntimeScope.create_root(
+            name="transport-runtime",
+            root_id="test-root:stubborn-browser-send",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stubborn_send(_payload: dict[str, Any]) -> None:
+            entered.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+
+        forwarder = BrowserEventForwarder(
+            bus,
+            stubborn_send,
+            send_timeout_s=0.01,
+            runtime_scope=root,
+        )
+        await bus.emit(STTPartial(text="hi", turn_id="t1"))
+        await entered.wait()
+        signal = root.signal_cohort("transport-events", force=True)
+
+        await asyncio.sleep(0.02)
+        forwarder.close()
+        await asyncio.wait_for(root.drain_cohort(signal), timeout=0.1)
+
+        assert cancelled.is_set()
+        assert root.empty
+        assert forwarder._detached_send_tasks.tasks()
+
+        release.set()
+        await asyncio.gather(*forwarder._detached_send_tasks.tasks())
+
     async def test_forwards_transcript_and_lifecycle_events(self, bus: EventBus, sink: _Sink):
         forwarder = BrowserEventForwarder(bus, sink.send)
 
