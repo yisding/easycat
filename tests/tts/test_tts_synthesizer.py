@@ -186,6 +186,27 @@ async def test_synthesize_offers_only_first_audio_to_direct_sender():
 
 
 @pytest.mark.asyncio
+async def test_synthesize_queues_first_audio_when_direct_sender_declines():
+    event_bus = EventBus()
+    queue = BoundedAudioQueue(max_size=100, policy=DropPolicy.DROP_OLDEST, name="test")
+
+    async def _decline_direct(_chunk: AudioChunk) -> bool:
+        return False
+
+    synth = TTSSynthesizer(
+        tts=FakeTTS(chunks=1),
+        event_bus=event_bus,
+        outbound_queue=queue,
+        direct_first_audio=_decline_direct,
+    )
+
+    result = await synth.synthesize(TTSInput("hello"), None)
+
+    assert result.audio_produced
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_synthesize_emits_markers():
     synth, event_bus, _ = _make_synth(tts=MarkerTTS())
     markers: list[TTSMarkers] = []

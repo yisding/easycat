@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
-from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
+from easycat._concurrency import RuntimeSupervisor
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
 from easycat.cancel import CancelToken
@@ -535,8 +535,7 @@ async def test_inline_send_quota_rejection_releases_outbound_claim() -> None:
     release = asyncio.Event()
     blocker = await router._inline_send_scope.start_owned_task("blocker", release.wait)
 
-    with pytest.raises(SurvivorCapacityError, match="root survivor capacity"):
-        await router.try_send_first_audio_inline(_make_chunk())
+    assert await router.try_send_first_audio_inline(_make_chunk()) is False
 
     assert router._outbound_in_flight == 0
     assert router._outbound_idle.is_set()

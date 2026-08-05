@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import SurvivorCapacityError
 from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
@@ -460,6 +461,9 @@ class AudioRouter:
                     ownership_started=ownership_started,
                 ),
             )
+        except SurvivorCapacityError:
+            await self._finish_outbound_send(replayed_chunk=False)
+            return False
         except BaseException:
             # Reservation is asynchronous. If cancellation or quota rejection
             # wins before the child starts, the caller still owns the in-flight
