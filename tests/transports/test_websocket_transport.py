@@ -722,6 +722,13 @@ async def test_interrupted_server_wait_blocks_connect_and_retries_exact_cleanup(
             await self.release_wait.wait()
 
     transport = WebSocketTransport(WebSocketTransportConfig())
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="test-root:websocket-listener-close",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    transport.set_runtime_scope(root, name="transport-runtime")
     client = _FailOnceClosingWebSocket()
     server = _InterruptibleCloseServer()
     transport._connected = True
@@ -739,6 +746,8 @@ async def test_interrupted_server_wait_blocks_connect_and_retries_exact_cleanup(
     assert transport._pending_client_close is client
     assert transport._server is server
     assert transport._server_wait_task is not None
+    assert root.tasks("transport_listener_close") == (transport._server_wait_task,)
+    assert "transport-listener" in root.cohorts(force=False)
     with pytest.raises(RuntimeError, match="client cleanup is incomplete"):
         await transport.connect()
 
@@ -750,6 +759,7 @@ async def test_interrupted_server_wait_blocks_connect_and_retries_exact_cleanup(
     assert transport._pending_client_close is None
     assert transport._server is None
     assert transport._server_wait_task is None
+    assert not root.tasks("transport_listener_close")
     assert transport._disconnect_emit_cleanup_task is None
     assert transport._disconnect_cleanup_pending is False
     assert transport._disconnect_cleanup_error is None
@@ -791,6 +801,7 @@ async def test_internal_server_wait_cancel_ignores_preexisting_caller_cancel_cou
     assert cancellation_requests == 1
     assert transport._server is server
     assert transport._server_wait_task is None
+    assert transport._listener_tasks.scope is None
     assert transport._disconnect_cleanup_pending is True
     with pytest.raises(RuntimeError, match="cleanup is incomplete"):
         await transport.connect()
