@@ -180,6 +180,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             await self.start_stream()
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.debug("OpenAI Realtime warmup skipped: %s", exc)
+            await self._drain_scheduled_close()
             return
         try:
             await self.end_stream()

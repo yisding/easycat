@@ -1103,6 +1103,42 @@ async def test_openai_realtime_warmup_swallows_start_errors():
 
 
 @pytest.mark.asyncio
+async def test_one_shot_warmup_drains_failed_handshake_close_before_attach() -> None:
+    factory = _MockWSFactory([])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(
+            api_key="sk-test",
+            persistent_ws=False,
+            ws_connect=factory,
+        )
+    )
+
+    async def fail_session_update() -> None:
+        raise ConnectionError("handshake failed")
+
+    stt._send_session_update = fail_session_update  # type: ignore[method-assign]
+
+    await stt.warmup()
+
+    assert stt._close_task is None
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.empty
+
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:warmup-failure",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
+
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.parent is root
+    await stt.aclose()
+    await root.close()
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_persistent_warmup_swallows_connect_errors():
     async def _boom() -> None:
         raise ConnectionError("boom")
