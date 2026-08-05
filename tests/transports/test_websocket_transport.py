@@ -748,6 +748,8 @@ async def test_interrupted_server_wait_blocks_connect_and_retries_exact_cleanup(
     assert transport._server_wait_task is not None
     assert root.tasks("transport_listener_close") == (transport._server_wait_task,)
     assert "transport-listener" in root.cohorts(force=False)
+    signal = root.signal_cohort("transport-listener", force=True)
+    assert transport._server_wait_task.cancelling() == 0
     with pytest.raises(RuntimeError, match="client cleanup is incomplete"):
         await transport.connect()
 
@@ -763,6 +765,7 @@ async def test_interrupted_server_wait_blocks_connect_and_retries_exact_cleanup(
     assert transport._disconnect_emit_cleanup_task is None
     assert transport._disconnect_cleanup_pending is False
     assert transport._disconnect_cleanup_error is None
+    await root.drain_cohort(signal)
 
 
 @pytest.mark.asyncio
