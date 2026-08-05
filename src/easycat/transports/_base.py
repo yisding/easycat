@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Coroutine
-from functools import partial
 from typing import Any
 
 import websockets
@@ -23,13 +22,8 @@ from easycat import _observability as observability
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
-from easycat.runtime.scope import (
-    RuntimeMemberPolicy,
-    RuntimeScope,
-    RuntimeScopeState,
-    RuntimeTaskAction,
-    RuntimeTaskPolicy,
-)
+from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime.scope import RuntimeScope
 from easycat.transports._browser_events import BrowserEventForwarder
 from easycat.transports._limits import (
     DEFAULT_INBOUND_AUDIO_MAX_BYTES,
@@ -48,18 +42,6 @@ _DEGRADED_MAX_PENDING_TASKS = 64
 _DEGRADED_MAX_DETAIL_CHARS = 256
 _TRANSPORT_EVENT_TASK_NAME = "transport_event_emit"
 _TRANSPORT_EVENT_COHORT = "transport-events"
-_TRANSPORT_EVENT_POLICY = RuntimeTaskPolicy(
-    graceful=RuntimeMemberPolicy(
-        cohort=_TRANSPORT_EVENT_COHORT,
-        signal_token=False,
-        task_action=RuntimeTaskAction.FINISH,
-    ),
-    force=RuntimeMemberPolicy(
-        cohort=_TRANSPORT_EVENT_COHORT,
-        signal_token=False,
-        task_action=RuntimeTaskAction.FINISH,
-    ),
-)
 
 
 def _require_positive_int(value: int, *, name: str) -> int:
@@ -215,8 +197,7 @@ class AudioQueueMixin:
     _client_connected: asyncio.Event
     _event_bus: EventBus | None
     _easycat_session_id: str | None
-    _emit_scope: RuntimeScope | None
-    _owns_emit_root: bool
+    _event_tasks: RuntimeEventTaskScope
     _degraded_last_emit: dict[tuple[str, bool], float]
     _degraded_suppressed: dict[tuple[str, bool], int]
     _browser_event_forwarder: BrowserEventForwarder | None
@@ -248,8 +229,16 @@ class AudioQueueMixin:
         # stay strongly owned without creating a second lifecycle registry.
         # Session attaches its root after construction; standalone transports
         # lazily create and drain a local root.
-        self._emit_scope = getattr(self, "_emit_scope", None)
-        self._owns_emit_root = getattr(self, "_owns_emit_root", False)
+        event_tasks = getattr(self, "_event_tasks", None)
+        if event_tasks is None:
+            transport = getattr(self, "transport_kind", "unknown")
+            self._event_tasks = RuntimeEventTaskScope(
+                owner_label=f"{transport}-transport",
+                member_name=_TRANSPORT_EVENT_TASK_NAME,
+                cohort=_TRANSPORT_EVENT_COHORT,
+                logger=logger,
+                failure_message="Transport event emission failed",
+            )
         # Per-reason coalescing for attacker-triggerable drop/control paths.
         self._degraded_last_emit = getattr(self, "_degraded_last_emit", {})
         self._degraded_suppressed = getattr(self, "_degraded_suppressed", {})
@@ -268,38 +257,25 @@ class AudioQueueMixin:
 
     def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
         """Attach transport event work beneath the owning application scope."""
-        if not name:
-            raise ValueError("Transport RuntimeScope name must be non-empty")
-        current = self._emit_scope
-        if current is not None:
-            if current.parent is parent:
-                return
-            if current.tasks():
-                raise RuntimeError("Cannot reattach transport event work while emits are active")
-        self._emit_scope = parent.create_child(
-            name,
-            default_policy=_TRANSPORT_EVENT_POLICY,
-        )
-        self._owns_emit_root = False
+        self._event_tasks.attach(parent, name=name)
+
+    @property
+    def _emit_scope(self) -> RuntimeScope | None:
+        """Compatibility inspection of the transport event scope."""
+        return self._event_tasks.scope
+
+    @property
+    def _owns_emit_root(self) -> bool:
+        """Compatibility inspection of standalone transport ownership."""
+        return self._event_tasks.owns_root
 
     @property
     def _emit_tasks(self) -> set[asyncio.Task[Any]]:
         """Compatibility inspection of transport events owned by the scope."""
-        scope = self._emit_scope
-        return set() if scope is None else set(scope.tasks(_TRANSPORT_EVENT_TASK_NAME))
+        return set(self._event_tasks.tasks())
 
     def _ensure_emit_scope(self) -> RuntimeScope:
-        scope = self._emit_scope
-        if scope is not None:
-            return scope
-        transport = getattr(self, "transport_kind", "unknown")
-        scope = RuntimeScope(
-            name=f"{transport}-transport-events",
-            default_policy=_TRANSPORT_EVENT_POLICY,
-        )
-        self._emit_scope = scope
-        self._owns_emit_root = True
-        return scope
+        return self._event_tasks.ensure_scope()
 
     def _create_emit_task(
         self,
@@ -308,40 +284,11 @@ class AudioQueueMixin:
         task_name: str,
     ) -> asyncio.Task[Any] | None:
         """Create one scope-owned, self-pruning best-effort event task."""
-        scope = self._ensure_emit_scope()
-        try:
-            task = scope.create_task(
-                _TRANSPORT_EVENT_TASK_NAME,
-                coro,
-                task_name=task_name,
-            )
-        except RuntimeError:
-            if scope.state is RuntimeScopeState.OPEN:
-                raise
-            coro.close()
-            logger.debug("Could not emit transport event - runtime scope is closed")
-            return None
-        task.add_done_callback(partial(self._on_emit_done, scope))
-        return task
+        return self._event_tasks.create_task(coro, task_name=task_name)
 
     def _track_emit_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
         """Adopt an existing event task for re-entrant lifecycle helpers."""
-        scope = self._ensure_emit_scope()
-        scope.add_task(_TRANSPORT_EVENT_TASK_NAME, task)
-        task.add_done_callback(partial(self._on_emit_done, scope))
-        return task
-
-    @staticmethod
-    def _on_emit_done(scope: RuntimeScope, task: asyncio.Task[Any]) -> None:
-        scope.discard(task)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            logger.debug(
-                "Transport event emission failed",
-                exc_info=(type(error), error, error.__traceback__),
-            )
+        return self._event_tasks.adopt_task(task)
 
     def _record_transport_disconnect(self, reason: str) -> None:
         """Count one abnormal transport disconnect (a drop, not a clean close).
@@ -435,7 +382,7 @@ class AudioQueueMixin:
         cleanup transaction avoid waiting on the event-emitter task that
         initiated its parent teardown.
         """
-        scope = self._emit_scope
+        scope = self._event_tasks.scope
         if scope is None or not scope.tasks(_TRANSPORT_EVENT_TASK_NAME):
             return
         # A subscriber runs inside its EventBus emitter task. It may call a
@@ -452,11 +399,7 @@ class AudioQueueMixin:
             await asyncio.gather(*pending, return_exceptions=True)
             for task in pending:
                 scope.discard(task)
-        if self._owns_emit_root and scope.empty:
-            await scope.close()
-            if self._emit_scope is scope:
-                self._emit_scope = None
-                self._owns_emit_root = False
+        await self._event_tasks.release_standalone_if_empty()
 
     # ── Browser event channel ─────────────────────────────────────
     #
