@@ -84,7 +84,7 @@ def _validate_positive_number(name: str, value: object) -> None:
         raise ValueError(f"{name} must be a finite number > 0")
 
 
-async def connect_until_stopped(
+async def connect_until_stopped(  # noqa: C901 - race cleanup preserves exception precedence
     ws: ReconnectingWebSocket,
     stop_event: asyncio.Event,
 ) -> bool:
@@ -99,37 +99,61 @@ async def connect_until_stopped(
         ``True`` when the socket connected. ``False`` when *stop_event* fired
         first; in that case the socket is closed before returning.
     """
-    connect_task = asyncio.create_task(ws.connect())
-    stop_task = asyncio.create_task(stop_event.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {connect_task, stop_task},
-            return_when=asyncio.FIRST_COMPLETED,
+
+    async def capture_connect() -> BaseException | None:
+        try:
+            await ws.connect()
+        except BaseException as exc:  # noqa: BLE001 - returned after child settlement
+            return exc
+        return None
+
+    wait_error: BaseException | None = None
+    stop_won = False
+    stop_close_error: BaseException | None = None
+    async with asyncio.TaskGroup() as race:
+        connect_task = race.create_task(
+            capture_connect(),
+            name="websocket_connect_until_stopped",
         )
-    except BaseException as wait_error:
-        connect_task.cancel()
+        stop_task = race.create_task(
+            stop_event.wait(),
+            name="websocket_connect_stop_wait",
+        )
         try:
-            await ws.close()
-        except BaseException as close_error:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            wait_error.add_note(
-                f"WebSocket cleanup after interrupted connect failed: {close_error!r}"
+            done, _ = await asyncio.wait(
+                {connect_task, stop_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
-        await asyncio.gather(connect_task, return_exceptions=True)
-        raise
-    finally:
-        if not stop_task.done():
-            stop_task.cancel()
-        await asyncio.gather(stop_task, return_exceptions=True)
-
-    if connect_task not in done:
-        connect_task.cancel()
-        try:
-            await ws.close()
+        except BaseException as exc:  # noqa: BLE001 - cleanup then re-raise primary
+            wait_error = exc
+            connect_task.cancel()
+            try:
+                await ws.close()
+            except BaseException as close_error:  # noqa: BLE001 cleanup note on primary
+                wait_error.add_note(
+                    f"WebSocket cleanup after interrupted connect failed: {close_error!r}"
+                )
+        else:
+            stop_won = connect_task not in done
+            if stop_won:
+                connect_task.cancel()
+                try:
+                    await ws.close()
+                except BaseException as close_error:  # noqa: BLE001 - re-raised after settle
+                    stop_close_error = close_error
         finally:
-            await asyncio.gather(connect_task, return_exceptions=True)
-        return False
+            if not stop_task.done():
+                stop_task.cancel()
 
-    connect_task.result()
+    if wait_error is not None:
+        raise wait_error
+    if stop_close_error is not None:
+        raise stop_close_error
+    if stop_won:
+        return False
+    connect_error = connect_task.result()
+    if connect_error is not None:
+        raise connect_error
     return True
 
 
@@ -434,20 +458,28 @@ class ReconnectingWebSocket:
                 await close_task
 
     async def _backoff_or_close(self, delay: float) -> None:
-        sleep_task = asyncio.create_task(asyncio.sleep(delay))
-        close_task = asyncio.create_task(self._close_event.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {sleep_task, close_task},
-                return_when=asyncio.FIRST_COMPLETED,
+        close_won = False
+        async with asyncio.TaskGroup() as race:
+            sleep_task = race.create_task(
+                asyncio.sleep(delay),
+                name="websocket_reconnect_backoff",
             )
-            if close_task in done:
-                raise ConnectionError("WebSocket closed during reconnect")
-        finally:
-            for task in (sleep_task, close_task):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(sleep_task, close_task, return_exceptions=True)
+            close_task = race.create_task(
+                self._close_event.wait(),
+                name="websocket_reconnect_close_wait",
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    {sleep_task, close_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                close_won = close_task in done
+            finally:
+                for task in (sleep_task, close_task):
+                    if not task.done():
+                        task.cancel()
+        if close_won:
+            raise ConnectionError("WebSocket closed during reconnect")
 
     def _close_late_connection(self, task: asyncio.Future[ClientConnection]) -> None:
         """Close a connector result that arrived after its caller stopped waiting."""

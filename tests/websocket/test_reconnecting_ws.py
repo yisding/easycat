@@ -157,6 +157,34 @@ async def test_connect_until_stopped_cancellation_closes_and_reaps_connector() -
     assert not client.connected
 
 
+async def test_connect_until_stopped_preserves_connect_failure_without_exception_group() -> None:
+    class FailingClient(_ConnectUntilStoppedClient):
+        async def connect(self) -> None:
+            raise RuntimeError("connect failed")
+
+    client = FailingClient()
+
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await connect_until_stopped(client, asyncio.Event())  # type: ignore[arg-type]
+
+
+async def test_connect_until_stopped_preserves_stop_close_failure() -> None:
+    class FailingCloseClient(_ConnectUntilStoppedClient):
+        async def close(self) -> None:
+            raise RuntimeError("stop close failed")
+
+    client = FailingCloseClient()
+    stop = asyncio.Event()
+    joining = asyncio.create_task(
+        connect_until_stopped(client, stop)  # type: ignore[arg-type]
+    )
+    await client.started.wait()
+    stop.set()
+
+    with pytest.raises(RuntimeError, match="stop close failed"):
+        await joining
+
+
 class TestReconnectingWebSocket:
     def _make_ws(self, url: str = "wss://test.com", **kwargs) -> ReconnectingWebSocket:
         config = ReconnectConfig(**kwargs)
