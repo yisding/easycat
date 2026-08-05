@@ -80,7 +80,7 @@ class ProviderErrorEmitter:
         scope = self._emit_scope
         return set() if scope is None else set(scope.tasks(_PROVIDER_EVENT_TASK_NAME))
 
-    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+    def _attach_provider_event_scope(self, parent: RuntimeScope, *, name: str) -> None:
         """Attach provider-event work to its owning application lifecycle."""
         if not name:
             raise ValueError("Provider event RuntimeScope name must be non-empty")

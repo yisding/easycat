@@ -177,7 +177,7 @@ async def test_attached_emitter_uses_parent_tree_and_stays_reusable_after_drain(
     )
     bus = _RecordingBus()
     probe = _ConfigProbe(_Config(event_bus=bus))
-    probe.set_runtime_scope(root, name="tts-provider-events")
+    probe._attach_provider_event_scope(root, name="tts-provider-events")
 
     probe._emit_provider_error(RuntimeError("first"))
     assert len(root.tasks("provider_error_emit")) == 1
@@ -206,7 +206,7 @@ async def test_emit_is_a_quiet_noop_after_attached_scope_closes(
     )
     bus = _RecordingBus()
     probe = _ConfigProbe(_Config(event_bus=bus))
-    probe.set_runtime_scope(root, name="tts-provider-events")
+    probe._attach_provider_event_scope(root, name="tts-provider-events")
     await root.close()
 
     probe._emit_provider_error(RuntimeError("late"))

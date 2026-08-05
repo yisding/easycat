@@ -380,7 +380,7 @@ class Session:
         )
         for role, provider in (("stt", self.stt), ("tts", self.tts)):
             if isinstance(provider, ProviderErrorEmitter):
-                provider.set_runtime_scope(
+                provider._attach_provider_event_scope(
                     self._runtime_scope,
                     name=f"{role}-provider-events",
                 )
