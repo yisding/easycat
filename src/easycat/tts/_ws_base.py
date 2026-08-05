@@ -70,9 +70,13 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         if current is not None:
             if current.parent is parent:
                 return
-            if self._mgr is not None or current.tasks():
+            if not self._owns_runtime_scope or current.tasks():
                 raise RuntimeError("Cannot reattach TTS runtime work after manager creation")
-        self._runtime_scope = parent.create_child(name)
+        attached = parent.create_child(name)
+        if self._mgr is not None:
+            assert current is not None
+            self._mgr.rehome_runtime_scope(current, attached)
+        self._runtime_scope = attached
         self._owns_runtime_scope = False
 
     def _ensure_runtime_scope(self) -> RuntimeScope:

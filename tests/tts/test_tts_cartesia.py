@@ -12,7 +12,9 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.events import Error, ErrorStage, EventBus, TTSEventType
+from easycat.session._session import Session
 from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
+from tests.session._session_core_helpers import _full_config
 from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
 
@@ -250,6 +252,25 @@ class TestCartesiaPersistent:
 
         assert factory.call_count == 1
         await provider.close()
+
+    async def test_prewarmed_manager_attaches_to_session_runtime(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            await provider.warmup()
+            standalone = provider._runtime_scope
+            assert standalone is not None
+            assert standalone.parent is None
+
+            session = Session(_full_config(tts=provider))
+
+            assert provider._runtime_scope is not standalone
+            assert provider._runtime_scope is not None
+            assert provider._runtime_scope.parent is session._runtime_scope
+            assert provider._mgr is not None
+            assert provider._mgr._runtime_scope is provider._runtime_scope
+            await session.stop(force=True)
 
     async def test_warmup_failure_is_retried_by_synthesis(self):
         provider = self._make_provider()

@@ -209,6 +209,15 @@ class MultiContextWSManager:
             and (self._close_task is None or self._close_task.done())
         )
 
+    def rehome_runtime_scope(self, source: RuntimeScope, target: RuntimeScope) -> None:
+        """Move manager ownership from one idle provider scope to another."""
+        if target is self._runtime_scope:
+            return
+        if self._runtime_scope is not source or source.tasks():
+            raise RuntimeError("Cannot reattach active TTS manager runtime work")
+        self._runtime_scope = target
+        self._owns_runtime_scope = False
+
     # ── public surface ────────────────────────────────────────────
 
     async def connect(self) -> None:
