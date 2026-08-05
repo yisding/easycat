@@ -29,6 +29,8 @@ from easycat.events import (
     SupervisorListenerAttached,
     SupervisorListenerDetached,
 )
+from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime.scope import RuntimeScope
 
 if TYPE_CHECKING:
     from easycat.session._session import Session
@@ -37,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 SUPERVISOR_TOKEN_ENV = "EASYCAT_SUPERVISOR_TOKEN"
 SupervisorTrack = Literal["caller", "assistant"]
+_SUPERVISOR_EVENT_TASK_NAME = "supervisor_audit_emit"
+_SUPERVISOR_EVENT_COHORT = "supervisor-events"
+_SUPERVISOR_EVENT_OWNER_ATTR = "_supervisor_event_tasks"
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +308,25 @@ def _close_unawaited(value: object) -> None:
             close()
 
 
+def _supervisor_event_tasks(session: Session) -> RuntimeEventTaskScope:
+    """Return the one audit-event owner shared by a Session's broadcasters."""
+    current = getattr(session, _SUPERVISOR_EVENT_OWNER_ATTR, None)
+    if isinstance(current, RuntimeEventTaskScope):
+        return current
+    tasks = RuntimeEventTaskScope(
+        owner_label="supervisor-audit",
+        member_name=_SUPERVISOR_EVENT_TASK_NAME,
+        cohort=_SUPERVISOR_EVENT_COHORT,
+        logger=logger,
+        failure_message="Supervisor audit event emission failed",
+    )
+    runtime_scope = getattr(session, "_runtime_scope", None)
+    if isinstance(runtime_scope, RuntimeScope):
+        tasks.attach(runtime_scope, name="supervisor-events")
+    setattr(session, _SUPERVISOR_EVENT_OWNER_ATTR, tasks)
+    return tasks
+
+
 class SessionAudioBroadcaster:
     """Fan out caller/bot audio from one Session to many passive listeners.
 
@@ -332,7 +356,7 @@ class SessionAudioBroadcaster:
         self._dropped_frames = 0
         self._consent_blocked_frames = 0
         self._redacted_frames = 0
-        self._audit_tasks: set[asyncio.Task[None]] = set()
+        self._event_tasks = _supervisor_event_tasks(session)
 
         self._session.subscribe_event(AudioIn, self._on_audio_in)
         self._session.subscribe_event(AudioOut, self._on_audio_out)
@@ -422,10 +446,17 @@ class SessionAudioBroadcaster:
 
     async def drain_audit_events(self) -> None:
         """Await in-flight supervisor audit event emissions."""
-        if not self._audit_tasks:
+        tasks = self._event_tasks.tasks()
+        if not tasks:
             return
-        pending = list(self._audit_tasks)
-        await asyncio.gather(*pending, return_exceptions=True)
+        if asyncio.current_task() in tasks:
+            # Audit subscribers may synchronously tear down their broadcaster.
+            # Do not wait for this emitter or siblings joining the same drain.
+            return
+        scope = self._event_tasks.scope
+        assert scope is not None
+        await scope.drain(_SUPERVISOR_EVENT_TASK_NAME, suppress_errors=True)
+        await self._event_tasks.release_standalone_if_empty()
 
     def _on_audio_in(self, event: AudioIn) -> None:
         self._forward(event, "caller")
@@ -542,12 +573,13 @@ class SessionAudioBroadcaster:
         if bus is None:
             return
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        task = loop.create_task(bus.emit(event))
-        self._audit_tasks.add(task)
-        task.add_done_callback(self._audit_tasks.discard)
+        self._event_tasks.create_task(
+            bus.emit(event),
+            task_name="supervisor:audit-emit",
+        )
 
     def _terminate_queue(self, queue: asyncio.Queue[SupervisorAudioFrame | None]) -> None:
         try:

@@ -15,6 +15,7 @@ from easycat.events import (
     SupervisorListenerAttached,
     SupervisorListenerDetached,
 )
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.supervisor import (
     SessionAudioBroadcaster,
     serve_supervisor_websocket,
@@ -34,6 +35,17 @@ class _DummySession:
 
     def unsubscribe_event(self, event_type, handler) -> None:
         self.event_bus.unsubscribe(event_type, handler)
+
+
+class _ScopedDummySession(_DummySession):
+    def __init__(self, session_id: str = "session-test") -> None:
+        super().__init__(session_id)
+        self._runtime_scope = RuntimeScope.create_root(
+            name="session",
+            root_id=f"test-root:{session_id}",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
 
 
 def _chunk(byte: int) -> AudioChunk:
@@ -126,6 +138,58 @@ async def test_session_audio_broadcaster_fans_out_caller_and_assistant_audio() -
     broadcaster.unsubscribe(listener_a)
     broadcaster.unsubscribe(listener_b)
     await broadcaster.drain_audit_events()
+
+
+@pytest.mark.asyncio
+async def test_session_broadcasters_share_attached_audit_event_scope() -> None:
+    session = _ScopedDummySession()
+    first = SessionAudioBroadcaster(session)
+    second = SessionAudioBroadcaster(session)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _handler(_event: SupervisorListenerAttached) -> None:
+        entered.set()
+        await release.wait()
+
+    session.event_bus.subscribe(SupervisorListenerAttached, _handler)
+    first.subscribe()
+    await entered.wait()
+
+    assert first._event_tasks is second._event_tasks
+    scope = first._event_tasks.scope
+    assert scope is not None
+    assert scope.parent is session._runtime_scope
+    assert scope.name == "supervisor-events"
+
+    closing = asyncio.create_task(session._runtime_scope.close(phases=("supervisor-events",)))
+    await asyncio.sleep(0)
+    assert not closing.done()
+    release.set()
+    await closing
+
+    assert not first._event_tasks.tasks()
+    first.close()
+    second.close()
+
+
+@pytest.mark.asyncio
+async def test_audit_subscriber_can_drain_its_own_event_task() -> None:
+    session = _DummySession()
+    broadcaster = SessionAudioBroadcaster(session)
+    drained = asyncio.Event()
+
+    async def _handler(_event: SupervisorListenerAttached) -> None:
+        await broadcaster.drain_audit_events()
+        drained.set()
+
+    session.event_bus.subscribe(SupervisorListenerAttached, _handler)
+    broadcaster.subscribe()
+
+    await asyncio.wait_for(drained.wait(), timeout=0.2)
+    await asyncio.sleep(0)
+    assert not broadcaster._event_tasks.tasks()
+    broadcaster.close()
 
 
 @pytest.mark.asyncio
