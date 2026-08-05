@@ -356,6 +356,13 @@ class TestOutboundAudioAecReference:
     ):
         monkeypatch.setattr(OutboundAudioSource, "_ACLOSE_TIMEOUT_S", 0.01)
         source = OutboundAudioSource()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webrtc-stubborn-delivery",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        source._bind_event_scope(root)
         bus = EventBus()
         entered = asyncio.Event()
         cancelled = asyncio.Event()
@@ -374,12 +381,15 @@ class TestOutboundAudioAecReference:
         chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
         source._queue_delivery_events([(chunk, None, None, None)])
         await asyncio.wait_for(entered.wait(), timeout=1)
+        signal = root.signal_cohort("transport-events", force=True)
 
         closing = asyncio.create_task(source.aclose())
         try:
             await asyncio.wait_for(asyncio.shield(closing), timeout=0.1)
+            await asyncio.wait_for(root.drain_cohort(signal), timeout=0.1)
             assert cancelled.is_set()
             assert not source._emit_tasks
+            assert root.empty
         finally:
             release.set()
             if not closing.done():
@@ -389,6 +399,7 @@ class TestOutboundAudioAecReference:
                     break
                 await asyncio.sleep(0)
             assert not _background_emit_scope().tasks()
+            await root.close()
 
     @pytest.mark.asyncio
     async def test_aclose_is_safe_from_delivery_event_subscriber(self):

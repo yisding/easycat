@@ -9,7 +9,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, ClassVar
-from weakref import WeakKeyDictionary
+from weakref import ReferenceType, WeakKeyDictionary, ref
 
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk, AudioFormat
@@ -106,14 +106,15 @@ _DELIVERY_EVENT_COHORT = "transport-events"
 # settles, keeping a durable strong owner without a module-level task set.
 _BACKGROUND_EMIT_SCOPES: WeakKeyDictionary[
     asyncio.AbstractEventLoop,
-    RuntimeEventTaskScope,
+    ReferenceType[RuntimeEventTaskScope],
 ] = WeakKeyDictionary()
 
 
 def _background_emit_scope() -> RuntimeEventTaskScope:
     """Return the detached-worker owner for the current event loop."""
     loop = asyncio.get_running_loop()
-    scope = _BACKGROUND_EMIT_SCOPES.get(loop)
+    scope_ref = _BACKGROUND_EMIT_SCOPES.get(loop)
+    scope = None if scope_ref is None else scope_ref()
     if scope is None:
         scope = RuntimeEventTaskScope(
             owner_label="webrtc-background-delivery",
@@ -122,7 +123,7 @@ def _background_emit_scope() -> RuntimeEventTaskScope:
             logger=logger,
             failure_message="Detached WebRTC delivery event worker failed",
         )
-        _BACKGROUND_EMIT_SCOPES[loop] = scope
+        _BACKGROUND_EMIT_SCOPES[loop] = ref(scope)
     return scope
 
 

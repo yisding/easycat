@@ -1317,7 +1317,11 @@ class RuntimeScope:
         return await coroutine
 
     async def _drain_cohort_signal(self, signal: RuntimeCohortSignal) -> None:
-        pending = {member.task: member for member in signal._members}
+        pending = {
+            member.task: member
+            for member in signal._members
+            if member.scope._members.get(member.task) is member
+        }
         escalated: set[asyncio.Task[Any]] = set()
         errors = [] if signal._signal_error is None else [signal._signal_error]
         current = asyncio.current_task()

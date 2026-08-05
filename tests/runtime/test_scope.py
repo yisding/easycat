@@ -1023,6 +1023,28 @@ async def test_cohort_signal_reports_selected_task_actions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cohort_signal_does_not_drain_task_after_ownership_transfer() -> None:
+    root = _attached_root("session")
+    detached = RuntimeScope(name="detached")
+    release = asyncio.Event()
+    task = root.create_task(
+        "delivery",
+        release.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.FINISH),
+    )
+    signal = root.signal_cohort("work", force=True)
+
+    root.discard(task)
+    detached.add_task("delivery", task)
+
+    await root.drain_cohort(signal)
+    assert not task.done()
+
+    release.set()
+    await detached.drain("delivery")
+
+
+@pytest.mark.asyncio
 async def test_parked_owned_member_retains_result_when_it_eventually_settles() -> None:
     root = _attached_root("session", survivor_capacity=1)
     release = asyncio.Event()
