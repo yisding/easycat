@@ -59,6 +59,7 @@ _MAX_TCP_PORT = 65535
 # second dev process (or anything sitting on 8765) gets the next free port
 # instead of permanently suppressing the UI.
 _DEV_PORT_SCAN_SPAN = 11
+_DEV_WATCHER_MEMBER_PREFIX = "debugger_dev_watcher"
 
 # Process-wide "launched once" latch. The dev opt-in fires per session start,
 # but the UI must bind a single port exactly once; subsequent sessions only
@@ -73,10 +74,6 @@ _LAUNCHED = False
 # of server modes — built downstream via ``create_session`` — show up in the
 # selector. Armed whenever dev mode is opted in (env or ``dev=True``).
 _DEV_REGISTRATION_ARMED = False
-
-# Strong refs to the per-session stop-watcher tasks so the event loop does not
-# garbage-collect a watcher mid-flight (asyncio only weakly tracks bare tasks).
-_WATCHERS: set[asyncio.Task[None]] = set()
 
 
 def dev_mode_opted_in(*, dev: bool = False) -> bool:
@@ -137,7 +134,6 @@ def reset_launch_state() -> None:
     with _LAUNCH_LOCK:
         _LAUNCHED = False
         _DEV_REGISTRATION_ARMED = False
-    _WATCHERS.clear()
 
 
 def arm_dev_session(session: Session) -> str | None:
@@ -160,12 +156,24 @@ def arm_dev_session(session: Session) -> str | None:
         return None
     registry_id = register_session(session)
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return registry_id
-    task = loop.create_task(_unregister_on_close(session))
-    _WATCHERS.add(task)
-    task.add_done_callback(_WATCHERS.discard)
+    scope = session._runtime_scope
+    member_name = f"{_DEV_WATCHER_MEMBER_PREFIX}:{registry_id}"
+    if scope.tasks(member_name):
+        return registry_id
+    try:
+        scope.create_task(
+            member_name,
+            _unregister_on_close(session),
+            task_name=member_name,
+        )
+    except RuntimeError:
+        # A Session whose root has already closed cannot become live in the
+        # debugger registry again. Match the watcher's eventual cleanup now.
+        unregister_session_obj(session)
+        logger.debug("dev session runtime is closed; registration removed")
     return registry_id
 
 

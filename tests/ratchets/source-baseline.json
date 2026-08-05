@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Periodic health checks now use attachable RuntimeTaskScope ownership and shared cancel-and-drain; one raw spawn and two local cancellation handlers removed.",
+  "rationale": "Dev debugger close watchers now attach to each Session RuntimeScope; the raw spawn and process-global watcher ledger were removed.",
   "counts": {
     "cancelled_error_handler": 99,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
-    "module_task_set": 2,
-    "raw_task_spawn": 42,
+    "module_task_set": 1,
+    "raw_task_spawn": 41,
     "shield_loop": 5,
     "task_cancelling": 52
   },
@@ -150,9 +150,7 @@
     "gather_return_exceptions\ttransports/webrtc.py\tWebRTCTransport._stop_active_offer_for_disconnect\tasyncio.gather(return_exceptions=True)\tfa27c3bc1c7b1755\t0",
     "gather_return_exceptions\ttransports/websocket.py\tWebSocketConnectionTransport._disconnect_transaction\tasyncio.gather(return_exceptions=True)\t81cfab756e8a9019\t0",
     "gather_return_exceptions\ttransports/webtransport.py\tWebTransportServer._cancel_and_reap_handler_tasks\tasyncio.gather(return_exceptions=True)\t5e7683f93dbce0ae\t0",
-    "module_task_set\tdebugger/dev.py\t<module>\tset[asyncio.Task/Future]\ta85ca02ac48045c6\t0",
     "module_task_set\tserver/transports.py\t<module>\tset[asyncio.Task/Future]\tc515d5a8ee4ee674\t0",
-    "raw_task_spawn\tdebugger/dev.py\tarm_dev_session\tloop.create_task\t9106caf915c1d263\t0",
     "raw_task_spawn\tdebugger/server.py\t_close_vad_provider_owned\tasyncio.create_task\t7ea3a2ca6795c5ba\t0",
     "raw_task_spawn\thelpers.py\t_await_session_until_shutdown\tasyncio.create_task\t11847efb85141583\t0",
     "raw_task_spawn\thelpers.py\t_await_session_until_shutdown\tasyncio.create_task\t11847efb85141583\t1",
