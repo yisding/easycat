@@ -848,6 +848,8 @@ async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -
     assert retained_cleanup.done() is False
     assert root.tasks("transport_diagnostic_cleanup") == (retained_cleanup,)
     assert "transport-events" in root.cohorts(force=False)
+    signal = root.signal_cohort("transport-events", force=True)
+    assert retained_cleanup.cancelling() == 0
     assert emit_task.cancelled() is False
     with pytest.raises(RuntimeError, match="cleanup is incomplete"):
         await transport.connect()
@@ -861,6 +863,7 @@ async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -
     assert not root.tasks("transport_diagnostic_cleanup")
     assert transport._disconnect_cleanup_pending is False
     assert transport._disconnect_cleanup_error is None
+    await root.drain_cohort(signal)
 
 
 @pytest.mark.asyncio
