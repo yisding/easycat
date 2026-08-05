@@ -507,9 +507,11 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel_count", [1, 2])
     async def test_connect_rollback_preserves_new_caller_cancellation(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        cancel_count: int,
     ) -> None:
         import easycat.transports.webrtc as webrtc_module
 
@@ -542,7 +544,9 @@ class TestWebRTCIngressQueueOwnership:
 
         connecting = asyncio.create_task(transport.connect())
         await cleanup_entered.wait()
-        connecting.cancel()
+        for _ in range(cancel_count):
+            connecting.cancel()
+            await asyncio.sleep(0)
         release_cleanup.set()
 
         with pytest.raises(asyncio.CancelledError) as exc_info:

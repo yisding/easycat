@@ -27,6 +27,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from easycat._concurrency import shielded_cleanup
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
 from easycat.audio_format import AudioChunk
@@ -37,7 +38,6 @@ from easycat.teardown_budgets import (
 from easycat.transports._base import (
     AudioQueueMixin,
     _raise_rollback_cancellation,
-    _remember_rollback_cancellation,
     make_version_info,
 )
 from easycat.transports._webrtc_audio import (
@@ -361,22 +361,16 @@ class WebRTCTransport(AudioQueueMixin):
             self._app = app
             self._runner = runner
             self._site = site
-            cleanup_task = asyncio.create_task(
-                self._rollback_failed_connect(),
-                name="webrtc-connect-rollback",
+            settlement = await shielded_cleanup(
+                self._rollback_failed_connect,
             )
-            cancellation: asyncio.CancelledError | None = None
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError as exc:
-                    cancellation = _remember_rollback_cancellation(
-                        cancellation,
-                        exc,
-                        startup_error,
-                    )
-                    continue
-            cleanup_error = cleanup_task.result()
+            cancellation = (
+                asyncio.CancelledError()
+                if settlement.cancellation_requests
+                and not isinstance(startup_error, asyncio.CancelledError)
+                else None
+            )
+            cleanup_error = settlement.error or settlement.result
             _raise_rollback_cancellation(cancellation, startup_error, cleanup_error)
             if cleanup_error is not None:
                 raise startup_error from cleanup_error
