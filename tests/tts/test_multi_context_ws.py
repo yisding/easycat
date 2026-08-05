@@ -12,6 +12,7 @@ from easycat._concurrency import RuntimeSupervisor
 from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 from easycat.tts import _multi_context_ws as multi_context_ws_module
 from easycat.tts._multi_context_ws import (
+    _READER_TASK,
     MultiContextAdapter,
     MultiContextWSManager,
 )
@@ -160,6 +161,9 @@ class TestMultiContextWSManager:
         assert connect_calls == 1
         assert mgr._ws is ws
         assert mgr._contexts == {}
+        assert mgr._reader_task in mgr._runtime_scope.tasks(_READER_TASK)
+        assert mgr._runtime_scope.cohorts(force=False) == ("tts-receive",)
+        assert mgr._runtime_scope.cohorts(force=True) == ("tts-receive",)
         await mgr.aclose()
 
     async def test_fresh_uuid_per_open_context(self):

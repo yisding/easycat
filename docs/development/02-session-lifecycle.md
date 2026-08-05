@@ -228,7 +228,7 @@ terminal journal records. It owns runtime work such as:
 - ingress and outbound loops;
 - pipeline heartbeat;
 - STT pause/commit tasks;
-- provider receive loops after their STT finalizer;
+- provider receive loops after their matching STT or TTS finalizer;
 - greeting work; and
 - post-cutoff barge-in cleanup.
 

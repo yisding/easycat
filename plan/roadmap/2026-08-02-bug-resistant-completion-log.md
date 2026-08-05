@@ -266,6 +266,7 @@ policy.
 | `manager-shutdown` | finalizer wrapping `TurnManager.shutdown()` | Follows transport disconnect. |
 | `agent-close` | finalizer wrapping `aclose_if_supported(agent)` | Follows manager shutdown and retains the existing log-and-continue policy. |
 | `audio-providers-close` | one composite finalizer over deduplicated STT/TTS/VAD/NR/AEC providers | Follows agent close; provider siblings retain no contractual total order and keep per-provider log-and-continue handling. |
+| `tts-receive` | persistent provider WebSocket receive loops | Drains after `audio-providers-close` has released the persistent socket; force may still cancel it through the earlier whole-root broadcast used by the current stop path. |
 | `identity-clear` | finalizer wrapping `TurnLifecycle.clear_identity()` | Runs after every provider sibling and before debug backend finalization. |
 | `debug-finalize` | finalizer wrapping `_finalize_debug_backends()` | Preserves the read-only journal/artifact postmortem view. |
 | `closed-publish` | finalizer wrapping `_mark_closed()` | Wakes `wait_closed()` only after live backends are finalized. |
@@ -289,6 +290,7 @@ behavior remains unbounded.
 | `call_answered_greeting` | `greeting`, no token, `cancel`, no new deadline | `greeting`, no token, `cancel`, no new deadline |
 | STT pause/segment/final-close/event-loop tasks | `stt-runtime`, no member-local token signal, current action and provider-local bounds | same cohort with the reviewed force action; the earlier `turn-token` phase supplies cooperative cancellation and no scope-level bound replaces a provider bound |
 | provider WebSocket receive loop | `stt-receive`, no token, `finish`, no scope deadline; `stt-finalize` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
+| persistent TTS WebSocket receive loop | `tts-receive`, no token, `finish`, no scope deadline; `audio-providers-close` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
 | `pipeline_heartbeat` | `heartbeat`, no token, `cancel`, no new deadline | same |
 
 The inline-send hard deadline is the one planned **[behavior change]** in this
@@ -318,10 +320,10 @@ wait above remains unbounded.
 | Force pipeline/TTS/outbound collection, synchronous cancel barrier, and task awaits | force row of `pipeline` | Every pipeline member is signalled before the first drain; siblings gain no invented total order. |
 | Force STT cleanup, remaining scoped drain, and task-handle clearing | `stt-runtime`, `stt-finalize`, and retained-result inspection | STT/runtime work finishes while providers live; handle clearing follows settlement; suppressed cleanup failures remain inspectable when policy requires it. |
 | Graceful pipeline cancellation and expected cancellation logging | graceful row of `pipeline` | Keeps the existing graceful action and diagnostic. |
-| Graceful barge-in, greeting, STT, and TTS cleanup chain | `barge-in-cleanup`, `greeting`, `stt-runtime`, `stt-finalize`, and `tts-finalize` | Preserves every WS2.7a partial-order edge without asserting sibling order. |
+| Graceful barge-in, greeting, STT, and TTS cleanup chain | `barge-in-cleanup`, `greeting`, `stt-runtime`, `stt-finalize`, `stt-receive`, and `tts-finalize` | Preserves every WS2.7a partial-order edge without asserting sibling order. |
 | `stop_ingress`, checker loop/list reset, helper stop, and conditional queue close | `ingress-stop` through `queue-close` finalizers | Exact ownership checks and error policies stay inside their wrappers. |
 | `stop_outbound`, inline-send drain, heartbeat drain, and handle clearing | `outbound` and `heartbeat` cohorts plus their small handle-clear finalizers | All outbound work precedes transport disconnect; owned survivors remain anchored and observable. |
-| Transport disconnect, manager shutdown, suppressed agent close, and deduplicated audio-provider closes | ordered resource finalizers | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract. |
+| Transport disconnect, manager shutdown, suppressed agent close, deduplicated audio-provider closes, and persistent TTS reader drain | ordered resource finalizers followed by `tts-receive` | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract, and the socket closes before its reader is joined. |
 | Identity clear, debug backend destruction/postmortem swap, closed publication, and optional emergency-export unregister | finalizers `identity-clear` through `emergency-export-release` | Journal readability and close notification retain their current order. |
 | `except BaseException` conversion into `stop_error` followed by re-raise | Session policy | Caller outcome remains primary; cancellation is stored as the existing cleanup error shape. |
 | `owns_stop` check and failed-stop EventBus poisoning | Session policy in `finally` | A superseded graceful caller cannot release the force owner's resources. |

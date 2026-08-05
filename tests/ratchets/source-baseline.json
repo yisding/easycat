@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WS2.2 attaches WebSocket STT receive loops after provider finalization",
+  "rationale": "WS2.2 attaches persistent TTS WebSocket receive loops after provider close",
   "counts": {
     "cancelled_error_handler": 112,
     "epoch_field": 17,
     "gather_return_exceptions": 30,
     "module_task_set": 4,
-    "raw_task_spawn": 82,
+    "raw_task_spawn": 81,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -250,7 +250,6 @@
     "raw_task_spawn\ttransports/webtransport.py\tWebTransportServer._wait_for_server_close\tasyncio.ensure_future\td729420541eeb6c9\t0",
     "raw_task_spawn\ttransports/webtransport.py\t_WebTransportSession.start\tasyncio.create_task\ta9c05962f74b95f4\t0",
     "raw_task_spawn\ttransports/webtransport.py\t_await_with_hard_timeout\tasyncio.ensure_future\t2197525e3944cdd4\t0",
-    "raw_task_spawn\ttts/_multi_context_ws.py\tMultiContextWSManager._ensure_socket\tasyncio.create_task\t28c2c38a8807bb6f\t0",
     "raw_task_spawn\ttts/_multi_context_ws.py\tMultiContextWSManager._put_context_item\tasyncio.create_task\t19f9bb663af72717\t0",
     "raw_task_spawn\ttts/_multi_context_ws.py\tMultiContextWSManager._put_context_item\tasyncio.create_task\t9604ed704cb69690\t0",
     "raw_task_spawn\ttts/_multi_context_ws.py\tMultiContextWSManager.aclose\tasyncio.create_task\t88c16a64a69aeec0\t0",

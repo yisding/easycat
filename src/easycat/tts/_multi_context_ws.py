@@ -51,7 +51,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
+from easycat.runtime.scope import (
+    RuntimeMemberPolicy,
+    RuntimeScope,
+    RuntimeScopeState,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,19 @@ _CANCEL_SEND_TIMEOUT = 0.5
 # A graceful close frame is best-effort too: a wedged sender must not hold the
 # connection lock and strand every close/connect waiter forever.
 _SOCKET_CLOSE_SEND_TIMEOUT = 0.5
+_READER_TASK = "tts_receive_loop"
+_TTS_RECEIVE_FINISH_POLICY = RuntimeTaskPolicy(
+    graceful=RuntimeMemberPolicy(
+        cohort="tts-receive",
+        signal_token=False,
+        task_action=RuntimeTaskAction.FINISH,
+    ),
+    force=RuntimeMemberPolicy(
+        cohort="tts-receive",
+        signal_token=False,
+        task_action=RuntimeTaskAction.FINISH,
+    ),
+)
 
 
 def validate_context_queue_maxsize(value: object, *, provider: str | None = None) -> None:
@@ -436,7 +455,12 @@ class MultiContextWSManager:
                 # exact published wrapper for the close transaction waiting on
                 # this lock; never publish a reader or report connect success.
                 raise RuntimeError("MultiContextWSManager closed during connect")
-            self._reader_task = asyncio.create_task(self._reader_loop())
+            self._reader_task = self._runtime_scope.create_task(
+                _READER_TASK,
+                self._reader_loop(),
+                task_name="tts_multi_context_reader",
+                policy=_TTS_RECEIVE_FINISH_POLICY,
+            )
 
     async def _aclose_transaction(self) -> None:
         """Run one physical close transaction after any connect owner settles."""
@@ -776,8 +800,13 @@ class MultiContextWSManager:
 
     async def _cancel_background_tasks(self) -> None:
         task = self._reader_task
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        if task is not None:
+            if task in self._runtime_scope.tasks(_READER_TASK):
+                await self._runtime_scope.cancel_and_drain(_READER_TASK)
+            elif not task.done():
+                # Compatibility for an externally supplied/test reader task;
+                # production readers are always registered above.
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
         self._reader_task = None
