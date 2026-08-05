@@ -1158,6 +1158,50 @@ async def test_force_supersession_reuses_in_flight_finalizer_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_superseded_finalizer_retains_error_when_replacement_fails_before_join() -> None:
+    root = _attached_root("session")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def finalizer() -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("detached disconnect failed")
+
+    root.add_finalizer("disconnect", finalizer)
+    graceful = asyncio.create_task(root.close(phases=("disconnect",)))
+    await started.wait()
+    force = asyncio.create_task(
+        root.close(
+            force=True,
+            phases=("missing",),
+            supersede_timeout=0.1,
+        )
+    )
+
+    with pytest.raises(ValueError, match="omit selected cohorts"):
+        await force
+    with pytest.raises(ValueError, match="omit selected cohorts"):
+        await graceful
+
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    results = root.terminal_results("disconnect")
+    assert len(results) == 1
+    assert results[0].status is RuntimeResultStatus.RAISED
+    with pytest.raises(RuntimeError, match="detached disconnect failed"):
+        results[0].unwrap()
+
+    # A later close observes the already-retained attempt without duplicating
+    # its evidence; a subsequent close may then retry the failed finalizer.
+    with pytest.raises(RuntimeError, match="detached disconnect failed"):
+        await root.close(phases=("disconnect",))
+    assert root.terminal_results("disconnect") == results
+
+
+@pytest.mark.asyncio
 async def test_cancelled_finalizer_is_retained_and_propagated_as_cancellation() -> None:
     root = _attached_root("session")
 

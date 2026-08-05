@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "WS2.1c adds reviewed ordered-finalizer and retained-result cancellation boundaries",
+  "rationale": "WS2.1c retains finalizer evidence when a superseded close controller detaches",
   "counts": {
     "cancelled_error_handler": 116,
     "epoch_field": 17,
@@ -32,7 +32,7 @@
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._drain_cohort_signal\texcept asyncio.CancelledError\t372387e5140069e5\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._observe_close_controller\texcept asyncio.CancelledError\t83dfdc4399c7cf7f\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_close\texcept asyncio.CancelledError\t6ac28f401e40a6d7\t0",
-    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_finalizer\texcept asyncio.CancelledError\ta416e45a919a81c7\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_finalizer\texcept asyncio.CancelledError\te30479465f2f062e\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._settle_cohort_member\texcept asyncio.CancelledError\t544585d4e14ab08a\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.close\texcept asyncio.CancelledError\tb8dd5cc898e117c1\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.create_journaled_task._on_done\texcept asyncio.CancelledError\t711d6ccc40f29477\t0",

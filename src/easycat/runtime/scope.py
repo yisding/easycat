@@ -343,6 +343,8 @@ class _RuntimeFinalizerNode:
     name: str
     factory: Callable[[], Coroutine[Any, Any, Any]]
     task: asyncio.Task[Any] | None = None
+    retained_task: asyncio.Task[Any] | None = None
+    retained_result: RuntimeTerminalResult | None = None
     completed: bool = False
 
 
@@ -1205,6 +1207,7 @@ class RuntimeScope:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             if current is not None and current.cancelling() > cancellation_requests:
+                task.add_done_callback(partial(node.scope._on_detached_finalizer_done, node))
                 raise
             # The finalizer itself ended as cancelled; retain and propagate it
             # as a terminal result rather than treating it as close takeover.
@@ -1215,6 +1218,28 @@ class RuntimeScope:
 
         if not task.done():  # pragma: no cover - shield only returns at settlement
             return
+        result = node.scope._retain_finalizer_result(node, task)
+        if node.task is task:
+            node.task = None
+        result.unwrap()
+
+    def _on_detached_finalizer_done(
+        self,
+        node: _RuntimeFinalizerNode,
+        task: asyncio.Task[Any],
+    ) -> None:
+        result = self._retain_finalizer_result(node, task)
+        if result.status is RuntimeResultStatus.COMPLETED and node.task is task:
+            node.task = None
+
+    def _retain_finalizer_result(
+        self,
+        node: _RuntimeFinalizerNode,
+        task: asyncio.Task[Any],
+    ) -> RuntimeTerminalResult:
+        if node.retained_task is task:
+            assert node.retained_result is not None
+            return node.retained_result
         result = _terminal_result_from_task(
             task,
             owner_id=node.scope.owner_id,
@@ -1222,10 +1247,11 @@ class RuntimeScope:
             kind=RuntimeMemberKind.FINALIZER,
         )
         node.scope._terminal_results.append(result)
-        node.task = None
+        node.retained_task = task
+        node.retained_result = result
         if result.status is RuntimeResultStatus.COMPLETED:
             node.completed = True
-        result.unwrap()
+        return result
 
     @staticmethod
     async def _invoke_finalizer(node: _RuntimeFinalizerNode) -> Any:
