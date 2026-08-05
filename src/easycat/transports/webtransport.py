@@ -237,6 +237,8 @@ _IDLE_TIMEOUT_SEC = 30.0
 _MAX_CONTROL_FRAME_BYTES = 64 * 1024
 _WEBTRANSPORT_WRITER_TASK_NAME = "webtransport_writer"
 _WEBTRANSPORT_WRITER_COHORT = "transport-write"
+_WEBTRANSPORT_HANDLER_TASK_NAME = "webtransport_handler"
+_WEBTRANSPORT_HANDLER_COHORT = "transport-handlers"
 
 # Cap on the number of streams whose purpose tag has not yet arrived.  A
 # malicious client can open many bidi streams and never write the first byte;
@@ -1792,7 +1794,14 @@ class WebTransportServer:
         # exact bound-server generation. Retrying it through a fresh call can
         # overlap two listener waiters against the same aioquic server.
         self._server_wait_closed_task: asyncio.Future[object] | None = None
-        self._handler_tasks: set[asyncio.Task[None]] = set()
+        self._handler_task_scope = RuntimeTaskScope(
+            owner_label="webtransport-server-handlers",
+            member_name=_WEBTRANSPORT_HANDLER_TASK_NAME,
+            cohort=_WEBTRANSPORT_HANDLER_COHORT,
+            logger=logger,
+            failure_message="WebTransport session handler failed",
+            drop_if_closed=False,
+        )
         # A handler task can finish after its transport's disconnect fails.
         # Keep the exact transport reachable so stop() can retry that owned
         # cleanup instead of discarding it with the completed handler task.
@@ -1818,6 +1827,15 @@ class WebTransportServer:
             )
         # Per-session transports need media settings, never the server secret.
         self._session_config = replace(config, auth_token=None)
+
+    @property
+    def _handler_tasks(self) -> set[asyncio.Task[Any]]:
+        """Compatibility view of currently owned session-handler tasks."""
+        return set(self._handler_task_scope.tasks())
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach session-handler work beneath an application lifecycle."""
+        self._handler_task_scope.attach(parent, name=name)
 
     def _can_accept_session(self) -> bool:
         """Capacity gate consulted by the protocol *before* it sends the 200.
@@ -1859,9 +1877,11 @@ class WebTransportServer:
             # now so the cap is actually enforced.
             transport.force_close(reason="session cap reached")
             return
-        task = asyncio.create_task(self._run_handler(transport))
-        self._handler_tasks.add(task)
-        task.add_done_callback(self._handler_tasks.discard)
+        task = self._handler_task_scope.create_task(
+            self._run_handler(transport),
+            task_name=f"webtransport-session-{id(transport)}",
+        )
+        assert task is not None
 
     async def start(self) -> None:
         current = asyncio.current_task()
@@ -1949,6 +1969,11 @@ class WebTransportServer:
                 raise
             except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 self._record_handler_cleanup_failure(transport, exc)
+            finally:
+                current = asyncio.current_task()
+                if current is not None and self._handler_task_scope.owns_root:
+                    self._handler_task_scope.discard_task(current)
+                await self._handler_task_scope.release_standalone_if_empty()
 
     def _record_handler_cleanup_failure(
         self,
@@ -2024,7 +2049,7 @@ class WebTransportServer:
         cooperative.
         """
         current = asyncio.current_task()
-        tasks = [task for task in self._handler_tasks if task is not current]
+        tasks = [task for task in self._handler_task_scope.tasks() if task is not current]
         for task in tasks:
             task.cancel()
         if not tasks:
@@ -2037,7 +2062,8 @@ class WebTransportServer:
             # Reap completed tasks so an exception that races teardown does
             # not become an unobserved task exception.
             await asyncio.gather(*done, return_exceptions=True)
-            self._handler_tasks.difference_update(done)
+            for task in done:
+                self._handler_task_scope.discard_task(task)
         if not pending:
             return []
         _track_background_cleanup(asyncio.gather(*pending, return_exceptions=True))
@@ -2089,6 +2115,7 @@ class WebTransportServer:
             and not self._pending_transport_cleanup
             and self._cleanup_error is None
         ):
+            await self._handler_task_scope.release_standalone_if_empty()
             return
         self._started = False
         # Tear down in-flight handlers, but never await the current task
@@ -2127,6 +2154,7 @@ class WebTransportServer:
         self._cleanup_error = cleanup_errors[0] if cleanup_errors else None
         if cleanup_errors:
             raise cleanup_errors[0]
+        await self._handler_task_scope.release_standalone_if_empty()
 
     async def serve_forever(self) -> None:
         """Convenience: start the server and block until cancelled."""
@@ -2190,6 +2218,12 @@ class WebTransportTransport(AudioQueueMixin):
         scope = self._emit_scope
         if scope is not None:
             transport._bind_runtime_scope(scope)
+
+    def _bind_server_runtime(self, server: WebTransportServer) -> None:
+        """Attach the internal server's handler work to this transport."""
+        scope = self._emit_scope
+        if scope is not None:
+            server.set_runtime_scope(scope, name="webtransport-server-runtime")
 
     async def connect(self) -> None:
         current = asyncio.current_task()
@@ -2258,6 +2292,7 @@ class WebTransportTransport(AudioQueueMixin):
         # lingering behind the one-session ``handle`` closure above.
         single_client_config = replace(self._config, max_concurrent_sessions=1)
         server = WebTransportServer(single_client_config, handle)
+        self._bind_server_runtime(server)
         self._server = server
         try:
             await server.start()

@@ -717,6 +717,9 @@ class TestWebTransportTransportConformance:
                 self._server = None
                 self._started = False
 
+            def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+                self.runtime_scope = (parent, name)
+
         monkeypatch.setattr(webtransport_module, "WebTransportServer", _CapturingServer)
         outer = WebTransportTransport(
             WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
@@ -730,6 +733,7 @@ class TestWebTransportTransportConformance:
         outer.set_runtime_scope(root, name="transport-runtime")
         await outer.connect()
         server = _CapturingServer.instances[0]
+        assert server.runtime_scope == (outer._emit_scope, "webtransport-server-runtime")
         inner = _build_connection_transport()
         await inner.connect()
         session = inner._session
