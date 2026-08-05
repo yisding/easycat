@@ -12,6 +12,7 @@ from typing import TypeVar
 import httpx
 
 from easycat._audio_utils import pcm_to_wav as _pcm_to_wav
+from easycat._concurrency import shielded_cleanup
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent
 
@@ -562,24 +563,12 @@ class STTBase:
 
     async def _finish_failed_start(self) -> asyncio.CancelledError | None:
         """Run failed-start cleanup to completion despite repeated cancellation."""
-        cancellation: asyncio.CancelledError | None = None
-        cleanup_task = asyncio.create_task(
-            self._on_start_failed(),
-            name="stt_failed_start_cleanup",
-        )
-        while not cleanup_task.done():
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as exc:
-                # The outer startup task may be cancelled more than once while
-                # cleanup is in progress. Keep ownership of the cleanup task,
-                # but preserve the first caller cancellation for delivery once
-                # the provider-owned cleanup has settled.
-                if cancellation is None:
-                    cancellation = exc
-                continue
-        cleanup_task.result()
-        return cancellation
+        settlement = await shielded_cleanup(self._on_start_failed)
+        if settlement.error is not None:
+            raise settlement.error
+        if settlement.cancellation_requests:
+            return asyncio.CancelledError()
+        return None
 
     async def _retry_failed_start_cleanup(self) -> None:
         """Finish a retained partial-start rollback before reusing the provider."""
@@ -603,23 +592,12 @@ class STTBase:
 
     async def _finish_failed_end_cleanup(self) -> asyncio.CancelledError | None:
         """Run retained end cleanup to completion despite repeated cancellation."""
-        cancellation: asyncio.CancelledError | None = None
-        cleanup_task = asyncio.create_task(
-            self._on_end_cleanup(),
-            name="stt_failed_end_cleanup",
-        )
-        while not cleanup_task.done():
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as exc:
-                # Cleanup owns external provider resources. Keep it attached to
-                # this provider until it settles even if the caller is
-                # cancelled repeatedly.
-                if cancellation is None:
-                    cancellation = exc
-                continue
-        cleanup_task.result()
-        return cancellation
+        settlement = await shielded_cleanup(self._on_end_cleanup)
+        if settlement.error is not None:
+            raise settlement.error
+        if settlement.cancellation_requests:
+            return asyncio.CancelledError()
+        return None
 
     async def _retry_failed_end_cleanup(self) -> None:
         """Release retained end resources before replacing provider state."""
