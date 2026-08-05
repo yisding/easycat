@@ -31,6 +31,33 @@ def _root(name: str) -> RuntimeScope:
     )
 
 
+def test_off_loop_attach_does_not_register_child_before_promotion_fails() -> None:
+    loop = asyncio.new_event_loop()
+    tasks = _task_scope()
+    release: asyncio.Event
+
+    async def start() -> tuple[asyncio.Event, asyncio.Task[None]]:
+        blocker = asyncio.Event()
+        task = tasks.create_task(blocker.wait(), task_name="standalone-work")
+        assert task is not None
+        return blocker, task
+
+    release, task = loop.run_until_complete(start())
+    parent = _root("off-loop-parent")
+    try:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            tasks.attach(parent, name="attached-child")
+
+        assert parent.children() == ()
+        assert tasks.scope is not None
+        assert tasks.scope.tasks("test_member") == (task,)
+    finally:
+        loop.call_soon_threadsafe(release.set)
+        loop.run_until_complete(task)
+        loop.run_until_complete(tasks.release_standalone_if_empty())
+        loop.close()
+
+
 @pytest.mark.asyncio
 async def test_bind_promotes_active_standalone_task_and_retires_old_root() -> None:
     tasks = _task_scope()

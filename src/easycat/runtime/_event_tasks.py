@@ -84,6 +84,7 @@ class RuntimeTaskScope:
                 return
             if current.tasks() and not self._owns_root:
                 raise RuntimeError("Cannot reattach event work while emissions are active")
+        self._require_promotion_loop(current)
         self._replace_scope(parent.create_child(name, default_policy=self._policy))
 
     def bind(self, scope: RuntimeScope) -> None:
@@ -93,6 +94,7 @@ class RuntimeTaskScope:
             return
         if current is not None and current.tasks() and not self._owns_root:
             raise RuntimeError("Cannot rebind event work while emissions are active")
+        self._require_promotion_loop(current)
         self._replace_scope(scope)
 
     def ensure_scope(self) -> RuntimeScope:
@@ -183,6 +185,13 @@ class RuntimeTaskScope:
             self._retired_roots.append(current)
         self._scope = scope
         self._owns_root = False
+
+    def _require_promotion_loop(self, current: RuntimeScope | None) -> None:
+        if current is None or not self._owns_root or not current.tasks(self._member_name):
+            return
+        loop = asyncio.get_running_loop()
+        if any(task.get_loop() is not loop for task in current.tasks(self._member_name)):
+            raise RuntimeError("Cannot promote runtime work across event loops")
 
     def _on_done(self, task: asyncio.Task[Any]) -> None:
         scope = self._scope
