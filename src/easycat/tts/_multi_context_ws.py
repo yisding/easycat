@@ -704,22 +704,28 @@ class MultiContextWSManager:
         except asyncio.QueueFull:
             pass
 
-        put_task = asyncio.create_task(ctx.queue.put(item))
-        done_task = asyncio.create_task(ctx.done.wait())
-        try:
+        async with asyncio.TaskGroup() as race:
+            put_task = race.create_task(
+                ctx.queue.put(item),
+                name="tts_context_queue_put",
+            )
+            done_task = race.create_task(
+                ctx.done.wait(),
+                name="tts_context_done_wait",
+            )
             done, _ = await asyncio.wait(
                 (put_task, done_task),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if put_task in done:
                 await put_task
-                return True
-            return False
-        finally:
+                queued = True
+            else:
+                queued = False
             for task in (put_task, done_task):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(put_task, done_task, return_exceptions=True)
+        return queued
 
     def _finalize_reader(self, err: BaseException | None) -> None:
         """Tear down after the reader loop exits (clean or error).
