@@ -776,14 +776,33 @@ class RuntimeScope:
                 cancellation_requests = current.cancelling()
                 try:
                     return await asyncio.shield(active)
-                except asyncio.CancelledError:
-                    if current.cancelling() > cancellation_requests:
-                        raise
+                except asyncio.CancelledError as exc:
+                    self._require_superseded_controller(
+                        active,
+                        current=current,
+                        cancellation_requests=cancellation_requests,
+                        error=exc,
+                    )
                     # A force caller cancelled the controller this caller had
                     # joined. Re-read ownership and join its replacement.
                     continue
         finally:
             self._close_joiners.discard(current)
+
+    def _require_superseded_controller(
+        self,
+        active: asyncio.Task[RuntimeScopeState],
+        *,
+        current: asyncio.Task[Any],
+        cancellation_requests: int,
+        error: asyncio.CancelledError,
+    ) -> None:
+        if current.cancelling() > cancellation_requests:
+            raise error
+        if active is self._close_task:
+            # The active controller propagated a member cancellation. Only a
+            # controller replaced by a force close is retried.
+            raise error
 
     def cancel(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
         """Cancel pending tasks and return the tasks that were targeted.
@@ -930,16 +949,35 @@ class RuntimeScope:
         if missing:
             raise ValueError(f"Runtime close phases omit selected cohorts: {missing!r}")
 
+        first_error: BaseException | None = None
         for phase in phase_order:
             signal = self.signal_cohort(
                 phase,
                 force=force,
                 _exclude_tasks=self._close_joiners,
             )
-            await self.drain_cohort(signal)
+            phase_error = await self._drain_close_phase(signal)
+            first_error = first_error or phase_error
 
         self._mark_terminal_recursive()
+        if first_error is not None:
+            raise first_error
         return self.state
+
+    async def _drain_close_phase(
+        self,
+        signal: RuntimeCohortSignal,
+    ) -> BaseException | None:
+        try:
+            await self.drain_cohort(signal)
+        except asyncio.CancelledError as exc:
+            controller = asyncio.current_task()
+            if controller is not None and controller.cancelling():
+                raise
+            return exc
+        except BaseException as exc:  # noqa: BLE001 - settle every close phase first
+            return exc
+        return None
 
     async def _drain_cohort_signal(self, signal: RuntimeCohortSignal) -> None:
         pending = {member.task: member for member in signal._members}

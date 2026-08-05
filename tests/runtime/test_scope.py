@@ -775,6 +775,45 @@ async def test_close_rejects_phase_list_that_omits_selected_member() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_propagates_cancelled_finish_member_after_marking_terminal() -> None:
+    root = _attached_root("session")
+    task = root.create_task("work", asyncio.Event().wait(), policy=_task_policy())
+    task.cancel()
+    await asyncio.sleep(0)
+
+    with pytest.raises(asyncio.CancelledError):
+        await root.close(phases=("work",))
+
+    assert root.state is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_close_settles_remaining_cohorts_before_propagating_failure() -> None:
+    root = _attached_root("session")
+    later_finished = asyncio.Event()
+
+    async def fail() -> None:
+        raise RuntimeError("cohort failed")
+
+    root.create_task("failing", fail(), policy=_task_policy(graceful_cohort="first"))
+    root.create_task(
+        "later",
+        later_finished.wait(),
+        policy=_task_policy(
+            graceful_cohort="second",
+            graceful_action=RuntimeTaskAction.CANCEL,
+        ),
+    )
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="cohort failed"):
+        await root.close(phases=("first", "second"))
+
+    assert root.state is RuntimeScopeState.CLOSED
+    assert root.empty
+
+
+@pytest.mark.asyncio
 async def test_closed_scope_rejects_all_admission_paths_without_running_factories() -> None:
     class RecordingSink:
         def __init__(self) -> None:
