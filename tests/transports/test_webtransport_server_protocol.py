@@ -799,11 +799,8 @@ class TestWebTransportServerWiring:
 
         release.set()
         await task
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
-        assert standalone.state is RuntimeScopeState.CLOSED
         await server.stop()
+        assert standalone.state is RuntimeScopeState.CLOSED
 
     @pytest.mark.asyncio
     async def test_standalone_handler_remains_visible_through_transport_cleanup(self) -> None:
@@ -838,6 +835,7 @@ class TestWebTransportServerWiring:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert not server._handler_tasks
+        await server.stop()
 
     @pytest.mark.asyncio
     async def test_can_accept_session_gate_reflects_cap(self) -> None:
