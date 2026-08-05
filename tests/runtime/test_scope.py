@@ -1137,6 +1137,29 @@ async def test_run_finalizer_retains_failure_and_retries_factory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_finalizer_rejects_new_attempt_after_close_starts() -> None:
+    root = _attached_root("session")
+    release = asyncio.Event()
+    calls = 0
+
+    async def finalizer() -> None:
+        nonlocal calls
+        calls += 1
+
+    root.create_task("work", release.wait())
+    root.add_finalizer("provider-close", finalizer)
+    closing = asyncio.create_task(root.close(phases=("default", "provider-close")))
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="is closing"):
+        await root.run_finalizer("provider-close")
+
+    release.set()
+    assert await closing is RuntimeScopeState.CLOSED
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_close_runs_finalizers_at_explicit_positions_between_cohorts() -> None:
     root = _attached_root("session")
     events: list[str] = []

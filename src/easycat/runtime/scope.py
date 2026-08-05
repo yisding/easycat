@@ -498,6 +498,7 @@ class RuntimeScope:
         """
         if not name:
             raise ValueError("RuntimeScope finalizer name must be non-empty")
+        self.root._require_open()
         node = self.root._finalizer_named(name)
         if node is None:
             raise ValueError(f"RuntimeScope finalizer {name!r} is not registered")
