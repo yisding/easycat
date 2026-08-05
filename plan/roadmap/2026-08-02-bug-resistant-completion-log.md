@@ -232,11 +232,15 @@ line numbers move.
 
 ### Scope phase plan
 
-The rewrite uses the following phase order. A task may select a different
-cohort in graceful and force mode, which preserves the force-only synchronous
-pipeline broadcast without broadening it to unrelated runtime work. Finalizer
-factories may select the existing graceful/force branch, but do not introduce
-a new timeout or error policy.
+The rewrite uses the following phase order. Before the force path awaits any
+member, it synchronously signals every scoped task whose force policy requires
+cancellation, across all cohorts. That root-wide barrier preserves the current
+ordering for pipeline, barge-in, greeting, STT, heartbeat, and other migrated
+work; phase order controls the subsequent drains and finalizers, not which
+force-cancel members observe the initial broadcast. A task may still select a
+different cohort in graceful and force mode. Finalizer factories may select the
+existing graceful/force branch, but do not introduce a new timeout or error
+policy.
 
 | phase | scope members or finalizer | preserved edge |
 |---|---|---|
@@ -244,8 +248,8 @@ a new timeout or error policy.
 | `turn-token` | finalizer wrapping the guarded active-turn token signal | Runs only after the graceful prompt has finished and skips the prompt-owned reentrant case. |
 | `text-turn` | active text-turn task | Signal the text token, cancel the task, then drain it before later teardown. No new deadline is added. |
 | `preemptive` | speculative agent-generation task | Cancel and drain before the wrapped agent can close. |
-| `pipeline` | audio ingress, active voice/TTS turn, outbound pump, and only the child work assigned to this broadcast | In force mode all members are signalled synchronously before any member is awaited. Graceful mode keeps each member's reviewed action rather than inheriting the force row. |
-| `barge-in-cleanup` | detached barge-in cleanup task | Graceful finish keeps providers, transport, and journal live. Its force row cancels and drains it without widening the pipeline barrier. |
+| `pipeline` | audio ingress, active voice/TTS turn, outbound pump, and child work assigned to this cohort | Its force-cancel members participate in the root-wide synchronous signal barrier before any cohort is drained. Graceful mode keeps each member's reviewed action rather than inheriting the force row. |
+| `barge-in-cleanup` | detached barge-in cleanup task | Graceful finish keeps providers, transport, and journal live. Its force row participates in the initial root-wide signal barrier, then cancels and drains in this phase. |
 | `greeting` | call-answered greeting task | Preserves the current cancel/drain point before STT cleanup. |
 | `stt-runtime` | pause commit, segment commit, concurrent final close, and event consumer | Drains before the STT provider finalizer; provider-local timeout/error handling stays inside `STTCommitter`. |
 | `stt-finalize` | finalizer wrapping `STTCommitter.cancel()` and handle clearing | Runs while providers, transport, and journal are live. |
