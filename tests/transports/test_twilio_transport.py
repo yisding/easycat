@@ -25,6 +25,7 @@ from easycat.events import (
     PlaybackMarkAck,
     TransportDegraded,
 )
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.telephony import compute_twilio_webhook_signature
 from easycat.transports._base import ServerTransportBase
 from easycat.transports.twilio_media import (
@@ -891,6 +892,29 @@ class TestTwilioStreamTokenValidation:
         assert transport._receive_task is receive_task
         await transport.disconnect()
         assert transport._socket_close_pending is False
+        assert ws.closed_with == ()
+
+    @pytest.mark.asyncio
+    async def test_receive_task_uses_attached_transport_scope(self) -> None:
+        ws = _ScriptedTwilioWebSocket()
+        transport = TwilioConnectionTransport(ws)
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:twilio-receive",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        transport.set_runtime_scope(root, name="transport-runtime")
+
+        await transport.connect()
+        await ws.entered.wait()
+
+        assert root.tasks("twilio_receive") == (transport._receive_task,)
+        assert "transport-receive" in root.cohorts(force=False)
+
+        await transport.disconnect()
+
+        assert not root.tasks("twilio_receive")
         assert ws.closed_with == ()
 
     @pytest.mark.asyncio

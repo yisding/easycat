@@ -38,7 +38,8 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
 )
-from easycat.runtime.scope import BackgroundTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
 from easycat.transports._base import (
     AudioQueueMixin,
@@ -58,6 +59,8 @@ _DEGRADED_TWILIO_TIMESTAMP_GAP = "twilio_timestamp_gap"
 _TWILIO_MULAW_BYTES_PER_MS = 8
 _TWILIO_STREAM_TOKEN_TIME_SCALE = 1_000_000_000
 TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
+_TWILIO_RECEIVE_TASK_NAME = "twilio_receive"
+_TWILIO_RECEIVE_COHORT = "transport-receive"
 
 
 def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
@@ -1460,6 +1463,14 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         # initializes the queue and diagnostics machinery.
         self._event_bus = event_bus
         self._receive_task: asyncio.Task[None] | None = None
+        self._receive_tasks = RuntimeTaskScope(
+            owner_label="twilio-connection-receive",
+            member_name=_TWILIO_RECEIVE_TASK_NAME,
+            cohort=_TWILIO_RECEIVE_COHORT,
+            logger=logger,
+            failure_message="Twilio receive loop failed",
+            drop_if_closed=False,
+        )
         self._pending_start_message: dict[str, Any] | None = None
         self._pending_start_claims: dict[str, str] | None = None
         self._connection_generation = 0
@@ -1488,6 +1499,13 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
             resolved_config.max_pending_bytes,
         )
         self._init_twilio_protocol(resolved_config, event_bus)
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach receive and event work to the owning transport scope."""
+        super().set_runtime_scope(parent, name=name)
+        scope = self._emit_scope
+        assert scope is not None
+        self._receive_tasks.bind(scope)
 
     def _current_ws(self) -> ServerConnection | None:
         return self._ws
@@ -1565,7 +1583,12 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
                         self._clear_connection_metadata()
                         self._enqueue_sentinel()
                         raise ConnectionError("Twilio transport disconnected during connect")
-                    self._receive_task = asyncio.create_task(self._receive_loop())
+                    receive_task = self._receive_tasks.create_task(
+                        self._receive_loop(),
+                        task_name="twilio-connection-receive",
+                    )
+                    assert receive_task is not None
+                    self._receive_task = receive_task
                 finally:
                     self._lifecycle_owner = None
                     self._lifecycle_action = None
