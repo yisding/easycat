@@ -420,8 +420,7 @@ async def test_connection_transport_disconnect_emit_observer_does_not_join_itsel
     await ws.close_started.wait()
 
     reentrant = asyncio.create_task(transport.disconnect())
-    transport._emit_tasks.add(reentrant)
-    reentrant.add_done_callback(transport._emit_tasks.discard)
+    transport._track_emit_task(reentrant)
     await asyncio.wait_for(reentrant, timeout=1)
 
     ws.release_close.set()
@@ -438,8 +437,7 @@ async def test_connection_transport_emit_observer_can_initiate_disconnect():
     transport._connected = True
 
     initiated = asyncio.create_task(transport.disconnect())
-    transport._emit_tasks.add(initiated)
-    initiated.add_done_callback(transport._emit_tasks.discard)
+    transport._track_emit_task(initiated)
 
     await asyncio.wait_for(initiated, timeout=1)
 
@@ -779,8 +777,7 @@ async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -
         await release_emit.wait()
 
     emit_task = asyncio.create_task(pending_emit())
-    transport._emit_tasks.add(emit_task)
-    emit_task.add_done_callback(transport._emit_tasks.discard)
+    transport._track_emit_task(emit_task)
 
     disconnecting = asyncio.create_task(transport.disconnect())
     await emit_started.wait()

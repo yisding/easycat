@@ -574,10 +574,7 @@ class LocalTransport(AudioQueueMixin):
                 return
             if self._event_bus is None:
                 return
-            # Retain the emit task so it is not GC'd mid-flight before the
-            # AudioRouter sees the TransportAudioDelivered event (matches the
-            # ``AudioQueueMixin._emit_tasks`` pattern used elsewhere).
-            task = loop.create_task(
+            self._create_emit_task(
                 self._event_bus.emit(
                     TransportAudioDelivered(
                         chunk=queued.chunk,
@@ -585,10 +582,9 @@ class LocalTransport(AudioQueueMixin):
                         turn_id=queued.turn_id,
                         turn_ref=queued.turn_ref,
                     )
-                )
+                ),
+                task_name="local:audio-delivered-emit",
             )
-            self._emit_tasks.add(task)
-            task.add_done_callback(self._emit_tasks.discard)
 
         try:
             loop.call_soon_threadsafe(_emit)

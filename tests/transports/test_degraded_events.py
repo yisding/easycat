@@ -17,6 +17,7 @@ import websockets.exceptions
 import websockets.frames
 
 from easycat.events import EventBus, TransportDegraded
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.transports._base import (
     _DEGRADED_EMIT_MIN_INTERVAL_SECONDS,
     _DEGRADED_INBOUND_QUEUE_FULL,
@@ -62,6 +63,56 @@ class _MixinHarness(AudioQueueMixin):
 
 
 class TestSharedEmitSeam:
+    @pytest.mark.asyncio
+    async def test_attached_runtime_scope_finishes_transport_events(self) -> None:
+        h = _MixinHarness(max_pending=1)
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:transport-events",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        h.set_runtime_scope(root, name="transport-runtime")
+        bus = EventBus()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _handler(_event: TransportDegraded) -> None:
+            entered.set()
+            await release.wait()
+
+        bus.subscribe(TransportDegraded, _handler)
+        h._event_bus = bus
+        h._emit_degraded("test", "scope ownership")
+
+        await entered.wait()
+        assert h._emit_scope is not None
+        assert h._emit_scope.parent is root
+        assert h._emit_scope.name == "transport-runtime"
+        assert root.tasks("transport_event_emit")
+
+        closing = asyncio.create_task(root.close(phases=("transport-events",)))
+        await asyncio.sleep(0)
+        assert not closing.done()
+        release.set()
+        await closing
+
+        assert not h._emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_standalone_drain_releases_local_runtime_root(self) -> None:
+        h = _MixinHarness(max_pending=1)
+        bus, received = _bus_with_collector()
+        h._event_bus = bus
+
+        h._emit_degraded("test", "standalone ownership")
+        assert h._owns_emit_root is True
+        await h._drain_emit_tasks()
+
+        assert [event.reason for event in received] == ["test"]
+        assert h._emit_scope is None
+        assert h._owns_emit_root is False
+
     @pytest.mark.asyncio
     async def test_enqueue_chunk_full_emits_inbound_queue_full(self) -> None:
         h = _MixinHarness(max_pending=1)

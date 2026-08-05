@@ -184,8 +184,7 @@ class _LocalLifecycleDriver:
             self.publications.append(generation)
 
             blocker = asyncio.create_task(asyncio.Event().wait())
-            self.transport._emit_tasks.add(blocker)
-            blocker.add_done_callback(self.transport._emit_tasks.discard)
+            self.transport._track_emit_task(blocker)
             await asyncio.sleep(0)
             disconnecting = asyncio.create_task(self.transport.disconnect())
             await asyncio.sleep(0)

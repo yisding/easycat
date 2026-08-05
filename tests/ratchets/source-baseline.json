@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WS2.2 gives reconnect connector and late cleanup tasks durable BackgroundTaskScope ownership",
+  "rationale": "Transport event tasks moved under RuntimeScope; two raw spawns removed.",
   "counts": {
     "cancelled_error_handler": 112,
     "epoch_field": 17,
     "gather_return_exceptions": 25,
     "module_task_set": 4,
-    "raw_task_spawn": 71,
+    "raw_task_spawn": 69,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -218,13 +218,11 @@
     "raw_task_spawn\ttelephony/voicemail.py\tPostScreeningVoicemailDetector._start_timeout\tloop.create_task\t137e70a1def4f350\t0",
     "raw_task_spawn\ttesting/contracts.py\tSTTProviderContractSuite.test_events_iterator_is_fresh_across_turns._cycle\tasyncio.create_task\tb4f397ab24f33ed2\t0",
     "raw_task_spawn\ttesting/contracts.py\tSTTProviderContractSuite.test_segment_commit_reports_boolean_acceptance\tasyncio.create_task\t483cedf93995a529\t0",
-    "raw_task_spawn\ttransports/_base.py\tAudioQueueMixin._emit_degraded\tloop.create_task\t11375d628fba9f0f\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._drain_diagnostics_for_disconnect\tasyncio.create_task\t54018eae3c55d241\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._start_server_wait_for_disconnect\tasyncio.ensure_future\t576a160d35378590\t0",
     "raw_task_spawn\ttransports/_browser_events.py\tBrowserEventForwarder._ensure_writer\tasyncio.create_task\tb1550486b6e21220\t0",
     "raw_task_spawn\ttransports/_browser_events.py\tBrowserEventForwarder._send_payload\tasyncio.create_task\t92ca7670c1cf586a\t0",
     "raw_task_spawn\ttransports/_webrtc_audio.py\tOutboundAudioSource._queue_delivery_events\tasyncio.create_task\t58cba564a14e3f25\t0",
-    "raw_task_spawn\ttransports/local.py\tLocalTransport._schedule_audio_delivery._emit\tloop.create_task\tecf4e733728dfc61\t0",
     "raw_task_spawn\ttransports/twilio_media.py\tTwilioConnectionTransport._connect_transaction\tasyncio.create_task\tf00d30d16d61c102\t0",
     "raw_task_spawn\ttransports/twilio_media.py\tTwilioConnectionTransport.connect\tasyncio.create_task\tcc73f973590f64cb\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\tasyncio.create_task\t9b98632a4c893ab3\t0",
