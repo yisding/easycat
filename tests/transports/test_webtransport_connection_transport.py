@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -236,6 +237,30 @@ class TestWebTransportConnectionTransport:
 
         assert session._writer_tasks.scope is None
         assert session._writer_tasks.owns_root is False
+
+    @pytest.mark.asyncio
+    async def test_connected_writer_promotes_into_attached_transport_scope(self) -> None:
+        transport = _build_connection_transport()
+        session = transport._session
+        assert session is not None
+        await transport.connect()
+        standalone = session._writer_tasks.scope
+        assert standalone is not None
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webtransport-late-attachment",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+
+        transport.set_runtime_scope(root, name="transport-runtime")
+
+        assert standalone.tasks("webtransport_writer") == ()
+        assert root.tasks("webtransport_writer") == (session._writer_task,)
+
+        await transport.disconnect()
+
+        assert standalone.state.value == "closed"
 
     @pytest.mark.asyncio
     async def test_clear_audio_drains_outbound_queue(self) -> None:
@@ -668,6 +693,62 @@ class TestWebTransportTransportConformance:
         assert transport._server is _BlockingServer.instances[0]
         assert transport._connected is True
         await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_internal_connection_shares_wrapper_runtime_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _CapturingServer:
+            instances: list[_CapturingServer] = []  # noqa: RUF012
+
+            def __init__(self, _config: object, handler: Any) -> None:
+                self.handler = handler
+                self._cleanup_error = None
+                self._server: object | None = None
+                self._started = False
+                self.instances.append(self)
+
+            async def start(self) -> None:
+                self._server = object()
+                self._started = True
+
+            async def stop(self) -> None:
+                self._server = None
+                self._started = False
+
+        monkeypatch.setattr(webtransport_module, "WebTransportServer", _CapturingServer)
+        outer = WebTransportTransport(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
+        )
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webtransport-wrapper",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        outer.set_runtime_scope(root, name="transport-runtime")
+        await outer.connect()
+        server = _CapturingServer.instances[0]
+        inner = _build_connection_transport()
+        await inner.connect()
+        session = inner._session
+        assert session is not None
+        standalone = session._writer_tasks.scope
+        assert standalone is not None
+
+        handling = asyncio.create_task(server.handler(inner))
+        await asyncio.sleep(0)
+
+        assert outer._active is inner
+        assert root.tasks("webtransport_writer") == (session._writer_task,)
+        assert standalone.tasks("webtransport_writer") == ()
+
+        await inner.disconnect()
+        await handling
+        await outer.disconnect()
+
+        assert standalone.state.value == "closed"
 
     @pytest.mark.asyncio
     async def test_disconnect_waits_for_connect_and_cleans_the_same_server(

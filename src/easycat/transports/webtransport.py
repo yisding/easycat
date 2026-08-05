@@ -1446,6 +1446,11 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         assert scope is not None
         self._writer_tasks.bind(scope)
 
+    def _bind_runtime_scope(self, scope: RuntimeScope) -> None:
+        """Share an existing transport child with a wrapper owner."""
+        self._event_tasks.bind(scope)
+        self._writer_tasks.bind(scope)
+
     # ── Transport protocol ────────────────────────────────────────
 
     @property
@@ -2180,6 +2185,12 @@ class WebTransportTransport(AudioQueueMixin):
     def audio_format(self) -> AudioFormat:
         return self._audio_format
 
+    def _bind_connection_runtime(self, transport: WebTransportConnectionTransport) -> None:
+        """Attach an accepted connection to this wrapper's transport child."""
+        scope = self._emit_scope
+        if scope is not None:
+            transport._bind_runtime_scope(scope)
+
     async def connect(self) -> None:
         current = asyncio.current_task()
         if current is not None and self._lifecycle_owner is current:
@@ -2221,6 +2232,7 @@ class WebTransportTransport(AudioQueueMixin):
                     "Rejecting additional WebTransport client (only one session supported)"
                 )
                 return
+            self._bind_connection_runtime(transport)
             self._active = transport
             # Forward the (late-attached) session bus so the inner session's
             # drop/poison/abort conditions are journaled in this path too.
