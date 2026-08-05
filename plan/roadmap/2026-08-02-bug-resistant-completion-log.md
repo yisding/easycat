@@ -263,6 +263,7 @@ policy.
 | `outbound` | outbound pump, AEC-degraded emit, and the audio-router inline-send child scope | Drains before transport disconnect. Cancellation-resistant inline sends keep their supervisor reservation and use the reviewed owned-task hard-deadline/parking path. |
 | `heartbeat` | pipeline heartbeat task | Settles after outbound shutdown and before transport disconnect. |
 | `transport-disconnect` | finalizer wrapping `transport.disconnect()` | Transport remains connected until outbound and inline writes settle or park. |
+| `transport-write` | transport connection protocol writer loops | Accounts for writers settled by transport disconnect before receive and event drains. |
 | `transport-receive` | transport connection receive loops | Accounts for readers settled by transport disconnect before event drains and manager shutdown. |
 | `transport-events` | transport diagnostic and delivery event tasks | Finishes best-effort event dispatch after disconnect has stopped new transport work and before manager shutdown. |
 | `supervisor-events` | supervisor listener audit event tasks | Finishes Session-attached audit dispatch before manager shutdown; standalone broadcaster drains keep the same boundary. |
@@ -297,6 +298,7 @@ behavior remains unbounded.
 | persistent TTS WebSocket receive loop | `tts-receive`, no token, `finish`, no scope deadline; `audio-providers-close` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
 | `pipeline_heartbeat` | `heartbeat`, no token, `cancel`, no new deadline | same |
 | transport diagnostic and delivery event tasks | `transport-events`, no token, `finish`, no new deadline | same |
+| transport connection protocol writer loops | `transport-write`, no token, `finish`, no new deadline; `transport-disconnect` settles the writer first | same |
 | transport connection receive loops | `transport-receive`, no token, `finish`, no new deadline; `transport-disconnect` settles the reader first | same |
 | supervisor listener audit event tasks | `supervisor-events`, no token, `finish`, no new deadline | same |
 
@@ -330,7 +332,7 @@ wait above remains unbounded.
 | Graceful barge-in, greeting, STT, and TTS cleanup chain | `barge-in-cleanup`, `greeting`, `stt-runtime`, `stt-finalize`, `stt-receive`, and `tts-finalize` | Preserves every WS2.7a partial-order edge without asserting sibling order. |
 | `stop_ingress`, checker loop/list reset, helper stop, and conditional queue close | `ingress-stop` through `queue-close` finalizers | Exact ownership checks and error policies stay inside their wrappers. |
 | `stop_outbound`, inline-send drain, heartbeat drain, and handle clearing | `outbound` and `heartbeat` cohorts plus their small handle-clear finalizers | All outbound work precedes transport disconnect; owned survivors remain anchored and observable. |
-| Transport disconnect and receive/event drains, supervisor audit drain, manager shutdown, suppressed agent close, deduplicated audio-provider closes, and persistent TTS reader drain | ordered resource finalizers plus `transport-receive`, `transport-events`, and `supervisor-events`, followed by `tts-socket-close` and `tts-receive` | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract, the explicit socket-close phase reuses the provider-triggered finalizer result, and the socket closes before its reader is joined. |
+| Transport disconnect and write/receive/event drains, supervisor audit drain, manager shutdown, suppressed agent close, deduplicated audio-provider closes, and persistent TTS reader drain | ordered resource finalizers plus `transport-write`, `transport-receive`, `transport-events`, and `supervisor-events`, followed by `tts-socket-close` and `tts-receive` | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract, the explicit socket-close phase reuses the provider-triggered finalizer result, and each socket closes before its I/O worker is joined. |
 | Identity clear, debug backend destruction/postmortem swap, closed publication, and optional emergency-export unregister | finalizers `identity-clear` through `emergency-export-release` | Journal readability and close notification retain their current order. |
 | `except BaseException` conversion into `stop_error` followed by re-raise | Session policy | Caller outcome remains primary; cancellation is stored as the existing cleanup error shape. |
 | `owns_stop` check and failed-stop EventBus poisoning | Session policy in `finally` | A superseded graceful caller cannot release the force owner's resources. |

@@ -110,6 +110,8 @@ from easycat._extras import require_module
 from easycat._net import normalize_auth_token
 from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime.scope import RuntimeScope
 from easycat.teardown_budgets import SERVER_FORCE_SHUTDOWN_TIMEOUT_S
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # noqa: PLC0414 compatibility export
@@ -233,6 +235,8 @@ _IDLE_TIMEOUT_SEC = 30.0
 # reject crafted length prefixes (a malicious uint32 can advertise up to 4 GB
 # and pin app-side buffers indefinitely while bytes trickle in).
 _MAX_CONTROL_FRAME_BYTES = 64 * 1024
+_WEBTRANSPORT_WRITER_TASK_NAME = "webtransport_writer"
+_WEBTRANSPORT_WRITER_COHORT = "transport-write"
 
 # Cap on the number of streams whose purpose tag has not yet arrived.  A
 # malicious client can open many bidi streams and never write the first byte;
@@ -527,6 +531,7 @@ class _WebTransportSession:
         out_queue: asyncio.Queue[AudioChunk | None],
         on_close: asyncio.Event,
         emit_degraded: _DegradedEmitter | None = None,
+        writer_tasks: RuntimeTaskScope | None = None,
     ) -> None:
         self._h3 = h3
         # Surfaces drop / poison / abort conditions on the session event bus
@@ -556,6 +561,14 @@ class _WebTransportSession:
         self._in_queue = in_queue
         self._out_queue = out_queue
         self._on_close = on_close
+        self._writer_tasks = writer_tasks or RuntimeTaskScope(
+            owner_label="webtransport-session-writer",
+            member_name=_WEBTRANSPORT_WRITER_TASK_NAME,
+            cohort=_WEBTRANSPORT_WRITER_COHORT,
+            logger=logger,
+            failure_message="WebTransport outbound writer failed",
+            drop_if_closed=False,
+        )
 
         # Client-opened stream ids (server reads from these halves).
         self._inbound_audio_stream_id: int | None = None
@@ -583,7 +596,12 @@ class _WebTransportSession:
         return self._session_id
 
     async def start(self) -> None:
-        self._writer_task = asyncio.create_task(self._outbound_writer())
+        writer_task = self._writer_tasks.create_task(
+            self._outbound_writer(),
+            task_name="webtransport-outbound-writer",
+        )
+        assert writer_task is not None
+        self._writer_task = writer_task
         self._send_control({"type": "ready"})
 
     async def stop(self) -> None:
@@ -600,6 +618,7 @@ class _WebTransportSession:
                 raise asyncio.CancelledError
         self._writer_task = None
         self._inbound_resampler.reset()
+        await self._writer_tasks.release_standalone_if_empty()
 
     def handle_stream_data(self, stream_id: int, data: bytes, ended: bool) -> None:
         if stream_id in self._rejected_stream_ids:
@@ -1380,6 +1399,14 @@ class WebTransportConnectionTransport(AudioQueueMixin):
             maxsize=self._config.outbound_max_pending,
         )
         self._on_close = asyncio.Event()
+        self._writer_tasks = RuntimeTaskScope(
+            owner_label="webtransport-connection-writer",
+            member_name=_WEBTRANSPORT_WRITER_TASK_NAME,
+            cohort=_WEBTRANSPORT_WRITER_COHORT,
+            logger=logger,
+            failure_message="WebTransport outbound writer failed",
+            drop_if_closed=False,
+        )
         # Cleanup ownership survives the public connected-state flip. A failed
         # provider/session stop must remain retryable instead of making the next
         # disconnect silently return.
@@ -1408,8 +1435,16 @@ class WebTransportConnectionTransport(AudioQueueMixin):
                 out_queue=self._out_queue,
                 on_close=self._on_close,
                 emit_degraded=self._emit_degraded,
+                writer_tasks=self._writer_tasks,
             )
             self._needs_external_session = False
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach writer and event work to the owning transport scope."""
+        super().set_runtime_scope(parent, name=name)
+        scope = self._emit_scope
+        assert scope is not None
+        self._writer_tasks.bind(scope)
 
     # ── Transport protocol ────────────────────────────────────────
 

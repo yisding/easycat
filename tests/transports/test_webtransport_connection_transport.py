@@ -10,6 +10,7 @@ import pytest
 import easycat.transports.webtransport as webtransport_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.providers import Transport
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.transports.webtransport import (
     _MAX_STREAM_DATA,
     _OUTBOUND_SEND_BUFFER_HIGH_WATER,
@@ -198,6 +199,43 @@ class TestWebTransportConnectionTransport:
         assert t._session_stop_pending is False
         assert t._connection_close_pending is False
         assert t._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
+    async def test_writer_uses_attached_transport_scope(self) -> None:
+        transport = _build_connection_transport()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webtransport-writer",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        transport.set_runtime_scope(root, name="transport-runtime")
+
+        await transport.connect()
+        session = transport._session
+        assert session is not None
+
+        assert root.tasks("webtransport_writer") == (session._writer_task,)
+        assert "transport-write" in root.cohorts(force=False)
+
+        await transport.disconnect()
+
+        assert not root.tasks("webtransport_writer")
+
+    @pytest.mark.asyncio
+    async def test_standalone_writer_releases_local_runtime_root(self) -> None:
+        transport = _build_connection_transport()
+        session = transport._session
+        assert session is not None
+
+        await transport.connect()
+
+        assert session._writer_tasks.owns_root is True
+
+        await transport.disconnect()
+
+        assert session._writer_tasks.scope is None
+        assert session._writer_tasks.owns_root is False
 
     @pytest.mark.asyncio
     async def test_clear_audio_drains_outbound_queue(self) -> None:
