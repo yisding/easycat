@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Browser event writers and sends moved to transport RuntimeEventTaskScopes; two raw spawns and one cancellation handler removed.",
+  "rationale": "WebSocket connection leadership transactions moved to BackgroundTaskScope; two raw spawns removed.",
   "counts": {
     "cancelled_error_handler": 111,
     "epoch_field": 17,
     "gather_return_exceptions": 24,
     "module_task_set": 3,
-    "raw_task_spawn": 65,
+    "raw_task_spawn": 63,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -222,8 +222,6 @@
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\tasyncio.ensure_future\t51eac5dd6d9dade1\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked\tasyncio.create_task\t3f84358545e6973f\t0",
     "raw_task_spawn\ttransports/websocket.py\tWebSocketConnectionTransport._connect_transaction\tasyncio.create_task\t8b8149bc7ab52b58\t0",
-    "raw_task_spawn\ttransports/websocket.py\tWebSocketConnectionTransport.connect\tasyncio.create_task\tf5f0540ef165ab32\t0",
-    "raw_task_spawn\ttransports/websocket.py\tWebSocketConnectionTransport.disconnect\tasyncio.create_task\t2df1e81600b442ec\t0",
     "raw_task_spawn\ttransports/webtransport.py\tWebTransportConnectionTransport._connect_unlocked\tasyncio.create_task\t11298102cb640373\t0",
     "raw_task_spawn\ttransports/webtransport.py\tWebTransportServer._dispatch_session\tasyncio.create_task\te4b674573a8365fb\t0",
     "raw_task_spawn\ttransports/webtransport.py\tWebTransportServer._wait_for_server_close\tasyncio.ensure_future\td729420541eeb6c9\t0",

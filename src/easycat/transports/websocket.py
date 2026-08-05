@@ -25,6 +25,7 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.runtime.scope import BackgroundTaskScope
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
     SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
@@ -406,6 +407,7 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         self._receive_task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
         self._disconnect_task: asyncio.Task[None] | None = None
+        self._lifecycle_tasks = BackgroundTaskScope(name="websocket-connection-lifecycle")
         self._connection_generation = 0
         # The constructor-supplied accepted socket supports one lifecycle.
         # Once connect starts, remote EOF or local teardown is terminal; a
@@ -429,9 +431,10 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         connect_task = self._connect_task
         leader = connect_task is None or connect_task.done()
         if leader:
-            connect_task = asyncio.create_task(
+            connect_task = self._lifecycle_tasks.create_task(
+                "websocket-connection-connect",
                 self._connect_transaction(),
-                name="websocket-connection-connect",
+                log_errors=False,
             )
             self._connect_task = connect_task
         assert connect_task is not None
@@ -506,9 +509,10 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         leader = disconnect_task is None or disconnect_task.done()
         if leader:
             emit_initiator = current if current in self._emit_tasks else None
-            disconnect_task = asyncio.create_task(
+            disconnect_task = self._lifecycle_tasks.create_task(
+                "websocket-connection-disconnect",
                 self._disconnect_transaction(emit_initiator=emit_initiator),
-                name="websocket-connection-disconnect",
+                log_errors=False,
             )
             self._disconnect_task = disconnect_task
         assert disconnect_task is not None

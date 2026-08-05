@@ -306,6 +306,7 @@ async def test_connection_transport_concurrent_connects_share_ready_failure():
 
     assert not second.done()
     assert transport._receive_task is None
+    assert transport._lifecycle_tasks.active("websocket-connection-connect")
 
     ws.release_send.set()
     with pytest.raises(RuntimeError, match="ready send failed"):
@@ -313,6 +314,7 @@ async def test_connection_transport_concurrent_connects_share_ready_failure():
     with pytest.raises(RuntimeError, match="ready send failed"):
         await second
 
+    assert not transport._lifecycle_tasks.active("websocket-connection-connect")
     assert transport.is_connected is False
     assert transport._ws is ws
     await transport.disconnect()
@@ -345,6 +347,7 @@ async def test_connection_transport_concurrent_disconnects_share_close_failure()
 
     assert not second.done()
     assert ws.close_calls == 1
+    assert transport._lifecycle_tasks.active("websocket-connection-disconnect")
 
     ws.release_close.set()
     with pytest.raises(RuntimeError, match="socket close failed"):
@@ -352,6 +355,7 @@ async def test_connection_transport_concurrent_disconnects_share_close_failure()
     with pytest.raises(RuntimeError, match="socket close failed"):
         await second
 
+    assert not transport._lifecycle_tasks.active("websocket-connection-disconnect")
     assert ws.close_calls == 1
     assert transport._ws is ws
     assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
