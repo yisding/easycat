@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Call-screening agent fallback timers moved to BackgroundTaskScope; one raw spawn and local cancellation handler removed.",
+  "rationale": "Outbound hold-audio synthesis moved to BackgroundTaskScope; one raw spawn and redundant cancellation handler removed.",
   "counts": {
-    "cancelled_error_handler": 104,
+    "cancelled_error_handler": 103,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
     "module_task_set": 2,
-    "raw_task_spawn": 46,
+    "raw_task_spawn": 45,
     "shield_loop": 7,
     "task_cancelling": 54
   },
@@ -15,7 +15,6 @@
     "cancelled_error_handler\t_health_check.py\tPeriodicHealthChecker.stop\texcept asyncio.CancelledError\ta416e45a919a81c7\t0",
     "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring._on_screening_response\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.flush_gated_audio\texcept asyncio.CancelledError\t33f32c219378ec96\t0",
-    "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.play_hold_audio._synthesize_hold\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tdebugger/server.py\t_close_vad_provider_owned\texcept asyncio.CancelledError\t176fdac4980daaaf\t0",
     "cancelled_error_handler\tintegrations/agents/_agent_runner.py\tclose_stream_after_done\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._best_effort_cancel\texcept asyncio.CancelledError\t531dafdd8d833e12\t0",
@@ -158,7 +157,6 @@
     "module_task_set\tdebugger/dev.py\t<module>\tset[asyncio.Task/Future]\ta85ca02ac48045c6\t0",
     "module_task_set\tserver/transports.py\t<module>\tset[asyncio.Task/Future]\tc515d5a8ee4ee674\t0",
     "raw_task_spawn\t_health_check.py\tPeriodicHealthChecker.start\tloop.create_task\t1076f3132fae749e\t0",
-    "raw_task_spawn\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.play_hold_audio\tloop.create_task\tdc9dd57b1b342b61\t0",
     "raw_task_spawn\tdebugger/dev.py\tarm_dev_session\tloop.create_task\t9106caf915c1d263\t0",
     "raw_task_spawn\tdebugger/server.py\t_close_vad_provider_owned\tasyncio.create_task\t7ea3a2ca6795c5ba\t0",
     "raw_task_spawn\thelpers.py\t_await_session_until_shutdown\tasyncio.create_task\t11847efb85141583\t0",
