@@ -397,7 +397,7 @@ def _exposure_reasons(
 def _pending_cohort_report(cohort: dict[str, Any], reason: str) -> dict[str, Any]:
     return {
         "cohort_id": cohort["id"],
-        "gate": cohort["gate"],
+        "observation": cohort["observation"],
         "anchor_status": cohort["anchor"]["status"],
         "result": "insufficient_data",
         "reasons": [reason],
@@ -637,7 +637,7 @@ def _cohort_report(
         decision_reasons = ["all_registered_conditions_passed"]
     return {
         "cohort_id": cohort["id"],
-        "gate": cohort["gate"],
+        "observation": cohort["observation"],
         "anchor_status": anchor["status"],
         "result": result,
         "reasons": decision_reasons,
@@ -647,207 +647,9 @@ def _cohort_report(
     }
 
 
-def _incident_review_reasons(
-    identifier: Any,
-    reviewed_at_raw: Any,
-    occurred_at: datetime,
-    as_of: datetime,
-) -> list[str]:
-    try:
-        reviewed_at = parse_utc(reviewed_at_raw)
-    except (TypeError, ValueError):
-        return [f"incident_invalid_reviewed_at:{identifier}"]
-    reasons: list[str] = []
-    if reviewed_at < occurred_at:
-        reasons.append(f"incident_review_before_occurrence:{identifier}")
-    if reviewed_at > as_of:
-        reasons.append(f"incident_review_after_as_of:{identifier}")
-    return reasons
-
-
-def _validate_soak_incident(
-    incident: dict[str, Any],
-    window: dict[str, str],
-    as_of: datetime,
-    cohort_reviewers: dict[str, str],
-) -> tuple[list[str], bool]:
-    identifier = incident.get("id")
-    required = (
-        "id",
-        "severity",
-        "cohort_id",
-        "slice",
-        "occurred_at",
-        "source",
-        "evidence",
-        "attribution",
-        "rationale",
-        "reviewer",
-        "reviewed_at",
-    )
-    if not all(incident.get(field) for field in required):
-        return [f"incident_incomplete:{identifier}"], False
-    try:
-        occurred_at = parse_utc(incident["occurred_at"])
-    except (TypeError, ValueError):
-        return [f"incident_invalid_timestamp:{identifier}"], False
-    reasons = _incident_review_reasons(
-        identifier,
-        incident["reviewed_at"],
-        occurred_at,
-        as_of,
-    )
-    expected_reviewer = cohort_reviewers.get(incident["cohort_id"])
-    if expected_reviewer is None and cohort_reviewers:
-        reasons.append(f"incident_unknown_cohort:{identifier}")
-    elif expected_reviewer is not None and incident["reviewer"] != expected_reviewer:
-        reasons.append(f"incident_wrong_reviewer:{identifier}")
-    if not _window_contains(window, occurred_at):
-        reasons.append(f"incident_outside_window:{identifier}")
-    if incident["severity"] not in {"P1", "P2", "below_threshold"}:
-        reasons.append(f"incident_invalid_severity:{identifier}")
-    if incident["attribution"] not in {"attributable", "not_attributable", "disputed"}:
-        reasons.append(f"incident_invalid_attribution:{identifier}")
-    is_threshold_incident = incident["severity"] in {"P1", "P2"}
-    if is_threshold_incident and incident["attribution"] == "disputed":
-        reasons.append(f"incident_disputed:{identifier}")
-    failed = is_threshold_incident and incident["attribution"] == "attributable"
-    return reasons, failed
-
-
-def _validated_soak_incidents(
-    incidents: dict[str, Any],
-    window: dict[str, str],
-    as_of: datetime,
-    cohort_reviewers: dict[str, str],
-) -> tuple[list[dict[str, Any]], list[str], bool]:
-    rendered = sorted(incidents.get("incidents", []), key=lambda item: item.get("id", ""))
-    reasons: list[str] = []
-    failed = False
-    seen_ids: set[Any] = set()
-    for incident in rendered:
-        identifier = incident.get("id")
-        if identifier in seen_ids:
-            reasons.append(f"incident_duplicate:{identifier}")
-        seen_ids.add(identifier)
-        incident_reasons, incident_failed = _validate_soak_incident(
-            incident,
-            window,
-            as_of,
-            cohort_reviewers,
-        )
-        reasons.extend(incident_reasons)
-        failed = failed or incident_failed
-    return [dict(incident) for incident in rendered], reasons, failed
-
-
-def _soak_review_reasons(
-    review: dict[str, Any],
-    window: dict[str, str],
-    as_of: datetime,
-    expected_reviewer: str | None,
-) -> list[str]:
-    if review.get("status") != "complete" or not all(
-        review.get(field) for field in ("reviewer", "reviewed_at", "evidence")
-    ):
-        return ["soak_review_incomplete"]
-    try:
-        reviewed_at = parse_utc(review["reviewed_at"])
-    except (TypeError, ValueError):
-        return ["soak_review_invalid_timestamp"]
-    reasons: list[str] = []
-    if reviewed_at < parse_utc(window["end"]):
-        reasons.append("soak_review_before_window_close")
-    if reviewed_at > as_of:
-        reasons.append("soak_review_after_as_of")
-    if expected_reviewer is not None and review["reviewer"] != expected_reviewer:
-        reasons.append("soak_review_wrong_reviewer")
-    return reasons
-
-
-def _soak_report(
-    incidents: dict[str, Any],
-    as_of: datetime,
-    history: list[CommitRecord],
-    cohort_reviewers: dict[str, str],
-) -> dict[str, Any]:
-    soak = incidents.get("soak", {})
-    status = soak.get("status", "pending")
-    if status != "active":
-        return {
-            "result": "insufficient_data",
-            "status": status,
-            "reasons": ["soak_pending"],
-            "window": None,
-            "incidents": [],
-        }
-    reasons: list[str] = []
-    try:
-        completion = parse_utc(soak["completion_date"])
-    except (KeyError, TypeError, ValueError):
-        return {
-            "result": "insufficient_data",
-            "status": status,
-            "reasons": ["soak_invalid_completion_date"],
-            "window": None,
-            "incidents": [],
-        }
-    expected_window = _window(
-        completion,
-        completion + timedelta(days=incidents["soak_window_days"]),
-    )
-    if soak.get("window") != expected_window:
-        reasons.append("soak_window_mismatch")
-    if as_of < parse_utc(expected_window["end"]):
-        reasons.append("soak_window_open")
-    history_by_sha = {commit.sha: commit for commit in history}
-    completion_sha = soak.get("completion_sha")
-    if completion_sha not in history_by_sha:
-        reasons.append("soak_anchor_unreachable")
-    elif history_by_sha[completion_sha].committed_at != completion:
-        reasons.append("soak_completion_date_mismatch")
-    soak_cohort_id = soak.get("cohort_id")
-    expected_reviewer = cohort_reviewers.get(soak_cohort_id)
-    if expected_reviewer is None and cohort_reviewers:
-        reasons.append("soak_unknown_cohort")
-    reasons.extend(
-        _soak_review_reasons(
-            soak.get("review", {}),
-            expected_window,
-            as_of,
-            expected_reviewer,
-        )
-    )
-    rendered_incidents, incident_reasons, failed = _validated_soak_incidents(
-        incidents,
-        expected_window,
-        as_of,
-        cohort_reviewers,
-    )
-    reasons.extend(incident_reasons)
-    reasons = sorted(set(reasons))
-    if reasons:
-        result = "insufficient_data"
-        decision_reasons = reasons
-    elif failed:
-        result = "fail"
-        decision_reasons = ["attributable_p1_p2_incident"]
-    else:
-        result = "pass"
-        decision_reasons = ["completed_review_found_no_attributable_p1_p2"]
-    return {
-        "result": result,
-        "status": status,
-        "reasons": decision_reasons,
-        "window": expected_window,
-        "incidents": rendered_incidents,
-    }
-
-
 def build_report(
     manifest: dict[str, Any],
     adjudications: dict[str, Any],
-    incidents: dict[str, Any],
     history: list[CommitRecord],
     *,
     as_of: datetime,
@@ -858,18 +660,12 @@ def build_report(
         _cohort_report(manifest, cohort, adjudications, history, normalized_as_of)
         for cohort in manifest["cohorts"]
     ]
-    cohort_reviewers = {
-        cohort["id"]: cohort["attribution_reviewer"] for cohort in manifest["cohorts"]
-    }
-    soak = _soak_report(incidents, normalized_as_of, history, cohort_reviewers)
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "as_of": format_utc(normalized_as_of),
         "cohorts": cohorts,
-        "vertical_slice_soak": soak,
     }
     assert all(cohort["result"] in _RESULTS for cohort in cohorts)
-    assert soak["result"] in _RESULTS
     return report
 
 
@@ -883,13 +679,15 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         "",
         f"As of `{report['as_of']}`. Generated; do not edit by hand.",
         "",
-        "| Cohort | Gate | Result | Decision |",
+        "This report is observational and never blocks refactor sequencing.",
+        "",
+        "| Cohort | Observation | Result | Decision |",
         "|---|---|---|---|",
     ]
     for cohort in report["cohorts"]:
         reasons = "; ".join(cohort["reasons"])
         lines.append(
-            f"| `{cohort['cohort_id']}` | `{cohort['gate']}` | "
+            f"| `{cohort['cohort_id']}` | `{cohort['observation']}` | "
             f"**{cohort['result']}** | {reasons} |"
         )
     lines.extend(["", "## Cohort details", ""])
@@ -912,17 +710,6 @@ def render_report_markdown(report: dict[str, Any]) -> str:
                 ]
             )
         lines.append("")
-    soak = report["vertical_slice_soak"]
-    lines.extend(
-        [
-            "## Fourteen-day vertical-slice soak",
-            "",
-            f"- Status: `{soak['status']}`",
-            f"- Result: **{soak['result']}**",
-            f"- Reasons: {', '.join(f'`{reason}`' for reason in soak['reasons'])}",
-            "",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -937,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_default = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=repo_default)
-    parser.add_argument("--as-of", required=True, help="UTC RFC 3339 decision timestamp")
+    parser.add_argument("--as-of", required=True, help="UTC RFC 3339 observation timestamp")
     parser.add_argument("--check", action="store_true", help="fail if checked reports drift")
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
@@ -945,7 +732,6 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         _load_json(metrics_dir / "refactor-families.json"),
         _load_json(metrics_dir / "adjudications.json"),
-        _load_json(metrics_dir / "incidents.json"),
         load_first_parent_history(repo),
         as_of=parse_utc(args.as_of),
     )

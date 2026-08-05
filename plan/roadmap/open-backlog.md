@@ -304,9 +304,9 @@ Recorded so nobody rebuilds these from an archived document.
 
 | Looking for | Now in |
 |---|---|
-| The active refactor slices and tier gates | [2026-08-02-bug-resistant-refactor-plan.md](2026-08-02-bug-resistant-refactor-plan.md) |
+| The active refactor slices and structural prerequisites | [2026-08-02-bug-resistant-refactor-plan.md](2026-08-02-bug-resistant-refactor-plan.md) |
 | The peer-set decision and its twelve obligation rows | [2026-08-03-peer-set-adr.md](2026-08-03-peer-set-adr.md) |
-| Outcome-gate definitions and the frozen cohorts | [../metrics/README.md](../metrics/README.md) and [../metrics/refactor-families.json](../metrics/refactor-families.json) |
+| Outcome-observation definitions and the frozen cohorts | [../metrics/README.md](../metrics/README.md) and [../metrics/refactor-families.json](../metrics/refactor-families.json) |
 | Separable feature work (mu-law, Smart Turn, evals UI, CLI flags) | [../peripherals/README.md](../peripherals/README.md) |
 | Per-platform deployment runbooks | [../peripherals/peripheral-deployment.md](../peripherals/peripheral-deployment.md) |
 | The 2026-07-26 audit in full, including [T5 on the meta-layer](../critique/2026-07-26-full-critique.md#t5-—-the-meta-layer-became-a-second-product-competing-for-the-same-maintenance-budget) | [../critique/2026-07-26-full-critique.md](../critique/2026-07-26-full-critique.md) |

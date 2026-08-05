@@ -104,13 +104,11 @@ WS2.7b-c, WS3.2+, WS4.2+, WS5.1, and WS5.3. All of those now migrate the full
 shipped set rather than a subset — more total work than a demotion would have
 required, and that is the accepted cost of the decision.
 
-It does **not** permit any of them to start. Each remains behind its own tier
-gate: A60 for the Tier-B slices (which cannot begin until the Tier-A completion
-SHA is stamped, and WS0.4, WS5.2, and WS6.1b are still open), and the relevant
-B60 plus the named prerequisites for the Tier-C engines. A reader treating this
-ADR as a green light would begin production treatment before the plan permits
-it — and before the cohort member arrays are locked, which would invalidate the
-measurement for that family.
+It does **not** waive their named implementation prerequisites. Tier-B slices
+require the deterministic Tier-A structural exit; Tier-C engines require the
+relevant workstream prerequisites. The cohort member arrays remain locked so
+the optional longitudinal measurement stays comparable, but no measurement
+window delays implementation.
 
 ### Measurement membership must be locked before treatment begins
 
@@ -119,8 +117,9 @@ measurement for that family.
 `status: preregistered` / `anchor.status: pending` with all twelve peers as
 members — seven agent bridges, five transports — and `candidate_members`
 removed. `tests/test_refactor_metrics.py` pins the exact member ids, so a later
-addition or removal fails loudly instead of silently changing what a B60 result
-means. The rest of this section records why it was done this way.
+addition or removal fails loudly instead of silently changing what a
+peer-family outcome means. The rest of this section records why it was done
+this way.
 
 `plan/metrics/refactor-families.json` froze both Tier-B cohorts at
 `status: blocked_peer_decision` with empty `members` arrays. Before the first

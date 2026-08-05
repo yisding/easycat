@@ -5,7 +5,7 @@
       "anchor_status": "pending",
       "cohort_id": "tier_a_session_lifecycle_staleness",
       "deltas": null,
-      "gate": "A60",
+      "observation": "tier_a_outcome",
       "reasons": [
         "anchor_pending"
       ],
@@ -20,7 +20,7 @@
       "anchor_status": "pending",
       "cohort_id": "tier_b_agent_bridge_lifecycle",
       "deltas": null,
-      "gate": "bridge_B60",
+      "observation": "agent_bridge_outcome",
       "reasons": [
         "anchor_pending"
       ],
@@ -35,7 +35,7 @@
       "anchor_status": "pending",
       "cohort_id": "tier_b_transport_lifecycle",
       "deltas": null,
-      "gate": "transport_B60",
+      "observation": "transport_outcome",
       "reasons": [
         "anchor_pending"
       ],
@@ -47,14 +47,5 @@
       }
     }
   ],
-  "schema_version": 1,
-  "vertical_slice_soak": {
-    "incidents": [],
-    "reasons": [
-      "soak_pending"
-    ],
-    "result": "insufficient_data",
-    "status": "pending",
-    "window": null
-  }
+  "schema_version": 1
 }

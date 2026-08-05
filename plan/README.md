@@ -13,7 +13,7 @@ This is the active program. Read it in this order.
 1. [roadmap/2026-08-02-bug-resistant-refactor-plan.md](roadmap/2026-08-02-bug-resistant-refactor-plan.md)
    — the PR-level backlog: tiered one-concern slices, target files,
    acceptance criteria, the session-refactor invariants, and the
-   re-measurement gates.
+   optional re-measurement telemetry.
 2. [roadmap/2026-08-02-bug-resistant-architecture.md](roadmap/2026-08-02-bug-resistant-architecture.md)
    — the design reference behind it: the recurring bug classes, the
    primitives and engines that remove them, and the enforcement ratchets.
@@ -41,9 +41,9 @@ This is the active program. Read it in this order.
 
 - [roadmap/current-code-status.md](roadmap/current-code-status.md): the
   source-tree snapshot used to judge whether an older claim is still current.
-- [metrics/README.md](metrics/README.md) and the three JSON files beside it:
-  the pre-registered measurement inputs for the refactor's outcome gates.
-  Never edit the JSON to make a gate pass.
+- [metrics/README.md](metrics/README.md) and its JSON artifacts: the
+  pre-registered inputs and generated outputs for optional longitudinal
+  outcome observations. Never edit them to manufacture a favorable result.
 - [critique/2026-07-26-full-critique.md](critique/2026-07-26-full-critique.md):
   the 2026-07-26 adversarial audit. Historical; its still-live residue was
   moved into `roadmap/open-backlog.md`.
@@ -58,7 +58,7 @@ This is the active program. Read it in this order.
 | [plan/](README.md) | index | This file plus [operating-model.md](operating-model.md). No other document lives at the root. |
 | [roadmap/](roadmap/current-code-status.md) | active backlog, design reference, current snapshot, historical record | The bug-resistant program, the open backlog, the completion log, and the code-status snapshot. |
 | [peripherals/](peripherals/README.md) | active backlog | Separable follow-ups that are not on the bug-resistant critical path. |
-| [metrics/](metrics/README.md) | design reference plus pre-registration artifacts | Pre-registered cohorts, thresholds, adjudications, and soak incidents. Test-frozen. |
+| [metrics/](metrics/README.md) | design reference plus pre-registration artifacts | Pre-registered cohorts, thresholds, and adjudications for optional longitudinal reporting. Test-frozen. |
 | [critique/](critique/2026-07-26-full-critique.md) | historical record | The full 2026-07-26 audit, kept byte-stable because other documents cite its findings by number and anchor. |
 | [archive/](archive/) | historical record | Retired plans, banner-per-file. Off the reading path by construction. |
 

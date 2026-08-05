@@ -78,7 +78,6 @@ def _classification(
 def _fixture_inputs() -> tuple[
     dict[str, Any],
     dict[str, Any],
-    dict[str, Any],
     list[CommitRecord],
 ]:
     pre_window = {
@@ -99,7 +98,7 @@ def _fixture_inputs() -> tuple[
         "cohorts": [
             {
                 "id": "fixture_cohort",
-                "gate": "fixture_gate",
+                "observation": "fixture_outcome",
                 "bug_classes": ["fixture_bug"],
                 "members": [
                     {"id": "member_a", "paths": ["src/easycat/member_a.py"]},
@@ -144,13 +143,6 @@ def _fixture_inputs() -> tuple[
         ],
         "recurrence_adjudications": [],
     }
-    incidents = {
-        "schema_version": 1,
-        "rubric_version": 1,
-        "soak_window_days": 14,
-        "soak": {"status": "pending"},
-        "incidents": [],
-    }
     history = [
         _commit(1, "2025-12-31T23:59:59Z", "src/easycat/member_a.py"),
         _commit(2, "2026-01-01T00:00:00Z", "src/easycat/member_a.py"),
@@ -167,7 +159,7 @@ def _fixture_inputs() -> tuple[
         ),
         _commit(7, "2026-05-01T00:00:00Z", "src/easycat/member_a.py"),
     ]
-    return manifest, adjudications, incidents, history
+    return manifest, adjudications, history
 
 
 def test_refactor_family_manifest_freezes_measurement_contract() -> None:
@@ -267,7 +259,7 @@ def test_peer_cohort_membership_matches_the_locked_adr_set() -> None:
     treatment begins: adding a peer inflates the denominator, and removing one
     invalidates the cohort rather than silently shrinking it. This pins the
     exact sets so either edit fails loudly instead of quietly changing what a
-    B60 result means.
+    peer-family outcome means.
     """
     cohorts = {cohort["id"]: cohort for cohort in _load("refactor-families.json")["cohorts"]}
 
@@ -300,41 +292,18 @@ def test_peer_cohort_membership_matches_the_locked_adr_set() -> None:
 
 def test_refactor_metric_review_inputs_start_empty_and_versioned() -> None:
     adjudications = _load("adjudications.json")
-    incidents = _load("incidents.json")
 
     assert adjudications == {
         "schema_version": 1,
         "commit_classifications": [],
         "recurrence_adjudications": [],
     }
-    assert incidents == {
-        "schema_version": 1,
-        "rubric_version": 1,
-        "soak_window_days": 14,
-        "soak": {
-            "status": "pending",
-            "cohort_id": "tier_a_session_lifecycle_staleness",
-            "completion_sha": None,
-            "completion_date": None,
-            "window": None,
-            "review": {
-                "status": "pending",
-                "reviewer": None,
-                "reviewed_at": None,
-                "evidence": [],
-            },
-        },
-        "incidents": [],
-    }
-
-
 def test_report_uses_exact_windows_migration_exclusions_and_group_assignment() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
 
     report = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )
@@ -367,13 +336,12 @@ def test_report_uses_exact_windows_migration_exclusions_and_group_assignment() -
 
 
 def test_report_rejects_completion_date_that_disagrees_with_anchor_commit() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     manifest["cohorts"][0]["anchor"]["completion_date"] = "2026-03-01T23:59:59Z"
 
     cohort = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -383,7 +351,7 @@ def test_report_rejects_completion_date_that_disagrees_with_anchor_commit() -> N
 
 
 def test_report_treats_missing_adjudication_and_zero_exposure_as_insufficient() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     adjudications["commit_classifications"] = [
         entry for entry in adjudications["commit_classifications"] if entry["sha"] != _sha(2)
     ]
@@ -391,7 +359,6 @@ def test_report_treats_missing_adjudication_and_zero_exposure_as_insufficient() 
     missing = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -401,7 +368,6 @@ def test_report_treats_missing_adjudication_and_zero_exposure_as_insufficient() 
     zero = build_report(
         manifest,
         {"commit_classifications": [], "recurrence_adjudications": []},
-        incidents,
         [history[3]],
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -412,13 +378,12 @@ def test_report_treats_missing_adjudication_and_zero_exposure_as_insufficient() 
 
 
 def test_report_requires_the_preregistered_reviewer() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     adjudications["commit_classifications"][0]["reviewer"] = "different-reviewer"
 
     cohort = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -428,7 +393,7 @@ def test_report_requires_the_preregistered_reviewer() -> None:
 
 
 def test_report_ignores_persisted_adjudications_outside_the_active_windows() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     adjudications["commit_classifications"].append(
         _classification(99, "fix", affected_members=["member_a"], reviewer="former-reviewer")
     )
@@ -445,7 +410,6 @@ def test_report_ignores_persisted_adjudications_outside_the_active_windows() -> 
     cohort = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -455,13 +419,12 @@ def test_report_ignores_persisted_adjudications_outside_the_active_windows() -> 
 
 
 def test_report_invalidates_registered_control_without_replacement() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     manifest["cohorts"][0]["controls"][0]["invalidated_by"] = _sha(99)
 
     cohort = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -470,8 +433,8 @@ def test_report_invalidates_registered_control_without_replacement() -> None:
     assert f"control_invalidated:control_a:{_sha(99)}" in cohort["reasons"]
 
 
-def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_observation() -> None:
+    manifest, adjudications, history = _fixture_inputs()
     for entry in adjudications["commit_classifications"]:
         if entry["sha"] == _sha(5):
             entry.update(
@@ -483,7 +446,6 @@ def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -
     unreviewed = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -496,7 +458,6 @@ def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -
     reversed_report = build_report(
         manifest,
         {**adjudications, "commit_classifications": adjudications["commit_classifications"][::-1]},
-        incidents,
         history[::-1],
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -517,7 +478,6 @@ def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -
     wrong_reviewer = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -531,7 +491,6 @@ def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -
     reviewed = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -540,7 +499,7 @@ def test_recurrence_candidate_is_stable_and_exact_adjudication_can_fail_gate() -
 
 
 def test_recurrence_candidate_excludes_fixes_attributed_only_to_controls() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     for entry in adjudications["commit_classifications"]:
         if entry["sha"] == _sha(5):
             entry.update(
@@ -563,7 +522,6 @@ def test_recurrence_candidate_excludes_fixes_attributed_only_to_controls() -> No
     cohort = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )["cohorts"][0]
@@ -572,128 +530,22 @@ def test_recurrence_candidate_excludes_fixes_attributed_only_to_controls() -> No
 
 
 def test_report_json_and_markdown_are_stable_for_normalized_input_order() -> None:
-    manifest, adjudications, incidents, history = _fixture_inputs()
+    manifest, adjudications, history = _fixture_inputs()
     first = build_report(
         manifest,
         adjudications,
-        incidents,
         history,
         as_of=FIXTURE_AS_OF,
     )
     second = build_report(
         manifest,
         {**adjudications, "commit_classifications": adjudications["commit_classifications"][::-1]},
-        incidents,
         history[::-1],
         as_of=FIXTURE_AS_OF,
     )
 
     assert render_report_json(first) == render_report_json(second)
     assert render_report_markdown(first) == render_report_markdown(second)
-
-
-def test_soak_requires_completed_review_and_applies_attribution_rubric() -> None:
-    manifest: dict[str, Any] = {
-        "method": {},
-        "cohorts": [
-            {
-                "id": "fixture_cohort",
-                "gate": "fixture_gate",
-                "attribution_reviewer": "fixture-reviewer",
-                "anchor": {"status": "pending"},
-            }
-        ],
-    }
-    pending = {
-        "soak_window_days": 14,
-        "soak": {"status": "pending"},
-        "incidents": [],
-    }
-    assert (
-        build_report(manifest, {}, pending, [], as_of=FIXTURE_AS_OF)["vertical_slice_soak"][
-            "result"
-        ]
-        == "insufficient_data"
-    )
-
-    active = {
-        "soak_window_days": 14,
-        "soak": {
-            "status": "active",
-            "cohort_id": "fixture_cohort",
-            "completion_sha": _sha(20),
-            "completion_date": "2026-01-01T00:00:00Z",
-            "window": {
-                "start": "2026-01-01T00:00:00Z",
-                "end": "2026-01-15T00:00:00Z",
-            },
-            "review": {
-                "status": "pending",
-                "reviewer": None,
-                "reviewed_at": None,
-                "evidence": [],
-            },
-        },
-        "incidents": [],
-    }
-    soak_history = [_commit(20, "2026-01-01T00:00:00Z")]
-    review_pending = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert review_pending["result"] == "insufficient_data"
-    assert "soak_review_incomplete" in review_pending["reasons"]
-
-    active["soak"]["review"] = {
-        "status": "complete",
-        "reviewer": "fixture-reviewer",
-        "reviewed_at": "2026-01-15T00:00:00Z",
-        "evidence": ["issue and release-blocking CI searches"],
-    }
-    reviewed_empty = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert reviewed_empty["result"] == "pass"
-
-    incident = {
-        "id": "fixture-incident",
-        "severity": "P2",
-        "cohort_id": "fixture_cohort",
-        "slice": "WS2.1a",
-        "occurred_at": "2026-01-02T00:00:00Z",
-        "source": "fixture issue",
-        "evidence": ["fixture reproduction"],
-        "attribution": "attributable",
-        "rationale": "introduced by fixture slice",
-        "reviewer": "fixture-reviewer",
-        "reviewed_at": "2026-01-15T00:00:00Z",
-    }
-    active["incidents"] = [incident]
-    attributable = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert attributable["result"] == "fail"
-
-    incident["reviewer"] = "different-reviewer"
-    wrong_reviewer = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert wrong_reviewer["result"] == "insufficient_data"
-    assert "incident_wrong_reviewer:fixture-incident" in wrong_reviewer["reasons"]
-    incident["reviewer"] = "fixture-reviewer"
-
-    incident["attribution"] = "disputed"
-    disputed = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert disputed["result"] == "insufficient_data"
-    assert "incident_disputed:fixture-incident" in disputed["reasons"]
-
-    incident["reviewed_at"] = "2026-05-03T00:00:00Z"
-    future_review = build_report(manifest, {}, active, soak_history, as_of=FIXTURE_AS_OF)[
-        "vertical_slice_soak"
-    ]
-    assert future_review["result"] == "insufficient_data"
-    assert "incident_review_after_as_of:fixture-incident" in future_review["reasons"]
 
 
 def test_checked_report_artifacts_have_a_versioned_schema_and_do_not_drift() -> None:
@@ -707,15 +559,10 @@ def test_checked_report_artifacts_have_a_versioned_schema_and_do_not_drift() -> 
         "schema_version",
         "as_of",
         "cohorts",
-        "vertical_slice_soak",
     }
     assert set(report) == set(schema["required"])
-    assert schema["$defs"]["soak"]["properties"]["incidents"]["items"] == {
-        "$ref": "#/$defs/incident"
-    }
-    assert schema["$defs"]["incident"]["additionalProperties"] is False
     assert markdown.startswith("# Refactor outcome report\n")
-    assert "## Fourteen-day vertical-slice soak" in markdown
+    assert "never blocks refactor sequencing" in markdown
     assert (
         main(
             [
