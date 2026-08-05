@@ -489,6 +489,20 @@ class RuntimeScope:
             factory=factory,
         )
 
+    async def run_finalizer(self, name: str) -> None:
+        """Run one registered finalizer without closing ordinary admission.
+
+        Concurrent callers join the same attempt. A successful attempt is not
+        repeated by a later caller or :meth:`close`; a failed attempt retains
+        its terminal result and the next call retries the registered factory.
+        """
+        if not name:
+            raise ValueError("RuntimeScope finalizer name must be non-empty")
+        node = self.root._finalizer_named(name)
+        if node is None:
+            raise ValueError(f"RuntimeScope finalizer {name!r} is not registered")
+        await self.root._run_finalizer(node)
+
     def terminal_results(self, name: str | None = None) -> tuple[RuntimeTerminalResult, ...]:
         """Return retained task and finalizer results across this subtree."""
         return tuple(

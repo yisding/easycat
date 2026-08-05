@@ -1068,6 +1068,75 @@ async def test_runtime_scope_finalizer_registration_rejects_duplicates_and_cohor
 
 
 @pytest.mark.asyncio
+async def test_run_finalizer_shares_attempt_without_closing_task_admission() -> None:
+    root = _attached_root("session")
+    child = root.create_child("provider")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def cleanup() -> str:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return "closed"
+
+    child.add_finalizer("provider-close", cleanup)
+    first = asyncio.create_task(root.run_finalizer("provider-close"))
+    await started.wait()
+    second = asyncio.create_task(child.run_finalizer("provider-close"))
+    await asyncio.sleep(0)
+
+    assert calls == 1
+
+    release.set()
+    await asyncio.gather(first, second)
+
+    admitted = child.create_task("after-finalize", asyncio.sleep(0))
+    await child.drain("after-finalize")
+    assert admitted.done()
+    assert root.state is RuntimeScopeState.OPEN
+    results = root.terminal_results("provider-close")
+    assert len(results) == 1
+    assert results[0].status is RuntimeResultStatus.COMPLETED
+    assert results[0].unwrap() == "closed"
+
+    assert await root.close() is RuntimeScopeState.CLOSED
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_finalizer_retains_failure_and_retries_factory() -> None:
+    root = _attached_root("session")
+    attempts = 0
+
+    async def cleanup() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("provider close failed")
+
+    root.add_finalizer("provider-close", cleanup)
+
+    with pytest.raises(RuntimeError, match="provider close failed"):
+        await root.run_finalizer("provider-close")
+
+    assert root.state is RuntimeScopeState.OPEN
+    assert root.terminal_results("provider-close")[0].status is RuntimeResultStatus.RAISED
+
+    await root.run_finalizer("provider-close")
+
+    assert attempts == 2
+    assert [result.status for result in root.terminal_results("provider-close")] == [
+        RuntimeResultStatus.RAISED,
+        RuntimeResultStatus.COMPLETED,
+    ]
+    assert await root.close() is RuntimeScopeState.CLOSED
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
 async def test_close_runs_finalizers_at_explicit_positions_between_cohorts() -> None:
     root = _attached_root("session")
     events: list[str] = []
