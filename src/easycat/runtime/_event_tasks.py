@@ -28,6 +28,8 @@ class RuntimeTaskScope:
         logger: logging.Logger,
         failure_message: str,
         drop_if_closed: bool = True,
+        graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
+        force_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
     ) -> None:
         if not owner_label:
             raise ValueError("Event task owner label must be non-empty")
@@ -42,12 +44,12 @@ class RuntimeTaskScope:
             graceful=RuntimeMemberPolicy(
                 cohort=cohort,
                 signal_token=False,
-                task_action=RuntimeTaskAction.FINISH,
+                task_action=graceful_action,
             ),
             force=RuntimeMemberPolicy(
                 cohort=cohort,
                 signal_token=False,
-                task_action=RuntimeTaskAction.FINISH,
+                task_action=force_action,
             ),
         )
         self._scope: RuntimeScope | None = None

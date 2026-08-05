@@ -148,6 +148,26 @@ class TestPeriodicHealthChecker:
             await checker.stop()
             await root.close()
 
+    async def test_runtime_root_close_cancels_perpetual_periodic_task(self):
+        provider = NotifyingHealthyProvider()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="session:health-root-close",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        checker = PeriodicHealthChecker(provider, interval=0, provider_name="test")
+        checker.set_runtime_scope(root, name="test-health-check")
+        checker.start()
+        await provider.checked.wait()
+        task = checker._task
+        assert task is not None
+
+        await asyncio.wait_for(root.close(), timeout=0.5)
+
+        assert task.cancelled()
+        assert checker.is_running is False
+
     def test_start_without_running_loop_leaves_no_task_or_coroutine_warning(
         self,
         recwarn: pytest.WarningsRecorder,

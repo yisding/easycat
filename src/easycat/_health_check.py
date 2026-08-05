@@ -22,7 +22,7 @@ from typing import Any
 
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.capabilities import HealthCheckable
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import RuntimeScope, RuntimeTaskAction
 
 logger = logging.getLogger(__name__)
 _HEALTH_CHECK_MEMBER = "provider_health_check"
@@ -70,6 +70,8 @@ class PeriodicHealthChecker:
             logger=logger,
             failure_message="Periodic health check task failed",
             drop_if_closed=False,
+            graceful_action=RuntimeTaskAction.CANCEL,
+            force_action=RuntimeTaskAction.CANCEL,
         )
         self._task: asyncio.Task[None] | None = None
         self._running = False
