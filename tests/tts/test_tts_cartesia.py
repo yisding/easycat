@@ -270,7 +270,10 @@ class TestCartesiaPersistent:
             assert provider._runtime_scope.parent is session._runtime_scope
             assert provider._mgr is not None
             assert provider._mgr._runtime_scope is provider._runtime_scope
+            assert standalone.tasks() == ()
+            assert provider._mgr._reader_task in provider._runtime_scope.tasks("tts_receive_loop")
             await session.stop(force=True)
+            assert fake.closed
 
     async def test_warmup_failure_is_retried_by_synthesis(self):
         provider = self._make_provider()

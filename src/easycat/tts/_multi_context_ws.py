@@ -229,11 +229,28 @@ class MultiContextWSManager:
         )
 
     def rehome_runtime_scope(self, source: RuntimeScope, target: RuntimeScope) -> None:
-        """Move manager ownership from one idle provider scope to another."""
+        """Move standalone reader ownership beneath an application lifecycle."""
         if target is self._runtime_scope:
             return
-        if self._runtime_scope is not source or source.tasks():
+        reader = self._reader_task
+        source_tasks = source.tasks()
+        if self._runtime_scope is not source or any(task is not reader for task in source_tasks):
             raise RuntimeError("Cannot reattach active TTS manager runtime work")
+        if reader is not None and reader in source_tasks:
+            source.discard(reader)
+            try:
+                target.add_task(
+                    _READER_TASK,
+                    reader,
+                    policy=_TTS_RECEIVE_FINISH_POLICY,
+                )
+            except BaseException:
+                source.add_task(
+                    _READER_TASK,
+                    reader,
+                    policy=_TTS_RECEIVE_FINISH_POLICY,
+                )
+                raise
         self._runtime_scope = target
         self._owns_runtime_scope = False
 
