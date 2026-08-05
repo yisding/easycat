@@ -25,7 +25,8 @@ from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import PCM16StreamResampler
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.runtime.scope import BackgroundTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
     SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
@@ -46,6 +47,8 @@ _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 _DEGRADED_EXTRA_CLIENT_REJECTED = "extra_client_rejected"
 _DEGRADED_CONTROL_DECODE_FAILED = "control_decode_failed"
 _DEGRADED_INVALID_SAMPLE_RATE = "invalid_sample_rate"
+_WEBSOCKET_RECEIVE_TASK_NAME = "websocket_receive"
+_WEBSOCKET_RECEIVE_COHORT = "transport-receive"
 
 
 def _valid_config_sample_rate(value: object) -> int | None:
@@ -408,6 +411,14 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         self._connect_task: asyncio.Task[None] | None = None
         self._disconnect_task: asyncio.Task[None] | None = None
         self._lifecycle_tasks = BackgroundTaskScope(name="websocket-connection-lifecycle")
+        self._receive_tasks = RuntimeTaskScope(
+            owner_label="websocket-connection-receive",
+            member_name=_WEBSOCKET_RECEIVE_TASK_NAME,
+            cohort=_WEBSOCKET_RECEIVE_COHORT,
+            logger=logger,
+            failure_message="WebSocket receive loop failed",
+            drop_if_closed=False,
+        )
         self._connection_generation = 0
         # The constructor-supplied accepted socket supports one lifecycle.
         # Once connect starts, remote EOF or local teardown is terminal; a
@@ -418,6 +429,13 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             self._config.max_pending_chunks,
             self._config.max_pending_bytes,
         )
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach receive and event work to the owning transport scope."""
+        super().set_runtime_scope(parent, name=name)
+        scope = self._emit_scope
+        assert scope is not None
+        self._receive_tasks.bind(scope)
 
     @property
     def request(self) -> Any | None:
@@ -489,7 +507,12 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             raise
         if generation != self._connection_generation or not self._connected or self._ws is not ws:
             raise ConnectionError("WebSocket transport disconnected during connect")
-        self._receive_task = asyncio.create_task(self._run_receive_loop(ws, generation))
+        receive_task = self._receive_tasks.create_task(
+            self._run_receive_loop(ws, generation),
+            task_name="websocket-connection-receive",
+        )
+        assert receive_task is not None
+        self._receive_task = receive_task
 
     async def disconnect(self) -> None:
         current = asyncio.current_task()

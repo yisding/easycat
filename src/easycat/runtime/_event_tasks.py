@@ -17,8 +17,8 @@ from easycat.runtime.scope import (
 )
 
 
-class RuntimeEventTaskScope:
-    """Own self-pruning event tasks under an attached or standalone root."""
+class RuntimeTaskScope:
+    """Own self-pruning tasks under an attached or standalone root."""
 
     def __init__(
         self,
@@ -28,6 +28,7 @@ class RuntimeEventTaskScope:
         cohort: str,
         logger: logging.Logger,
         failure_message: str,
+        drop_if_closed: bool = True,
     ) -> None:
         if not owner_label:
             raise ValueError("Event task owner label must be non-empty")
@@ -37,6 +38,7 @@ class RuntimeEventTaskScope:
         self._member_name = member_name
         self._logger = logger
         self._failure_message = failure_message
+        self._drop_if_closed = drop_if_closed
         self._policy = RuntimeTaskPolicy(
             graceful=RuntimeMemberPolicy(
                 cohort=cohort,
@@ -124,10 +126,10 @@ class RuntimeEventTaskScope:
                 policy=self._policy,
             )
         except RuntimeError:
-            if scope.state is RuntimeScopeState.OPEN:
+            if scope.state is RuntimeScopeState.OPEN or not self._drop_if_closed:
                 raise
             coro.close()
-            self._logger.debug("Could not emit event - runtime scope is closed")
+            self._logger.debug("Could not start task - runtime scope is closed")
             return None
         task.add_done_callback(partial(self._on_done, scope))
         return task
@@ -165,3 +167,8 @@ class RuntimeEventTaskScope:
                 self._failure_message,
                 exc_info=(type(error), error, error.__traceback__),
             )
+
+
+# Event-oriented call sites keep the descriptive name introduced with the
+# helper; lifecycle workers use the generic name above.
+RuntimeEventTaskScope = RuntimeTaskScope

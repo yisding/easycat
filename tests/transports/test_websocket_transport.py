@@ -13,6 +13,7 @@ import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
@@ -227,6 +228,49 @@ async def test_connection_transport_ready_disconnect_is_not_raised():
     assert transport._ws is None
     assert transport._receive_task is None
     assert transport._in_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_connection_receive_loop_attaches_to_transport_scope():
+    class _ConnectedWebSocket:
+        def __init__(self) -> None:
+            self.receive_started = asyncio.Event()
+            self.close_calls = 0
+
+        async def send(self, _message: str | bytes) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> bytes:
+            self.receive_started.set()
+            await asyncio.Event().wait()
+            raise StopAsyncIteration
+
+    ws = _ConnectedWebSocket()
+    transport = WebSocketConnectionTransport(ws)  # type: ignore[arg-type]
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="test-root:websocket-receive",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    transport.set_runtime_scope(root, name="transport-runtime")
+
+    await transport.connect()
+    await ws.receive_started.wait()
+
+    assert root.tasks("websocket_receive") == (transport._receive_task,)
+    assert "transport-receive" in root.cohorts(force=False)
+
+    await transport.disconnect()
+
+    assert not root.tasks("websocket_receive")
+    assert ws.close_calls == 1
 
 
 @pytest.mark.asyncio
