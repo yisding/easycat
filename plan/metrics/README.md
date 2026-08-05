@@ -46,16 +46,24 @@ the immutable merge SHA and date, and the four computed window endpoints.
 An anchor has four states:
 
 - `pending`: treatment membership is frozen but treatment is incomplete;
-- `blocked`: membership cannot yet be frozen because the peer ADR is missing;
+- `blocked`: membership cannot yet be frozen because the peer ADR is missing
+  (no cohort is in this state since the 2026-08-04 lock);
 - `active`: the completion SHA/date, migration SHAs, and exact windows are
   recorded; or
 - `superseded`: retained only under `superseded_anchors` after a reset.
 
-The Tier-A Session cohort is pre-registered now. Bridge and transport candidates
-are frozen now, but their `members` arrays stay empty until the peer-set ADR
-chooses the retained in-tree peers. The ADR SHA and exact retained subset must be
-recorded before the first production treatment commit. A peer cannot be added
-after treatment begins; removing one after treatment begins invalidates that
+All three cohorts are now pre-registered with frozen membership.
+
+The bridge and transport cohorts were locked on 2026-08-04 by the peer-set ADR
+(merge SHA `df517aeca8409b9cd5eab3b0767d837ec41b0afe`, recorded in each cohort's
+`member_selection`). The ADR retained every candidate in-tree, so each cohort's
+`members` array is its former candidate set copied verbatim: seven agent bridges
+and five transports. `candidate_members` was removed at lock time — keeping both
+would let the two drift with no rule saying which one counts. The exact member
+ids are pinned by `tests/test_refactor_metrics.py`, so a later addition or
+removal fails loudly rather than silently changing what a B60 result means.
+
+A peer cannot be added after treatment begins; removing one after treatment begins invalidates that
 cohort rather than silently changing the denominator.
 
 A later production change that extends the treatment before the post-window

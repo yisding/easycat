@@ -53,9 +53,9 @@ still bind:
   sketches; WS4.2+ additionally requires **transport B60** plus WS1.4, WS2.3,
   and WS5.1.
 
-Before the first production treatment commit of any gated slice, lock both
-Tier-B cohort `members` arrays in `plan/metrics/refactor-families.json` to the
-ADR's twelve peers.
+The cohort member lock this decision required is **done** (2026-08-04): both
+Tier-B cohorts in `plan/metrics/refactor-families.json` are pre-registered with
+all twelve peers, pinned by `tests/test_refactor_metrics.py`.
 
 Original framing, retained for context: the critique's T1 recommended demoting
 several agent bridges to out-of-tree and deleting WebTransport; as of

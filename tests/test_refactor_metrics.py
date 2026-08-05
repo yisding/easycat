@@ -91,8 +91,17 @@ def test_refactor_family_manifest_freezes_measurement_contract() -> None:
             assert anchor["status"] == "pending"
             assert cohort["members"]
             _assert_paths_exist(cohort["members"], allow_planned=True)
+            # Candidates collapse into members at lock time; keeping both would
+            # let the two drift apart with no rule saying which one counts.
             assert "candidate_members" not in cohort
-            assert "member_selection" not in cohort
+            # A cohort whose membership came from the peer-set ADR keeps its
+            # selection rule as provenance, and both fields must be filled in.
+            # The Tier-A cohort never had a selection rule and carries none.
+            selection = cohort.get("member_selection")
+            if selection is not None:
+                assert selection["source"] == "peer-set ADR"
+                assert selection["decision_sha"]
+                assert selection["locked_at"]
         else:
             assert cohort["status"] == "blocked_peer_decision"
             assert anchor["status"] == "blocked"
@@ -103,6 +112,44 @@ def test_refactor_family_manifest_freezes_measurement_contract() -> None:
             assert selection["source"] == "peer-set ADR"
             assert selection["decision_sha"] is None
             assert selection["locked_at"] is None
+
+
+def test_peer_cohort_membership_matches_the_locked_adr_set() -> None:
+    """Freeze the twelve peers the peer-set ADR retained.
+
+    Pre-registration is only meaningful if membership cannot move after
+    treatment begins: adding a peer inflates the denominator, and removing one
+    invalidates the cohort rather than silently shrinking it. This pins the
+    exact sets so either edit fails loudly instead of quietly changing what a
+    B60 result means.
+    """
+    cohorts = {cohort["id"]: cohort for cohort in _load("refactor-families.json")["cohorts"]}
+
+    locked = {
+        "tier_b_agent_bridge_lifecycle": {
+            "generic_workflow",
+            "langchain",
+            "langgraph",
+            "llama_agents",
+            "openai_agents",
+            "pydantic_ai",
+            "responses_api",
+        },
+        "tier_b_transport_lifecycle": {
+            "local",
+            "twilio_media",
+            "webrtc",
+            "websocket",
+            "webtransport",
+        },
+    }
+
+    for cohort_id, expected in locked.items():
+        cohort = cohorts[cohort_id]
+        assert {member["id"] for member in cohort["members"]} == expected, cohort_id
+        assert cohort["member_selection"]["decision_sha"] == (
+            "df517aeca8409b9cd5eab3b0767d837ec41b0afe"
+        ), cohort_id
 
 
 def test_refactor_metric_review_inputs_start_empty_and_versioned() -> None:
