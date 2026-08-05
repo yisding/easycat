@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Coroutine
-from functools import partial
 from typing import Any
 
 from easycat.runtime.scope import (
@@ -53,6 +52,7 @@ class RuntimeTaskScope:
         )
         self._scope: RuntimeScope | None = None
         self._owns_root = False
+        self._retired_roots: list[RuntimeScope] = []
 
     @property
     def scope(self) -> RuntimeScope | None:
@@ -82,20 +82,18 @@ class RuntimeTaskScope:
         if current is not None:
             if current.parent is parent:
                 return
-            if current.tasks():
+            if current.tasks() and not self._owns_root:
                 raise RuntimeError("Cannot reattach event work while emissions are active")
-        self._scope = parent.create_child(name, default_policy=self._policy)
-        self._owns_root = False
+        self._replace_scope(parent.create_child(name, default_policy=self._policy))
 
     def bind(self, scope: RuntimeScope) -> None:
         """Use an existing scope when a component shares its owner's child."""
         current = self._scope
         if current is scope:
             return
-        if current is not None and current.tasks():
+        if current is not None and current.tasks() and not self._owns_root:
             raise RuntimeError("Cannot rebind event work while emissions are active")
-        self._scope = scope
-        self._owns_root = False
+        self._replace_scope(scope)
 
     def ensure_scope(self) -> RuntimeScope:
         """Return the attached scope or lazily create a standalone root."""
@@ -131,14 +129,14 @@ class RuntimeTaskScope:
             coro.close()
             self._logger.debug("Could not start task - runtime scope is closed")
             return None
-        task.add_done_callback(partial(self._on_done, scope))
+        task.add_done_callback(self._on_done)
         return task
 
     def adopt_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
         """Adopt an existing task into the same ownership and result policy."""
         scope = self.ensure_scope()
         scope.add_task(self._member_name, task, policy=self._policy)
-        task.add_done_callback(partial(self._on_done, scope))
+        task.add_done_callback(self._on_done)
         return task
 
     def discard_task(self, task: asyncio.Task[Any]) -> None:
@@ -149,6 +147,10 @@ class RuntimeTaskScope:
 
     async def release_standalone_if_empty(self) -> None:
         """Close and release an empty lazily created root."""
+        for retired in tuple(self._retired_roots):
+            if retired.empty:
+                await retired.close()
+                self._retired_roots.remove(retired)
         scope = self._scope
         if not self._owns_root or scope is None or not scope.empty:
             return
@@ -157,8 +159,35 @@ class RuntimeTaskScope:
             self._scope = None
             self._owns_root = False
 
-    def _on_done(self, scope: RuntimeScope, task: asyncio.Task[Any]) -> None:
-        scope.discard(task)
+    def _replace_scope(self, scope: RuntimeScope) -> None:
+        """Install *scope*, promoting work from a standalone root if needed."""
+        current = self._scope
+        if current is None:
+            self._scope = scope
+            self._owns_root = False
+            return
+
+        tasks = current.tasks(self._member_name)
+        added: list[asyncio.Task[Any]] = []
+        try:
+            for task in tasks:
+                scope.add_task(self._member_name, task, policy=self._policy)
+                added.append(task)
+        except BaseException:
+            for task in added:
+                scope.discard(task)
+            raise
+        for task in tasks:
+            current.discard(task)
+        if self._owns_root:
+            self._retired_roots.append(current)
+        self._scope = scope
+        self._owns_root = False
+
+    def _on_done(self, task: asyncio.Task[Any]) -> None:
+        scope = self._scope
+        if scope is not None:
+            scope.discard(task)
         if task.cancelled():
             return
         error = task.exception()
