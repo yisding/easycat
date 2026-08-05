@@ -51,6 +51,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
+
 logger = logging.getLogger(__name__)
 
 # Sentinels pushed onto a context queue to preserve consumer-visible ordering.
@@ -162,8 +164,15 @@ class _Context:
 class MultiContextWSManager:
     """Owns one persistent socket shared across many context-scoped utterances."""
 
-    def __init__(self, adapter: MultiContextAdapter) -> None:
+    def __init__(
+        self,
+        adapter: MultiContextAdapter,
+        *,
+        runtime_scope: RuntimeScope | None = None,
+    ) -> None:
         self._adapter = adapter
+        self._runtime_scope = runtime_scope or RuntimeScope(name="tts-multi-context-runtime")
+        self._owns_runtime_scope = runtime_scope is None
         self._ws: Any | None = None
         # Exact socket retained when physical close fails. No replacement may
         # be created until that same wrapper closes successfully.
@@ -189,6 +198,16 @@ class MultiContextWSManager:
         # only an unexpected socket death does.
         self._closing = False
         self._fallback_close_waiters = 0
+
+    @property
+    def runtime_cleanup_complete(self) -> bool:
+        """Whether no socket or reader cleanup remains for a scope owner."""
+        return (
+            self._pending_socket_close is None
+            and self._ws is None
+            and self._reader_task is None
+            and (self._close_task is None or self._close_task.done())
+        )
 
     # ── public surface ────────────────────────────────────────────
 
@@ -311,6 +330,7 @@ class MultiContextWSManager:
             return
         if close_task is not None:
             await self._await_close_task(close_task)
+            await self._close_owned_runtime_scope_if_idle()
             return
         if (
             self._closed
@@ -318,6 +338,7 @@ class MultiContextWSManager:
             and self._ws is None
             and self._reader_task is None
         ):
+            await self._close_owned_runtime_scope_if_idle()
             return
         # Close admission synchronously before spawning the task: a connect()
         # scheduled on the next loop turn must observe closure even if this
@@ -331,6 +352,7 @@ class MultiContextWSManager:
         self._close_task = close_task
         close_task.add_done_callback(self._close_task_done)
         await self._await_close_task(close_task)
+        await self._close_owned_runtime_scope_if_idle()
 
     # ── reconnect hook ────────────────────────────────────────────
 
@@ -504,6 +526,18 @@ class MultiContextWSManager:
                 "Previous multi-context WebSocket cleanup is incomplete; "
                 "retry close() or connect() after cleanup recovers"
             ) from exc
+
+    async def _close_owned_runtime_scope_if_idle(self) -> None:
+        """Close the standalone scope after every retained resource settles."""
+        scope = self._runtime_scope
+        if (
+            not self._owns_runtime_scope
+            or scope.state is not RuntimeScopeState.OPEN
+            or not scope.empty
+            or not self.runtime_cleanup_complete
+        ):
+            return
+        await scope.close()
 
     def _require_send_admission(self, ctx: _Context | None = None) -> None:
         if self._closed or self._closing:

@@ -385,11 +385,12 @@ class Session:
                     self._runtime_scope,
                     name=f"{role}-provider-events",
                 )
-        if isinstance(self.stt, RuntimeScopeBindable):
-            self.stt.set_runtime_scope(
-                self._runtime_scope,
-                name="stt-provider-runtime",
-            )
+        for role, provider in (("stt", self.stt), ("tts", self.tts)):
+            if isinstance(provider, RuntimeScopeBindable):
+                provider.set_runtime_scope(
+                    self._runtime_scope,
+                    name=f"{role}-provider-runtime",
+                )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
             self._maybe_bind_session_id(event_producer)

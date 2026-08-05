@@ -24,6 +24,7 @@ from easycat.events import (
 )
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._session import Session
 from easycat.session._types import TurnState
 from easycat.stt.base import STTBase
@@ -89,8 +90,17 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
             STTBase.__init__(self)
             self._init_emit_tasks()
 
+    class ScopedFakeTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_scope: RuntimeScope | None = None
+
+        def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+            self.runtime_scope = parent.create_child(name)
+
     stt = ScopedFakeSTT()
-    session = Session(_full_config(stt=stt))
+    tts = ScopedFakeTTS()
+    session = Session(_full_config(stt=stt, tts=tts))
 
     assert stt._emit_scope is not None
     assert stt._emit_scope.parent is session._runtime_scope
@@ -98,6 +108,9 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
     assert stt._runtime_scope is not None
     assert stt._runtime_scope.parent is session._runtime_scope
     assert stt._runtime_scope.name == "stt-provider-runtime"
+    assert tts.runtime_scope is not None
+    assert tts.runtime_scope.parent is session._runtime_scope
+    assert tts.runtime_scope.name == "tts-provider-runtime"
 
     await session.stop(force=True)
 

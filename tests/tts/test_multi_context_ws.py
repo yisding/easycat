@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 from easycat.tts import _multi_context_ws as multi_context_ws_module
 from easycat.tts._multi_context_ws import (
     MultiContextAdapter,
@@ -107,6 +109,41 @@ def test_adapter_accepts_minimum_bounded_context_queue() -> None:
 
 
 class TestMultiContextWSManager:
+    async def test_standalone_manager_closes_its_runtime_scope(self):
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        scope = mgr._runtime_scope
+
+        assert mgr._owns_runtime_scope is True
+        assert scope.parent is None
+
+        await mgr.aclose()
+
+        assert scope.state is RuntimeScopeState.CLOSED
+
+    async def test_attached_manager_leaves_parent_owned_scope_open(self):
+        supervisor = RuntimeSupervisor(capacity=1)
+        root = RuntimeScope.create_root(
+            name="test-root",
+            root_id="test:tts-manager",
+            supervisor=supervisor,
+            survivor_capacity=1,
+        )
+        provider_scope = root.create_child("tts-provider-runtime")
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(
+            _make_adapter(ws),
+            runtime_scope=provider_scope,
+        )
+
+        assert mgr._runtime_scope is provider_scope
+        assert mgr._owns_runtime_scope is False
+
+        await mgr.aclose()
+
+        assert provider_scope.state is RuntimeScopeState.OPEN
+        await root.close()
+
     async def test_connect_warms_socket_without_opening_context(self):
         ws = FakeMultiContextWS()
         connect_calls = 0

@@ -228,9 +228,11 @@ class TestCartesiaPersistent:
 
         assert provider._mgr is not None
         assert provider._mgr._pending_socket_close is fake
+        assert provider._runtime_scope is not None
 
         await provider.close()
         assert provider._mgr._pending_socket_close is None
+        assert provider._runtime_scope is None
         assert fake.close.await_count == 2
 
     async def test_warmup_connects_once_and_first_synthesis_reuses_socket(self):
