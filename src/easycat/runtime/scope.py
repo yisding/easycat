@@ -28,6 +28,77 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+class RuntimeMemberKind(StrEnum):
+    """Kind of lifecycle member represented by a terminal result."""
+
+    TASK = "task"
+    FINALIZER = "finalizer"
+
+
+class RuntimeResultStatus(StrEnum):
+    """Exhaustive terminal states retained by runtime scopes."""
+
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RAISED = "raised"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTerminalResult:
+    """Retained terminal value or error for a named lifecycle member."""
+
+    owner_id: str
+    name: str
+    kind: RuntimeMemberKind
+    status: RuntimeResultStatus
+    task_name: str
+    value: Any | None = None
+    error: BaseException | None = None
+
+    def unwrap(self) -> Any:
+        """Return the value or re-raise the retained terminal error."""
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+
+def _terminal_result_from_task(
+    task: asyncio.Task[Any],
+    *,
+    owner_id: str,
+    name: str,
+    kind: RuntimeMemberKind,
+) -> RuntimeTerminalResult:
+    try:
+        value = task.result()
+    except asyncio.CancelledError as exc:
+        return RuntimeTerminalResult(
+            owner_id=owner_id,
+            name=name,
+            kind=kind,
+            status=RuntimeResultStatus.CANCELLED,
+            task_name=task.get_name(),
+            error=exc,
+        )
+    except BaseException as exc:  # noqa: BLE001 - the result is retained for caller policy
+        return RuntimeTerminalResult(
+            owner_id=owner_id,
+            name=name,
+            kind=kind,
+            status=RuntimeResultStatus.RAISED,
+            task_name=task.get_name(),
+            error=exc,
+        )
+    return RuntimeTerminalResult(
+        owner_id=owner_id,
+        name=name,
+        kind=kind,
+        status=RuntimeResultStatus.COMPLETED,
+        task_name=task.get_name(),
+        value=value,
+    )
+
+
 class BackgroundTaskScope:
     """Own self-pruning, fire-and-forget tasks for synchronous components.
 
@@ -37,8 +108,12 @@ class BackgroundTaskScope:
     the owning component keeps a synchronous ``stop()`` contract.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, name: str = "background") -> None:
+        if not name:
+            raise ValueError("BackgroundTaskScope name must be non-empty")
+        self._name = name
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._terminal_results: list[RuntimeTerminalResult] = []
 
     def create_task(
         self,
@@ -46,6 +121,7 @@ class BackgroundTaskScope:
         coro: Coroutine[Any, Any, _T],
         *,
         replace: bool = False,
+        retain_result: bool = False,
     ) -> asyncio.Task[_T]:
         """Create a named task, optionally cancelling an active predecessor."""
         if not name:
@@ -65,7 +141,7 @@ class BackgroundTaskScope:
             coro.close()
             raise
         self._tasks[name] = task
-        task.add_done_callback(partial(self._on_done, name))
+        task.add_done_callback(partial(self._on_done, name, retain_result))
         return task
 
     def active(self, name: str) -> bool:
@@ -81,6 +157,26 @@ class BackgroundTaskScope:
     def empty(self) -> bool:
         """Whether the scope owns no unfinished tasks."""
         return not self.tasks()
+
+    def terminal_results(self, name: str | None = None) -> tuple[RuntimeTerminalResult, ...]:
+        """Return retained named results in settlement order."""
+        return tuple(
+            result for result in self._terminal_results if name is None or result.name == name
+        )
+
+    def pop_terminal_results(
+        self,
+        name: str | None = None,
+    ) -> tuple[RuntimeTerminalResult, ...]:
+        """Remove and return retained results, optionally for one member."""
+        selected = self.terminal_results(name)
+        if name is None:
+            self._terminal_results.clear()
+        else:
+            self._terminal_results = [
+                result for result in self._terminal_results if result.name != name
+            ]
+        return selected
 
     def cancel(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
         """Detach and cancel one named task or every task in the scope.
@@ -105,9 +201,23 @@ class BackgroundTaskScope:
                 task.cancel()
         return tasks
 
-    def _on_done(self, name: str, task: asyncio.Task[Any]) -> None:
+    def _on_done(
+        self,
+        name: str,
+        retain_result: bool,
+        task: asyncio.Task[Any],
+    ) -> None:
         if self._tasks.get(name) is task:
             self._tasks.pop(name, None)
+        if retain_result:
+            self._terminal_results.append(
+                _terminal_result_from_task(
+                    task,
+                    owner_id=self._name,
+                    name=name,
+                    kind=RuntimeMemberKind.TASK,
+                )
+            )
         try:
             task.result()
         except asyncio.CancelledError:
@@ -223,7 +333,17 @@ class _RuntimeTaskMember:
     policy: RuntimeTaskPolicy
     token_signal: Callable[[], object] | None
     owned: OwnedTask[Any] | None
+    retain_result: bool
     parked: bool = False
+
+
+@dataclass(slots=True)
+class _RuntimeFinalizerNode:
+    scope: RuntimeScope
+    name: str
+    factory: Callable[[], Coroutine[Any, Any, Any]]
+    task: asyncio.Task[Any] | None = None
+    completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +390,8 @@ class RuntimeScope:
         self._children: dict[str, RuntimeScope] = {}
         self._tasks: dict[str, set[asyncio.Task[Any]]] = {}
         self._members: dict[asyncio.Task[Any], _RuntimeTaskMember] = {}
+        self._finalizers: dict[str, _RuntimeFinalizerNode] = {}
+        self._terminal_results: list[RuntimeTerminalResult] = []
         self._state = RuntimeScopeState.OPEN
         self._state_lock = Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -334,6 +456,54 @@ class RuntimeScope:
         """Return directly registered child scopes in creation order."""
         return tuple(self._children.values())
 
+    def add_finalizer(
+        self,
+        name: str,
+        factory: Callable[[], Coroutine[Any, Any, Any]],
+    ) -> None:
+        """Register one ordered async finalizer without invoking its factory."""
+        if inspect.iscoroutine(factory):
+            factory.close()
+            raise TypeError("RuntimeScope finalizer requires a factory")
+        if not callable(factory):
+            raise TypeError("RuntimeScope finalizer factory must be callable")
+        if not name:
+            raise ValueError("RuntimeScope finalizer name must be non-empty")
+        self._require_open()
+        if self.root._finalizer_named(name) is not None:
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} already exists")
+        if name in self.root._policy_cohort_names():
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} collides with a task cohort")
+        self._finalizers[name] = _RuntimeFinalizerNode(
+            scope=self,
+            name=name,
+            factory=factory,
+        )
+
+    def terminal_results(self, name: str | None = None) -> tuple[RuntimeTerminalResult, ...]:
+        """Return retained task and finalizer results across this subtree."""
+        return tuple(
+            result
+            for scope in self._scope_tree()
+            for result in scope._terminal_results
+            if name is None or result.name == name
+        )
+
+    def pop_terminal_results(
+        self,
+        name: str | None = None,
+    ) -> tuple[RuntimeTerminalResult, ...]:
+        """Remove and return retained results across this subtree."""
+        selected = self.terminal_results(name)
+        for scope in self._scope_tree():
+            if name is None:
+                scope._terminal_results.clear()
+            else:
+                scope._terminal_results = [
+                    result for result in scope._terminal_results if result.name != name
+                ]
+        return selected
+
     def create_child(
         self,
         name: str,
@@ -366,6 +536,7 @@ class RuntimeScope:
         task_name: str | None = None,
         policy: RuntimeTaskPolicy | None = None,
         token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
     ) -> asyncio.Task[_T]:
         """Reserve capacity, start a task, and retain it in this scope."""
         if not name:
@@ -373,6 +544,7 @@ class RuntimeScope:
         self._bind_running_loop()
         selected_policy = policy or self._default_policy
         self._validate_policy_signal(selected_policy, token_signal)
+        self._validate_policy_cohorts(selected_policy)
         self._require_open()
         registry = self._survivor_registry
         if registry is None:
@@ -396,6 +568,7 @@ class RuntimeScope:
                 task_name=label,
                 policy=selected_policy,
                 token_signal=token_signal,
+                retain_result=retain_result,
             )
             raise
         return self._track_task(
@@ -404,6 +577,7 @@ class RuntimeScope:
             policy=selected_policy,
             token_signal=token_signal,
             owned=owned,
+            retain_result=retain_result,
         )
 
     def create_task(
@@ -414,6 +588,7 @@ class RuntimeScope:
         task_name: str | None = None,
         policy: RuntimeTaskPolicy | None = None,
         token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
     ) -> asyncio.Task[_T]:
         """Create and track a named task."""
         self._validate_new_task_name(name, coro)
@@ -421,6 +596,7 @@ class RuntimeScope:
         try:
             self._bind_running_loop()
             self._validate_policy_signal(selected_policy, token_signal)
+            self._validate_policy_cohorts(selected_policy)
             self._validate_raw_task_policy(selected_policy)
             self._require_open()
             task = asyncio.create_task(coro, name=task_name or name)
@@ -432,6 +608,7 @@ class RuntimeScope:
             task,
             policy=selected_policy,
             token_signal=token_signal,
+            retain_result=retain_result,
         )
 
     def spawn_from_sync(
@@ -442,6 +619,7 @@ class RuntimeScope:
         task_name: str | None = None,
         policy: RuntimeTaskPolicy | None = None,
         token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
     ) -> concurrent.futures.Future[asyncio.Task[_T]]:
         """Schedule a factory safely from another thread.
 
@@ -462,6 +640,7 @@ class RuntimeScope:
         selected_policy = policy or self._default_policy
         try:
             self._validate_policy_signal(selected_policy, token_signal)
+            self._validate_policy_cohorts(selected_policy)
             self._validate_raw_task_policy(selected_policy)
             with self.root._state_lock:
                 loop = self.root._loop
@@ -477,6 +656,7 @@ class RuntimeScope:
                 task_name,
                 selected_policy,
                 token_signal,
+                retain_result,
             )
         except Exception as exc:  # noqa: BLE001 - cross-thread Future carries failure
             result.set_exception(exc)
@@ -491,6 +671,7 @@ class RuntimeScope:
         turn_id: str | None = None,
         policy: RuntimeTaskPolicy | None = None,
         token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
     ) -> asyncio.Task[_T]:
         """Create a tracked task that journals scheduled/completed/cancelled/raised.
 
@@ -512,6 +693,7 @@ class RuntimeScope:
         try:
             self._bind_running_loop()
             self._validate_policy_signal(selected_policy, token_signal)
+            self._validate_policy_cohorts(selected_policy)
             self._validate_raw_task_policy(selected_policy)
             self._require_open()
             task = asyncio.create_task(coro, name=name)
@@ -582,6 +764,7 @@ class RuntimeScope:
             task,
             policy=selected_policy,
             token_signal=token_signal,
+            retain_result=retain_result,
         )
 
     @staticmethod
@@ -605,6 +788,7 @@ class RuntimeScope:
         *,
         policy: RuntimeTaskPolicy | None = None,
         token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
     ) -> asyncio.Task[_T]:
         """Track an existing task under *name*.
 
@@ -619,6 +803,7 @@ class RuntimeScope:
         self._bind_running_loop()
         selected_policy = policy or self._default_policy
         self._validate_policy_signal(selected_policy, token_signal)
+        self._validate_policy_cohorts(selected_policy)
         self._validate_raw_task_policy(selected_policy)
         self._require_open()
         return self._track_task(
@@ -626,6 +811,7 @@ class RuntimeScope:
             task,
             policy=selected_policy,
             token_signal=token_signal,
+            retain_result=retain_result,
         )
 
     def tasks(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
@@ -739,39 +925,13 @@ class RuntimeScope:
 
         try:
             while True:
-                active = self._close_task
-                if active is None or active.done():
-                    if self.state is RuntimeScopeState.CLOSED:
-                        return RuntimeScopeState.CLOSED
-                    replacement = asyncio.create_task(
-                        self._run_close(
-                            force=force,
-                            phases=phases,
-                            superseded=None,
-                            supersede_timeout=supersede_timeout,
-                        ),
-                        name=f"{self.owner_id}:close:{'force' if force else 'graceful'}",
-                    )
-                    replacement.add_done_callback(self._observe_close_controller)
-                    self._close_task = replacement
-                    self._close_force = force
-                    active = replacement
-                elif force and not self._close_force:
-                    superseded = active
-                    replacement = asyncio.create_task(
-                        self._run_close(
-                            force=True,
-                            phases=phases,
-                            superseded=superseded,
-                            supersede_timeout=supersede_timeout,
-                        ),
-                        name=f"{self.owner_id}:close:force",
-                    )
-                    replacement.add_done_callback(self._observe_close_controller)
-                    self._close_task = replacement
-                    self._close_force = True
-                    superseded.cancel()
-                    active = replacement
+                if self.state is RuntimeScopeState.CLOSED:
+                    return RuntimeScopeState.CLOSED
+                active = self._select_close_controller(
+                    force=force,
+                    phases=phases,
+                    supersede_timeout=supersede_timeout,
+                )
 
                 cancellation_requests = current.cancelling()
                 try:
@@ -803,6 +963,46 @@ class RuntimeScope:
             # The active controller propagated a member cancellation. Only a
             # controller replaced by a force close is retried.
             raise error
+
+    def _select_close_controller(
+        self,
+        *,
+        force: bool,
+        phases: tuple[str, ...] | None,
+        supersede_timeout: float | None,
+    ) -> asyncio.Task[RuntimeScopeState]:
+        active = self._close_task
+        if active is None or active.done():
+            replacement = asyncio.create_task(
+                self._run_close(
+                    force=force,
+                    phases=phases,
+                    superseded=None,
+                    supersede_timeout=supersede_timeout,
+                ),
+                name=f"{self.owner_id}:close:{'force' if force else 'graceful'}",
+            )
+            replacement.add_done_callback(self._observe_close_controller)
+            self._close_task = replacement
+            self._close_force = force
+            return replacement
+        if not force or self._close_force:
+            return active
+
+        replacement = asyncio.create_task(
+            self._run_close(
+                force=True,
+                phases=phases,
+                superseded=active,
+                supersede_timeout=supersede_timeout,
+            ),
+            name=f"{self.owner_id}:close:force",
+        )
+        replacement.add_done_callback(self._observe_close_controller)
+        self._close_task = replacement
+        self._close_force = True
+        active.cancel()
+        return replacement
 
     def cancel(self, name: str | None = None) -> tuple[asyncio.Task[Any], ...]:
         """Cancel pending tasks and return the tasks that were targeted.
@@ -859,6 +1059,7 @@ class RuntimeScope:
                     pending = exc
             finally:
                 if task.done():
+                    self._retain_task_result(task)
                     self._discard_task(task)
 
         if pending is not None:
@@ -898,6 +1099,7 @@ class RuntimeScope:
         task_name: str,
         policy: RuntimeTaskPolicy,
         token_signal: Callable[[], object] | None,
+        retain_result: bool,
     ) -> None:
         registry = self._survivor_registry
         if registry is None:
@@ -911,6 +1113,7 @@ class RuntimeScope:
                     policy=policy,
                     token_signal=token_signal,
                     owned=owned,
+                    retain_result=retain_result,
                     _allow_closed=True,
                 )
                 if owned.state.value == "parked":
@@ -941,7 +1144,9 @@ class RuntimeScope:
                     self.owner_id,
                 )
 
-        selected = self.cohorts(force=force)
+        selected_cohorts = self.cohorts(force=force)
+        selected_finalizers = self._pending_finalizer_names()
+        selected = (*selected_cohorts, *selected_finalizers)
         phase_order = selected if phases is None else phases
         if len(set(phase_order)) != len(phase_order) or any(not phase for phase in phase_order):
             raise ValueError("Runtime close phases must be unique non-empty names")
@@ -951,6 +1156,10 @@ class RuntimeScope:
 
         first_error: BaseException | None = None
         for phase in phase_order:
+            finalizer = self._finalizer_named(phase)
+            if finalizer is not None:
+                await self._run_finalizer(finalizer)
+                continue
             signal = self.signal_cohort(
                 phase,
                 force=force,
@@ -978,6 +1187,52 @@ class RuntimeScope:
         except BaseException as exc:  # noqa: BLE001 - settle every close phase first
             return exc
         return None
+
+    async def _run_finalizer(self, node: _RuntimeFinalizerNode) -> None:
+        if node.completed:
+            return
+        task = node.task
+        if task is None:
+            task = asyncio.create_task(
+                self._invoke_finalizer(node),
+                name=f"{node.scope.owner_id}:finalizer:{node.name}",
+            )
+            node.task = task
+
+        current = asyncio.current_task()
+        cancellation_requests = current.cancelling() if current is not None else 0
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if current is not None and current.cancelling() > cancellation_requests:
+                raise
+            # The finalizer itself ended as cancelled; retain and propagate it
+            # as a terminal result rather than treating it as close takeover.
+        except BaseException:  # noqa: BLE001, S110 - retained and re-raised below
+            # Inspect and retain the settled task below so the result model,
+            # not the await expression, chooses propagation.
+            pass
+
+        if not task.done():  # pragma: no cover - shield only returns at settlement
+            return
+        result = _terminal_result_from_task(
+            task,
+            owner_id=node.scope.owner_id,
+            name=node.name,
+            kind=RuntimeMemberKind.FINALIZER,
+        )
+        node.scope._terminal_results.append(result)
+        node.task = None
+        if result.status is RuntimeResultStatus.COMPLETED:
+            node.completed = True
+        result.unwrap()
+
+    @staticmethod
+    async def _invoke_finalizer(node: _RuntimeFinalizerNode) -> Any:
+        coroutine = node.factory()
+        if isinstance(coroutine, asyncio.Future) or not inspect.iscoroutine(coroutine):
+            raise TypeError("RuntimeScope finalizer factory must return a coroutine")
+        return await coroutine
 
     async def _drain_cohort_signal(self, signal: RuntimeCohortSignal) -> None:
         pending = {member.task: member for member in signal._members}
@@ -1157,6 +1412,7 @@ class RuntimeScope:
         except BaseException as exc:  # noqa: BLE001 - close caller selects precedence
             if not suppress:
                 error = exc
+        member.scope._retain_task_result(task, member=member)
         member.scope._discard_task(task)
         return error
 
@@ -1167,6 +1423,7 @@ class RuntimeScope:
         member.task.add_done_callback(member.scope._on_parked_member_done)
 
     def _on_parked_member_done(self, task: asyncio.Task[Any]) -> None:
+        self._retain_task_result(task)
         self._discard_task(task)
         self._refresh_terminal_state_upwards()
 
@@ -1223,6 +1480,50 @@ class RuntimeScope:
     def _task_members(self) -> tuple[_RuntimeTaskMember, ...]:
         return tuple(member for scope in self._scope_tree() for member in scope._members.values())
 
+    def _pending_finalizer_names(self) -> tuple[str, ...]:
+        return tuple(
+            node.name
+            for scope in self._scope_tree()
+            for node in scope._finalizers.values()
+            if not node.completed
+        )
+
+    def _finalizer_named(self, name: str) -> _RuntimeFinalizerNode | None:
+        for scope in self._scope_tree():
+            node = scope._finalizers.get(name)
+            if node is not None:
+                return node
+        return None
+
+    def _policy_cohort_names(self) -> set[str]:
+        return {
+            cohort
+            for member in self._task_members()
+            for cohort in (
+                member.policy.graceful.cohort,
+                member.policy.force.cohort,
+            )
+        }
+
+    def _retain_task_result(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        member: _RuntimeTaskMember | None = None,
+    ) -> None:
+        selected = member or self.root._member_for_task(task)
+        if selected is None or not selected.retain_result or not task.done():
+            return
+        selected.retain_result = False
+        selected.scope._terminal_results.append(
+            _terminal_result_from_task(
+                task,
+                owner_id=selected.scope.owner_id,
+                name=selected.name,
+                kind=RuntimeMemberKind.TASK,
+            )
+        )
+
     def _track_task(
         self,
         name: str,
@@ -1231,6 +1532,7 @@ class RuntimeScope:
         policy: RuntimeTaskPolicy,
         token_signal: Callable[[], object] | None,
         owned: OwnedTask[_T] | None = None,
+        retain_result: bool = False,
         _allow_closed: bool = False,
     ) -> asyncio.Task[_T]:
         if not _allow_closed:
@@ -1243,6 +1545,7 @@ class RuntimeScope:
         bucket = self._tasks.setdefault(name, set())
         for existing in tuple(bucket):
             if existing.done():
+                self._retain_task_result(existing)
                 self._discard_task(existing)
         bucket = self._tasks.setdefault(name, set())
         bucket.add(task)
@@ -1253,6 +1556,7 @@ class RuntimeScope:
             policy=policy,
             token_signal=token_signal,
             owned=owned,
+            retain_result=retain_result,
         )
         return task
 
@@ -1271,6 +1575,7 @@ class RuntimeScope:
         task_name: str | None,
         policy: RuntimeTaskPolicy,
         token_signal: Callable[[], object] | None,
+        retain_result: bool,
     ) -> None:
         if result.cancelled():
             return
@@ -1285,6 +1590,7 @@ class RuntimeScope:
                 task_name=task_name,
                 policy=policy,
                 token_signal=token_signal,
+                retain_result=retain_result,
             )
         except BaseException as exc:  # noqa: BLE001 - cross-thread Future carries failure
             try:
@@ -1316,6 +1622,12 @@ class RuntimeScope:
     def _require_open_locked(self) -> None:
         if self._state is not RuntimeScopeState.OPEN:
             raise RuntimeError(f"RuntimeScope {self.owner_id!r} is {self._state.value}")
+
+    def _validate_policy_cohorts(self, policy: RuntimeTaskPolicy) -> None:
+        finalizer_names = {name for scope in self.root._scope_tree() for name in scope._finalizers}
+        for cohort in (policy.graceful.cohort, policy.force.cohort):
+            if cohort in finalizer_names:
+                raise RuntimeError(f"Runtime task cohort {cohort!r} collides with a finalizer")
 
     @staticmethod
     def _validate_policy_signal(

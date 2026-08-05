@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "update_rationale": "WS2.1b adds explicit scope policy and close budget sites",
+  "update_rationale": "WS2.1c extracts reviewed close-controller selection and preserves lifecycle budgets",
   "counts": {
     "configurable": 23,
-    "lifecycle_budget": 86,
+    "lifecycle_budget": 87,
     "not_teardown": 32,
     "protocol_local": 41
   },
@@ -51,8 +51,9 @@
     "lifecycle_call\truntime/journal_sql.py\tLitestreamSqliteJournal._stop_sidecar\tcall self._stderr_thread.join\t2124206fa1d3cd3b\t0\tlifecycle_budget\tBounds Litestream stderr-thread shutdown.",
     "lifecycle_call\truntime/scope.py\tRuntimeScope._drain_cohort_signal\tcall asyncio.wait\ta08bf6c1f38b30e7\t0\tlifecycle_budget\tApplies the selected member grace and hard deadlines while draining a teardown cohort.",
     "lifecycle_call\truntime/scope.py\tRuntimeScope._run_close\tcall asyncio.wait\t99a2f41dc96efb83\t0\tlifecycle_budget\tBounds settlement of a graceful close superseded by a force caller when configured.",
-    "lifecycle_call\truntime/scope.py\tRuntimeScope.close\tcall self._run_close\t2ad430120a9d1dad\t0\tlifecycle_budget\tPropagates the caller-selected supersession budget to a new close controller.",
-    "lifecycle_call\truntime/scope.py\tRuntimeScope.close\tcall self._run_close\t770738e8f5de04eb\t0\tlifecycle_budget\tPropagates the caller-selected supersession budget to a force replacement controller.",
+    "lifecycle_call\truntime/scope.py\tRuntimeScope._select_close_controller\tcall self._run_close\t2ad430120a9d1dad\t0\tlifecycle_budget\tPropagates the caller-selected supersession budget to a new close controller.",
+    "lifecycle_call\truntime/scope.py\tRuntimeScope._select_close_controller\tcall self._run_close\t857b76d5cf11c5c0\t0\tlifecycle_budget\tPropagates the caller-selected supersession budget to a force replacement controller.",
+    "lifecycle_call\truntime/scope.py\tRuntimeScope.close\tcall self._select_close_controller\t820d49abebb82f1e\t0\tlifecycle_budget\tDelegates close-controller selection without changing the caller-selected supersession budget.",
     "lifecycle_call\tserver/transports.py\tCapacityGate._finish_drain\tcall _remaining_timeout\t70a011d4de20d21d\t0\tlifecycle_budget\tPropagates the remaining capacity-drain deadline.",
     "lifecycle_call\tserver/transports.py\tCapacityGate._finish_drain\tcall _safe_await\t70a011d4de20d21d\t0\tlifecycle_budget\tEnforces the remaining capacity-drain deadline.",
     "lifecycle_call\tserver/transports.py\tCapacityGate.drain\tcall _deadline_after\t018502c5628811c8\t0\tlifecycle_budget\tCreates the graceful capacity-drain deadline.",

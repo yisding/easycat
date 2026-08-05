@@ -10,7 +10,9 @@ from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
 from easycat.runtime.scope import (
     BackgroundTaskScope,
     JournalSink,
+    RuntimeMemberKind,
     RuntimeMemberPolicy,
+    RuntimeResultStatus,
     RuntimeScope,
     RuntimeScopeState,
     RuntimeTaskAction,
@@ -167,6 +169,47 @@ async def test_background_scope_observes_task_exception(
 
     assert scope.empty
     assert "Background task 'timer' failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_background_scope_retains_and_pops_typed_terminal_results() -> None:
+    scope = BackgroundTaskScope(name="transport")
+
+    async def succeed() -> str:
+        return "closed"
+
+    async def fail() -> None:
+        raise RuntimeError("disconnect failed")
+
+    success = scope.create_task("close", succeed(), retain_result=True)
+    failure = scope.create_task("disconnect", fail(), retain_result=True)
+    await asyncio.gather(success, failure, return_exceptions=True)
+    await asyncio.sleep(0)
+
+    results = scope.terminal_results()
+    assert [result.name for result in results] == ["close", "disconnect"]
+    assert results[0].owner_id == "transport"
+    assert results[0].kind is RuntimeMemberKind.TASK
+    assert results[0].status is RuntimeResultStatus.COMPLETED
+    assert results[0].unwrap() == "closed"
+    assert results[1].status is RuntimeResultStatus.RAISED
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        results[1].unwrap()
+
+    assert scope.pop_terminal_results("disconnect") == (results[1],)
+    assert scope.terminal_results() == (results[0],)
+    assert scope.pop_terminal_results() == (results[0],)
+    assert scope.terminal_results() == ()
+
+
+@pytest.mark.asyncio
+async def test_background_scope_default_mode_does_not_retain_result() -> None:
+    scope = BackgroundTaskScope()
+
+    await scope.create_task("timer", asyncio.sleep(0))
+    await asyncio.sleep(0)
+
+    assert scope.terminal_results() == ()
 
 
 def _attached_root(
@@ -877,6 +920,268 @@ async def test_closed_scope_rejects_all_admission_paths_without_running_factorie
     with pytest.raises(RuntimeError, match="is closed"):
         handles[0].result()
     assert not factory_called
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_retains_task_values_and_errors_across_children() -> None:
+    root = _attached_root("session")
+    child = root.create_child("transport")
+
+    async def fail() -> None:
+        raise RuntimeError("send failed")
+
+    success = child.create_task(
+        "connect",
+        asyncio.sleep(0, result="connected"),
+        retain_result=True,
+    )
+    child.create_task("send", fail(), retain_result=True)
+    await success
+    with pytest.raises(RuntimeError, match="send failed"):
+        await child.drain()
+
+    results = root.terminal_results()
+    assert {result.name for result in results} == {"connect", "send"}
+    by_name = {result.name: result for result in results}
+    assert by_name["connect"].owner_id == "session/transport"
+    assert by_name["connect"].status is RuntimeResultStatus.COMPLETED
+    assert by_name["connect"].unwrap() == "connected"
+    assert by_name["send"].status is RuntimeResultStatus.RAISED
+    with pytest.raises(RuntimeError, match="send failed"):
+        by_name["send"].unwrap()
+
+    assert root.pop_terminal_results("send") == (by_name["send"],)
+    assert root.terminal_results() == (by_name["connect"],)
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_retains_cleanup_failure_even_when_close_suppresses_it() -> None:
+    root = _attached_root("session")
+
+    async def fail_during_cancel() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("cleanup failed") from None
+
+    root.create_task(
+        "worker",
+        fail_during_cancel(),
+        policy=_task_policy(force_action=RuntimeTaskAction.CANCEL),
+        retain_result=True,
+    )
+    await asyncio.sleep(0)
+
+    assert await root.close(force=True, phases=("work",)) is RuntimeScopeState.CLOSED
+
+    result = root.terminal_results("worker")[0]
+    assert result.status is RuntimeResultStatus.RAISED
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        result.unwrap()
+
+
+@pytest.mark.asyncio
+async def test_parked_owned_member_retains_result_when_it_eventually_settles() -> None:
+    root = _attached_root("session", survivor_capacity=1)
+    release = asyncio.Event()
+    policy = _task_policy(force_hard_deadline=0.01)
+
+    async def stubborn_work() -> str:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+        return "settled"
+
+    task = await root.start_owned_task(
+        "cleanup",
+        stubborn_work,
+        policy=policy,
+        retain_result=True,
+    )
+    assert (
+        await root.close(force=True, phases=("work",)) is RuntimeScopeState.CLOSED_WITH_SURVIVORS
+    )
+    assert root.terminal_results() == ()
+
+    release.set()
+    assert await task == "settled"
+    await asyncio.sleep(0)
+
+    result = root.terminal_results("cleanup")[0]
+    assert result.status is RuntimeResultStatus.COMPLETED
+    assert result.unwrap() == "settled"
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_finalizer_registration_rejects_duplicates_and_cohort_collisions() -> (
+    None
+):
+    root = _attached_root("session")
+    root.add_finalizer("disconnect", lambda: asyncio.sleep(0))
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        root.create_child("transport").add_finalizer(
+            "disconnect",
+            lambda: asyncio.sleep(0),
+        )
+
+    rejected = asyncio.sleep(0)
+    collision_policy = _task_policy(
+        graceful_cohort="disconnect",
+        force_cohort="disconnect",
+    )
+    with pytest.raises(RuntimeError, match="collides with a finalizer"):
+        root.create_task("worker", rejected, policy=collision_policy)
+    assert rejected.cr_frame is None
+
+    other = _attached_root("other")
+    other.create_task("worker", asyncio.sleep(0), policy=_task_policy())
+    with pytest.raises(RuntimeError, match="collides with a task cohort"):
+        other.add_finalizer("work", lambda: asyncio.sleep(0))
+    await other.cancel_and_drain()
+
+
+@pytest.mark.asyncio
+async def test_close_runs_finalizers_at_explicit_positions_between_cohorts() -> None:
+    root = _attached_root("session")
+    events: list[str] = []
+
+    async def member(label: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append(f"{label}:drained")
+
+    async def disconnect() -> str:
+        events.append("disconnect")
+        return "done"
+
+    root.create_task(
+        "pipeline",
+        member("pipeline"),
+        policy=_task_policy(force_cohort="pipeline"),
+    )
+    root.create_task(
+        "provider",
+        member("provider"),
+        policy=_task_policy(force_cohort="provider"),
+    )
+    root.add_finalizer("disconnect", disconnect)
+    await asyncio.sleep(0)
+
+    state = await root.close(
+        force=True,
+        phases=("pipeline", "disconnect", "provider"),
+    )
+
+    assert state is RuntimeScopeState.CLOSED
+    assert events.index("pipeline:drained") < events.index("disconnect")
+    assert events.index("disconnect") < events.index("provider:drained")
+    result = root.terminal_results("disconnect")[0]
+    assert result.kind is RuntimeMemberKind.FINALIZER
+    assert result.status is RuntimeResultStatus.COMPLETED
+    assert result.unwrap() == "done"
+
+
+@pytest.mark.asyncio
+async def test_failed_finalizer_retains_error_and_retries_without_rerunning_successes() -> None:
+    root = _attached_root("session")
+    attempts = 0
+    successful_calls = 0
+
+    async def flaky() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("disconnect failed")
+        return "recovered"
+
+    async def successful() -> None:
+        nonlocal successful_calls
+        successful_calls += 1
+
+    root.add_finalizer("flaky", flaky)
+    root.add_finalizer("successful", successful)
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await root.close(phases=("flaky", "successful"))
+    assert root.state is RuntimeScopeState.CLOSING
+    assert successful_calls == 0
+    first = root.terminal_results("flaky")[0]
+    assert first.status is RuntimeResultStatus.RAISED
+
+    assert await root.close(phases=("flaky", "successful")) is RuntimeScopeState.CLOSED
+    assert attempts == 2
+    assert successful_calls == 1
+    results = root.terminal_results("flaky")
+    assert [result.status for result in results] == [
+        RuntimeResultStatus.RAISED,
+        RuntimeResultStatus.COMPLETED,
+    ]
+    assert results[1].unwrap() == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_force_supersession_reuses_in_flight_finalizer_task() -> None:
+    root = _attached_root("session")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def finalizer() -> None:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+
+    root.add_finalizer("disconnect", finalizer)
+    graceful = asyncio.create_task(root.close(phases=("disconnect",)))
+    await started.wait()
+
+    force = asyncio.create_task(
+        root.close(
+            force=True,
+            phases=("disconnect",),
+            supersede_timeout=0.1,
+        )
+    )
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    release.set()
+    assert await force is RuntimeScopeState.CLOSED
+    assert await graceful is RuntimeScopeState.CLOSED
+    assert calls == 1
+    assert len(root.terminal_results("disconnect")) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_finalizer_is_retained_and_propagated_as_cancellation() -> None:
+    root = _attached_root("session")
+
+    async def cancelled() -> None:
+        raise asyncio.CancelledError
+
+    root.add_finalizer("disconnect", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await root.close(phases=("disconnect",))
+
+    result = root.terminal_results("disconnect")[0]
+    assert result.status is RuntimeResultStatus.CANCELLED
+    with pytest.raises(asyncio.CancelledError):
+        result.unwrap()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_admission_closes_with_scope() -> None:
+    root = _attached_root("session")
+    await root.close(force=True)
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        root.add_finalizer("late", lambda: asyncio.sleep(0))
 
 
 def test_create_journaled_task_records_lifecycle_via_structural_sink() -> None:

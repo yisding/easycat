@@ -249,6 +249,15 @@ also closes task admission, including callbacks submitted from other threads,
 and a force close can supersede an unbounded graceful close without starting a
 second concurrent teardown controller.
 
+Non-task teardown steps register as named async finalizers. Their names appear
+in the same explicit close sequence as cohorts, so an ordering such as
+`outbound` → `transport-disconnect` → `provider-close` is represented without
+inventing task-shaped wrappers. An in-flight finalizer is reused when force
+supersedes graceful close. Finalizers always retain a typed terminal result;
+tasks opt into the same result mode when their caller must preserve raised
+cleanup errors. Callers can inspect or pop those results and use `unwrap()` to
+apply their existing exception-precedence policy.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Scheduled
