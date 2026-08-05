@@ -178,14 +178,29 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
     async def record_async(name: str) -> None:
         record(name)
 
-    def record_sync(name: str) -> None:
-        record(name)
-
     async def scope_drain(name: str) -> None:
         record(f"scope.drain.{name}")
 
     async def scope_cancel_and_drain(name: str | None = None) -> None:
         record("scope.drain.all" if name is None else f"scope.drain.{name}")
+
+    original_signal_cohort = session._runtime_scope.signal_cohort
+
+    def scope_signal_cohort(
+        cohort: str,
+        *,
+        force: bool,
+        _exclude_tasks: set[asyncio.Task[Any]] | None = None,
+    ):
+        record("scope.signal")
+        return original_signal_cohort(
+            cohort,
+            force=force,
+            _exclude_tasks=_exclude_tasks,
+        )
+
+    async def scope_drain_cohort(_signal: object) -> None:
+        record("scope.drain.all")
 
     monkeypatch.setattr(session._runtime_scope, "drain", scope_drain)
     monkeypatch.setattr(
@@ -193,7 +208,13 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
         "cancel_and_drain",
         scope_cancel_and_drain,
     )
-    monkeypatch.setattr(session._runtime_scope, "cancel", lambda: record_sync("scope.signal"))
+    monkeypatch.setattr(
+        session._runtime_scope,
+        "cohorts",
+        lambda *, force: ("default",) if force else (),
+    )
+    monkeypatch.setattr(session._runtime_scope, "signal_cohort", scope_signal_cohort)
+    monkeypatch.setattr(session._runtime_scope, "drain_cohort", scope_drain_cohort)
     monkeypatch.setattr(
         session._greeting,
         "cancel",

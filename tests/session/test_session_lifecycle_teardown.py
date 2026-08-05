@@ -14,6 +14,7 @@ from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
+    Error,
     ErrorStage,
     EventBus,
     Interruption,
@@ -95,6 +96,53 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
     assert stt._emit_scope.name == "stt-provider-events"
 
     await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_finishes_provider_error_emission_before_close() -> None:
+    class ScopedFakeSTT(ProviderErrorEmitter, FakeSTT):
+        _error_stage = ErrorStage.STT
+        _provider_error_name = "fake-stt"
+
+        def __init__(self) -> None:
+            FakeSTT.__init__(self)
+            self._init_emit_tasks()
+            self._event_bus: EventBus | None = None
+
+        def _resolve_event_bus(self) -> EventBus | None:
+            return self._event_bus
+
+        async def close(self) -> None:
+            await self._drain_emit_tasks()
+
+    stt = ScopedFakeSTT()
+    bus = EventBus()
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    received: list[Error] = []
+
+    async def handle_error(event: Error) -> None:
+        received.append(event)
+        handler_started.set()
+        await release_handler.wait()
+
+    bus.subscribe(Error, handle_error)
+    session = Session(_full_config(stt=stt, event_bus=bus))
+    stt._emit_provider_error(RuntimeError("provider failed"))
+    await handler_started.wait()
+
+    stopping = asyncio.create_task(session.stop(force=True))
+    await asyncio.sleep(0)
+
+    assert stt._emit_tasks
+    assert all(not task.cancelled() for task in stt._emit_tasks)
+
+    release_handler.set()
+    await stopping
+
+    assert len(received) == 1
+    assert str(received[0].exception) == "provider failed"
+    assert not stt._emit_tasks
 
 
 @pytest.mark.asyncio

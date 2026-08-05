@@ -28,7 +28,7 @@ from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
-from easycat._provider_helpers import ProviderErrorEmitter
+from easycat._provider_helpers import _PROVIDER_EVENT_COHORT, ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -79,7 +79,7 @@ from easycat.runtime.capabilities import (
 from easycat.runtime.journal import JournalView
 from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
 from easycat.runtime.records import JournalRecordKind
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import RuntimeCohortSignal, RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
     _OUTBOUND_QUEUE_NAME,
@@ -1707,7 +1707,14 @@ class Session:
                 # Signal scoped work before awaiting other task handles so
                 # migrated shutdown work preserves the previous force-cancel
                 # ordering. Drain below after every task observed cancellation.
-                self._runtime_scope.cancel()
+                runtime_signals = tuple(
+                    self._runtime_scope.signal_cohort(
+                        cohort,
+                        force=True,
+                        _exclude_tasks={current_task} if current_task is not None else None,
+                    )
+                    for cohort in self._runtime_scope.cohorts(force=True)
+                )
                 for task in tasks:
                     try:
                         await task
@@ -1719,7 +1726,7 @@ class Session:
                 # tasks. These can outlive the pipeline/STT consumer handles
                 # above, so the force path drains the scope before provider
                 # teardown.
-                await self._runtime_scope.cancel_and_drain()
+                await self._drain_force_runtime_signals(runtime_signals)
                 self._stt_committer.clear_task_handles()
                 self._greeting.clear_task()
                 self._heartbeat_task = None
@@ -2179,6 +2186,24 @@ class Session:
                 await close_if_supported(provider)
             except Exception:
                 logger.debug("Error closing %s provider", name, exc_info=True)
+
+    async def _drain_force_runtime_signals(
+        self,
+        signals: tuple[RuntimeCohortSignal, ...],
+    ) -> None:
+        """Drain force-signalled work that does not require a later owner phase."""
+        current = asyncio.current_task()
+        for signal in signals:
+            if signal.cohort == _PROVIDER_EVENT_COHORT:
+                continue
+            try:
+                await self._runtime_scope.drain_cohort(signal)
+            except asyncio.CancelledError:
+                if current is not None and current.cancelling():
+                    raise
+            except Exception:  # noqa: BLE001, S110 - preserve best-effort force drain
+                # Preserve the legacy force drain's best-effort settlement.
+                pass
 
     # ── Internal helpers ───────────────────────────────────────
 
