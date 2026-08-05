@@ -20,6 +20,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from easycat._numeric import is_finite_number
+from easycat.runtime.scope import BackgroundTaskScope
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ class ReconnectingWebSocket:
         # arrived late from a cancellation-resistant connector.
         self._pending_connection_closes: list[ClientConnection] = []
         self._connection_cleanup_lock = asyncio.Lock()
-        self._connection_cleanup_tasks: set[asyncio.Task[Any]] = set()
+        self._background_tasks = BackgroundTaskScope(name="reconnecting-websocket")
         self._closed = False
         # Set when recv_iter ends because the reconnect budget was exhausted or a
         # reconnect ultimately failed (terminal mid-stream death), as opposed to a
@@ -436,8 +437,20 @@ class ReconnectingWebSocket:
         operation: Awaitable[ClientConnection],
     ) -> ClientConnection:
         """Run one connector call while allowing close() to win immediately."""
-        connect_task = asyncio.ensure_future(operation)
-        close_task = asyncio.create_task(self._close_event.wait())
+
+        async def await_connection() -> ClientConnection:
+            return await operation
+
+        connect_task = self._background_tasks.create_task(
+            "websocket_connection_attempt",
+            await_connection(),
+            log_errors=False,
+        )
+        close_task = self._background_tasks.create_task(
+            "websocket_connection_close_wait",
+            self._close_event.wait(),
+            log_errors=False,
+        )
         try:
             done, _ = await asyncio.wait(
                 {connect_task, close_task},
@@ -490,13 +503,10 @@ class ReconnectingWebSocket:
         except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return
         self._retain_connection_for_close(connection)
-        close_task = asyncio.create_task(
+        self._background_tasks.create_task(
+            "websocket_late_connection_cleanup",
             self._close_late_retained_connection(connection),
-            name="websocket_late_connection_cleanup",
         )
-        self._connection_cleanup_tasks.add(close_task)
-        close_task.add_done_callback(self._connection_cleanup_tasks.discard)
-        close_task.add_done_callback(ReconnectingWebSocket._consume_task_result)
 
     async def _close_late_retained_connection(self, connection: ClientConnection) -> None:
         """Best-effort immediate cleanup; failures remain retry-owned."""
@@ -505,11 +515,6 @@ class ReconnectingWebSocket:
         except BaseException:
             logger.debug("Error closing late WebSocket connection", exc_info=True)
             raise
-
-    @staticmethod
-    def _consume_task_result(task: asyncio.Task[Any]) -> None:
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            task.result()
 
     def _mark_reconnect_exhausted(self, attempts: int, reason: str) -> None:
         self._died_abnormally = True

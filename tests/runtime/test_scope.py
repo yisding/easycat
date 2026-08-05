@@ -78,6 +78,24 @@ async def test_background_scope_prunes_completed_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_scope_can_delegate_error_logging(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scope = BackgroundTaskScope()
+
+    async def fail() -> None:
+        raise RuntimeError("handled by caller")
+
+    task = scope.create_task("delegated", fail(), log_errors=False)
+    with pytest.raises(RuntimeError, match="handled by caller"):
+        await task
+    await asyncio.sleep(0)
+
+    assert scope.empty
+    assert "Background task 'delegated' failed" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_background_scope_replaces_named_task() -> None:
     scope = BackgroundTaskScope()
     first_started = asyncio.Event()

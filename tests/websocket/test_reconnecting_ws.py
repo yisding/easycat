@@ -487,12 +487,18 @@ class TestReconnectingWebSocket:
         with pytest.raises(ConnectionError, match="closed during reconnect"):
             await asyncio.wait_for(connect_task, timeout=0.1)
 
+        assert not ws._background_tasks.empty
         release.set()
         for _ in range(10):
             if late_connection.close.await_count:
                 break
             await asyncio.sleep(0)
         late_connection.close.assert_awaited_once()
+        for _ in range(10):
+            if ws._background_tasks.empty:
+                break
+            await asyncio.sleep(0)
+        assert ws._background_tasks.empty
 
     async def test_late_connection_close_failure_is_retained_for_close_retry(self):
         started = asyncio.Event()

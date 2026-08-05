@@ -122,8 +122,14 @@ class BackgroundTaskScope:
         *,
         replace: bool = False,
         retain_result: bool = False,
+        log_errors: bool = True,
     ) -> asyncio.Task[_T]:
-        """Create a named task, optionally cancelling an active predecessor."""
+        """Create a named task, optionally cancelling an active predecessor.
+
+        ``log_errors=False`` still consumes the terminal exception; use it
+        when a synchronous done callback or an ordinary awaiter applies the
+        owner's error policy instead.
+        """
         if not name:
             coro.close()
             raise ValueError("BackgroundTaskScope task name must be non-empty")
@@ -141,7 +147,7 @@ class BackgroundTaskScope:
             coro.close()
             raise
         self._tasks[name] = task
-        task.add_done_callback(partial(self._on_done, name, retain_result))
+        task.add_done_callback(partial(self._on_done, name, retain_result, log_errors))
         return task
 
     def active(self, name: str) -> bool:
@@ -205,6 +211,7 @@ class BackgroundTaskScope:
         self,
         name: str,
         retain_result: bool,
+        log_errors: bool,
         task: asyncio.Task[Any],
     ) -> None:
         if self._tasks.get(name) is task:
@@ -223,7 +230,8 @@ class BackgroundTaskScope:
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Background task %r failed", name)
+            if log_errors:
+                logger.exception("Background task %r failed", name)
 
 
 @runtime_checkable

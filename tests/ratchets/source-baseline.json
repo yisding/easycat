@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WS2.2 structurally scopes reconnect connect-stop and backoff-close races",
+  "rationale": "WS2.2 gives reconnect connector and late cleanup tasks durable BackgroundTaskScope ownership",
   "counts": {
     "cancelled_error_handler": 112,
     "epoch_field": 17,
     "gather_return_exceptions": 25,
     "module_task_set": 4,
-    "raw_task_spawn": 74,
+    "raw_task_spawn": 71,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -181,9 +181,6 @@
     "raw_task_spawn\tintegrations/agents/llama_agents.py\t_aiter_with_cancellation\tasyncio.ensure_future\tb69073e7af6b5d19\t0",
     "raw_task_spawn\tintegrations/agents/responses_api.py\t_aiter_lines_with_cancellation\tasyncio.ensure_future\t3236350b538dee4c\t0",
     "raw_task_spawn\tintegrations/agents/responses_api.py\t_aiter_lines_with_cancellation\tasyncio.ensure_future\t41ba48ba9387c249\t0",
-    "raw_task_spawn\treconnecting_ws.py\tReconnectingWebSocket._close_late_connection\tasyncio.create_task\t3c4f64664155d1f5\t0",
-    "raw_task_spawn\treconnecting_ws.py\tReconnectingWebSocket._connect_attempt_or_close\tasyncio.create_task\tb612433d13641014\t0",
-    "raw_task_spawn\treconnecting_ws.py\tReconnectingWebSocket._connect_attempt_or_close\tasyncio.ensure_future\t2f2e6edbf7654130\t0",
     "raw_task_spawn\truntime/journal.py\tappend_journal_record_async\tasyncio.create_task\tb4a0a6b20b70d669\t0",
     "raw_task_spawn\tserver/transports.py\tCapacityGate._finish_drain\tasyncio.create_task\t813760d4a2a85247\t0",
     "raw_task_spawn\tserver/transports.py\tCapacityGate.drain\tasyncio.create_task\tbbc8d7bde5354f3d\t0",
