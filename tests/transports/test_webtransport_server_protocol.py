@@ -636,6 +636,11 @@ class TestWebTransportServerWiring:
 
         stopping = asyncio.create_task(server.stop())
         await wait_entered.wait()
+        standalone = server._listener_task_scope.scope
+        assert standalone is not None
+        assert standalone.tasks("webtransport_listener_close") == (
+            server._server_wait_closed_task,
+        )
         with pytest.raises(RuntimeError, match="listener did not close"):
             await asyncio.wait_for(stopping, timeout=1)
 
@@ -658,6 +663,41 @@ class TestWebTransportServerWiring:
         assert server._server is None
         assert server._cleanup_error is None
         assert bound.wait_closed.await_count == 1
+        assert standalone.state is RuntimeScopeState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_listener_close_uses_attached_server_scope(self) -> None:
+        wait_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+
+        async def wait_closed() -> None:
+            wait_entered.set()
+            await release_wait_closed.wait()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        root = RuntimeScope.create_root(
+            name="application",
+            root_id="test-root:webtransport-listener",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        server.set_runtime_scope(root, name="webtransport-server-runtime")
+        server._server = SimpleNamespace(close=Mock(), wait_closed=wait_closed)
+        server._started = True
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+
+        assert root.tasks("webtransport_listener_close") == (server._server_wait_closed_task,)
+        assert "transport-listener" in root.cohorts(force=False)
+
+        release_wait_closed.set()
+        await stopping
+
+        assert not root.tasks("webtransport_listener_close")
 
     @pytest.mark.asyncio
     async def test_stop_safe_when_called_from_within_handler(self) -> None:

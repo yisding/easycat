@@ -137,26 +137,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_BACKGROUND_CLEANUP_TASKS: set[asyncio.Future[Any]] = set()
-
-
-def _track_background_cleanup(future: asyncio.Future[Any]) -> None:
-    """Keep a timed-out teardown reachable and consume its eventual result."""
-    _BACKGROUND_CLEANUP_TASKS.add(future)
-
-    def finish(done: asyncio.Future[Any]) -> None:
-        _BACKGROUND_CLEANUP_TASKS.discard(done)
-        if not done.cancelled():
-            try:
-                done.exception()
-            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
-                pass
-
-    future.add_done_callback(finish)
-
-
 async def _await_with_hard_timeout(
-    awaitable: Awaitable[object],
+    future: asyncio.Task[object],
     *,
     timeout_s: float,
 ) -> bool:
@@ -168,20 +150,18 @@ async def _await_with_hard_timeout(
     background ledger instead. The owner still retains its primary resource
     reference and refuses restart until a later ``stop()`` completes cleanup.
     """
-    future = asyncio.ensure_future(awaitable)
     try:
         done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
     except asyncio.CancelledError:
         future.cancel()
-        _track_background_cleanup(future)
         raise
     if future in done:
         await future
         return True
     future.cancel()
-    _track_background_cleanup(future)
     # Give cooperative cleanup one event-loop turn without waiting for a
-    # coroutine that intentionally ignores cancellation.
+    # coroutine that intentionally ignores cancellation. The caller's runtime
+    # scope retains the exact future for a later retry.
     await asyncio.sleep(0)
     return False
 
@@ -239,6 +219,8 @@ _WEBTRANSPORT_WRITER_TASK_NAME = "webtransport_writer"
 _WEBTRANSPORT_WRITER_COHORT = "transport-write"
 _WEBTRANSPORT_HANDLER_TASK_NAME = "webtransport_handler"
 _WEBTRANSPORT_HANDLER_COHORT = "transport-handlers"
+_WEBTRANSPORT_LISTENER_TASK_NAME = "webtransport_listener_close"
+_WEBTRANSPORT_LISTENER_COHORT = "transport-listener"
 
 # Cap on the number of streams whose purpose tag has not yet arrived.  A
 # malicious client can open many bidi streams and never write the first byte;
@@ -1793,13 +1775,21 @@ class WebTransportServer:
         # A cancellation-resistant ``wait_closed()`` must remain owned by this
         # exact bound-server generation. Retrying it through a fresh call can
         # overlap two listener waiters against the same aioquic server.
-        self._server_wait_closed_task: asyncio.Future[object] | None = None
+        self._server_wait_closed_task: asyncio.Task[object] | None = None
         self._handler_task_scope = RuntimeTaskScope(
             owner_label="webtransport-server-handlers",
             member_name=_WEBTRANSPORT_HANDLER_TASK_NAME,
             cohort=_WEBTRANSPORT_HANDLER_COHORT,
             logger=logger,
             failure_message="WebTransport session handler failed",
+            drop_if_closed=False,
+        )
+        self._listener_task_scope = RuntimeTaskScope(
+            owner_label="webtransport-server-listener",
+            member_name=_WEBTRANSPORT_LISTENER_TASK_NAME,
+            cohort=_WEBTRANSPORT_LISTENER_COHORT,
+            logger=logger,
+            failure_message="WebTransport listener close failed",
             drop_if_closed=False,
         )
         # A handler task can finish after its transport's disconnect fails.
@@ -1836,6 +1826,14 @@ class WebTransportServer:
     def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
         """Attach session-handler work beneath an application lifecycle."""
         self._handler_task_scope.attach(parent, name=name)
+        scope = self._handler_task_scope.scope
+        assert scope is not None
+        self._listener_task_scope.bind(scope)
+
+    async def _release_standalone_task_scopes(self) -> None:
+        """Close empty standalone roots used by handlers and listener wait."""
+        await self._listener_task_scope.release_standalone_if_empty()
+        await self._handler_task_scope.release_standalone_if_empty()
 
     def _bind_runtime_scope(self, scope: RuntimeScope) -> None:
         """Share an already-created handler scope owned by a wrapper."""
@@ -2065,7 +2063,6 @@ class WebTransportServer:
                 self._handler_task_scope.discard_task(task)
         if not pending:
             return []
-        _track_background_cleanup(asyncio.gather(*pending, return_exceptions=True))
         timeout_error = RuntimeError(
             "WebTransport session handler(s) did not stop within "
             f"force_shutdown_timeout_s={self._config.force_shutdown_timeout_s}s"
@@ -2087,10 +2084,23 @@ class WebTransportServer:
                     # the old waiter is complete, not concurrent.
                     pass
                 else:
+                    self._listener_task_scope.discard_task(task)
+                    await self._listener_task_scope.release_standalone_if_empty()
                     return True
             task = None
         if task is None:
-            task = asyncio.ensure_future(wait_closed())
+            handler_scope = self._handler_task_scope.scope
+            if handler_scope is not None and self._listener_task_scope.scope is None:
+                self._listener_task_scope.bind(handler_scope)
+
+            async def await_listener_close() -> object:
+                return await wait_closed()
+
+            task = self._listener_task_scope.create_task(
+                await_listener_close(),
+                task_name="webtransport-listener-close",
+            )
+            assert task is not None
             self._server_wait_closed_task = task
         closed = await _await_with_hard_timeout(
             task,
@@ -2098,6 +2108,8 @@ class WebTransportServer:
         )
         if closed:
             self._server_wait_closed_task = None
+            self._listener_task_scope.discard_task(task)
+            await self._listener_task_scope.release_standalone_if_empty()
         return closed
 
     async def _stop_unlocked(self) -> None:
@@ -2114,7 +2126,7 @@ class WebTransportServer:
             and not self._pending_transport_cleanup
             and self._cleanup_error is None
         ):
-            await self._handler_task_scope.release_standalone_if_empty()
+            await self._release_standalone_task_scopes()
             return
         self._started = False
         # Tear down in-flight handlers, but never await the current task
@@ -2153,7 +2165,7 @@ class WebTransportServer:
         self._cleanup_error = cleanup_errors[0] if cleanup_errors else None
         if cleanup_errors:
             raise cleanup_errors[0]
-        await self._handler_task_scope.release_standalone_if_empty()
+        await self._release_standalone_task_scopes()
 
     async def serve_forever(self) -> None:
         """Convenience: start the server and block until cancelled."""
