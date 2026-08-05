@@ -2,5 +2,18 @@
   "schema_version": 1,
   "rubric_version": 1,
   "soak_window_days": 14,
+  "soak": {
+    "status": "pending",
+    "cohort_id": "tier_a_session_lifecycle_staleness",
+    "completion_sha": null,
+    "completion_date": null,
+    "window": null,
+    "review": {
+      "status": "pending",
+      "reviewer": null,
+      "reviewed_at": null,
+      "evidence": []
+    }
+  },
   "incidents": []
 }

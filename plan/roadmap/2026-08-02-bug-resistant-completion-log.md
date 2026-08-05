@@ -490,3 +490,15 @@ device behavior is not claimed as portable CI evidence: the local extra keeps
 its install/import smoke, while the credential-free capability driver remains
 the deterministic lifecycle proof. WS4.1 is complete as the Tier-A transport
 safety net.
+
+## WS6.1b
+
+WS6.1b result: the sole report engine now derives reproducible JSON and
+Markdown views from first-parent Git history, the frozen cohort manifest, and
+reviewer-owned adjudication and incident inputs. It enforces exact half-open
+windows, exact-SHA migration exclusion, treated/control attribution, exposure
+and denominator requirements, immutable anchor dates, control invalidation,
+stable per-window recurrence clustering, named-reviewer ownership, and the
+14-day soak rubric. Checked outputs remain `insufficient_data` while every
+anchor and the soak are pending; this measurement-only slice makes no outcome
+claim.

@@ -48,7 +48,7 @@ still bind:
 
 - WS1.4, WS1.5, WS2.2-2.6, WS2.7b-c, WS5.1, and WS5.3 remain behind **A60**,
   which cannot even begin until the Tier-A completion SHA is stamped — and
-  WS0.4, WS5.2, and WS6.1b are still open.
+  WS0.4 and WS5.2 are still open.
 - WS3.2+ additionally requires **bridge B60** plus the retained-peer adapter
   sketches; WS4.2+ additionally requires **transport B60** plus WS1.4, WS2.3,
   and WS5.1.
@@ -975,6 +975,9 @@ runs without skip; duplicated lifecycle code is deleted.
   family/control assignment, insufficient exposure/zero denominators, control
   invalidation, candidate clustering, and stable output. This is measurement
   infrastructure only; no outcome can be claimed before a window closes.
+
+Completed — see [completion log](2026-08-02-bug-resistant-completion-log.md#ws61b).
+
 - Remaining work is explicitly out of this implementation plan and lives in
   [critique T5](../critique/2026-07-26-full-critique.md#t5-—-the-meta-layer-became-a-second-product-competing-for-the-same-maintenance-budget).
   Standing rules here: new guards assert values, never prose; a new generated
@@ -1059,7 +1062,8 @@ The gates are deliberately separate:
 After each eligible window, regenerate the persisted report and run:
 
 ```bash
-uv run python scripts/refactor_metrics.py --manifest plan/metrics/refactor-families.json
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time>
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time> --check
 uv run pytest tests/ratchets -q
 uv run ruff check .
 ```
