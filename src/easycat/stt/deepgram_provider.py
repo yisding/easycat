@@ -14,6 +14,7 @@ from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
+from easycat.runtime.scope import RuntimeScope
 from easycat.stt.base import _STT_RUNTIME_CANCEL_POLICY
 from easycat.stt.websocket_base import WebSocketSTTBase
 
@@ -144,6 +145,34 @@ class DeepgramSTT(WebSocketSTTBase):
         # reused by the next turn until it is contained.
         self._bare_finalize_ack_pending = False
         self._audio_resampler = PCM16StreamResampler(config.sample_rate)
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach provider work, preserving a pre-warmed keepalive task."""
+        current = self._runtime_scope
+        keepalive = self._keepalive_task
+        if (
+            current is None
+            or current.parent is parent
+            or not self._owns_runtime_scope
+            or keepalive is None
+            or keepalive.done()
+        ):
+            super().set_runtime_scope(parent, name=name)
+            return
+
+        # Validate loop affinity before registering the child so an off-loop
+        # caller cannot leave a duplicate child behind after a failed attach.
+        if asyncio.get_running_loop() is not keepalive.get_loop():
+            raise RuntimeError("Cannot reattach Deepgram keepalive from another event loop")
+        attached = parent.create_child(name)
+        attached.add_task(
+            _KEEPALIVE_TASK,
+            keepalive,
+            policy=_STT_RUNTIME_CANCEL_POLICY,
+        )
+        current.discard(keepalive)
+        self._runtime_scope = attached
+        self._owns_runtime_scope = False
 
     def _persistent_enabled(self) -> bool:
         return bool(self._config.persistent_ws and not self._config.is_flux)

@@ -687,6 +687,41 @@ async def test_deepgram_persistent_socket_sends_idle_keepalive():
 
 
 @pytest.mark.asyncio
+async def test_deepgram_prewarmed_keepalive_moves_to_session_scope() -> None:
+    ws = PersistentMockWebSocket()
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            keepalive_interval_s=60.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.warmup()
+    standalone = stt._runtime_scope
+    keepalive = stt._keepalive_task
+    assert standalone is not None
+    assert keepalive is not None
+
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:prewarmed",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
+
+    assert standalone.empty
+    assert root.tasks("deepgram_keepalive") == (keepalive,)
+
+    await stt.aclose()
+    await root.close()
+
+
+@pytest.mark.asyncio
 async def test_deepgram_keepalive_cleanup_preserves_caller_cancellation() -> None:
     stt = DeepgramSTT(DeepgramSTTConfig(api_key="k"))
     child_cancelled = asyncio.Event()
