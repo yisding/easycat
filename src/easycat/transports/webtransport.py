@@ -106,6 +106,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 from urllib.parse import urlsplit
 
 from easycat._audio_utils import PCM16StreamResampler
+from easycat._concurrency import shielded_cleanup
 from easycat._extras import require_module
 from easycat._net import normalize_auth_token
 from easycat._numeric import is_finite_number
@@ -120,7 +121,6 @@ from easycat.transports._base import (
     AudioQueueMixin,
     _enqueue_inbound_chunk,
     _raise_rollback_cancellation,
-    _remember_rollback_cancellation,
     make_version_info,
 )
 from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
@@ -1489,32 +1489,22 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         try:
             await self._session.start()
         except BaseException as startup_error:
-            cleanup_task = asyncio.create_task(
-                self._disconnect_unlocked(),
-                name="webtransport-connect-rollback",
+            settlement = await shielded_cleanup(
+                self._disconnect_unlocked,
             )
-            cancellation: asyncio.CancelledError | None = None
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError as exc:
-                    cancellation = _remember_rollback_cancellation(
-                        cancellation,
-                        exc,
-                        startup_error,
-                    )
-                    continue
-                except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                    break
-            try:
-                cleanup_task.result()
-            except BaseException as cleanup_error:
+            cancellation = (
+                asyncio.CancelledError()
+                if settlement.cancellation_requests
+                and not isinstance(startup_error, asyncio.CancelledError)
+                else None
+            )
+            if settlement.error is not None:
                 if self._disconnect_cleanup_error is None:
                     self._disconnect_cleanup_error = RuntimeError(
                         "WebTransport connect rollback was interrupted"
                     )
-                _raise_rollback_cancellation(cancellation, startup_error, cleanup_error)
-                raise startup_error from cleanup_error
+                _raise_rollback_cancellation(cancellation, startup_error, settlement.error)
+                raise startup_error from settlement.error
             _raise_rollback_cancellation(cancellation, startup_error)
             raise
         self._connected = True

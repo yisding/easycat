@@ -132,7 +132,11 @@ class TestWebTransportConnectionTransport:
         assert t._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
-    async def test_connect_rollback_preserves_new_caller_cancellation(self) -> None:
+    @pytest.mark.parametrize("cancel_count", [1, 2])
+    async def test_connect_rollback_preserves_new_caller_cancellation(
+        self,
+        cancel_count: int,
+    ) -> None:
         t = _build_connection_transport()
         session = t._session
         assert session is not None
@@ -150,7 +154,9 @@ class TestWebTransportConnectionTransport:
 
         connecting = asyncio.create_task(t.connect())
         await cleanup_entered.wait()
-        connecting.cancel()
+        for _ in range(cancel_count):
+            connecting.cancel()
+            await asyncio.sleep(0)
         release_cleanup.set()
 
         with pytest.raises(asyncio.CancelledError) as exc_info:

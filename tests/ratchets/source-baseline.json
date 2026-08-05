@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "rationale": "WebTransport listener-close retries and handler survivors moved to runtime scopes; two raw spawns, one module ledger, and one broad gather removed.",
+  "rationale": "WebTransport connect rollback now uses the shared shielded cleanup primitive; one raw spawn, cancellation handler, and shield loop removed.",
   "counts": {
-    "cancelled_error_handler": 111,
+    "cancelled_error_handler": 110,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
     "module_task_set": 2,
-    "raw_task_spawn": 56,
-    "shield_loop": 10,
+    "raw_task_spawn": 55,
+    "shield_loop": 9,
     "task_cancelling": 54
   },
   "entries": [
@@ -110,7 +110,6 @@
     "cancelled_error_handler\ttransports/webrtc.py\tWebRTCTransport.disconnect\texcept asyncio.CancelledError\ta5205db18331a7b7\t0",
     "cancelled_error_handler\ttransports/websocket.py\tWebSocketConnectionTransport._disconnect_transaction\texcept asyncio.CancelledError\t33877f50c67db6d6\t0",
     "cancelled_error_handler\ttransports/websocket.py\tWebSocketConnectionTransport._reap_receive_task_for_disconnect\texcept asyncio.CancelledError\te2ac913a0947fe91\t0",
-    "cancelled_error_handler\ttransports/webtransport.py\tWebTransportConnectionTransport._connect_unlocked\texcept asyncio.CancelledError\tbffaffcd03de4e66\t0",
     "cancelled_error_handler\ttransports/webtransport.py\tWebTransportConnectionTransport.disconnect\texcept asyncio.CancelledError\ta5205db18331a7b7\t0",
     "cancelled_error_handler\ttransports/webtransport.py\tWebTransportServer._retry_pending_transport_cleanup\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\ttransports/webtransport.py\tWebTransportServer._run_handler\texcept asyncio.CancelledError\tdddad9f10620b722\t0",
@@ -217,7 +216,6 @@
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\tasyncio.create_task\t9b98632a4c893ab3\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\tasyncio.ensure_future\t51eac5dd6d9dade1\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked\tasyncio.create_task\t3f84358545e6973f\t0",
-    "raw_task_spawn\ttransports/webtransport.py\tWebTransportConnectionTransport._connect_unlocked\tasyncio.create_task\t11298102cb640373\t0",
     "raw_task_spawn\tturn_manager.py\tTurnManager._handle_speech_stop\tasyncio.create_task\t18054907e4217ac4\t0",
     "raw_task_spawn\tvalidation/reliability.py\tEventLoopLagSampler.start\tasyncio.create_task\t25d2f7444d5cda40\t0",
     "shield_loop\tdebugger/server.py\t_close_vad_provider_owned\twhile Task.done + asyncio.shield\ta7f49c206cbd3640\t0",
@@ -229,7 +227,6 @@
     "shield_loop\ttelephony/outbound.py\tOutboundCallManager._create_call_owned\twhile Task.done + asyncio.shield\tf0d644d2e92143c0\t0",
     "shield_loop\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\twhile Task.done + asyncio.shield\t18b1bb0cbdb420cc\t0",
     "shield_loop\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked\twhile Task.done + asyncio.shield\taa848b75b127f99f\t0",
-    "shield_loop\ttransports/webtransport.py\tWebTransportConnectionTransport._connect_unlocked\twhile Task.done + asyncio.shield\t1710470643966280\t0",
     "task_cancelling\t_health_check.py\tPeriodicHealthChecker.stop\tTask.cancelling\t69ec3c7ed4421853\t0",
     "task_cancelling\t_health_check.py\tPeriodicHealthChecker.stop\tTask.cancelling\t9b108507dc69f599\t0",
     "task_cancelling\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.flush_gated_audio\tTask.cancelling\t352bdbd134ab89f2\t0",
