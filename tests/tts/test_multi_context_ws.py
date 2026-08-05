@@ -12,6 +12,7 @@ from easycat._concurrency import RuntimeSupervisor
 from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 from easycat.tts import _multi_context_ws as multi_context_ws_module
 from easycat.tts._multi_context_ws import (
+    _CLOSE_FINALIZER,
     _READER_TASK,
     MultiContextAdapter,
     MultiContextWSManager,
@@ -144,6 +145,30 @@ class TestMultiContextWSManager:
 
         assert provider_scope.state is RuntimeScopeState.OPEN
         await root.close()
+
+    async def test_attached_root_finalizer_closes_socket_before_reader_cohort(self):
+        supervisor = RuntimeSupervisor(capacity=1)
+        root = RuntimeScope.create_root(
+            name="test-root",
+            root_id="test:tts-manager-close",
+            supervisor=supervisor,
+            survivor_capacity=1,
+        )
+        provider_scope = root.create_child("tts-provider-runtime")
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(
+            _make_adapter(ws),
+            runtime_scope=provider_scope,
+        )
+        await mgr.connect()
+        reader = mgr._reader_task
+
+        state = await root.close(phases=(_CLOSE_FINALIZER, "tts-receive"))
+
+        assert state is RuntimeScopeState.CLOSED
+        assert ws.closed is True
+        assert reader is not None and reader.done()
+        assert mgr.runtime_cleanup_complete is True
 
     async def test_connect_warms_socket_without_opening_context(self):
         ws = FakeMultiContextWS()
@@ -677,8 +702,8 @@ class TestMultiContextWSManager:
             await follower
         assert follower.cancelling() == 1
         assert not leader.done()
-        assert mgr._close_task is not None
-        assert not mgr._close_task.done()
+        assert mgr._close_owner_task is not None
+        assert not mgr._close_owner_task.done()
 
         release_close.set()
         await leader
@@ -688,21 +713,23 @@ class TestMultiContextWSManager:
     async def test_close_wait_preserves_cancellation_pending_at_entry(self):
         ws = FakeMultiContextWS()
         mgr = MultiContextWSManager(_make_adapter(ws))
-        owned = asyncio.create_task(asyncio.Event().wait())
+        await mgr.connect()
 
         async def cancel_before_await() -> None:
             current = asyncio.current_task()
             assert current is not None
             current.cancel()
-            await mgr._await_close_task(owned)
+            await mgr.aclose()
 
         caller = asyncio.create_task(cancel_before_await())
 
         with pytest.raises(asyncio.CancelledError):
             await caller
-        assert not owned.done()
-        owned.cancel()
-        await asyncio.gather(owned, return_exceptions=True)
+        assert mgr._close_owner_task is None
+        assert ws.closed is False
+
+        await mgr.aclose()
+        assert ws.closed is True
 
     async def test_cancel_fallback_closes_before_joining_wedged_sender(self, monkeypatch):
         monkeypatch.setattr(multi_context_ws_module, "_CANCEL_SEND_TIMEOUT", 0.01)

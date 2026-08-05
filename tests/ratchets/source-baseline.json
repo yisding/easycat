@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WS2.2 makes the persistent TTS context queue race structurally scoped",
+  "rationale": "WS2.2 moves the persistent TTS close transaction into a retryable RuntimeScope finalizer",
   "counts": {
     "cancelled_error_handler": 112,
     "epoch_field": 17,
     "gather_return_exceptions": 29,
     "module_task_set": 4,
-    "raw_task_spawn": 79,
+    "raw_task_spawn": 78,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -119,7 +119,7 @@
     "cancelled_error_handler\ttransports/webtransport.py\t_WebTransportSession._outbound_writer\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\ttransports/webtransport.py\t_WebTransportSession.stop\texcept asyncio.CancelledError\te2ac913a0947fe91\t0",
     "cancelled_error_handler\ttransports/webtransport.py\t_await_with_hard_timeout\texcept asyncio.CancelledError\t98b40b31cfcd1374\t0",
-    "cancelled_error_handler\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_task\texcept asyncio.CancelledError\tb0da2e2cb972b5b9\t0",
+    "cancelled_error_handler\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_finalizer\texcept asyncio.CancelledError\tb0da2e2cb972b5b9\t0",
     "cancelled_error_handler\ttts/_multi_context_ws.py\tMultiContextWSManager._reader_loop\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tturn_manager.py\tTurnManager._silence_timeout\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\tturn_manager.py\tTurnManager.shutdown\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
@@ -249,7 +249,6 @@
     "raw_task_spawn\ttransports/webtransport.py\tWebTransportServer._wait_for_server_close\tasyncio.ensure_future\td729420541eeb6c9\t0",
     "raw_task_spawn\ttransports/webtransport.py\t_WebTransportSession.start\tasyncio.create_task\ta9c05962f74b95f4\t0",
     "raw_task_spawn\ttransports/webtransport.py\t_await_with_hard_timeout\tasyncio.ensure_future\t2197525e3944cdd4\t0",
-    "raw_task_spawn\ttts/_multi_context_ws.py\tMultiContextWSManager.aclose\tasyncio.create_task\t88c16a64a69aeec0\t0",
     "raw_task_spawn\tturn_manager.py\tTurnManager._handle_speech_stop\tasyncio.create_task\t18054907e4217ac4\t0",
     "raw_task_spawn\tvalidation/reliability.py\tEventLoopLagSampler.start\tasyncio.create_task\t25d2f7444d5cda40\t0",
     "shield_loop\tdebugger/server.py\t_close_vad_provider_owned\twhile Task.done + asyncio.shield\ta7f49c206cbd3640\t0",
@@ -313,8 +312,8 @@
     "task_cancelling\ttransports/webtransport.py\t_WebTransportSession.stop\tTask.cancelling\t4470c4710ba7e5b5\t0",
     "task_cancelling\ttransports/webtransport.py\t_WebTransportSession.stop\tTask.cancelling\taeb7b66fc2578c81\t0",
     "task_cancelling\ttransports/webtransport.py\t_WebTransportSession.stop\tTask.cancelling\tb6c5962130215510\t0",
-    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_task\tTask.cancelling\t371212ea00b2fd4b\t0",
-    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_task\tTask.cancelling\t977175e6b4665fd9\t0",
-    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_task\tTask.cancelling\tb1c7ce904f0a6cb5\t0"
+    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_finalizer\tTask.cancelling\t371212ea00b2fd4b\t0",
+    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_finalizer\tTask.cancelling\t977175e6b4665fd9\t0",
+    "task_cancelling\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_finalizer\tTask.cancelling\tb1c7ce904f0a6cb5\t0"
   ]
 }
