@@ -756,9 +756,11 @@ class TestOutboundCallManagerPlaceCall:
 
         first.cancel()
         await asyncio.sleep(0.05)
+        first.cancel()
+        await asyncio.sleep(0)
 
-        # Cancellation does not abandon the uncancellable REST worker or
-        # expose a provider-created SID to the caller.
+        # Repeated cancellation does not abandon the uncancellable REST
+        # worker or expose a provider-created SID to the caller.
         assert not first.done()
         assert create_count == 1
 

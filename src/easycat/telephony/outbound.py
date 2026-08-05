@@ -16,6 +16,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from easycat._concurrency import shielded_cleanup
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -550,49 +551,32 @@ class OutboundCallManager:
         create_kwargs: dict[str, Any],
     ) -> tuple[Any | None, asyncio.CancelledError | None, Exception | None]:
         """Await one uncancellable REST worker while retaining placement ownership."""
-        cancellation: asyncio.CancelledError | None = None
-        create_task = asyncio.create_task(
-            asyncio.to_thread(self._client.calls.create, **create_kwargs)
+        settlement = await shielded_cleanup(
+            lambda: asyncio.to_thread(self._client.calls.create, **create_kwargs)
         )
-        while not create_task.done():
-            try:
-                await asyncio.shield(create_task)
-            except asyncio.CancelledError as exc:
-                if cancellation is None:
-                    cancellation = exc
-            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                # Read the provider exception from ``result`` below after
-                # leaving the wait loop.
-                break
-        try:
-            return create_task.result(), cancellation, None
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            return None, cancellation, exc
+        cancellation = asyncio.CancelledError() if settlement.cancellation_requests else None
+        if settlement.error is None:
+            return settlement.result, cancellation, None
+        if isinstance(settlement.error, Exception):
+            return None, cancellation, settlement.error
+        raise settlement.error
 
     async def _complete_call_owned(
         self,
         call_sid: str,
     ) -> tuple[Exception | None, asyncio.CancelledError | None]:
         """Complete a Twilio call without abandoning its REST worker."""
-        cancellation: asyncio.CancelledError | None = None
-        cleanup_task = asyncio.create_task(
-            asyncio.to_thread(
+        settlement = await shielded_cleanup(
+            lambda: asyncio.to_thread(
                 self._client.calls(call_sid).update,
                 status="completed",
             )
         )
-        while not cleanup_task.done():
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as exc:
-                if cancellation is None:
-                    cancellation = exc
-            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                break
-        try:
-            cleanup_task.result()
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            return exc, cancellation
+        cancellation = asyncio.CancelledError() if settlement.cancellation_requests else None
+        if settlement.error is not None:
+            if isinstance(settlement.error, Exception):
+                return settlement.error, cancellation
+            raise settlement.error
         return None, cancellation
 
     async def _finish_stale_call_placement(
