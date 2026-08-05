@@ -752,10 +752,21 @@ async def test_webrtc_cleanup_logs_only_unexpected_finalizer_failure(
         runtime_feedback=False,
     )
     started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
 
     async def wait_for_peer_close() -> None:
         started.set()
-        await asyncio.Event().wait()
+        try:
+            while True:
+                try:
+                    await release.wait()
+                    return
+                except asyncio.CancelledError:
+                    if release.is_set():
+                        raise
+        finally:
+            finished.set()
 
     async def fail_finalizer(_key: int, *, force: bool) -> None:
         assert force is True
@@ -770,13 +781,17 @@ async def test_webrtc_cleanup_logs_only_unexpected_finalizer_failure(
     monkeypatch.setattr(routes, "_finalize_session_cleanup", fail_finalizer)
     await started.wait()
 
-    with caplog.at_level(logging.ERROR, logger="easycat.server.webrtc_routes"):
-        await routes.cancel_cleanup_tasks()
+    try:
+        with caplog.at_level(logging.ERROR, logger="easycat.server.webrtc_routes"):
+            await routes.cancel_cleanup_tasks(timeout_s=0.05)
 
-    assert cleanup.cancelled()
-    assert "test-webrtc-wait-closed" not in caplog.text
-    assert "easycat-webrtc-finalizer-17" in caplog.text
-    assert "webrtc finalizer failed" in caplog.text
+        assert not cleanup.done()
+        assert "test-webrtc-wait-closed" not in caplog.text
+        assert "easycat-webrtc-finalizer-17" in caplog.text
+        assert "webrtc finalizer failed" in caplog.text
+    finally:
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
 
 
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:

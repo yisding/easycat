@@ -60,27 +60,51 @@ async def test_close_active_ws_connections_logs_finalizer_failure(
     assert "websocket close failed" in caplog.text
 
 
-async def test_close_active_ws_connections_ignores_deadline_cancellation(
+async def test_close_active_ws_connections_logs_settled_failure_when_sibling_times_out(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
 
-    class _SlowConnection:
+    class _StubbornConnection:
         async def close(self, *, code: int, reason: str) -> None:
             assert code == 1001
             assert reason
             started.set()
-            await asyncio.Event().wait()
+            try:
+                while True:
+                    try:
+                        await release.wait()
+                        return
+                    except asyncio.CancelledError:
+                        if release.is_set():
+                            raise
+            finally:
+                finished.set()
+
+    class _FailingConnection:
+        async def close(self, *, code: int, reason: str) -> None:
+            assert code == 1001
+            assert reason
+            raise RuntimeError("websocket close failed during timeout")
 
     server = _idle_server(force_shutdown_timeout_s=0.01)
-    connection = _SlowConnection()
-    server._ws_connections[1] = connection
+    stubborn = _StubbornConnection()
+    failing = _FailingConnection()
+    server._ws_connections.update({1: stubborn, 2: failing})
 
-    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
-        await server._close_active_ws_connections()
+    try:
+        with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+            await server._close_active_ws_connections()
 
-    assert started.is_set()
-    assert f"easycat-voice-websocket-close-{id(connection)}" not in caplog.text
+        assert started.is_set()
+        assert f"easycat-voice-websocket-close-{id(stubborn)}" not in caplog.text
+        assert f"easycat-voice-websocket-close-{id(failing)}" in caplog.text
+        assert "websocket close failed during timeout" in caplog.text
+    finally:
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
 
 
 async def test_cancel_ws_handler_tasks_ignores_requested_cancellation(
