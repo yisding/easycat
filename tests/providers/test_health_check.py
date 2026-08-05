@@ -10,6 +10,7 @@ import pytest
 
 from easycat._health_check import HealthCheckable, PeriodicHealthChecker
 from easycat.events import Error, ErrorStage, EventBus
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 
 
 class HealthyProvider:
@@ -125,6 +126,28 @@ class TestPeriodicHealthChecker:
             await checker.stop()
         assert not checker.is_running
 
+    async def test_session_scope_owns_periodic_task(self):
+        provider = NotifyingHealthyProvider()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="session:health-test",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        checker = PeriodicHealthChecker(provider, interval=0, provider_name="test")
+        checker.set_runtime_scope(root, name="test-health-check")
+        checker.start()
+        try:
+            await asyncio.wait_for(provider.checked.wait(), timeout=0.5)
+            task = checker._task
+            assert task is not None
+            assert checker._tasks.scope is not None
+            assert checker._tasks.scope.parent is root
+            assert checker._tasks.tasks() == (task,)
+        finally:
+            await checker.stop()
+            await root.close()
+
     def test_start_without_running_loop_leaves_no_task_or_coroutine_warning(
         self,
         recwarn: pytest.WarningsRecorder,
@@ -153,6 +176,7 @@ class TestPeriodicHealthChecker:
                     child_cancelled.set()
 
         child = asyncio.create_task(cancellation_resistant_task())
+        checker._tasks.adopt_task(child)
         checker._running = True
         checker._task = child
         stopping = asyncio.create_task(checker.stop())

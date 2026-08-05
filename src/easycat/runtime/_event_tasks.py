@@ -147,6 +147,14 @@ class RuntimeTaskScope:
         if scope is not None:
             scope.discard(task)
 
+    async def cancel_and_drain(self) -> None:
+        """Cancel and join this owner's tasks, closing an empty standalone root."""
+        scope = self._scope
+        if scope is None:
+            return
+        await scope.cancel_and_drain(self._member_name)
+        await self.release_standalone_if_empty()
+
     async def release_standalone_if_empty(self) -> None:
         """Close and release an empty lazily created root."""
         for retired in tuple(self._retired_roots):

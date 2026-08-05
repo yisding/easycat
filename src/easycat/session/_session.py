@@ -1436,6 +1436,10 @@ class Session:
                         on_unhealthy=self._on_provider_unhealthy,
                         on_recovered=self._on_provider_recovered,
                     )
+                    checker.set_runtime_scope(
+                        self._runtime_scope,
+                        name=f"{name}-health-check",
+                    )
                     checker.start()
                     self._health_checkers.append(checker)
 

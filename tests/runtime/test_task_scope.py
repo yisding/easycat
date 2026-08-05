@@ -143,3 +143,30 @@ async def test_failed_promotion_keeps_standalone_ownership_intact() -> None:
     release.set()
     await task
     await tasks.release_standalone_if_empty()
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_drain_closes_standalone_root() -> None:
+    tasks = _task_scope()
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def worker() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    task = tasks.create_task(worker(), task_name="standalone-work")
+    assert task is not None
+    standalone = tasks.scope
+    assert standalone is not None
+    await started.wait()
+
+    await tasks.cancel_and_drain()
+
+    assert task.cancelled()
+    assert cleaned_up.is_set()
+    assert tasks.scope is None
+    assert standalone.state is RuntimeScopeState.CLOSED

@@ -20,9 +20,12 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.capabilities import HealthCheckable
+from easycat.runtime.scope import RuntimeScope
 
 logger = logging.getLogger(__name__)
+_HEALTH_CHECK_MEMBER = "provider_health_check"
 
 # Sync or async, takes the provider name. Mirrors ReconnectingWebSocket's
 # callback style so owners can hook recovery the same way as on_give_up.
@@ -60,6 +63,14 @@ class PeriodicHealthChecker:
         self._failure_threshold = failure_threshold
         self._on_unhealthy = on_unhealthy
         self._on_recovered = on_recovered
+        self._tasks = RuntimeTaskScope(
+            owner_label=f"{provider_name}-health-check",
+            member_name=_HEALTH_CHECK_MEMBER,
+            cohort="health",
+            logger=logger,
+            failure_message="Periodic health check task failed",
+            drop_if_closed=False,
+        )
         self._task: asyncio.Task[None] | None = None
         self._running = False
         # Consecutive failures since the last healthy check.
@@ -77,46 +88,32 @@ class PeriodicHealthChecker:
         """True once the failure streak has crossed ``failure_threshold``."""
         return self._unhealthy
 
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach periodic work beneath its owning runtime lifecycle."""
+        self._tasks.attach(parent, name=name)
+
     def start(self) -> None:
         """Start the periodic health check loop."""
         if self._running:
             return
-        # Resolve the running loop before constructing ``self._run()``. Calling
-        # ``asyncio.create_task(self._run())`` first creates a coroutine that
-        # leaks a RuntimeWarning when an owner accidentally starts us from
-        # synchronous code.
-        loop = asyncio.get_running_loop()
+        # Resolve the running loop before constructing ``self._run()`` so an
+        # accidental synchronous start cannot leave an unawaited coroutine.
+        asyncio.get_running_loop()
+        task = self._tasks.create_task(
+            self._run(),
+            task_name=f"{self._provider_name}-health-check",
+        )
+        assert task is not None
+        self._task = task
         self._running = True
-        self._task = loop.create_task(self._run())
 
     async def stop(self) -> None:
         """Stop the periodic health check loop."""
         self._running = False
         task = self._task
-        if task and not task.done():
-            current = asyncio.current_task()
-            if task is current:
-                # Error subscribers and unhealthy callbacks run inside the
-                # checker task. They may initiate Session.stop(), which calls
-                # back here. Cancelling the current task would be mistaken for
-                # external caller cancellation below and abort the surrounding
-                # session teardown. The loop observes ``_running = False`` as
-                # soon as the callback returns and exits naturally.
-                return
-            cancellation_requests = current.cancelling() if current is not None else 0
-            task.cancel()
-            try:
-                # A caller abandoning its wait must not issue another
-                # cancellation to the owned checker task, nor be mistaken for
-                # the expected cancellation of that task.
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if current is not None and current.cancelling() > cancellation_requests:
-                    # Keep ``_task`` reachable so a later stop can finish the
-                    # cancellation-resistant checker rather than orphaning it.
-                    raise
-                # Expected: the checker task acknowledged our cancellation.
-        self._task = None
+        await self._tasks.cancel_and_drain()
+        if self._task is task:
+            self._task = None
 
     async def check_once(self) -> bool:
         """Run a single health check. Returns True if healthy."""
@@ -139,8 +136,6 @@ class PeriodicHealthChecker:
                 if not self._running:
                     break
                 await self.check_once()
-        except asyncio.CancelledError:
-            pass  # Graceful shutdown via stop()
         except Exception:
             logger.exception("Periodic health check loop failed for %s", self._provider_name)
         finally:
