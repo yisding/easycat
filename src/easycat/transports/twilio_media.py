@@ -38,6 +38,7 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
 )
+from easycat.runtime.scope import BackgroundTaskScope
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
 from easycat.transports._base import (
     AudioQueueMixin,
@@ -1467,6 +1468,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
         # start/observer outcome instead of treating `_connected=True` as a
         # completed handshake.
         self._connect_task: asyncio.Task[None] | None = None
+        self._lifecycle_tasks = BackgroundTaskScope(name="twilio-connection-lifecycle")
         self._socket_consumed = False
         # The accepted socket remains cleanup-owned until close succeeds.
         # Public connected state and receive metadata may already be cleared
@@ -1507,9 +1509,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
             connect_task = self._connect_task
             leader = connect_task is None or connect_task.done()
             if leader:
-                connect_task = asyncio.create_task(
+                connect_task = self._lifecycle_tasks.create_task(
+                    "twilio-connection-connect",
                     self._connect_transaction(),
-                    name="twilio-connection-connect",
+                    log_errors=False,
                 )
                 self._connect_task = connect_task
         if connect_task is None:

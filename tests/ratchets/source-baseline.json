@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WebSocket connection receive loop moved to the transport RuntimeTaskScope; one raw spawn removed.",
+  "rationale": "Twilio connection leadership moved to BackgroundTaskScope; one raw spawn removed.",
   "counts": {
     "cancelled_error_handler": 111,
     "epoch_field": 17,
     "gather_return_exceptions": 24,
     "module_task_set": 3,
-    "raw_task_spawn": 62,
+    "raw_task_spawn": 61,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -217,7 +217,6 @@
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._drain_diagnostics_for_disconnect\tasyncio.create_task\t54018eae3c55d241\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._start_server_wait_for_disconnect\tasyncio.ensure_future\t576a160d35378590\t0",
     "raw_task_spawn\ttransports/twilio_media.py\tTwilioConnectionTransport._connect_transaction\tasyncio.create_task\tf00d30d16d61c102\t0",
-    "raw_task_spawn\ttransports/twilio_media.py\tTwilioConnectionTransport.connect\tasyncio.create_task\tcc73f973590f64cb\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._close_unpublished_peer\tasyncio.create_task\t9b98632a4c893ab3\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\tasyncio.ensure_future\t51eac5dd6d9dade1\t0",
     "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked\tasyncio.create_task\t3f84358545e6973f\t0",

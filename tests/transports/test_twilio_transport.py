@@ -852,6 +852,7 @@ class TestTwilioStreamTokenValidation:
 
         assert not second.done()
         assert transport._receive_task is None
+        assert transport._lifecycle_tasks.active("twilio-connection-connect")
 
         transport.release_start.set()
         with pytest.raises(RuntimeError, match="deferred start failed"):
@@ -859,6 +860,7 @@ class TestTwilioStreamTokenValidation:
         with pytest.raises(RuntimeError, match="deferred start failed"):
             await second
 
+        assert not transport._lifecycle_tasks.active("twilio-connection-connect")
         assert not transport.is_connected
         assert transport._receive_task is None
         assert ws.closed_with == ()
