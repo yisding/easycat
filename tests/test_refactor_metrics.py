@@ -298,6 +298,8 @@ def test_refactor_metric_review_inputs_start_empty_and_versioned() -> None:
         "commit_classifications": [],
         "recurrence_adjudications": [],
     }
+
+
 def test_report_uses_exact_windows_migration_exclusions_and_group_assignment() -> None:
     manifest, adjudications, history = _fixture_inputs()
 
