@@ -588,6 +588,33 @@ class TestIVRNavigation:
         finally:
             nav.stop()
 
+    @pytest.mark.asyncio
+    async def test_stop_cancels_owned_prompt_timer(self) -> None:
+        bus = EventBus()
+
+        async def mock_agent(_ctx: dict) -> dict:
+            return {"action": "wait"}
+
+        nav = IVRNavigator(
+            bus,
+            agent_callback=mock_agent,
+            config=IVRNavigatorConfig(prompt_timeout_s=5.0),
+        )
+        nav.start()
+        nav.activate()
+        await bus.emit(STTFinal(text="Press 1 for sales"))
+
+        timer = nav._prompt_timeout_task
+        assert timer is not None
+        assert nav._timer_tasks.tasks() == (timer,)
+
+        nav.stop()
+        await asyncio.sleep(0)
+
+        assert timer.cancelled()
+        assert nav._timer_tasks.empty
+        assert nav._prompt_timeout_task is None
+
 
 class TestIVRDetection:
     def test_detects_ivr_prompt_with_numbers(self) -> None:

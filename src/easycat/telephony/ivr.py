@@ -22,12 +22,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
+from easycat.runtime.scope import BackgroundTaskScope
 from easycat.telephony._ivr_decision import IVRAgentDecision, parse_ivr_agent_decision
 from easycat.telephony.dtmf import is_valid_dtmf_output
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 from easycat.telephony.twiml import twiml_play_digits
 
 logger = logging.getLogger(__name__)
+_IVR_PROMPT_TIMER_MEMBER = "ivr_prompt_timeout"
 
 # Heuristic patterns that indicate IVR prompts.
 _IVR_PATTERNS: list[re.Pattern[str]] = [
@@ -251,6 +253,7 @@ class IVRNavigator:
         self._started = False
         self._menu_depth = 0
         self._history: list[tuple[str, dict[str, str]]] = []
+        self._timer_tasks = BackgroundTaskScope(name="ivr-navigator")
         self._prompt_timeout_task: asyncio.Task[None] | None = None
         self._in_hold = False
 
@@ -518,15 +521,22 @@ class IVRNavigator:
         if not self._is_current_activation(activation_epoch):
             return
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._prompt_timeout_task = loop.create_task(self._prompt_timeout_coro(activation_epoch))
+        self._prompt_timeout_task = self._timer_tasks.create_task(
+            _IVR_PROMPT_TIMER_MEMBER,
+            self._prompt_timeout_coro(activation_epoch),
+            replace=True,
+        )
 
     def _cancel_prompt_timeout(self) -> None:
-        if self._prompt_timeout_task and not self._prompt_timeout_task.done():
-            self._prompt_timeout_task.cancel()
-            self._prompt_timeout_task = None
+        task = self._prompt_timeout_task
+        if task is None or task.done():
+            return
+        self._timer_tasks.cancel(_IVR_PROMPT_TIMER_MEMBER)
+        task.cancel()
+        self._prompt_timeout_task = None
 
     async def _prompt_timeout_coro(self, activation_epoch: int) -> None:
         try:
@@ -535,5 +545,6 @@ class IVRNavigator:
                 await self._event_bus.emit(
                     IVRAction(type=IVRActionType.WAIT, menu_depth=self._menu_depth)
                 )
-        except asyncio.CancelledError:
-            pass
+        finally:
+            if self._prompt_timeout_task is asyncio.current_task():
+                self._prompt_timeout_task = None
