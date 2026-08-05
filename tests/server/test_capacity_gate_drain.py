@@ -10,6 +10,7 @@ replicates the real ``Session._stopping`` idempotency guard (where a
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -735,6 +736,47 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
     assert gate.active_keys() == ()
     assert gate.reserved_count == 0
     assert routes._cleanup_tasks == set()
+
+
+async def test_webrtc_cleanup_logs_only_unexpected_finalizer_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=gate,
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+    started = asyncio.Event()
+
+    async def wait_for_peer_close() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def fail_finalizer(_key: int, *, force: bool) -> None:
+        assert force is True
+        raise RuntimeError("webrtc finalizer failed")
+
+    cleanup = asyncio.create_task(
+        wait_for_peer_close(),
+        name="test-webrtc-wait-closed",
+    )
+    routes._cleanup_tasks.add(cleanup)
+    routes._cleanup_task_keys[cleanup] = 17
+    monkeypatch.setattr(routes, "_finalize_session_cleanup", fail_finalizer)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.webrtc_routes"):
+        await routes.cancel_cleanup_tasks()
+
+    assert cleanup.cancelled()
+    assert "test-webrtc-wait-closed" not in caplog.text
+    assert "easycat-webrtc-finalizer-17" in caplog.text
+    assert "webrtc finalizer failed" in caplog.text
 
 
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:

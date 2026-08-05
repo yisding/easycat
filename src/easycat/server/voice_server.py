@@ -40,7 +40,12 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate, _await_with_hard_timeout
+from easycat.server.transports import (
+    CapacityGate,
+    _await_with_hard_timeout,
+    _log_settled_task_failures,
+    _log_unexpected_task_results,
+)
 from easycat.session_manager import (
     SessionManager,
     SessionStopReport,
@@ -854,14 +859,33 @@ class VoiceServer:
         if not connections:
             return
         close_tasks = [
-            asyncio.create_task(ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON))
+            asyncio.create_task(
+                ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON),
+                name=f"easycat-voice-websocket-close-{id(ws)}",
+            )
             for ws in connections
         ]
+        gathered = asyncio.gather(*close_tasks, return_exceptions=True)
         closed = await _await_with_hard_timeout(
-            asyncio.gather(*close_tasks, return_exceptions=True),
+            gathered,
             timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
         )
-        if not closed:
+        context = "VoiceServer WebSocket connection teardown"
+        if closed:
+            _log_unexpected_task_results(
+                close_tasks,
+                gathered.result(),
+                explicitly_cancelled=(),
+                context=context,
+                log=logger,
+            )
+        else:
+            _log_settled_task_failures(
+                close_tasks,
+                explicitly_cancelled=close_tasks,
+                context=context,
+                log=logger,
+            )
             logger.warning(
                 "VoiceServer: raw-ws connections did not close within "
                 "force_shutdown_timeout_s=%ss; cancelling handlers",
@@ -903,9 +927,25 @@ class VoiceServer:
         if tasks:
             gathered = asyncio.gather(*tasks, return_exceptions=True)
             if timeout_s is None:
-                await gathered
+                results = await gathered
             else:
-                await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                if not completed:
+                    _log_settled_task_failures(
+                        tasks,
+                        explicitly_cancelled=tasks,
+                        context="VoiceServer WebSocket handler teardown",
+                        log=logger,
+                    )
+                    return
+                results = gathered.result()
+            _log_unexpected_task_results(
+                tasks,
+                results,
+                explicitly_cancelled=tasks,
+                context="VoiceServer WebSocket handler teardown",
+                log=logger,
+            )
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -1299,6 +1339,7 @@ class VoiceServer:
         # block forever on the surviving handler).
         task = asyncio.current_task()
         if task is not None:
+            task.set_name(f"easycat-voice-websocket-handler-{id(ws)}")
             self._ws_handler_tasks.add(task)
         try:
             if self._gate.is_draining:

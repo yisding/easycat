@@ -48,7 +48,7 @@ still bind:
 
 - WS1.4, WS1.5, WS2.2-2.6, WS2.7b-c, WS5.1, and WS5.3 remain behind **A60**,
   which cannot even begin until the Tier-A completion SHA is stamped — and
-  WS0.4, WS5.2, and WS6.1b are still open.
+  WS5.2 and WS6.1b are still open.
 - WS3.2+ additionally requires **bridge B60** plus the retained-peer adapter
   sketches; WS4.2+ additionally requires **transport B60** plus WS1.4, WS2.3,
   and WS5.1.
@@ -404,6 +404,9 @@ exception results with task identity; classify `CancelledError` caused by the
 preceding explicit teardown cancellation as expected, and journal unexpected
 exceptions. Tests: expected cancellation emits no failure, while a genuine
 finalizer exception is observable with its task name.
+
+Completed — see
+[completion log](2026-08-02-bug-resistant-completion-log.md#ws04).
 
 ### WS0.5 — Websocket resampler-tail fence [S] [behavior fix]
 
