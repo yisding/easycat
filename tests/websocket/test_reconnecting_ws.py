@@ -500,6 +500,36 @@ class TestReconnectingWebSocket:
             await asyncio.sleep(0)
         assert ws._background_tasks.empty
 
+    async def test_overlapping_connection_races_keep_distinct_ownership(self):
+        first_release = asyncio.Event()
+        second_release = asyncio.Event()
+        first_connection = FakeWSConnection()
+        second_connection = FakeWSConnection()
+
+        async def connect(
+            release: asyncio.Event,
+            connection: FakeWSConnection,
+        ) -> FakeWSConnection:
+            await release.wait()
+            return connection
+
+        ws = ReconnectingWebSocket(url="wss://test.com")
+        first = asyncio.create_task(
+            ws._connect_attempt_or_close(connect(first_release, first_connection))
+        )
+        await asyncio.sleep(0)
+        second = asyncio.create_task(
+            ws._connect_attempt_or_close(connect(second_release, second_connection))
+        )
+        await asyncio.sleep(0)
+
+        first_release.set()
+        second_release.set()
+
+        assert await first is first_connection
+        assert await second is second_connection
+        assert ws._background_tasks.empty
+
     async def test_late_connection_close_failure_is_retained_for_close_retry(self):
         started = asyncio.Event()
         release = asyncio.Event()

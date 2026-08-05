@@ -195,6 +195,7 @@ class ReconnectingWebSocket:
         self._pending_connection_closes: list[ClientConnection] = []
         self._connection_cleanup_lock = asyncio.Lock()
         self._background_tasks = BackgroundTaskScope(name="reconnecting-websocket")
+        self._background_task_sequence = 0
         self._closed = False
         # Set when recv_iter ends because the reconnect budget was exhausted or a
         # reconnect ultimately failed (terminal mid-stream death), as opposed to a
@@ -442,12 +443,12 @@ class ReconnectingWebSocket:
             return await operation
 
         connect_task = self._background_tasks.create_task(
-            "websocket_connection_attempt",
+            self._next_background_task_name("websocket_connection_attempt"),
             await_connection(),
             log_errors=False,
         )
         close_task = self._background_tasks.create_task(
-            "websocket_connection_close_wait",
+            self._next_background_task_name("websocket_connection_close_wait"),
             self._close_event.wait(),
             log_errors=False,
         )
@@ -504,9 +505,13 @@ class ReconnectingWebSocket:
             return
         self._retain_connection_for_close(connection)
         self._background_tasks.create_task(
-            "websocket_late_connection_cleanup",
+            self._next_background_task_name("websocket_late_connection_cleanup"),
             self._close_late_retained_connection(connection),
         )
+
+    def _next_background_task_name(self, prefix: str) -> str:
+        self._background_task_sequence += 1
+        return f"{prefix}:{self._background_task_sequence}"
 
     async def _close_late_retained_connection(self, connection: ClientConnection) -> None:
         """Best-effort immediate cleanup; failures remain retry-owned."""
