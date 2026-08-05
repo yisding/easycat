@@ -28,6 +28,7 @@ from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
+from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -377,6 +378,12 @@ class Session:
             supervisor=self._runtime_supervisor,
             survivor_capacity=1,
         )
+        for role, provider in (("stt", self.stt), ("tts", self.tts)):
+            if isinstance(provider, ProviderErrorEmitter):
+                provider.set_runtime_scope(
+                    self._runtime_scope,
+                    name=f"{role}-provider-events",
+                )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
             self._maybe_bind_session_id(event_producer)

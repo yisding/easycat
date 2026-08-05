@@ -1027,14 +1027,23 @@ class RuntimeScope:
                 task.cancel()
         return tasks
 
-    async def drain(self, name: str | None = None, *, cancel: bool = False) -> None:
+    async def drain(
+        self,
+        name: str | None = None,
+        *,
+        cancel: bool = False,
+        suppress_errors: bool = False,
+    ) -> None:
         """Wait for pending tasks to finish, optionally cancelling them first.
 
         Every snapshotted task is awaited and discarded even if one of
         them fails; the first observed exception (if any) is re-raised
         once the drain completes, so callers cannot silently leave
         sibling tasks pending. When *cancel* is True, expected
-        cancellation/exception teardown is swallowed.
+        cancellation/exception teardown is swallowed. ``suppress_errors``
+        preserves task execution while letting an owning emitter keep its
+        reviewed log-and-drop result policy. Caller cancellation always
+        propagates.
         """
         tasks = self.cancel(name) if cancel else self.tasks(name)
         current = asyncio.current_task()
@@ -1054,10 +1063,10 @@ class RuntimeScope:
             except asyncio.CancelledError as exc:
                 if current is not None and current.cancelling() > cancellation_requests:
                     raise
-                if not cancel and pending is None:
+                if not cancel and not suppress_errors and pending is None:
                     pending = exc
             except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                if not cancel and pending is None:
+                if not cancel and not suppress_errors and pending is None:
                     pending = exc
             finally:
                 if task.done():

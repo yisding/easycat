@@ -8,11 +8,13 @@ import sys
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
+    ErrorStage,
     EventBus,
     Interruption,
     TTSAudio,
@@ -73,6 +75,26 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
     assert warmed == ["stt", "tts", "audio_resampling", "agent", "transport"]
+
+
+@pytest.mark.asyncio
+async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() -> None:
+    class ScopedFakeSTT(ProviderErrorEmitter, FakeSTT):
+        _error_stage = ErrorStage.STT
+        _provider_error_name = "fake-stt"
+
+        def __init__(self) -> None:
+            FakeSTT.__init__(self)
+            self._init_emit_tasks()
+
+    stt = ScopedFakeSTT()
+    session = Session(_full_config(stt=stt))
+
+    assert stt._emit_scope is not None
+    assert stt._emit_scope.parent is session._runtime_scope
+    assert stt._emit_scope.name == "stt-provider-events"
+
+    await session.stop(force=True)
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ import platform
 import sys
 from typing import Any
 
-from easycat._provider_helpers import has_usable_credential
+from easycat._credentials import has_usable_credential
 
 PROVIDER_ENV_VARS = (
     "OPENAI_API_KEY",

@@ -315,10 +315,7 @@ class STTBase:
             await self._drain_provider_error_tasks()
 
     async def _drain_provider_error_tasks(self) -> None:
-        """Join provider-scoped Error publication when the mixin supplies it."""
-        drain = getattr(self, "_drain_emit_tasks", None)
-        if callable(drain):
-            await drain()
+        """No-op hook overridden by the provider error-emitter mixin."""
 
     def _emit_event(self, event: STTEvent) -> None:
         """Enqueue an STTEvent for consumers of ``events()``."""

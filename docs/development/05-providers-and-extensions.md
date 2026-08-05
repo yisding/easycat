@@ -233,10 +233,12 @@ fallback, not the contract.
 
 STT and TTS providers yield provider-scoped normal events, while provider
 failures may publish session `Error` events through the injected bus.
-[`ProviderErrorEmitter`](../../src/easycat/_provider_helpers.py) retains strong
-references to asynchronous error-emission tasks and drains them on teardown.
-That avoids garbage collection of a pending task and avoids leaving emissions
-dangling during interpreter shutdown.
+[`ProviderErrorEmitter`](../../src/easycat/_provider_helpers.py) places
+asynchronous error-emission tasks in a named child of the Session runtime
+scope. Standalone providers use a local scope with the same drain semantics.
+That explicit ownership keeps pending publications alive, joins them during
+provider teardown, and leaves no detached task dangling during interpreter
+shutdown.
 
 ## 5.8 Failure and Teardown Semantics
 

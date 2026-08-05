@@ -1658,6 +1658,52 @@ async def test_runtime_scope_drain_observes_completed_task_exceptions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_drain_can_suppress_member_errors_without_cancelling_work() -> None:
+    scope = RuntimeScope()
+    sibling_finished = False
+
+    async def fail() -> None:
+        raise RuntimeError("emit failed")
+
+    async def sibling() -> None:
+        nonlocal sibling_finished
+        await asyncio.sleep(0)
+        sibling_finished = True
+
+    scope.create_task("emit", fail())
+    scope.create_task("emit", sibling())
+
+    await scope.drain("emit", suppress_errors=True)
+
+    assert sibling_finished
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_suppressing_member_errors_still_propagates_drain_caller_cancellation() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def member() -> None:
+        started.set()
+        await release.wait()
+
+    task = scope.create_task("emit", member())
+    await started.wait()
+    draining = asyncio.create_task(scope.drain("emit", suppress_errors=True))
+    await asyncio.sleep(0)
+    draining.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+    assert not task.cancelled()
+
+    release.set()
+    await scope.drain("emit", suppress_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_cancel_and_drain_preserves_caller_cancellation() -> None:
     scope = RuntimeScope()
     started = asyncio.Event()
