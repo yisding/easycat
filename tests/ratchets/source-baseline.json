@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WS2.2 attaches Deepgram keepalive work to the STT runtime scope",
+  "rationale": "WS2.2 attaches OpenAI Realtime close transactions to the STT runtime scope",
   "counts": {
-    "cancelled_error_handler": 113,
+    "cancelled_error_handler": 112,
     "epoch_field": 17,
     "gather_return_exceptions": 30,
     "module_task_set": 4,
-    "raw_task_spawn": 84,
+    "raw_task_spawn": 83,
     "shield_loop": 10,
     "task_cancelling": 54
   },
@@ -82,7 +82,6 @@
     "cancelled_error_handler\tstt/base.py\tSTTBase.end_stream\texcept asyncio.CancelledError\ta416e45a919a81c7\t0",
     "cancelled_error_handler\tstt/base.py\tSTTBase.send_audio\texcept asyncio.CancelledError\tbd2375c7d7d7630a\t0",
     "cancelled_error_handler\tstt/deepgram_provider.py\tDeepgramSTT._keepalive_loop\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
-    "cancelled_error_handler\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT._log_close_task_exception\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT.warmup\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
@@ -220,7 +219,6 @@
     "raw_task_spawn\tsession_manager.py\tSessionManager._prepare_stop\tasyncio.create_task\tcba157a7f5843a5b\t0",
     "raw_task_spawn\tstages/base.py\t_delete_blocking_artifact\tasyncio.create_task\tb7e1c417c6a0d071\t0",
     "raw_task_spawn\tstages/base.py\t_put_blocking_artifact\tasyncio.create_task\t7e868a22b5488d4e\t0",
-    "raw_task_spawn\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT._schedule_close\tasyncio.create_task\tf08f8090575c6120\t0",
     "raw_task_spawn\tstt/websocket_base.py\tWebSocketSTTBase._connect_websocket\tasyncio.create_task\tf00d30d16d61c102\t0",
     "raw_task_spawn\tsupervisor.py\tSessionAudioBroadcaster._emit_audit_event\tloop.create_task\t11375d628fba9f0f\t0",
     "raw_task_spawn\tsupervisor.py\t_stream_supervisor_audio\tasyncio.create_task\t257c42b0ca7aca8b\t0",

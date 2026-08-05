@@ -29,6 +29,7 @@ from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
+from easycat.stt.base import _STT_RUNTIME_FINISH_POLICY
 from easycat.stt.websocket_base import WebSocketSTTBase
 
 # OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
@@ -48,6 +49,8 @@ _REALTIME_SAMPLE_RATE = 24000
 _FINAL_TRANSCRIPT_TIMEOUT_S = 0.9
 
 logger = logging.getLogger(__name__)
+
+_BACKGROUND_CLOSE_TASK = "openai_realtime_close"
 
 
 @dataclass
@@ -201,11 +204,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             # provider hook. The old persistent receive loop may terminate
             # that queue while its close task drains, so replace it only after
             # the task has fully completed.
-            try:
-                await self._close_task
-            except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
-                pass
-            self._close_task = None
+            await self._drain_scheduled_close()
             if self._persistent_enabled():
                 self._event_queue = asyncio.Queue()
         self._reset_logical_turn_state()
@@ -271,15 +270,8 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _discard_connection(self) -> None:
         """Close a socket that cannot be safely reused by another turn."""
-        close_task = self._close_task
-        if close_task is not None and close_task is not asyncio.current_task():
-            try:
-                await close_task
-            except Exception:
-                logger.debug("OpenAI Realtime background close failed", exc_info=True)
-            finally:
-                if self._close_task is close_task:
-                    self._close_task = None
+        if self._close_task is not asyncio.current_task():
+            await self._drain_scheduled_close()
         await self._close_active_websocket(close_before_drain=True)
         self._session_ready = None
         self._reset_logical_turn_state()
@@ -294,18 +286,37 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         ws = self._ws
         if ws is None:
             return
-        task = asyncio.create_task(self._close_active_websocket())
-        task.add_done_callback(self._log_close_task_exception)
-        self._close_task = task
+        scope = self._ensure_runtime_scope()
+        self._close_task = scope.create_task(
+            _BACKGROUND_CLOSE_TASK,
+            self._run_scheduled_close(),
+            task_name=_BACKGROUND_CLOSE_TASK,
+            policy=_STT_RUNTIME_FINISH_POLICY,
+        )
 
-    @staticmethod
-    def _log_close_task_exception(task: asyncio.Task[None]) -> None:
+    async def _run_scheduled_close(self) -> None:
         try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
+            await self._close_active_websocket()
         except Exception:
             logger.debug("OpenAI Realtime close task failed", exc_info=True)
+
+    async def _drain_scheduled_close(self) -> None:
+        task = self._close_task
+        scope = self._runtime_scope
+        if scope is None:
+            if task is None:
+                return
+            try:
+                await task
+            except Exception:
+                logger.debug("OpenAI Realtime background close failed", exc_info=True)
+            finally:
+                if task.done() and self._close_task is task:
+                    self._close_task = None
+            return
+        await scope.drain(_BACKGROUND_CLOSE_TASK, suppress_errors=True)
+        if (task is None or task.done()) and self._close_task is task:
+            self._close_task = None
 
     async def _send_session_update(self) -> None:
         """Configure a realtime session with input audio transcription enabled.
@@ -594,16 +605,13 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def aclose(self) -> None:
         """Close a persistent Realtime socket during Session teardown."""
-        close_task = self._close_task
-        self._close_task = None
-        if close_task is not None:
-            try:
-                await close_task
-            except Exception:
-                logger.debug("OpenAI Realtime background close failed", exc_info=True)
-        await self._close_active_websocket(close_before_drain=True)
-        self._session_ready = None
-        self._reset_logical_turn_state()
+        try:
+            await self._drain_scheduled_close()
+            await self._close_active_websocket(close_before_drain=True)
+            self._session_ready = None
+            self._reset_logical_turn_state()
+        finally:
+            await self._close_owned_runtime_scope_if_idle()
 
     def version_info(self) -> dict[str, str]:
         return {
