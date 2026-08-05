@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
 from easycat.audio_format import AudioChunk
+from easycat.runtime.scope import RuntimeScope
 from easycat.teardown_budgets import (
     WEBRTC_OFFER_CANCEL_DRAIN_TIMEOUT_S as _OFFER_CANCEL_DRAIN_TIMEOUT_S,
 )
@@ -194,6 +195,13 @@ class WebRTCTransport(AudioQueueMixin):
         # Per-server stats rate-limit / record state, shared with each lazily
         # built signaling-handlers instance (see ``_signaling``).
         self._stats_state = WebRTCStatsState()
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach transport and outbound delivery work to one runtime child."""
+        super().set_runtime_scope(parent, name=name)
+        scope = self._emit_scope
+        assert scope is not None
+        self._outbound._bind_event_scope(scope)
 
     @property
     def offer_request(self) -> Any | None:
@@ -1023,6 +1031,9 @@ class WebRTCTransport(AudioQueueMixin):
             # Prepare an outbound track for the new connection, but keep the
             # existing peer's source active until negotiation succeeds.
             outbound = OutboundAudioSource()
+            emit_scope = self._emit_scope
+            if emit_scope is not None:
+                outbound._bind_event_scope(emit_scope)
             outbound_track = outbound.create_track()
             pc.addTrack(outbound_track)
 

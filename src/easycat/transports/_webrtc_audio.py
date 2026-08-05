@@ -9,10 +9,13 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, ClassVar
+from weakref import WeakKeyDictionary
 
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
+from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime.scope import RuntimeScope
 from easycat.teardown_budgets import WEBRTC_AUDIO_ACLOSE_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
@@ -96,24 +99,31 @@ class _QueuedOutboundChunk:
 _DeliveredChunk = tuple[AudioChunk, str | None, str | None, object | None]
 
 
+_DELIVERY_EVENT_TASK_NAME = "webrtc_delivery_emit"
+_DELIVERY_EVENT_COHORT = "transport-events"
 # Delivery subscribers are application-owned and can suppress cancellation.
-# Timed-out teardown work remains owned here until it eventually settles so
-# neither loop shutdown nor a task exception loses observability.
-_BACKGROUND_EMIT_TASKS: set[asyncio.Task[None]] = set()
+# A worker that exceeds the reviewed aclose bound transfers here until it
+# settles, keeping a durable strong owner without a module-level task set.
+_BACKGROUND_EMIT_SCOPES: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    RuntimeEventTaskScope,
+] = WeakKeyDictionary()
 
 
-def _track_background_emit_task(task: asyncio.Task[None]) -> None:
-    _BACKGROUND_EMIT_TASKS.add(task)
-
-    def _finished(done: asyncio.Task[None]) -> None:
-        _BACKGROUND_EMIT_TASKS.discard(done)
-        if not done.cancelled():
-            try:
-                done.exception()
-            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
-                pass
-
-    task.add_done_callback(_finished)
+def _background_emit_scope() -> RuntimeEventTaskScope:
+    """Return the detached-worker owner for the current event loop."""
+    loop = asyncio.get_running_loop()
+    scope = _BACKGROUND_EMIT_SCOPES.get(loop)
+    if scope is None:
+        scope = RuntimeEventTaskScope(
+            owner_label="webrtc-background-delivery",
+            member_name=_DELIVERY_EVENT_TASK_NAME,
+            cohort=_DELIVERY_EVENT_COHORT,
+            logger=logger,
+            failure_message="Detached WebRTC delivery event worker failed",
+        )
+        _BACKGROUND_EMIT_SCOPES[loop] = scope
+    return scope
 
 
 class OutboundAudioSource:
@@ -139,11 +149,26 @@ class OutboundAudioSource:
         # teardown.
         self._emit_queue: deque[TransportAudioDelivered] = deque(maxlen=self._EMIT_QUEUE_MAX)
         self._emit_worker: asyncio.Task[None] | None = None
-        self._emit_tasks: set[asyncio.Task[None]] = set()
+        self._event_tasks = RuntimeEventTaskScope(
+            owner_label="webrtc-outbound-delivery",
+            member_name=_DELIVERY_EVENT_TASK_NAME,
+            cohort=_DELIVERY_EVENT_COHORT,
+            logger=logger,
+            failure_message="WebRTC delivery event worker failed",
+        )
         self._AudioFrame: type | None = None
         self._aec_ref_queue: deque[AudioChunk] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
         self._ref_format: AudioFormat | None = None
         self._aec_reference_enabled = False
+
+    @property
+    def _emit_tasks(self) -> set[asyncio.Task[Any]]:
+        """Compatibility inspection of scope-owned delivery workers."""
+        return set(self._event_tasks.tasks())
+
+    def _bind_event_scope(self, scope: RuntimeScope) -> None:
+        """Attach delivery workers to the owning transport's runtime child."""
+        self._event_tasks.bind(scope)
 
     def create_track(self) -> Any:
         """Return an aiortc ``MediaStreamTrack`` wrapping this source."""
@@ -331,10 +356,14 @@ class OutboundAudioSource:
                     )
                 )
         if self._emit_queue and (self._emit_worker is None or self._emit_worker.done()):
-            worker = asyncio.create_task(self._drain_emit_queue())
+            worker = self._event_tasks.create_task(
+                self._drain_emit_queue(),
+                task_name="webrtc:delivery-emit",
+            )
+            if worker is None:
+                self._emit_queue.clear()
+                return
             self._emit_worker = worker
-            self._emit_tasks.add(worker)
-            worker.add_done_callback(self._emit_tasks.discard)
 
     async def _drain_emit_queue(self) -> None:
         """Emit queued delivery events in playback order."""
@@ -386,7 +415,8 @@ class OutboundAudioSource:
                 )
                 for task in pending:
                     task.cancel()
-                    _track_background_emit_task(task)
+                    self._event_tasks.discard_task(task)
+                    _background_emit_scope().adopt_task(task)
                 # Let cooperative workers observe cancellation without awaiting a
                 # subscriber that deliberately suppresses it.
                 await asyncio.sleep(0)
@@ -396,7 +426,5 @@ class OutboundAudioSource:
                         task.exception()
                     except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
                         pass
-            # A self-owned worker remains tracked until it returns from this
-            # subscriber and its completion callback reaps it.
-            self._emit_tasks.difference_update(tasks)
         self._emit_queue.clear()
+        await self._event_tasks.release_standalone_if_empty()

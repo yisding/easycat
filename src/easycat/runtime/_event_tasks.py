@@ -85,6 +85,16 @@ class RuntimeEventTaskScope:
         self._scope = parent.create_child(name, default_policy=self._policy)
         self._owns_root = False
 
+    def bind(self, scope: RuntimeScope) -> None:
+        """Use an existing scope when a component shares its owner's child."""
+        current = self._scope
+        if current is scope:
+            return
+        if current is not None and current.tasks():
+            raise RuntimeError("Cannot rebind event work while emissions are active")
+        self._scope = scope
+        self._owns_root = False
+
     def ensure_scope(self) -> RuntimeScope:
         """Return the attached scope or lazily create a standalone root."""
         scope = self._scope
@@ -127,6 +137,12 @@ class RuntimeEventTaskScope:
         scope.add_task(self._member_name, task)
         task.add_done_callback(partial(self._on_done, scope))
         return task
+
+    def discard_task(self, task: asyncio.Task[Any]) -> None:
+        """Release one task from this scope before transferring ownership."""
+        scope = self._scope
+        if scope is not None:
+            scope.discard(task)
 
     async def release_standalone_if_empty(self) -> None:
         """Close and release an empty lazily created root."""
