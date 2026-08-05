@@ -8,10 +8,19 @@ import logging
 import pytest
 
 from easycat.runtime._event_tasks import RuntimeTaskScope
-from easycat.runtime.scope import RuntimeScope, RuntimeScopeState, RuntimeSupervisor
+from easycat.runtime.scope import (
+    RuntimeScope,
+    RuntimeScopeState,
+    RuntimeSupervisor,
+    RuntimeTaskAction,
+)
 
 
-def _task_scope() -> RuntimeTaskScope:
+def _task_scope(
+    *,
+    graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
+    force_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
+) -> RuntimeTaskScope:
     return RuntimeTaskScope(
         owner_label="test-owner",
         member_name="test_member",
@@ -19,6 +28,8 @@ def _task_scope() -> RuntimeTaskScope:
         logger=logging.getLogger(__name__),
         failure_message="test task failed",
         drop_if_closed=False,
+        graceful_action=graceful_action,
+        force_action=force_action,
     )
 
 
@@ -170,3 +181,32 @@ async def test_cancel_and_drain_closes_standalone_root() -> None:
     assert cleaned_up.is_set()
     assert tasks.scope is None
     assert standalone.state is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_attached_scope_can_cancel_workers_during_graceful_close() -> None:
+    tasks = _task_scope(
+        graceful_action=RuntimeTaskAction.CANCEL,
+        force_action=RuntimeTaskAction.CANCEL,
+    )
+    parent = _root("parent")
+    tasks.attach(parent, name="cancel-workers")
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def worker() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    task = tasks.create_task(worker(), task_name="cancelled-work")
+    assert task is not None
+    await started.wait()
+
+    await parent.close()
+
+    assert task.cancelled()
+    assert cleaned_up.is_set()
+    assert parent.state is RuntimeScopeState.CLOSED
