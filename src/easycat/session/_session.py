@@ -28,7 +28,7 @@ from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
-from easycat._provider_helpers import _PROVIDER_EVENT_COHORT, ProviderErrorEmitter
+from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -80,7 +80,7 @@ from easycat.runtime.capabilities import (
 from easycat.runtime.journal import JournalView
 from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
 from easycat.runtime.records import JournalRecordKind
-from easycat.runtime.scope import RuntimeCohortSignal, RuntimeScope
+from easycat.runtime.scope import RuntimeCohortSignal, RuntimeScope, RuntimeTaskAction
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
     _OUTBOUND_QUEUE_NAME,
@@ -1732,7 +1732,7 @@ class Session:
                 # tasks. These can outlive the pipeline/STT consumer handles
                 # above, so the force path drains the scope before provider
                 # teardown.
-                await self._drain_force_runtime_signals(runtime_signals)
+                await self._drain_force_runtime_signals(runtime_signals, deferred=False)
                 self._stt_committer.clear_task_handles()
                 self._greeting.clear_task()
                 self._heartbeat_task = None
@@ -1788,6 +1788,8 @@ class Session:
             except Exception:
                 logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
+            if force:
+                await self._drain_force_runtime_signals(runtime_signals, deferred=True)
             self._turn_lifecycle.clear_identity()
             self._finalize_debug_backends()
             self._mark_closed()
@@ -2196,11 +2198,14 @@ class Session:
     async def _drain_force_runtime_signals(
         self,
         signals: tuple[RuntimeCohortSignal, ...],
+        *,
+        deferred: bool,
     ) -> None:
-        """Drain force-signalled work that does not require a later owner phase."""
+        """Drain force-signalled work in its owner-safe teardown phase."""
         current = asyncio.current_task()
         for signal in signals:
-            if signal.cohort == _PROVIDER_EVENT_COHORT:
+            requires_owner_close = signal.includes_action(RuntimeTaskAction.FINISH)
+            if requires_owner_close is not deferred:
                 continue
             try:
                 await self._runtime_scope.drain_cohort(signal)

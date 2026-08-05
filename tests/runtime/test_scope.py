@@ -981,6 +981,30 @@ async def test_force_cancel_retains_cleanup_failure_even_when_close_suppresses_i
 
 
 @pytest.mark.asyncio
+async def test_cohort_signal_reports_selected_task_actions() -> None:
+    root = _attached_root("session")
+    blocker = asyncio.Event()
+    root.create_task(
+        "finish",
+        blocker.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.FINISH),
+    )
+    root.create_task(
+        "cancel",
+        blocker.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.CANCEL),
+    )
+
+    finish = root.signal_cohort("work", force=True)
+
+    assert finish.includes_action(RuntimeTaskAction.FINISH)
+    assert finish.includes_action(RuntimeTaskAction.CANCEL)
+
+    blocker.set()
+    await root.drain_cohort(finish)
+
+
+@pytest.mark.asyncio
 async def test_parked_owned_member_retains_result_when_it_eventually_settles() -> None:
     root = _attached_root("session", survivor_capacity=1)
     release = asyncio.Event()

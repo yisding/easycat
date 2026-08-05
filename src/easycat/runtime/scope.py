@@ -360,6 +360,13 @@ class RuntimeCohortSignal:
     _members: tuple[_RuntimeTaskMember, ...]
     _signal_error: BaseException | None = None
 
+    def includes_action(self, action: RuntimeTaskAction) -> bool:
+        """Whether any snapshotted member selected ``action`` for this mode."""
+        return any(
+            member.policy.for_mode(force=self.force).task_action is action
+            for member in self._members
+        )
+
 
 class RuntimeScope:
     """Track named runtime tasks in an explicit lifecycle hierarchy.
