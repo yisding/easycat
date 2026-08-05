@@ -32,7 +32,7 @@ DEFAULT_MAX_AUDIO_BUFFER_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_AUDIO_DURATION_MS = 5 * 60 * 1000.0
 
 _AUDIO_SEND_TASK = "stt_audio_send"
-_AUDIO_SEND_POLICY = RuntimeTaskPolicy(
+_STT_RUNTIME_CANCEL_POLICY = RuntimeTaskPolicy(
     graceful=RuntimeMemberPolicy(
         cohort="stt-runtime",
         signal_token=False,
@@ -204,7 +204,7 @@ class STTBase:
                     _AUDIO_SEND_TASK,
                     self._on_audio(chunk),
                     task_name=_AUDIO_SEND_TASK,
-                    policy=_AUDIO_SEND_POLICY,
+                    policy=_STT_RUNTIME_CANCEL_POLICY,
                 )
                 self._active_audio_send_task = send_task
                 current = asyncio.current_task()

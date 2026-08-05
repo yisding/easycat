@@ -269,9 +269,10 @@ should implement `aclose()` or `close()`. These remain optional protocol
 capabilities, and Session calls the capability helper during stop.
 Built-in STT providers also expose the internal `RuntimeScopeBindable`
 capability: Session attaches interruptible provider writes to its
-`stt-runtime` cohort, while standalone providers create and close a local
-scope. This makes cancellation ownership visible without adding lifecycle
-methods to the minimal public STT protocol.
+`stt-runtime` cohort. Persistent provider housekeeping such as Deepgram's
+idle keepalive joins that same owner. Standalone providers create and close a
+local scope. This makes cancellation ownership visible without adding
+lifecycle methods to the minimal public STT protocol.
 
 Cancellation operations should be idempotent and prompt. `TTSProvider.stop()`
 means graceful synthesis stop; `cancel()` means immediate discard. STT

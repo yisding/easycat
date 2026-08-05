@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "rationale": "WS2.2 attaches interruptible STT audio sends to the Session runtime tree",
+  "rationale": "WS2.2 attaches Deepgram keepalive work to the STT runtime scope",
   "counts": {
-    "cancelled_error_handler": 114,
+    "cancelled_error_handler": 113,
     "epoch_field": 17,
     "gather_return_exceptions": 30,
     "module_task_set": 4,
-    "raw_task_spawn": 85,
+    "raw_task_spawn": 84,
     "shield_loop": 10,
-    "task_cancelling": 57
+    "task_cancelling": 54
   },
   "entries": [
     "cancelled_error_handler\t_health_check.py\tPeriodicHealthChecker._run\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
@@ -81,7 +81,6 @@
     "cancelled_error_handler\tstt/base.py\tSTTBase._reap_retained_audio_send\texcept asyncio.CancelledError\ta416e45a919a81c7\t0",
     "cancelled_error_handler\tstt/base.py\tSTTBase.end_stream\texcept asyncio.CancelledError\ta416e45a919a81c7\t0",
     "cancelled_error_handler\tstt/base.py\tSTTBase.send_audio\texcept asyncio.CancelledError\tbd2375c7d7d7630a\t0",
-    "cancelled_error_handler\tstt/deepgram_provider.py\tDeepgramSTT._cancel_keepalive\texcept asyncio.CancelledError\te2ac913a0947fe91\t0",
     "cancelled_error_handler\tstt/deepgram_provider.py\tDeepgramSTT._keepalive_loop\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT._log_close_task_exception\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT.warmup\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
@@ -221,7 +220,6 @@
     "raw_task_spawn\tsession_manager.py\tSessionManager._prepare_stop\tasyncio.create_task\tcba157a7f5843a5b\t0",
     "raw_task_spawn\tstages/base.py\t_delete_blocking_artifact\tasyncio.create_task\tb7e1c417c6a0d071\t0",
     "raw_task_spawn\tstages/base.py\t_put_blocking_artifact\tasyncio.create_task\t7e868a22b5488d4e\t0",
-    "raw_task_spawn\tstt/deepgram_provider.py\tDeepgramSTT._ensure_keepalive_task\tasyncio.create_task\tfbd83bf440f55181\t0",
     "raw_task_spawn\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT._schedule_close\tasyncio.create_task\tf08f8090575c6120\t0",
     "raw_task_spawn\tstt/websocket_base.py\tWebSocketSTTBase._connect_websocket\tasyncio.create_task\tf00d30d16d61c102\t0",
     "raw_task_spawn\tsupervisor.py\tSessionAudioBroadcaster._emit_audit_event\tloop.create_task\t11375d628fba9f0f\t0",
@@ -304,9 +302,6 @@
     "task_cancelling\tstt/base.py\tSTTBase.end_stream\tTask.cancelling\t9b108507dc69f599\t0",
     "task_cancelling\tstt/base.py\tSTTBase.send_audio\tTask.cancelling\t08991de816fd034f\t0",
     "task_cancelling\tstt/base.py\tSTTBase.send_audio\tTask.cancelling\t69ec3c7ed4421853\t0",
-    "task_cancelling\tstt/deepgram_provider.py\tDeepgramSTT._cancel_keepalive\tTask.cancelling\t4470c4710ba7e5b5\t0",
-    "task_cancelling\tstt/deepgram_provider.py\tDeepgramSTT._cancel_keepalive\tTask.cancelling\taeb7b66fc2578c81\t0",
-    "task_cancelling\tstt/deepgram_provider.py\tDeepgramSTT._cancel_keepalive\tTask.cancelling\tb6c5962130215510\t0",
     "task_cancelling\ttransports/_base.py\tServerTransportBase._close_client_for_disconnect\tTask.cancelling\t3ec2aadbc2a099e1\t0",
     "task_cancelling\ttransports/_base.py\tServerTransportBase._close_client_for_disconnect\tTask.cancelling\t9210f31c3f2c177f\t0",
     "task_cancelling\ttransports/_base.py\tServerTransportBase._close_server_for_disconnect\tTask.cancelling\t3ec2aadbc2a099e1\t0",

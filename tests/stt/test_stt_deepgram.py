@@ -8,7 +8,9 @@ import json
 import pytest
 import websockets
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat.events import Error, ErrorStage, EventBus, STTEventType
+from easycat.runtime.scope import RuntimeScope
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -665,13 +667,23 @@ async def test_deepgram_persistent_socket_sends_idle_keepalive():
             ws_connect=mock_connect,
         )
     )
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
     await stt.warmup()
     await asyncio.sleep(0.03)
 
+    assert stt._keepalive_task in root.tasks("deepgram_keepalive")
     assert any(
         json.loads(frame).get("type") == "KeepAlive" for frame in ws.sent if isinstance(frame, str)
     )
     await stt.aclose()
+    assert root.tasks("deepgram_keepalive") == ()
+    await root.close()
 
 
 @pytest.mark.asyncio
@@ -687,16 +699,24 @@ async def test_deepgram_keepalive_cleanup_preserves_caller_cancellation() -> Non
             except asyncio.CancelledError:
                 child_cancelled.set()
 
-    stt._keepalive_task = asyncio.create_task(cancellation_resistant_keepalive())
+    scope = stt._ensure_runtime_scope()
+    stt._keepalive_task = scope.create_task(
+        "deepgram_keepalive",
+        cancellation_resistant_keepalive(),
+    )
     cancelling = asyncio.create_task(stt._cancel_keepalive())
     await child_cancelled.wait()
     cancelling.cancel()
-    release_child.set()
 
     with pytest.raises(asyncio.CancelledError):
         await cancelling
 
     assert stt._keepalive_task is None
+    assert scope.tasks("deepgram_keepalive")
+
+    release_child.set()
+    await stt._cancel_keepalive()
+    assert scope.tasks("deepgram_keepalive") == ()
 
 
 @pytest.mark.asyncio

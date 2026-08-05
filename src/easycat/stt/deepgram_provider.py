@@ -14,9 +14,12 @@ from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
+from easycat.stt.base import _STT_RUNTIME_CANCEL_POLICY
 from easycat.stt.websocket_base import WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
+
+_KEEPALIVE_TASK = "deepgram_keepalive"
 
 
 @dataclass
@@ -240,8 +243,18 @@ class DeepgramSTT(WebSocketSTTBase):
         self._ensure_keepalive_task()
 
     def _ensure_keepalive_task(self) -> None:
-        if self._keepalive_task is None or self._keepalive_task.done():
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        task = self._keepalive_task
+        if task is not None and not task.done():
+            return
+        scope = self._ensure_runtime_scope()
+        if task is not None:
+            scope.discard(task)
+        self._keepalive_task = scope.create_task(
+            _KEEPALIVE_TASK,
+            self._keepalive_loop(),
+            task_name=_KEEPALIVE_TASK,
+            policy=_STT_RUNTIME_CANCEL_POLICY,
+        )
 
     async def _keepalive_loop(self) -> None:
         try:
@@ -261,20 +274,11 @@ class DeepgramSTT(WebSocketSTTBase):
             logger.debug("Deepgram KeepAlive loop stopped", exc_info=True)
 
     async def _cancel_keepalive(self) -> None:
-        task = self._keepalive_task
         self._keepalive_task = None
-        if task is None or task.done():
+        scope = self._runtime_scope
+        if scope is None:
             return
-        current = asyncio.current_task()
-        cancellation_count = current.cancelling() if current is not None else 0
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            if current is not None and current.cancelling() > cancellation_count:
-                raise
-        if current is not None and current.cancelling() > cancellation_count:
-            raise asyncio.CancelledError
+        await scope.cancel_and_drain(_KEEPALIVE_TASK)
 
     async def _discard_connection(self) -> None:
         self._audio_resampler.reset()
@@ -431,10 +435,13 @@ class DeepgramSTT(WebSocketSTTBase):
             # making a later start_stream() fail as "already started".
             await super().close()
         finally:
-            await self._cancel_keepalive()
-            if self._ws is not None:
-                await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
-            await self._close_active_websocket(close_before_drain=True)
+            try:
+                await self._cancel_keepalive()
+                if self._ws is not None:
+                    await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
+                await self._close_active_websocket(close_before_drain=True)
+            finally:
+                await self._close_owned_runtime_scope_if_idle()
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         # Deepgram may acknowledge Finalize with a bare
