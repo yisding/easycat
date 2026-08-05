@@ -164,11 +164,12 @@ def arm_dev_session(session: Session) -> str | None:
     if scope.tasks(member_name):
         return registry_id
     try:
-        scope.create_task(
+        task = scope.create_task(
             member_name,
             _unregister_on_close(session),
             task_name=member_name,
         )
+        task.add_done_callback(scope.discard)
     except RuntimeError:
         # A Session whose root has already closed cannot become live in the
         # debugger registry again. Match the watcher's eventual cleanup now.
