@@ -56,6 +56,18 @@ _STT_RUNTIME_FINISH_POLICY = RuntimeTaskPolicy(
         task_action=RuntimeTaskAction.FINISH,
     ),
 )
+_STT_RECEIVE_FINISH_POLICY = RuntimeTaskPolicy(
+    graceful=RuntimeMemberPolicy(
+        cohort="stt-receive",
+        signal_token=False,
+        task_action=RuntimeTaskAction.FINISH,
+    ),
+    force=RuntimeMemberPolicy(
+        cohort="stt-receive",
+        signal_token=False,
+        task_action=RuntimeTaskAction.FINISH,
+    ),
+)
 
 
 class AudioBufferLimitExceeded(Exception):

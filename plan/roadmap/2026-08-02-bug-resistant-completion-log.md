@@ -253,6 +253,7 @@ policy.
 | `greeting` | call-answered greeting task | Preserves the current cancel/drain point before STT cleanup. |
 | `stt-runtime` | pause commit, segment commit, concurrent final close, and event consumer | Drains before the STT provider finalizer; provider-local timeout/error handling stays inside `STTCommitter`. |
 | `stt-finalize` | finalizer wrapping `STTCommitter.cancel()` and handle clearing | Runs while providers, transport, and journal are live. |
+| `stt-receive` | provider WebSocket receive loops | Drains only after `stt-finalize` has sent provider finalization and closed or released the socket; force may still cancel it through the earlier whole-root broadcast used by the current stop path. |
 | `tts-finalize` | mode-aware finalizer wrapping the current graceful scheduler cancellation and handle clearing | Preserves the graceful-only provider cleanup; force has already applied its task policy. |
 | `tts-runtime` | active voice/TTS turn after the graceful scheduler finalizer | Accounts for the task the scheduler has drained; its force row instead belongs to the earlier `pipeline` barrier. |
 | `ingress-stop` | finalizer wrapping `AudioRouter.stop_ingress()` | Completes before health checkers and all externally visible resource finalizers. |
@@ -287,6 +288,7 @@ behavior remains unbounded.
 | `barge_in_cleanup` | `barge-in-cleanup`, no token, `finish`, no new deadline | `barge-in-cleanup`, no token, `cancel`, no new deadline |
 | `call_answered_greeting` | `greeting`, no token, `cancel`, no new deadline | `greeting`, no token, `cancel`, no new deadline |
 | STT pause/segment/final-close/event-loop tasks | `stt-runtime`, no member-local token signal, current action and provider-local bounds | same cohort with the reviewed force action; the earlier `turn-token` phase supplies cooperative cancellation and no scope-level bound replaces a provider bound |
+| provider WebSocket receive loop | `stt-receive`, no token, `finish`, no scope deadline; `stt-finalize` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
 | `pipeline_heartbeat` | `heartbeat`, no token, `cancel`, no new deadline | same |
 
 The inline-send hard deadline is the one planned **[behavior change]** in this
