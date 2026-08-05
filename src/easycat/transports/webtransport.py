@@ -1837,6 +1837,10 @@ class WebTransportServer:
         """Attach session-handler work beneath an application lifecycle."""
         self._handler_task_scope.attach(parent, name=name)
 
+    def _bind_runtime_scope(self, scope: RuntimeScope) -> None:
+        """Share an already-created handler scope owned by a wrapper."""
+        self._handler_task_scope.bind(scope)
+
     def _can_accept_session(self) -> bool:
         """Capacity gate consulted by the protocol *before* it sends the 200.
 
@@ -1969,11 +1973,6 @@ class WebTransportServer:
                 raise
             except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
                 self._record_handler_cleanup_failure(transport, exc)
-            finally:
-                current = asyncio.current_task()
-                if current is not None and self._handler_task_scope.owns_root:
-                    self._handler_task_scope.discard_task(current)
-                await self._handler_task_scope.release_standalone_if_empty()
 
     def _record_handler_cleanup_failure(
         self,
@@ -2199,6 +2198,7 @@ class WebTransportTransport(AudioQueueMixin):
             self._config.max_pending_bytes,
         )
         self._server: WebTransportServer | None = None
+        self._server_runtime_scope: RuntimeScope | None = None
         self._active: WebTransportConnectionTransport | None = None
         self._lifecycle_lock = asyncio.Lock()
         self._lifecycle_owner: asyncio.Task[Any] | None = None
@@ -2223,7 +2223,11 @@ class WebTransportTransport(AudioQueueMixin):
         """Attach the internal server's handler work to this transport."""
         scope = self._emit_scope
         if scope is not None:
-            server.set_runtime_scope(scope, name="webtransport-server-runtime")
+            server_scope = self._server_runtime_scope
+            if server_scope is None:
+                server_scope = scope.create_child("webtransport-server-runtime")
+                self._server_runtime_scope = server_scope
+            server._bind_runtime_scope(server_scope)
 
     async def connect(self) -> None:
         current = asyncio.current_task()

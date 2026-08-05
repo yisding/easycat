@@ -717,8 +717,8 @@ class TestWebTransportTransportConformance:
                 self._server = None
                 self._started = False
 
-            def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
-                self.runtime_scope = (parent, name)
+            def _bind_runtime_scope(self, scope: RuntimeScope) -> None:
+                self.runtime_scope = scope
 
         monkeypatch.setattr(webtransport_module, "WebTransportServer", _CapturingServer)
         outer = WebTransportTransport(
@@ -733,7 +733,9 @@ class TestWebTransportTransportConformance:
         outer.set_runtime_scope(root, name="transport-runtime")
         await outer.connect()
         server = _CapturingServer.instances[0]
-        assert server.runtime_scope == (outer._emit_scope, "webtransport-server-runtime")
+        assert server.runtime_scope is outer._server_runtime_scope
+        assert outer._server_runtime_scope is not None
+        assert outer._server_runtime_scope.parent is outer._emit_scope
         inner = _build_connection_transport()
         await inner.connect()
         session = inner._session
@@ -753,6 +755,12 @@ class TestWebTransportTransportConformance:
         await outer.disconnect()
 
         assert standalone.state.value == "closed"
+
+        await outer.connect()
+        replacement = _CapturingServer.instances[1]
+        assert replacement.runtime_scope is outer._server_runtime_scope
+        assert len(outer._emit_scope.children()) == 1
+        await outer.disconnect()
 
     @pytest.mark.asyncio
     async def test_disconnect_waits_for_connect_and_cleans_the_same_server(

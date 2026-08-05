@@ -799,9 +799,45 @@ class TestWebTransportServerWiring:
 
         release.set()
         await task
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         assert standalone.state is RuntimeScopeState.CLOSED
         await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_standalone_handler_remains_visible_through_transport_cleanup(self) -> None:
+        disconnect_started = asyncio.Event()
+        release_disconnect = asyncio.Event()
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        server._started = True
+        server._accepting_sessions = True
+        transport = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+            _session_id=0,
+        )
+        transport.connect = AsyncMock()
+
+        async def disconnect() -> None:
+            disconnect_started.set()
+            await release_disconnect.wait()
+
+        transport.disconnect = disconnect  # type: ignore[method-assign]
+        server._dispatch_session(transport)
+        await disconnect_started.wait()
+
+        task = next(iter(server._handler_tasks))
+        assert not task.done()
+
+        release_disconnect.set()
+        await task
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not server._handler_tasks
 
     @pytest.mark.asyncio
     async def test_can_accept_session_gate_reflects_cap(self) -> None:
