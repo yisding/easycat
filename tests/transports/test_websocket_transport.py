@@ -807,6 +807,13 @@ async def test_internal_server_wait_cancel_ignores_preexisting_caller_cancel_cou
 @pytest.mark.asyncio
 async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -> None:
     transport = WebSocketTransport(WebSocketTransportConfig())
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="test-root:websocket-diagnostic-cleanup",
+        supervisor=RuntimeSupervisor(capacity=2),
+        survivor_capacity=2,
+    )
+    transport.set_runtime_scope(root, name="transport-runtime")
     transport._connected = True
     transport._server = _ClosedServer()  # type: ignore[assignment]
     emit_started = asyncio.Event()
@@ -839,6 +846,8 @@ async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -
     assert transport._disconnect_cleanup_pending is True
     assert retained_cleanup is not None
     assert retained_cleanup.done() is False
+    assert root.tasks("transport_diagnostic_cleanup") == (retained_cleanup,)
+    assert "transport-events" in root.cohorts(force=False)
     assert emit_task.cancelled() is False
     with pytest.raises(RuntimeError, match="cleanup is incomplete"):
         await transport.connect()
@@ -849,6 +858,7 @@ async def test_interrupted_diagnostic_drain_is_retained_for_disconnect_retry() -
     assert emit_task.done()
     assert transport._emit_tasks == set()
     assert transport._disconnect_emit_cleanup_task is None
+    assert not root.tasks("transport_diagnostic_cleanup")
     assert transport._disconnect_cleanup_pending is False
     assert transport._disconnect_cleanup_error is None
 
@@ -893,6 +903,7 @@ async def test_internal_diagnostic_cancel_ignores_preexisting_caller_cancel_coun
 
     assert drain_calls == 2
     assert transport._disconnect_emit_cleanup_task is None
+    assert transport._diagnostic_cleanup_tasks.scope is None
     assert transport._disconnect_cleanup_pending is False
     assert transport._disconnect_cleanup_error is None
 
