@@ -230,6 +230,9 @@ async def _stream_supervisor_audio(
     logger.info("Supervisor attached to %s", session_id)
 
     stream_tasks = _supervisor_stream_tasks(broadcaster._session)
+    handler_task = asyncio.current_task()
+    if handler_task is not None:
+        stream_tasks.adopt_task(handler_task)
     recv_task = stream_tasks.create_task(
         _drain_supervisor_inbound(ws),
         task_name=f"supervisor-recv-{listener_id}",

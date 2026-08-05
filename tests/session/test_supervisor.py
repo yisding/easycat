@@ -16,6 +16,7 @@ from easycat.events import (
     SupervisorListenerDetached,
 )
 from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
+from easycat.session._session import Session
 from easycat.supervisor import (
     SessionAudioBroadcaster,
     serve_supervisor_websocket,
@@ -23,6 +24,7 @@ from easycat.supervisor import (
     supervisor_auth_token_from_env,
     supervisor_message_authorized,
 )
+from tests.session._session_core_helpers import _full_config
 
 
 class _DummySession:
@@ -461,6 +463,7 @@ async def test_supervisor_stream_workers_are_cancelled_with_session_scope() -> N
     await asyncio.sleep(0)
 
     assert {task.get_name() for task in session._runtime_scope.tasks()} == {
+        serving.get_name(),
         "supervisor-queue-0",
         "supervisor-recv-0",
     }
@@ -473,6 +476,38 @@ async def test_supervisor_stream_workers_are_cancelled_with_session_scope() -> N
     assert session._runtime_scope.tasks("supervisor_stream_0") == ()
     await broadcaster.drain_audit_events()
     assert session._runtime_scope.empty
+
+
+@pytest.mark.asyncio
+async def test_graceful_session_stop_joins_supervisor_handler_and_workers() -> None:
+    session = Session(_full_config())
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "subscribe",
+                    "session_id": session.session_id,
+                    "token": "secret",
+                }
+            )
+        ]
+    )
+    serving = asyncio.create_task(
+        serve_supervisor_websocket(
+            ws,
+            {session.session_id: broadcaster},
+            expected_token="secret",
+        )
+    )
+    await _wait_for_sent_type(ws, "subscribed")
+
+    await session.stop()
+
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+    assert broadcaster.listener_count == 0
+    assert not session._runtime_scope.tasks("supervisor_stream_0")
 
 
 @pytest.mark.asyncio

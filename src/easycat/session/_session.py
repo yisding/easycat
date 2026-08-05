@@ -126,6 +126,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
+_SUPERVISOR_STREAM_COHORT = "supervisor-streams"
 _EventT = TypeVar("_EventT", bound=Event)
 
 
@@ -1780,6 +1781,11 @@ class Session:
             for checker in self._health_checkers:
                 await checker.stop()
             self._health_checkers = []
+            if not force:
+                await self._runtime_scope.drain_cohort(
+                    _SUPERVISOR_STREAM_COHORT,
+                    force=False,
+                )
             self._stop_helpers()
             if not self._outbound_queue_external:
                 self._outbound_queue.close()
