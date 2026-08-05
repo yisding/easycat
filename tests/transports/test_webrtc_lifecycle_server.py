@@ -13,6 +13,7 @@ import pytest
 
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 from easycat.transports.webrtc import (
     _DEGRADED_INBOUND_CONSUME_ERROR,
@@ -881,6 +882,16 @@ class TestWebRTCIngressQueueOwnership:
         # The deferred consumer must be created and running post-commit.
         assert transport._consume_task is not None
         assert not transport._consume_task.done()
+        assert transport._receive_tasks.owns_root
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webrtc-receive",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        transport.set_runtime_scope(root, name="transport-runtime")
+        assert root.tasks("webrtc_receive") == (transport._consume_task,)
+        assert "transport-receive" in root.cohorts(force=False)
         # The ``ended`` handler must be registered on the captured track.
         assert "ended" in inbound._handlers
 
@@ -891,6 +902,7 @@ class TestWebRTCIngressQueueOwnership:
 
         await audio_iter.aclose()
         await transport.disconnect()
+        assert not root.tasks("webrtc_receive")
 
     @pytest.mark.asyncio
     async def test_inbound_consume_ignores_pyav_plane_padding(self):

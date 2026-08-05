@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WebRTC unpublished-peer close now uses shared shielded cleanup; one raw spawn, cancellation handler, and shield loop removed.",
+  "rationale": "WebRTC inbound audio consumers moved to RuntimeTaskScope ownership; one raw receive-task spawn removed.",
   "counts": {
     "cancelled_error_handler": 108,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
     "module_task_set": 2,
-    "raw_task_spawn": 53,
+    "raw_task_spawn": 52,
     "shield_loop": 7,
     "task_cancelling": 54
   },
@@ -211,7 +211,6 @@
     "raw_task_spawn\ttesting/contracts.py\tSTTProviderContractSuite.test_segment_commit_reports_boolean_acceptance\tasyncio.create_task\t483cedf93995a529\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._drain_diagnostics_for_disconnect\tasyncio.create_task\t54018eae3c55d241\t0",
     "raw_task_spawn\ttransports/_base.py\tServerTransportBase._start_server_wait_for_disconnect\tasyncio.ensure_future\t576a160d35378590\t0",
-    "raw_task_spawn\ttransports/webrtc.py\tWebRTCTransport._commit_negotiated_offer\tasyncio.ensure_future\t51eac5dd6d9dade1\t0",
     "raw_task_spawn\tturn_manager.py\tTurnManager._handle_speech_stop\tasyncio.create_task\t18054907e4217ac4\t0",
     "raw_task_spawn\tvalidation/reliability.py\tEventLoopLagSampler.start\tasyncio.create_task\t25d2f7444d5cda40\t0",
     "shield_loop\tdebugger/server.py\t_close_vad_provider_owned\twhile Task.done + asyncio.shield\ta7f49c206cbd3640\t0",

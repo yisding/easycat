@@ -31,6 +31,7 @@ from easycat._concurrency import shielded_cleanup
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
 from easycat.audio_format import AudioChunk
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.scope import RuntimeScope
 from easycat.teardown_budgets import (
     WEBRTC_OFFER_CANCEL_DRAIN_TIMEOUT_S as _OFFER_CANCEL_DRAIN_TIMEOUT_S,
@@ -71,6 +72,8 @@ logger = logging.getLogger(__name__)
 _DEGRADED_NEGOTIATION_FAILED = "negotiation_failed"
 _DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
 _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
+_WEBRTC_RECEIVE_TASK_NAME = "webrtc_receive"
+_WEBRTC_RECEIVE_COHORT = "transport-receive"
 
 # Browser-created data channel carrying session events to the playground.
 _EVENTS_CHANNEL_LABEL = "events"
@@ -164,6 +167,14 @@ class WebRTCTransport(AudioQueueMixin):
 
         # Background task that consumes the inbound audio track.
         self._consume_task: asyncio.Task[None] | None = None
+        self._receive_tasks = RuntimeTaskScope(
+            owner_label="webrtc-receive",
+            member_name=_WEBRTC_RECEIVE_TASK_NAME,
+            cohort=_WEBRTC_RECEIVE_COHORT,
+            logger=logger,
+            failure_message="WebRTC inbound audio consumer failed",
+            drop_if_closed=False,
+        )
         self._peer_generation = 0
         self._retiring_peer_generation: int | None = None
         self._offer_lock = asyncio.Lock()
@@ -202,6 +213,7 @@ class WebRTCTransport(AudioQueueMixin):
         scope = self._emit_scope
         assert scope is not None
         self._outbound._bind_event_scope(scope)
+        self._receive_tasks.bind(scope)
 
     @property
     def offer_request(self) -> Any | None:
@@ -590,11 +602,13 @@ class WebRTCTransport(AudioQueueMixin):
             finally:
                 if self._consume_task is consume_task:
                     self._consume_task = None
+                self._receive_tasks.discard_task(consume_task)
             if current is not None and current.cancelling() > cancellation_count:
                 # A cancellation-resistant child can swallow the cancellation
                 # forwarded by Task.cancel(), making ``await child`` return
                 # normally. Preserve the caller's independent request.
                 raise asyncio.CancelledError
+        await self._receive_tasks.release_standalone_if_empty()
 
     async def _close_peer_for_disconnect(
         self,
@@ -1179,9 +1193,12 @@ class WebRTCTransport(AudioQueueMixin):
                 logger.info("WebRTC remote audio track ended")
                 self._enqueue_sentinel_for_peer(peer_generation)
 
-            self._consume_task = asyncio.ensure_future(
-                self._consume_audio(captured_track, peer_generation=peer_generation)
+            consume_task = self._receive_tasks.create_task(
+                self._consume_audio(captured_track, peer_generation=peer_generation),
+                task_name="webrtc-audio-receive",
             )
+            assert consume_task is not None
+            self._consume_task = consume_task
 
         return web.Response(
             content_type="application/json",
