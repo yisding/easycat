@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Server listener waiters moved to RuntimeTaskScope ownership; the final raw transport task spawn was removed.",
+  "rationale": "DTMF aggregation timers moved to BackgroundTaskScope; one raw spawn and local cancellation handler removed.",
   "counts": {
-    "cancelled_error_handler": 108,
+    "cancelled_error_handler": 107,
     "epoch_field": 17,
     "gather_return_exceptions": 23,
     "module_task_set": 2,
-    "raw_task_spawn": 50,
+    "raw_task_spawn": 49,
     "shield_loop": 7,
     "task_cancelling": 54
   },
@@ -85,7 +85,6 @@
     "cancelled_error_handler\tstt/openai_realtime_provider.py\tOpenAIRealtimeSTT.warmup\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
-    "cancelled_error_handler\ttelephony/dtmf.py\tDTMFAggregator._timeout\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\ttelephony/ivr.py\tIVRNavigator._prompt_timeout_coro\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\ttelephony/outbound.py\tOutboundCallManager._complete_call_owned\texcept asyncio.CancelledError\t77a0d6a3d0f570f8\t0",
     "cancelled_error_handler\ttelephony/outbound.py\tOutboundCallManager._create_call_owned\texcept asyncio.CancelledError\t77a0d6a3d0f570f8\t0",
@@ -201,7 +200,6 @@
     "raw_task_spawn\tstages/base.py\t_put_blocking_artifact\tasyncio.create_task\t7e868a22b5488d4e\t0",
     "raw_task_spawn\tsupervisor.py\t_stream_supervisor_audio\tasyncio.create_task\t257c42b0ca7aca8b\t0",
     "raw_task_spawn\tsupervisor.py\t_stream_supervisor_audio\tasyncio.create_task\te47ebb069e7550eb\t0",
-    "raw_task_spawn\ttelephony/dtmf.py\tDTMFAggregator._on_dtmf\tasyncio.create_task\t9b59d1c495cd1e19\t0",
     "raw_task_spawn\ttelephony/ivr.py\tIVRNavigator._start_prompt_timeout\tloop.create_task\t37d236a481418315\t0",
     "raw_task_spawn\ttelephony/outbound.py\tOutboundCallManager._complete_call_owned\tasyncio.create_task\t690bb8e7cc9be4fb\t0",
     "raw_task_spawn\ttelephony/outbound.py\tOutboundCallManager._create_call_owned\tasyncio.create_task\tb9f78a9103982644\t0",

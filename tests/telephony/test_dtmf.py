@@ -272,8 +272,15 @@ class TestDTMFAggregator:
         agg.start()
 
         await bus.emit(DTMF(digit="1"))
+        timer = agg._timer_task
+        assert timer is not None
+        assert agg._tasks.tasks() == (timer,)
         agg.stop()
 
+        await asyncio.sleep(0)
+        assert timer.cancelled()
+        assert agg._tasks.empty
+        assert agg._timer_task is None
         await asyncio.sleep(0.2)
         # Timer was cancelled, so no aggregated event
         assert len(aggregated) == 0

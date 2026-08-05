@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeGuard
 
 from easycat.events import DTMF, DTMFAggregated, EventBus
+from easycat.runtime.scope import BackgroundTaskScope
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ VALID_DTMF_DIGITS = frozenset("0123456789*#ABCD")
 # transport-output policy beside the core DTMF alphabet so every serializer and
 # agent boundary uses the same all-or-nothing validation rule.
 VALID_DTMF_OUTPUT_CHARS = VALID_DTMF_DIGITS | frozenset("wW")
+_DTMF_TIMER_MEMBER = "dtmf_aggregate_timeout"
 
 
 def is_valid_dtmf_output(value: object) -> TypeGuard[str]:
@@ -134,6 +136,7 @@ class DTMFAggregator:
         self._event_bus = event_bus
         self._config = config or DTMFAggregatorConfig()
         self._buffer: list[str] = []
+        self._tasks = BackgroundTaskScope(name="dtmf-aggregator")
         self._timer_task: asyncio.Task[None] | None = None
         self._started = False
 
@@ -176,7 +179,11 @@ class DTMFAggregator:
             return
 
         # Start idle timeout
-        self._timer_task = asyncio.create_task(self._timeout())
+        self._timer_task = self._tasks.create_task(
+            _DTMF_TIMER_MEMBER,
+            self._timeout(),
+            replace=True,
+        )
 
     async def _timeout(self) -> None:
         """Wait for the idle timeout, then emit."""
@@ -184,10 +191,6 @@ class DTMFAggregator:
             await asyncio.sleep(self._config.timeout_ms / 1000.0)
             if self._buffer:
                 await self._emit()
-        except asyncio.CancelledError:
-            # Cancellation is expected when a new DTMF digit arrives or the
-            # aggregator is stopped; we deliberately ignore it.
-            pass
         finally:
             # Keep the task reachable through its aggregate emission. A
             # synchronous stop() can then still cancel a blocked subscriber
@@ -208,6 +211,7 @@ class DTMFAggregator:
         task = self._timer_task
         if task is None:
             return
+        self._tasks.cancel(_DTMF_TIMER_MEMBER)
         try:
             current = asyncio.current_task()
         except RuntimeError:
