@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Debugger VAD provider close now uses shielded_cleanup; one raw spawn, local cancellation handler, and shield loop removed.",
+  "rationale": "Run-session signal and close waiters now use a standalone RuntimeTaskScope that is cancelled, drained, and closed; two raw spawns removed.",
   "counts": {
     "cancelled_error_handler": 98,
     "epoch_field": 17,
-    "gather_return_exceptions": 23,
+    "gather_return_exceptions": 22,
     "module_task_set": 1,
-    "raw_task_spawn": 40,
+    "raw_task_spawn": 38,
     "shield_loop": 4,
     "task_cancelling": 50
   },
@@ -127,7 +127,6 @@
     "epoch_field\ttransports/websocket.py\tWebSocketTransport.__init__\tinteger field _connection_generation\t40ab6fee1bf73797\t0",
     "epoch_field\ttransports/websocket.py\t_WebSocketProtocolMixin\tinteger field _connection_generation\tf64c8d151bee822e\t0",
     "gather_return_exceptions\tdebugger/server.py\t_DebuggerRoutes.shutdown\tasyncio.gather(return_exceptions=True)\t2889b0e71fb50ffd\t0",
-    "gather_return_exceptions\thelpers.py\t_await_session_until_shutdown\tasyncio.gather(return_exceptions=True)\t1bd41e453823fedd\t0",
     "gather_return_exceptions\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge.aclose\tasyncio.gather(return_exceptions=True)\tc25f3b5c770fb320\t0",
     "gather_return_exceptions\tserver/transports.py\tCapacityGate._finish_drain\tasyncio.gather(return_exceptions=True)\t70a011d4de20d21d\t0",
     "gather_return_exceptions\tserver/transports.py\t_safe_await\tasyncio.gather(return_exceptions=True)\t3dbf6076e37aef46\t0",
@@ -150,8 +149,6 @@
     "gather_return_exceptions\ttransports/websocket.py\tWebSocketConnectionTransport._disconnect_transaction\tasyncio.gather(return_exceptions=True)\t81cfab756e8a9019\t0",
     "gather_return_exceptions\ttransports/webtransport.py\tWebTransportServer._cancel_and_reap_handler_tasks\tasyncio.gather(return_exceptions=True)\t5e7683f93dbce0ae\t0",
     "module_task_set\tserver/transports.py\t<module>\tset[asyncio.Task/Future]\tc515d5a8ee4ee674\t0",
-    "raw_task_spawn\thelpers.py\t_await_session_until_shutdown\tasyncio.create_task\t11847efb85141583\t0",
-    "raw_task_spawn\thelpers.py\t_await_session_until_shutdown\tasyncio.create_task\t11847efb85141583\t1",
     "raw_task_spawn\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._best_effort_cancel\tasyncio.ensure_future\t75acf41f36ace248\t0",
     "raw_task_spawn\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._fire_and_forget\tloop.create_task\t3d36109ccd5fbaee\t0",
     "raw_task_spawn\tintegrations/agents/llama_agents.py\t_aiter_with_cancellation\tasyncio.ensure_future\t00d4a997b95b9376\t0",
