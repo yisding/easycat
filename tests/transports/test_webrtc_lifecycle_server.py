@@ -1714,19 +1714,55 @@ async def test_serve_webrtc_config_sessions_cleans_runner_on_start_failure(
 ) -> None:
     import easycat._extras as extras_module
 
-    web, runner, site = _fake_serve_web(start_error=RuntimeError("port busy"))
+    error = RuntimeError("port busy")
+    web, runner, site = _fake_serve_web(start_error=error)
     monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
 
-    with pytest.raises(RuntimeError, match="port busy"):
+    with pytest.raises(RuntimeError, match="port busy") as exc_info:
         await serve_webrtc_config_sessions(
             lambda _transport: {},
             WebRTCTransportConfig(static_dir=None),
             announce=False,
         )
 
+    assert exc_info.value is error
     runner.setup.assert_awaited_once()
     site.start.assert_awaited_once()
     site.stop.assert_not_awaited()
+    runner.cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_serve_webrtc_config_sessions_authorizes_the_backend_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat._extras as extras_module
+    import easycat.server.auth as auth_module
+
+    web, runner, _site = _fake_serve_web()
+    monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
+    error = RuntimeError("rejected at backend capability")
+    guard_calls = 0
+
+    def guard(*_args: object, **_kwargs: object) -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise error
+
+    monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+
+    with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+        await serve_webrtc_config_sessions(
+            lambda _transport: {},
+            WebRTCTransportConfig(static_dir=None),
+            announce=False,
+        )
+
+    assert exc_info.value is error
+    assert guard_calls == 2
+    runner.setup.assert_awaited_once()
+    web.TCPSite.assert_not_called()
     runner.cleanup.assert_awaited_once()
 
 
