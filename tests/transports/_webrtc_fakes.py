@@ -132,7 +132,7 @@ class _FakeRTCPeerConnection:
     # When set on the class before an offer, the next constructed peer fires
     # its registered ``track`` handler synchronously during
     # ``setRemoteDescription`` with this track — mirroring aiortc, which emits
-    # ``track`` before the offer handler commits the new generation.
+    # ``track`` before the offer handler publishes the new peer.
     next_inbound_track: object | None = None
 
     def __init__(self, config: _FakeRTCConfiguration) -> None:
@@ -162,7 +162,7 @@ class _FakeRTCPeerConnection:
         self.remoteDescription = offer
         # aiortc fires the synchronous ``track`` event during
         # setRemoteDescription — before the offer handler commits the new
-        # generation. Replicate that ordering so regressions in the deferred
+        # peer. Replicate that ordering so regressions in the deferred
         # consume-task start are caught.
         if self._inbound_track is not None:
             callback = self._handlers.get("track")

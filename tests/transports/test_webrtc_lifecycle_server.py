@@ -356,7 +356,7 @@ class TestWebRTCIngressQueueOwnership:
         assert response.status == 503
         assert candidate.closed is True
         assert transport._pc is None
-        assert transport._retiring_peer_generation is None
+        assert transport._peer_epoch.capture().value is None
 
     @pytest.mark.asyncio
     async def test_disconnect_from_active_offer_fails_instead_of_self_deadlocking(
@@ -688,7 +688,7 @@ class TestWebRTCIngressQueueOwnership:
         first_response = await transport._handle_offer(_FakeOfferRequest())
         assert first_response.status == 200
         first_pc = _FakeRTCPeerConnection.instances[0]
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
 
         audio_iter = transport.receive_audio()
         pending = asyncio.create_task(anext(audio_iter))
@@ -703,7 +703,8 @@ class TestWebRTCIngressQueueOwnership:
         failed_response = await transport._handle_offer(_FakeOfferRequest())
 
         assert failed_response.status == 400
-        assert transport._peer_generation == first_generation
+        assert first_peer.guard()
+        assert first_peer.value is first_pc
         assert transport._pc is first_pc
         assert not first_pc.closed
         assert _FakeRTCPeerConnection.instances[1].closed
@@ -749,7 +750,8 @@ class TestWebRTCIngressQueueOwnership:
         assert len(_FakeRTCPeerConnection.instances) == 1
         assert _FakeRTCPeerConnection.instances[0].closed is True
         assert transport._pc is None
-        assert transport._peer_generation == 0
+        assert transport._peer_epoch.generation == 0
+        assert transport._peer_epoch.capture().value is None
 
     @pytest.mark.asyncio
     async def test_unpublished_peer_close_settles_before_repeated_cancellation(self) -> None:
@@ -786,7 +788,7 @@ class TestWebRTCIngressQueueOwnership:
         transport._connected = True
 
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
         old_outbound = transport._outbound
         original_aclose = old_outbound.aclose
         retirement_started = asyncio.Event()
@@ -805,7 +807,8 @@ class TestWebRTCIngressQueueOwnership:
             await handling
 
         assert candidate.closed is True
-        assert transport._peer_generation == first_generation
+        assert not first_peer.guard()
+        assert transport._peer_epoch.capture().value is None
         assert transport._pc is None
         assert transport._connected is False
         assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
@@ -825,7 +828,7 @@ class TestWebRTCIngressQueueOwnership:
         transport._connected = True
 
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
         old_outbound = transport._outbound
         original_aclose = old_outbound.aclose
         close_calls = 0
@@ -844,7 +847,8 @@ class TestWebRTCIngressQueueOwnership:
 
         candidate = _FakeRTCPeerConnection.instances[-1]
         assert candidate.closed is True
-        assert transport._peer_generation == first_generation
+        assert not first_peer.guard()
+        assert transport._peer_epoch.capture().value is None
         assert transport._connected is False
         assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 503
@@ -857,7 +861,7 @@ class TestWebRTCIngressQueueOwnership:
     async def test_track_event_during_set_remote_description_starts_consumer(self, monkeypatch):
         # aiortc fires the synchronous ``track`` event during
         # setRemoteDescription, before the offer handler commits the new peer
-        # generation. A successful offer must still start ``_consume_task`` and
+        # peer. A successful offer must still start ``_consume_task`` and
         # forward the captured track's frames to receive_audio().
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
@@ -2344,7 +2348,7 @@ class TestWebRTCDegradedEvents:
             async def recv(self):
                 raise RuntimeError("decode boom")
 
-        await transport._consume_audio(_BadTrack(), peer_generation=transport._peer_generation)
+        await transport._consume_audio(_BadTrack())
 
         for _ in range(5):
             await asyncio.sleep(0)
