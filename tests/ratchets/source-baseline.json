@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "VoiceServer raw-WebSocket close fan-out now uses named ownership and reports failures.",
+  "rationale": "VoiceServer adopts listener-created WebSocket handlers into named ownership and reports teardown failures.",
   "counts": {
     "cancelled_error_handler": 100,
     "epoch_field": 17,

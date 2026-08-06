@@ -76,6 +76,8 @@ _WS_UNAUTHORIZED_CLOSE_CODE = 1008
 _WS_UNAUTHORIZED_CLOSE_REASON = "Missing or invalid bearer token"
 _WS_CLOSE_TASK = "voice_server_ws_close"
 _WS_CLOSE_COHORT = "voice-server-ws-close"
+_WS_HANDLER_TASK = "voice_server_ws_handler"
+_WS_HANDLER_COHORT = "voice-server-ws-handler"
 
 
 class VoiceServer:
@@ -121,7 +123,14 @@ class VoiceServer:
         # which would otherwise keep the raw-ws ``Server._close`` waiter (it
         # ``asyncio.wait``s on its handlers, it does NOT cancel them) — and thus
         # ``ws_server.wait_closed()`` — blocked forever.
-        self._ws_handler_tasks: set[asyncio.Task[None]] = set()
+        self._ws_handler_task_scope = RuntimeTaskScope(
+            owner_label="voice-server-ws-handlers",
+            member_name=_WS_HANDLER_TASK,
+            cohort=_WS_HANDLER_COHORT,
+            logger=logger,
+            failure_message="VoiceServer raw-WebSocket handler task failed",
+            drop_if_closed=False,
+        )
         self._ws_connections: dict[int, Any] = {}
         self._ws_close_task_scope = RuntimeTaskScope(
             owner_label="voice-server-ws-close",
@@ -943,15 +952,29 @@ class VoiceServer:
         excluded defensively.
         """
         current = asyncio.current_task()
-        tasks = [t for t in self._ws_handler_tasks if t is not current and not t.done()]
+        tasks = [
+            task
+            for task in self._ws_handler_task_scope.tasks()
+            if task is not current and not task.done()
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             gathered = asyncio.gather(*tasks, return_exceptions=True)
+            results: list[Any | BaseException] | None
             if timeout_s is None:
-                await gathered
+                results = await gathered
             else:
-                await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                results = gathered.result() if completed else None
+            if results is not None:
+                self._report_shutdown_task_results(
+                    "raw-WebSocket handler",
+                    tasks,
+                    results,
+                    explicitly_cancelled=set(tasks),
+                )
+        await self._ws_handler_task_scope.release_standalone_if_empty()
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -1345,7 +1368,8 @@ class VoiceServer:
         # block forever on the surviving handler).
         task = asyncio.current_task()
         if task is not None:
-            self._ws_handler_tasks.add(task)
+            task.set_name(f"easycat-raw-ws-handler-{id(ws)}")
+            self._ws_handler_task_scope.adopt_task(task)
         try:
             if self._gate.is_draining:
                 self._emit_session_rejected(server_state="draining")
@@ -1406,7 +1430,7 @@ class VoiceServer:
                 self._ws_connections.pop(key, None)
         finally:
             if task is not None:
-                self._ws_handler_tasks.discard(task)
+                self._ws_handler_task_scope.discard_task(task)
 
     async def _teardown_ws_session(self, key: int) -> None:
         """Tear down one ``/ws`` session, deferring to the drain when draining.

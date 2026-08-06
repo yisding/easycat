@@ -180,6 +180,9 @@ the only loop owner; `serve()` is the composable async operation. Forced
 raw-WebSocket connection closes run in a named task cohort; completed failures
 are reported with the connection-close task identity, while the hard deadline
 keeps cancellation-resistant closes owned after the stop path advances.
+Listener-created WebSocket handler tasks are adopted into their own cohort so
+expected stop cancellation stays quiet and cleanup failures retain the handler
+task identity.
 
 Read [`server/transports.py`](../../src/easycat/server/transports.py) for
 `CapacityGate` and hard-timeout helpers, and

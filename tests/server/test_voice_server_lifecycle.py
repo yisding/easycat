@@ -118,6 +118,42 @@ def test_late_websocket_close_releases_scope_before_cross_loop_reuse() -> None:
     asyncio.run(second_close())
 
 
+@pytest.mark.parametrize("handler_cleanup_fails", [False, True])
+async def test_cancel_websocket_handlers_reports_only_cleanup_failures(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    handler_cleanup_fails: bool,
+) -> None:
+    started = asyncio.Event()
+
+    async def handler() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            if handler_cleanup_fails:
+                raise RuntimeError("handler cleanup failed") from exc
+            raise
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    task = asyncio.create_task(handler(), name="easycat-raw-ws-handler-41")
+    server._ws_handler_task_scope.adopt_task(task)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks()
+
+    expected = "VoiceServer raw-WebSocket handler task easycat-raw-ws-handler-41 failed"
+    messages = [record.getMessage() for record in caplog.records]
+    if handler_cleanup_fails:
+        assert expected in messages
+    else:
+        assert not any(
+            message.startswith("VoiceServer raw-WebSocket handler task ") for message in messages
+        )
+    assert server._ws_handler_task_scope.tasks() == ()
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 
