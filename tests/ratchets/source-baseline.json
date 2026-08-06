@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "rationale": "Server hard deadlines now wait only on caller-owned futures; the private helper and global ledger were removed",
+  "rationale": "Llama reset and bounded-cancel cleanup moved from raw tasks and an instance set into named RuntimeTaskScopes",
   "counts": {
     "cancelled_error_handler": 99,
     "epoch_field": 17,
     "gather_return_exceptions": 22,
-    "raw_task_spawn": 22,
+    "raw_task_spawn": 20,
     "shield_loop": 4,
     "task_cancelling": 51
   },
@@ -14,8 +14,8 @@
     "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring.flush_gated_audio\texcept asyncio.CancelledError\t33f32c219378ec96\t0",
     "cancelled_error_handler\tintegrations/agents/_agent_runner.py\tclose_stream_after_done\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._best_effort_cancel\texcept asyncio.CancelledError\t531dafdd8d833e12\t0",
-    "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._invoke_local\texcept asyncio.CancelledError\tfcd7e065600084e8\t0",
-    "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._invoke_remote\texcept asyncio.CancelledError\tedd9bae352e99365\t0",
+    "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._invoke_local\texcept asyncio.CancelledError\t4f26b5d15cdc1aa4\t0",
+    "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._invoke_remote\texcept asyncio.CancelledError\ted12c10820222b8e\t0",
     "cancelled_error_handler\tintegrations/agents/openai_agents.py\tOpenAIAgentsBridge.invoke\texcept asyncio.CancelledError\tb0cd6ed5f0979211\t0",
     "cancelled_error_handler\tintegrations/agents/pydantic_ai.py\tPydanticAIBridge._commit_interrupted_agent_run\texcept asyncio.CancelledError\t99c51236777c04b3\t0",
     "cancelled_error_handler\tintegrations/agents/responses_api.py\t_drain_completed_stream\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
@@ -148,8 +148,6 @@
     "gather_return_exceptions\ttransports/webrtc.py\tWebRTCTransport._stop_active_offer_for_disconnect\tasyncio.gather(return_exceptions=True)\tfa27c3bc1c7b1755\t0",
     "gather_return_exceptions\ttransports/websocket.py\tWebSocketConnectionTransport._disconnect_transaction\tasyncio.gather(return_exceptions=True)\t81cfab756e8a9019\t0",
     "gather_return_exceptions\ttransports/webtransport.py\tWebTransportServer._cancel_and_reap_handler_tasks\tasyncio.gather(return_exceptions=True)\t5e7683f93dbce0ae\t0",
-    "raw_task_spawn\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._best_effort_cancel\tasyncio.ensure_future\t75acf41f36ace248\t0",
-    "raw_task_spawn\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._fire_and_forget\tloop.create_task\t3d36109ccd5fbaee\t0",
     "raw_task_spawn\tintegrations/agents/llama_agents.py\t_aiter_with_cancellation\tasyncio.ensure_future\t00d4a997b95b9376\t0",
     "raw_task_spawn\tintegrations/agents/llama_agents.py\t_aiter_with_cancellation\tasyncio.ensure_future\tb69073e7af6b5d19\t0",
     "raw_task_spawn\tintegrations/agents/responses_api.py\t_aiter_lines_with_cancellation\tasyncio.ensure_future\t3236350b538dee4c\t0",

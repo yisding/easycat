@@ -102,6 +102,12 @@ cheap, ordered, testable, and fail with actionable input errors for shapes
 that require explicit configuration. See
 [`tests/integrations/agents/test_factory.py`](../../tests/integrations/agents/test_factory.py).
 
+Bridge cleanup must remain owned even when an SDK exposes a synchronous reset
+hook. `LlamaAgentsBridge` starts paused-handler reset work in a named task
+scope, and uses a separate scope for handler cancellation that survives its
+best-effort deadline. `aclose()` joins reset work without turning the bounded
+cancel path back into an unbounded shutdown wait.
+
 ## 4.3 The Agent Stage
 
 [`AgentStage`](../../src/easycat/stages/agent.py) is the recordable execution
