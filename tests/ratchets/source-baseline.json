@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "Llama and Responses cancellation races moved from raw starts into local named RuntimeTaskScopes",
+  "rationale": "WS1.4 WebSocket replaces all three integer connection-generation declarations with one payload-carrying Epoch mechanism",
   "counts": {
     "cancelled_error_handler": 99,
-    "epoch_field": 17,
+    "epoch_field": 14,
     "gather_return_exceptions": 22,
     "raw_task_spawn": 16,
     "shield_loop": 4,
@@ -123,9 +123,6 @@
     "epoch_field\ttransports/twilio_media.py\tTwilioConnectionTransport.__init__\tinteger field _connection_generation\t40ab6fee1bf73797\t0",
     "epoch_field\ttransports/webrtc.py\tWebRTCTransport.__init__\tinteger field _peer_generation\t912f2dab175bd25e\t0",
     "epoch_field\ttransports/webrtc.py\tWebRTCTransport.__init__\tinteger field _retiring_peer_generation\t00f8177fa0031694\t0",
-    "epoch_field\ttransports/websocket.py\tWebSocketConnectionTransport.__init__\tinteger field _connection_generation\t40ab6fee1bf73797\t0",
-    "epoch_field\ttransports/websocket.py\tWebSocketTransport.__init__\tinteger field _connection_generation\t40ab6fee1bf73797\t0",
-    "epoch_field\ttransports/websocket.py\t_WebSocketProtocolMixin\tinteger field _connection_generation\tf64c8d151bee822e\t0",
     "gather_return_exceptions\tdebugger/server.py\t_DebuggerRoutes.shutdown\tasyncio.gather(return_exceptions=True)\t2889b0e71fb50ffd\t0",
     "gather_return_exceptions\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge.aclose\tasyncio.gather(return_exceptions=True)\tc25f3b5c770fb320\t0",
     "gather_return_exceptions\tserver/transports.py\tCapacityGate._finish_drain\tasyncio.gather(return_exceptions=True)\t70a011d4de20d21d\t0",

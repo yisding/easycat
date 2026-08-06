@@ -185,8 +185,9 @@ async def test_replaced_websocket_drops_prior_connection_resampler_tail(
     old_ws = _DeferredEndWebSocket()
     replacement_ws = object()
     transport = WebSocketTransport()
-    transport._connection_generation = 1
     transport._ws = old_ws  # type: ignore[assignment]
+    transport._connection_epoch.bump(old_ws)  # type: ignore[arg-type]
+    old_connection = transport._connection_epoch.capture()
 
     monkeypatch.setattr(
         "easycat.transports.websocket.PCM16StreamResampler",
@@ -195,12 +196,13 @@ async def test_replaced_websocket_drops_prior_connection_resampler_tail(
     receive_task = asyncio.create_task(transport._receive_loop(old_ws))  # type: ignore[arg-type]
     await old_ws.receive_started.wait()
 
-    transport._connection_generation = 2
     transport._ws = replacement_ws  # type: ignore[assignment]
+    transport._connection_epoch.bump(replacement_ws)  # type: ignore[arg-type]
     transport._reset_audio_queue()
     old_ws.release_receive.set()
     await receive_task
 
+    assert not old_connection.guard()
     assert transport._ws is replacement_ws
     assert transport._in_queue.empty()
 
@@ -263,12 +265,17 @@ async def test_connection_receive_loop_attaches_to_transport_scope():
 
     await transport.connect()
     await ws.receive_started.wait()
+    connection = transport._connection_epoch.capture()
 
     assert root.tasks("websocket_receive") == (transport._receive_task,)
     assert "transport-receive" in root.cohorts(force=False)
+    assert connection.guard()
+    assert connection.value is ws
 
     await transport.disconnect()
 
+    assert not connection.guard()
+    assert transport._connection_epoch.capture().value is None
     assert not root.tasks("websocket_receive")
     assert ws.close_calls == 1
 

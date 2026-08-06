@@ -24,6 +24,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import PCM16StreamResampler
+from easycat._epoch import Epoch, Lease
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
@@ -114,7 +115,7 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
     _ws: ServerConnection | None
     _audio_format: AudioFormat
     _outbound_rate: int | None
-    _connection_generation: int
+    _connection_epoch: Epoch[ServerConnection | None]
 
     @property
     def audio_format(self) -> AudioFormat:
@@ -133,11 +134,11 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
     async def _run_receive_loop(
         self,
         ws: ServerConnection,
-        connection_generation: int,
+        connection: Lease[ServerConnection | None],
     ) -> None:
         """Run the shared receiver with common disconnect handling."""
         try:
-            await self._receive_loop(ws, connection_generation)
+            await self._receive_loop(ws, connection)
         except websockets.exceptions.ConnectionClosed as exc:
             self._note_client_disconnected(exc)
         finally:
@@ -153,6 +154,8 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
         if self._ws is not ws:
             return
         self._ws = None
+        if self._connection_epoch.capture().value is ws:
+            self._connection_epoch.bump(None)
         self._client_connected.clear()
         self._audio_format = self._config.audio_format
         self._outbound_rate = None
@@ -199,7 +202,7 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
     async def _receive_loop(
         self,
         ws: ServerConnection | None = None,
-        connection_generation: int | None = None,
+        connection: Lease[ServerConnection | None] | None = None,
     ) -> None:
         """Route inbound binary audio and JSON control messages."""
         manage_lifecycle = ws is None
@@ -207,8 +210,8 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
             ws = self._ws
         if ws is None:
             return
-        if connection_generation is None:
-            connection_generation = self._connection_generation
+        if connection is None:
+            connection = self._connection_epoch.capture()
         target_rate = self._config.audio_format.sample_rate
         resampler = PCM16StreamResampler(target_rate)
         try:
@@ -222,7 +225,8 @@ class _WebSocketProtocolMixin(AudioQueueMixin):
             tail = resampler.finish()
             if (
                 tail
-                and connection_generation == self._connection_generation
+                and connection.guard()
+                and connection.value is ws
                 and self._websocket_is_active(ws)
             ):
                 self._enqueue_chunk(
@@ -331,7 +335,7 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
         )
         self._audio_format = self._config.audio_format
         self._outbound_rate: int | None = None
-        self._connection_generation = 0
+        self._connection_epoch: Epoch[ServerConnection | None] = Epoch(None)
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -364,9 +368,9 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
             await ws.close(4000, "Only one session at a time")
             return
 
-        self._connection_generation += 1
-        connection_generation = self._connection_generation
         self._ws = ws
+        self._connection_epoch.bump(ws)
+        connection = self._connection_epoch.capture()
         self._client_connected.set()
         self._outbound_rate = None
         # Reset negotiated format so every accepted client starts from the
@@ -380,7 +384,7 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
 
         try:
             if await self._send_ready(ws):
-                await self._run_receive_loop(ws, connection_generation)
+                await self._run_receive_loop(ws, connection)
         finally:
             self._finish_websocket(ws)
 
@@ -419,7 +423,7 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             failure_message="WebSocket receive loop failed",
             drop_if_closed=False,
         )
-        self._connection_generation = 0
+        self._connection_epoch: Epoch[ServerConnection | None] = Epoch(None)
         # The constructor-supplied accepted socket supports one lifecycle.
         # Once connect starts, remote EOF or local teardown is terminal; a
         # later connect must not report success with no socket.
@@ -481,8 +485,8 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
         if ws is None:
             raise RuntimeError("WebSocket accepted connection is already closed")
         self._socket_consumed = True
-        self._connection_generation += 1
-        generation = self._connection_generation
+        self._connection_epoch.bump(ws)
+        connection = self._connection_epoch.capture()
         self._reset_audio_queue()
         self._connected = True
         self._client_connected.set()
@@ -505,10 +509,10 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             self._enqueue_sentinel()
             self._after_websocket_finished()
             raise
-        if generation != self._connection_generation or not self._connected or self._ws is not ws:
+        if not connection.guard() or not self._connected or self._ws is not connection.value:
             raise ConnectionError("WebSocket transport disconnected during connect")
         receive_task = self._receive_tasks.create_task(
-            self._run_receive_loop(ws, generation),
+            self._run_receive_loop(ws, connection),
             task_name="websocket-connection-receive",
         )
         assert receive_task is not None
@@ -564,7 +568,7 @@ class WebSocketConnectionTransport(_WebSocketProtocolMixin):
             and not self._emit_tasks
         ):
             return
-        self._connection_generation += 1
+        self._connection_epoch.bump(None)
         self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
