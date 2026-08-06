@@ -871,10 +871,17 @@ class TestTwilioStreamTokenValidation:
         self,
     ) -> None:
         class _EOFWebSocket(_DummyTwilioWebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.receive_started = asyncio.Event()
+                self.release_receive = asyncio.Event()
+
             def __aiter__(self) -> _EOFWebSocket:
                 return self
 
             async def __anext__(self) -> str:
+                self.receive_started.set()
+                await self.release_receive.wait()
                 raise StopAsyncIteration
 
         ws = _EOFWebSocket()
@@ -882,9 +889,16 @@ class TestTwilioStreamTokenValidation:
         await transport.connect()
         receive_task = transport._receive_task
         assert receive_task is not None
+        await ws.receive_started.wait()
+        connection = transport._connection_epoch.capture()
+        assert connection.guard()
+        assert connection.value is ws
+        ws.release_receive.set()
         await receive_task
 
         assert not transport.is_connected
+        assert not connection.guard()
+        assert transport._connection_epoch.capture().value is None
         assert transport._socket_close_pending is True
         with pytest.raises(RuntimeError, match="has ended; call disconnect"):
             await transport.connect()
@@ -908,12 +922,17 @@ class TestTwilioStreamTokenValidation:
 
         await transport.connect()
         await ws.entered.wait()
+        connection = transport._connection_epoch.capture()
 
         assert root.tasks("twilio_receive") == (transport._receive_task,)
         assert "transport-receive" in root.cohorts(force=False)
+        assert connection.guard()
+        assert connection.value is ws
 
         await transport.disconnect()
 
+        assert not connection.guard()
+        assert transport._connection_epoch.capture().value is None
         assert not root.tasks("twilio_receive")
         assert ws.closed_with == ()
 
