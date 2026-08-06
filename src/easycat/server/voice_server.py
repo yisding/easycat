@@ -1376,12 +1376,17 @@ class VoiceServer:
 
         from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
-        return await websockets.serve(
-            self._handle_websocket_connection,
+        return await authorized_bind(
             self.config.host,
-            self._websocket_port(),
-            compression=None,
-            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+            auth=self.config.auth,
+            unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
+            binder=lambda: websockets.serve(
+                self._handle_websocket_connection,
+                self.config.host,
+                self._websocket_port(),
+                compression=None,
+                max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+            ),
         )
 
     def _websocket_port(self) -> int:
