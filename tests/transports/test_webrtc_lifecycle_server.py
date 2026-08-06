@@ -1836,7 +1836,16 @@ async def test_standalone_shutdown_surfaces_failed_session_report_and_retains_le
         stopped_keys=(),
         failures=(SessionStopFailure(key=41, exception=failure),),
     )
-    manager = SimpleNamespace(stop_all=AsyncMock(return_value=report))
+    sweep_task_names: list[str] = []
+
+    async def stop_all(*, force: bool) -> SessionStopReport[int]:
+        assert force is True
+        current = asyncio.current_task()
+        assert current is not None
+        sweep_task_names.append(current.get_name())
+        return report
+
+    manager = SimpleNamespace(stop_all=AsyncMock(side_effect=stop_all))
     retained_session = object()
     active_sessions = {41: retained_session}
 
@@ -1865,6 +1874,7 @@ async def test_standalone_shutdown_surfaces_failed_session_report_and_retains_le
     assert "webrtc session teardown failed" in caplog.text
     assert active_sessions == {41: retained_session}
     manager.stop_all.assert_awaited_once_with(force=True)
+    assert sweep_task_names == ["easycat-standalone-webrtc-session-sweep"]
 
 
 @pytest.mark.asyncio

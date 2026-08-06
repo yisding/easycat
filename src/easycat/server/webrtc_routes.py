@@ -85,6 +85,8 @@ _OFFER_CLEANUP_TASK = "webrtc_offer_cleanup"
 _OFFER_CLEANUP_COHORT = "webrtc-offer-cleanup"
 _FORCE_CLEANUP_TASK = "webrtc_force_cleanup"
 _FORCE_CLEANUP_COHORT = "webrtc-force-cleanup"
+_STANDALONE_SWEEP_TASK = "standalone_webrtc_session_sweep"
+_STANDALONE_SWEEP_COHORT = "standalone-webrtc-session-sweep"
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
@@ -737,18 +739,33 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
     except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
+    sweep_scope = RuntimeTaskScope(
+        owner_label="standalone-webrtc-shutdown",
+        member_name=_STANDALONE_SWEEP_TASK,
+        cohort=_STANDALONE_SWEEP_COHORT,
+        logger=logger,
+        failure_message="Standalone WebRTC session sweep failed",
+        drop_if_closed=False,
+    )
     try:
-        sweep_task = asyncio.create_task(manager.stop_all(force=True))
-        swept = await _await_with_hard_timeout(
-            sweep_task,
-            timeout_s=max(force_shutdown_timeout_s, 0.0),
-        )
-        report_error = _standalone_sweep_error(
-            swept=swept,
-            sweep_task=sweep_task,
-            timeout_s=force_shutdown_timeout_s,
-        )
-        body_error = body_error or report_error
+        try:
+            sweep_task = sweep_scope.create_task(
+                manager.stop_all(force=True),
+                task_name="easycat-standalone-webrtc-session-sweep",
+            )
+            assert sweep_task is not None
+            swept = await _await_with_hard_timeout(
+                sweep_task,
+                timeout_s=max(force_shutdown_timeout_s, 0.0),
+            )
+            report_error = _standalone_sweep_error(
+                swept=swept,
+                sweep_task=sweep_task,
+                timeout_s=force_shutdown_timeout_s,
+            )
+            body_error = body_error or report_error
+        finally:
+            await sweep_scope.release_standalone_if_empty()
     except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc

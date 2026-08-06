@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "WebRTC forced cleanup finalizers now use named ownership and report unexpected results.",
+  "rationale": "Standalone WebRTC final session sweeps now use named RuntimeTaskScope ownership.",
   "counts": {
     "cancelled_error_handler": 100,
     "epoch_field": 17,
     "gather_return_exceptions": 22,
     "module_task_set": 1,
-    "raw_task_spawn": 33,
+    "raw_task_spawn": 32,
     "shield_loop": 4,
     "task_cancelling": 51
   },
@@ -168,7 +168,6 @@
     "raw_task_spawn\tserver/voice_server.py\tVoiceServer._close_active_ws_connections\tasyncio.create_task\tbcc4bc77941655eb\t0",
     "raw_task_spawn\tserver/voice_server.py\tVoiceServer._prepare_listener_cleanup_task\tasyncio.ensure_future\t5c7a78f6e7637ffa\t0",
     "raw_task_spawn\tserver/voice_server.py\tVoiceServer._stop_unlocked\tasyncio.create_task\t17a66ec385918dba\t0",
-    "raw_task_spawn\tserver/webrtc_routes.py\t_shutdown_standalone_webrtc\tasyncio.create_task\tb2e5ccf8c0d214f5\t0",
     "raw_task_spawn\tsession/_journal_sink.py\tSessionJournalSink.append_record_async\tasyncio.create_task\t933bcec6345d252c\t0",
     "raw_task_spawn\tsession/_session.py\tSession._cut_off_turn_playback\tasyncio.create_task\t002fb7c8f4960eaf\t0",
     "raw_task_spawn\tsession/_session.py\tSession._finish_interrupted_start\tasyncio.create_task\tc3c0859252009636\t0",

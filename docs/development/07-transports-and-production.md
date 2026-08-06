@@ -230,6 +230,10 @@ WebRTC has two layers:
   Shutdown cancels those waiters, runs forced finalizers in a separate named
   cohort, and reports unexpected results with their task identities.
 
+The standalone WebRTC server also owns its final force sweep as a named task.
+The hard deadline may return before cancellation-resistant Session teardown,
+but the sweep remains strongly owned until it settles.
+
 Shared config/stats/health/CORS/root behavior lives once in
 [`server/_webrtc_handlers.py`](../../src/easycat/server/_webrtc_handlers.py).
 Both standalone transport serving and `VoiceServer` routes delegate there,
