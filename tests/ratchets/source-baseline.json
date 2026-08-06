@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "Own TTS close-finalizer waiters and reconcile reviewed cancellation constructs.",
+  "rationale": "SessionManager stop operations now use named RuntimeTaskScope ownership across cancelled waiters.",
   "counts": {
     "cancelled_error_handler": 100,
     "epoch_field": 17,
     "gather_return_exceptions": 22,
     "module_task_set": 1,
-    "raw_task_spawn": 36,
+    "raw_task_spawn": 35,
     "shield_loop": 4,
     "task_cancelling": 51
   },
@@ -180,7 +180,6 @@
     "raw_task_spawn\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tasyncio.create_task\t3c9486fb4a3d0296\t0",
     "raw_task_spawn\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tasyncio.create_task\t65a734d4300baa01\t0",
     "raw_task_spawn\tsession/_warmup.py\tWarmupRunner.run\tasyncio.create_task\t15fcf01d077c6d19\t0",
-    "raw_task_spawn\tsession_manager.py\tSessionManager._prepare_stop\tasyncio.create_task\tcba157a7f5843a5b\t0",
     "raw_task_spawn\tstages/base.py\t_delete_blocking_artifact\tasyncio.create_task\tb7e1c417c6a0d071\t0",
     "raw_task_spawn\tstages/base.py\t_put_blocking_artifact\tasyncio.create_task\t7e868a22b5488d4e\t0",
     "raw_task_spawn\ttesting/contracts.py\tSTTProviderContractSuite.test_events_iterator_is_fresh_across_turns._cycle\tasyncio.create_task\tb4f397ab24f33ed2\t0",

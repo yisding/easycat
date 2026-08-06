@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Generic, TypeVar
 
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.session._session import Session
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,14 @@ class SessionManager(Generic[TKey]):
     def __init__(self) -> None:
         self._sessions: dict[TKey, Session] = {}
         self._stop_tasks: dict[TKey, tuple[Session, asyncio.Task[None], bool]] = {}
+        self._stop_task_scope = RuntimeTaskScope(
+            owner_label="session-manager",
+            member_name="session_stop",
+            cohort="session-stop",
+            logger=logger,
+            failure_message="Session stop task failed",
+            drop_if_closed=False,
+        )
         self._force_requested: set[TKey] = set()
         self._lock = asyncio.Lock()
 
@@ -196,7 +205,11 @@ class SessionManager(Generic[TKey]):
                 operation = None
             if operation is None or operation[0] is not session:
                 stop = session.stop(force=True) if force_requested else session.stop()
-                task = asyncio.create_task(stop)
+                task = self._stop_task_scope.create_task(
+                    stop,
+                    task_name="easycat-session-stop",
+                )
+                assert task is not None
                 operation = (session, task, force_requested)
                 self._stop_tasks[key] = operation
                 task.add_done_callback(partial(self._finish_stop, key, session))

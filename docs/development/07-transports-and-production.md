@@ -134,7 +134,9 @@ sequenceDiagram
 
 The manager relies on idempotent `Session.stop()`. It retains a key until stop
 completes successfully and owns one stop task per key, so a cancelled waiter
-does not lose the actual teardown.
+does not lose the actual teardown. Those keyed operations also share a named
+runtime task cohort, which keeps a cancellation-surviving stop strongly owned
+until the manager callback settles its key and exception policy.
 
 The manager does **not** own admission capacity or server draining. Those are
 process policy. It also documents that `connection()` bodies must not overlap
