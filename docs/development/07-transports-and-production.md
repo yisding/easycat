@@ -225,7 +225,8 @@ WebRTC has two layers:
   per-peer connection, tracks, audio, and negotiation state.
 - [`server/webrtc_routes.py`](../../src/easycat/server/webrtc_routes.py) owns
   stateless/per-server route handling, admission, and per-offer transport
-  construction.
+  construction. Each accepted offer also installs one named runtime cleanup
+  task that waits for peer closure and releases its Session and capacity slot.
 
 Shared config/stats/health/CORS/root behavior lives once in
 [`server/_webrtc_handlers.py`](../../src/easycat/server/_webrtc_handlers.py).

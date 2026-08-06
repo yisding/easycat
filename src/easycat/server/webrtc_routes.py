@@ -60,6 +60,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
 from easycat.server.transports import _await_with_hard_timeout
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
@@ -79,6 +80,9 @@ if TYPE_CHECKING:
     from easycat.transports.webrtc import WebRTCTransport
 
 logger = logging.getLogger(__name__)
+
+_OFFER_CLEANUP_TASK = "webrtc_offer_cleanup"
+_OFFER_CLEANUP_COHORT = "webrtc-offer-cleanup"
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
@@ -175,9 +179,16 @@ class WebRTCRoutes:
         # helper, ``/webrtc`` for the mounted server). Threaded into the root
         # redirect so the served client points at the right routes.
         self._client_base = ""
-        # Tracks per-offer transport cleanup tasks so ``stop`` can cancel them.
-        self._cleanup_tasks: set[asyncio.Task[None]] = set()
-        self._cleanup_task_keys: dict[asyncio.Task[None], int] = {}
+        # Owns per-offer transport cleanup tasks so ``stop`` can cancel them.
+        self._cleanup_task_scope = RuntimeTaskScope(
+            owner_label="webrtc-routes",
+            member_name=_OFFER_CLEANUP_TASK,
+            cohort=_OFFER_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="WebRTC offer cleanup task failed",
+            drop_if_closed=False,
+        )
+        self._cleanup_task_keys: dict[asyncio.Task[Any], int] = {}
         self._released_cleanup_keys: set[int] = set()
         # aiohttp.web, resolved lazily inside ``register``.
         self._web: Any = None
@@ -473,10 +484,7 @@ class WebRTCRoutes:
             self._emit_connections_changed()
             transport._ensure_browser_event_forwarder()
             self._released_cleanup_keys.discard(key)
-            task = asyncio.create_task(self._cleanup_session(key, transport))
-            self._cleanup_tasks.add(task)
-            self._cleanup_task_keys[task] = key
-            task.add_done_callback(self._cleanup_task_done)
+            self._start_cleanup_task(key, transport)
             return True
         except Exception:
             # Stop + drop the started session (``manager.remove`` stops it) and
@@ -516,6 +524,21 @@ class WebRTCRoutes:
         finally:
             await self._finalize_session_cleanup(key, force=False)
 
+    def _start_cleanup_task(
+        self,
+        key: int,
+        transport: WebRTCTransport,
+    ) -> asyncio.Task[Any]:
+        """Start and index one scope-owned per-offer cleanup worker."""
+        task = self._cleanup_task_scope.create_task(
+            self._cleanup_session(key, transport),
+            task_name="easycat-webrtc-offer-cleanup",
+        )
+        assert task is not None
+        self._cleanup_task_keys[task] = key
+        task.add_done_callback(self._cleanup_task_done)
+        return task
+
     async def _finalize_session_cleanup(self, key: int, *, force: bool) -> None:
         """Stop and release one offer exactly once, including pre-start cancellation."""
         await self._manager.remove(key, force=force)
@@ -527,13 +550,14 @@ class WebRTCRoutes:
             self._gate.release()
             self._emit_connections_changed()
 
-    def _cleanup_task_done(self, task: asyncio.Task[None]) -> None:
-        self._cleanup_tasks.discard(task)
+    def _cleanup_task_done(self, task: asyncio.Task[Any]) -> None:
         self._cleanup_task_keys.pop(task, None)
 
     async def cancel_cleanup_tasks(self, *, timeout_s: float | None = None) -> None:
         """Cancel + await the per-offer cleanup tasks (called on server stop)."""
-        pending = [(task, self._cleanup_task_keys.get(task)) for task in self._cleanup_tasks]
+        pending = [
+            (task, self._cleanup_task_keys.get(task)) for task in self._cleanup_task_scope.tasks()
+        ]
         for task, _key in pending:
             task.cancel()
         if pending:
@@ -551,6 +575,7 @@ class WebRTCRoutes:
                 await cleanup
             else:
                 await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+        await self._cleanup_task_scope.release_standalone_if_empty()
 
     async def _stop_managed_session(self, key: int, force: bool) -> None:
         """Route drain teardown through the manager's keyed stop ownership."""

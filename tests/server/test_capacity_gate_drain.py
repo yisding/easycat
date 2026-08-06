@@ -708,12 +708,12 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
         runtime_feedback=False,
         active_session_objs=active,
     )
-    cleanup = asyncio.create_task(
-        routes._cleanup_session(1, _NeverClosedTransport())  # type: ignore[arg-type]
+    cleanup = routes._start_cleanup_task(
+        1,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
     )
-    routes._cleanup_tasks.add(cleanup)
-    routes._cleanup_task_keys[cleanup] = 1
-    cleanup.add_done_callback(routes._cleanup_task_done)
+
+    assert routes._cleanup_task_scope.tasks() == (cleanup,)
 
     gate.start_draining()
     drain = asyncio.create_task(
@@ -734,7 +734,7 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
     assert active == {}
     assert gate.active_keys() == ()
     assert gate.reserved_count == 0
-    assert routes._cleanup_tasks == set()
+    assert routes._cleanup_task_scope.tasks() == ()
 
 
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:
