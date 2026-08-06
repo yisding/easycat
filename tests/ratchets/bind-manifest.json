@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "update_rationale": "WS5.1 freezes every reviewed production listener backend before further migrations",
+  "counts": {
+    "backends": {
+      "aiohttp_run_app": 1,
+      "aiohttp_tcp_site": 5,
+      "aioquic_serve": 1,
+      "socket_bind": 2,
+      "websockets_serve": 5
+    },
+    "classifications": {
+      "authorized_capability": 1,
+      "generated_template": 1,
+      "guarded_embedding": 2,
+      "loopback_probe": 2,
+      "pending_migration": 8
+    }
+  },
+  "entries": [
+    "aiohttp_run_app\tdebugger/server.py\t_serve\tcall aiohttp.web.run_app\t011a2074b0ea8515\t0\tguarded_embedding\tDebugger-only synchronous embedding surface; _check_host requires an explicit allow_remote opt-in before this path.",
+    "aiohttp_tcp_site\tdebugger/server.py\trun_app_async\tcall aiohttp.web.TCPSite\ta76a18940daff620\t0\tguarded_embedding\tDebugger-only async embedding surface; _check_host requires an explicit allow_remote opt-in before setup.",
+    "aiohttp_tcp_site\tserver/voice_server.py\tVoiceServer._start_http_listener\tcall web.TCPSite\t7df0074dc790097f\t0\tpending_migration\tRetained VoiceServer aiohttp listener; the shared guard currently runs earlier in the startup transaction.",
+    "aiohttp_tcp_site\tserver/webrtc_routes.py\tserve_webrtc_config_sessions\tcall web.TCPSite\t0c9404fa212bff58\t0\tpending_migration\tRetained standalone WebRTC signaling listener; migrate its backend start behind authorized_bind.",
+    "aiohttp_tcp_site\ttelephony/server.py\t_start_twiml_http_listener\tcall web.TCPSite\t2f02b5074a42df2d\t0\tpending_migration\tRetained TwiML HTTP listener; migrate while preserving its two-listener rollback ordering.",
+    "aiohttp_tcp_site\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked\tcall self._web.TCPSite\tf27bcd4fdbf73fa9\t0\tpending_migration\tRetained WebRTC transport listener still relies on a hand-written pre-bind loopback check.",
+    "aioquic_serve\ttransports/webtransport.py\tWebTransportServer._start_unlocked\tcall aioquic_server.serve\ta24a50dc804c0d2d\t0\tpending_migration\tRetained aioquic WebTransport listener; the shared guard currently runs separately before backend setup.",
+    "socket_bind\tdebugger/dev.py\t_port_is_free\tcall @socket.bind\t861867d6028314be\t0\tloopback_probe\tIntentional dev-UI port probe receives only the module's fixed loopback host.",
+    "socket_bind\tdebugger/server.py\t_probe_bind\tcall @socket.bind\tf4688465a5a60a12\t0\tloopback_probe\tIntentional collision probe rewrites the target to a concrete IPv4 or IPv6 loopback address.",
+    "websockets_serve\tcli/scaffold/templates/twilio-phone/server.py\tcreate_app.lifespan\tcall websockets.serve\t5a39da69f8643192\t0\tgenerated_template\tGenerated Twilio listener is authenticated by Twilio signature and stream-token checks; migrate the template without changing that policy.",
+    "websockets_serve\tserver/voice_server.py\tVoiceServer._start_websocket_listener\tcall websockets.serve\tf70ee3f977c31ad4\t0\tpending_migration\tRetained VoiceServer raw-WebSocket listener; the shared guard currently runs earlier in the startup transaction.",
+    "websockets_serve\tserver/websocket.py\tserve_websocket_sessions\tcall websockets.serve\tb682544f34b28648\t0\tauthorized_capability\tStandalone raw-WebSocket listener is invoked only as the deferred binder passed to authorized_bind.",
+    "websockets_serve\ttelephony/server.py\tserve_twilio_voice_app\tcall websockets.serve\t37b0cf837621d8b2\t0\tpending_migration\tRetained Twilio media listener; migrate while preserving signature validation and HTTP-listener rollback.",
+    "websockets_serve\ttransports/_base.py\tServerTransportBase.connect\tcall websockets.serve\t7bf68d42d803d92c\t0\tpending_migration\tShared retained WebSocket transport listener currently has no mandatory bind capability at the backend call."
+  ]
+}
