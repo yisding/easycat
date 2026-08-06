@@ -236,12 +236,16 @@ class TestClassificationGate:
         gate.start()
         try:
             gate.close()
+            first_epoch = gate._timeout_epoch.capture()
             first_timeout = gate._tasks.tasks()[0]
 
             gate.close()
+            second_epoch = gate._timeout_epoch.capture()
             second_timeout = gate._tasks.tasks()[0]
             await asyncio.sleep(0)
 
+            assert not first_epoch.is_current()
+            assert second_epoch.is_current()
             assert first_timeout.cancelled()
             assert second_timeout is not first_timeout
             assert gate._tasks.active("classification_gate_timeout")

@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "WS1.5 outbound lifecycle transitions now invalidate an Epoch[None], with each serialized placement carrying a Lease[None] through provider creation and initiated-event dispatch.",
+  "rationale": "WS1.5 ClassificationGate timeouts now carry Lease[None] values from a dedicated Epoch, preserving invalidation on stop, reclose, and discard while allowing detached release replay.",
   "counts": {
     "cancelled_error_handler": 99,
-    "epoch_field": 9,
+    "epoch_field": 8,
     "gather_return_exceptions": 22,
     "raw_task_spawn": 16,
     "shield_loop": 4,
@@ -116,7 +116,6 @@
     "epoch_field\tsession/_turn_runner.py\tTurnRunner.__init__\tinteger field _preemptive_finalized_generation\t7fa28bd22c6bc585\t0",
     "epoch_field\tstages/agent.py\tAgentStage.__init__\tinteger field _history_epoch\t4cbb9484136baef7\t0",
     "epoch_field\tstt/base.py\tSTTBase.__init__\tinteger field _stream_generation\tccdccfa6b270012c\t0",
-    "epoch_field\ttelephony/call_state.py\tClassificationGate.__init__\tinteger field _generation\t6e6641518fab3af3\t0",
     "epoch_field\ttransports/local.py\tLocalTransport.__init__\tinteger field _stream_generation\tccdccfa6b270012c\t0",
     "gather_return_exceptions\tdebugger/server.py\t_DebuggerRoutes.shutdown\tasyncio.gather(return_exceptions=True)\t2889b0e71fb50ffd\t0",
     "gather_return_exceptions\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge.aclose\tasyncio.gather(return_exceptions=True)\tc25f3b5c770fb320\t0",
