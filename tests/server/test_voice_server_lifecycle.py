@@ -650,6 +650,7 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
 
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FailingSession(_FakeSession):
         def __init__(self) -> None:
@@ -671,6 +672,16 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     server._active_session_objs[key] = session
     assert server._gate.try_acquire()
     server._gate.track(key)
+    sweep_task_names: list[str] = []
+    stop_all = server._manager.stop_all
+
+    async def named_stop_all(*, force: bool = False) -> object:
+        current = asyncio.current_task()
+        assert current is not None
+        sweep_task_names.append(current.get_name())
+        return await stop_all(force=force)
+
+    monkeypatch.setattr(server._manager, "stop_all", named_stop_all)
 
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="retained 1 session"):
         await server.stop(force=True)
@@ -679,6 +690,8 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert "session teardown failed" in caplog.text
     assert server._manager.get(key) is session
     assert server._active_session_objs == {key: session}
+    assert sweep_task_names == ["easycat-voice-server-session-sweep"]
+    assert server._session_sweep_task_scope.tasks() == ()
     assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
     with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
         await server.start()
@@ -690,6 +703,47 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert server._manager.get(key) is None
     assert server._active_session_objs == {}
     assert server._lifecycle_cleanup_error is None
+
+
+async def test_hard_sweep_timeout_keeps_named_task_owned_until_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    server._started = True
+    sweep_started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release_sweep = asyncio.Event()
+
+    async def stop_all(*, force: bool = False) -> object:
+        assert force is True
+        sweep_started.set()
+        while not release_sweep.is_set():
+            try:
+                await release_sweep.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+        return object()
+
+    monkeypatch.setattr(server._manager, "stop_all", stop_all)
+
+    with pytest.raises(RuntimeError, match="SessionManager.stop_all did not finish"):
+        await asyncio.wait_for(server.stop(force=True), timeout=0.5)
+
+    assert sweep_started.is_set()
+    assert cancellation_seen.is_set()
+    tasks = server._session_sweep_task_scope.tasks()
+    assert len(tasks) == 1
+    sweep_task = tasks[0]
+    assert sweep_task.get_name() == "easycat-voice-server-session-sweep"
+
+    release_sweep.set()
+    await asyncio.wait_for(sweep_task, timeout=0.5)
+    await server._session_sweep_task_scope.release_standalone_if_empty()
+    assert server._session_sweep_task_scope.tasks() == ()
 
 
 async def test_cancelled_stop_publishes_retryable_stopped_state_before_reraising() -> None:

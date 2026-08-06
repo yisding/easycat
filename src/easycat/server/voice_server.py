@@ -81,6 +81,8 @@ _WS_HANDLER_TASK = "voice_server_ws_handler"
 _WS_HANDLER_COHORT = "voice-server-ws-handler"
 _LISTENER_CLEANUP_TASK = "voice_server_listener_cleanup"
 _LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
+_SESSION_SWEEP_TASK = "voice_server_session_sweep"
+_SESSION_SWEEP_COHORT = "voice-server-session-sweep"
 
 
 class VoiceServer:
@@ -112,6 +114,14 @@ class VoiceServer:
         # Bare session registry only: add/remove/stop_all/connection. Capacity
         # and draining are NOT attributed to it (it has neither).
         self._manager: SessionManager[int] = SessionManager()
+        self._session_sweep_task_scope = RuntimeTaskScope(
+            owner_label="voice-server-session-sweep",
+            member_name=_SESSION_SWEEP_TASK,
+            cohort=_SESSION_SWEEP_COHORT,
+            logger=logger,
+            failure_message="VoiceServer SessionManager sweep task failed",
+            drop_if_closed=False,
+        )
 
         # Shared capacity + draining collaborator (the M5 lift). It owns the
         # reservation counter, the active-connection set, and the draining flag
@@ -605,7 +615,11 @@ class VoiceServer:
         # retries it after the handler has unwound. Bound the sweep with
         # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
         # block server teardown.
-        sweep_task = asyncio.create_task(self._manager.stop_all(force=True))
+        sweep_task = self._session_sweep_task_scope.create_task(
+            self._manager.stop_all(force=True),
+            task_name="easycat-voice-server-session-sweep",
+        )
+        assert sweep_task is not None
         sweep_succeeded, swept = await self._attempt_cleanup(
             "SessionManager hard sweep",
             _await_with_hard_timeout(
@@ -620,6 +634,7 @@ class VoiceServer:
                 report=sweep_task.result() if swept else None,
                 cleanup_errors=cleanup_errors,
             )
+        await self._session_sweep_task_scope.release_standalone_if_empty()
 
         # Keep session/resource references when any cleanup stage failed so a
         # later stop can retry them. The gate itself is always reset to a
