@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "rationale": "Supervisor WebSocket readers and queue waiters now use cancel-on-close RuntimeTaskScope ownership.",
+  "rationale": "Own TTS close-finalizer waiters and reconcile reviewed cancellation constructs.",
   "counts": {
-    "cancelled_error_handler": 98,
+    "cancelled_error_handler": 100,
     "epoch_field": 17,
     "gather_return_exceptions": 22,
     "module_task_set": 1,
     "raw_task_spawn": 36,
     "shield_loop": 4,
-    "task_cancelling": 50
+    "task_cancelling": 51
   },
   "entries": [
     "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring._on_screening_response\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
@@ -25,12 +25,13 @@
     "cancelled_error_handler\truntime/journal.py\tappend_journal_record_async\texcept asyncio.CancelledError\t10a466e1f09307e3\t0",
     "cancelled_error_handler\truntime/journal.py\tappend_journal_record_async\texcept asyncio.CancelledError\t4265cd7fb8d52774\t0",
     "cancelled_error_handler\truntime/scope.py\tBackgroundTaskScope._on_done\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope._drain_close_phase\texcept asyncio.CancelledError\t0ad29dbf86ba890b\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._drain_cohort_signal\texcept asyncio.CancelledError\t372387e5140069e5\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._observe_close_controller\texcept asyncio.CancelledError\t83dfdc4399c7cf7f\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_close\texcept asyncio.CancelledError\t6ac28f401e40a6d7\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._run_finalizer\texcept asyncio.CancelledError\te30479465f2f062e\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope._settle_cohort_member\texcept asyncio.CancelledError\t544585d4e14ab08a\t0",
-    "cancelled_error_handler\truntime/scope.py\tRuntimeScope.close\texcept asyncio.CancelledError\tb8dd5cc898e117c1\t0",
+    "cancelled_error_handler\truntime/scope.py\tRuntimeScope.close\texcept asyncio.CancelledError\t3d6737d9c7e3dd5d\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.create_journaled_task._on_done\texcept asyncio.CancelledError\t711d6ccc40f29477\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.drain\texcept asyncio.CancelledError\t4e1f0f5e7b3ffad9\t0",
     "cancelled_error_handler\truntime/scope.py\tRuntimeScope.log_task_exception\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
@@ -48,6 +49,7 @@
     "cancelled_error_handler\tsession/_greeting.py\tGreetingController._deliver\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tsession/_journal_sink.py\t_await_owned_write\texcept asyncio.CancelledError\t4265cd7fb8d52774\t0",
     "cancelled_error_handler\tsession/_journal_sink.py\t_await_owned_write\texcept asyncio.CancelledError\t642af9be15e96347\t0",
+    "cancelled_error_handler\tsession/_session.py\tSession._drain_force_runtime_signals\texcept asyncio.CancelledError\tb026ddd7f1232ca5\t0",
     "cancelled_error_handler\tsession/_session.py\tSession._emit_heartbeats\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\tsession/_session.py\tSession._finish_interrupted_start\texcept asyncio.CancelledError\t4265cd7fb8d52774\t0",
     "cancelled_error_handler\tsession/_session.py\tSession.stop\texcept asyncio.CancelledError\t6ac28f401e40a6d7\t0",
@@ -200,6 +202,7 @@
     "task_cancelling\tserver/voice_server.py\tVoiceServer._finish_listener_cleanup_task\tTask.cancelling\t4c4fd1cba5cfda47\t0",
     "task_cancelling\tserver/voice_server.py\tVoiceServer._finish_listener_cleanup_task\tTask.cancelling\t97b0e2d243884e98\t0",
     "task_cancelling\tsession/_audio_router.py\tAudioRouter._await_non_cancellable_send\tTask.cancelling\ted8c5abdab511cda\t0",
+    "task_cancelling\tsession/_session.py\tSession._drain_force_runtime_signals\tTask.cancelling\t9a8e082bfd593441\t0",
     "task_cancelling\tsession/_session.py\tSession.stop\tTask.cancelling\tca4bad2549874da3\t0",
     "task_cancelling\tsession/_session.py\tSession.stop\tTask.cancelling\td2e70716c464ec8d\t0",
     "task_cancelling\tsession/_session.py\tSession.stop\tTask.cancelling\tfe3f299748891400\t0",
