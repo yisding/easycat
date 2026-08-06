@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
 from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
-from easycat.server.auth import from_websocket
+from easycat.server.auth import authorized_bind, from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
 from easycat.server.routes import (
@@ -366,10 +366,21 @@ class VoiceServer:
         """Start aiohttp transactionally, retaining failed rollback ownership."""
         runner = web.AppRunner(app)
         site: Any | None = None
-        try:
-            await runner.setup()
+
+        async def start_site() -> Any:
+            nonlocal site
             site = web.TCPSite(runner, self.config.host, self.config.port)
             await site.start()
+            return site
+
+        try:
+            await runner.setup()
+            site = await authorized_bind(
+                self.config.host,
+                auth=self.config.auth,
+                unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
+                binder=start_site,
+            )
         except BaseException as startup_error:
             # A site can fail after it has partially started. Publish both
             # listener references before rolling back so the regular bounded

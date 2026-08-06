@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS5.1 replaces WebRTC transport hand guard and protects TCPSite startup with authorized_bind",
+  "update_rationale": "WS5.1 routes VoiceServer TCPSite startup through authorized_bind",
   "counts": {
     "backends": {
       "aiohttp_run_app": 1,
@@ -10,17 +10,17 @@
       "websockets_serve": 5
     },
     "classifications": {
-      "authorized_capability": 4,
+      "authorized_capability": 5,
       "generated_template": 1,
       "guarded_embedding": 2,
       "loopback_probe": 2,
-      "pending_migration": 5
+      "pending_migration": 4
     }
   },
   "entries": [
     "aiohttp_run_app\tdebugger/server.py\t_serve\tcall aiohttp.web.run_app\t011a2074b0ea8515\t0\tguarded_embedding\tDebugger-only synchronous embedding surface; _check_host requires an explicit allow_remote opt-in before this path.",
     "aiohttp_tcp_site\tdebugger/server.py\trun_app_async\tcall aiohttp.web.TCPSite\ta76a18940daff620\t0\tguarded_embedding\tDebugger-only async embedding surface; _check_host requires an explicit allow_remote opt-in before setup.",
-    "aiohttp_tcp_site\tserver/voice_server.py\tVoiceServer._start_http_listener\tcall web.TCPSite\t7df0074dc790097f\t0\tpending_migration\tRetained VoiceServer aiohttp listener; the shared guard currently runs earlier in the startup transaction.",
+    "aiohttp_tcp_site\tserver/voice_server.py\tVoiceServer._start_http_listener.start_site\tcall web.TCPSite\t7df0074dc790097f\t0\tauthorized_capability\tVoiceServer TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
     "aiohttp_tcp_site\tserver/webrtc_routes.py\tserve_webrtc_config_sessions.start_site\tcall web.TCPSite\tcfe0af8c696c0cf1\t0\tauthorized_capability\tStandalone WebRTC TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
     "aiohttp_tcp_site\ttelephony/server.py\t_start_twiml_http_listener\tcall web.TCPSite\t2f02b5074a42df2d\t0\tpending_migration\tRetained TwiML HTTP listener; migrate while preserving its two-listener rollback ordering.",
     "aiohttp_tcp_site\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked.start_site\tcall self._web.TCPSite\t04e0376fb2b0f1fe\t0\tauthorized_capability\tWebRTC transport TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
