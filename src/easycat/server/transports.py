@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Hashable, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Hashable, Iterable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
@@ -44,6 +44,7 @@ from easycat._concurrency import (
     start_owned,
 )
 from easycat._numeric import is_finite_number
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 
 if TYPE_CHECKING:
@@ -53,6 +54,9 @@ KeyT = TypeVar("KeyT", bound=Hashable)
 ConnectionT = TypeVar("ConnectionT")
 SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
+
+_CAPACITY_DRAIN_TASK = "capacity_gate_drain"
+_CAPACITY_DRAIN_COHORT = "capacity-gate-drain"
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
@@ -433,7 +437,15 @@ class CapacityGate(Generic[KeyT]):
         self._reserved = 0
         self._active: set[KeyT] = set()
         self._draining = False
-        self._drain_tasks: set[asyncio.Task[None]] = set()
+        self._drain_task_scope = RuntimeTaskScope(
+            owner_label="capacity-gate-drain",
+            member_name=_CAPACITY_DRAIN_TASK,
+            cohort=_CAPACITY_DRAIN_COHORT,
+            logger=logger,
+            failure_message="CapacityGate drain task failed",
+            drop_if_closed=False,
+        )
+        self._drain_task_serial = 0
 
     # ── Capacity ─────────────────────────────────────────────────────
 
@@ -579,7 +591,14 @@ class CapacityGate(Generic[KeyT]):
                 # Nothing to stop; just drop it from the active set.
                 self.untrack(key)
                 continue
-            task = asyncio.ensure_future(result) if isinstance(result, Awaitable) else None
+            task = (
+                self._start_drain_task(
+                    _await_stop_result(result),
+                    stage="graceful",
+                )
+                if isinstance(result, Awaitable)
+                else None
+            )
             graceful[key] = (session, task)
 
         # (2) wait up to the grace window for the graceful stops to complete.
@@ -592,16 +611,15 @@ class CapacityGate(Generic[KeyT]):
             # Teardown ownership survives cancellation of the caller running
             # drain. This prevents graceful tasks from becoming detached and
             # preserves a keyed path for later force escalation.
-            finish_task = asyncio.create_task(
+            finish_task = self._start_drain_task(
                 self._finish_drain(
                     graceful,
                     force_after=force_after,
                     force_deadline=force_deadline,
                     stop_for_key=stop_for_key,
-                )
+                ),
+                stage="finish",
             )
-            self._drain_tasks.add(finish_task)
-            finish_task.add_done_callback(self._drain_tasks.discard)
 
         await asyncio.shield(finish_task)
         return force_deadline
@@ -617,14 +635,15 @@ class CapacityGate(Generic[KeyT]):
         """Escalate all remaining sessions concurrently under one deadline."""
         escalations: list[asyncio.Task[None]] = []
         for key, (session, task) in graceful.items():
-            escalation = asyncio.create_task(
+            escalation = self._start_drain_task(
                 _escalate_graceful_stop(
                     key,
                     session,
                     task,
                     force_after=force_after,
                     stop_for_key=stop_for_key,
-                )
+                ),
+                stage="escalate",
             )
             escalation.add_done_callback(partial(self._untrack_after_escalation, key))
             escalations.append(escalation)
@@ -638,6 +657,21 @@ class CapacityGate(Generic[KeyT]):
 
     def _untrack_after_escalation(self, key: KeyT, _task: asyncio.Task[None]) -> None:
         self.untrack(key)
+
+    def _start_drain_task(
+        self,
+        coro: Coroutine[Any, Any, None],
+        *,
+        stage: str,
+    ) -> asyncio.Task[None]:
+        """Start one named drain worker under the gate's lifecycle owner."""
+        self._drain_task_serial += 1
+        task = self._drain_task_scope.create_task(
+            coro,
+            task_name=f"easycat-capacity-drain-{stage}-{self._drain_task_serial}",
+        )
+        assert task is not None
+        return cast("asyncio.Task[None]", task)
 
 
 def _deadline_after(timeout_s: float | None) -> float | None:
@@ -673,6 +707,11 @@ def _call_stop(
     if stop is None:
         return None
     return stop(force=force)
+
+
+async def _await_stop_result(awaitable: Awaitable[object]) -> None:
+    """Normalize an arbitrary session stop awaitable into an owned coroutine."""
+    await awaitable
 
 
 async def _escalate_graceful_stop(

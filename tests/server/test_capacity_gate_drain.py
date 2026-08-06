@@ -448,10 +448,15 @@ async def test_force_timeout_is_hard_when_stop_resists_cancellation() -> None:
     assert session.force_started.is_set()
     assert session.cancel_seen.is_set()
     assert gate.active_keys() == ()
+    owned = gate._drain_task_scope.tasks()
+    assert len(owned) == 1
+    assert owned[0].get_name().startswith("easycat-capacity-drain-escalate-")
 
     session.release.set()
     await asyncio.wait_for(session.finished.wait(), timeout=1)
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     await asyncio.sleep(0)
+    assert gate._drain_task_scope.tasks() == ()
 
 
 async def test_forced_shutdown_runs_all_sessions_concurrently() -> None:
@@ -491,13 +496,17 @@ async def test_cancelled_drain_keeps_teardown_owned_and_force_escalates() -> Non
         )
     )
     await session.graceful_started.wait()
+    graceful = gate._drain_task_scope.tasks()
+    assert len(graceful) == 1
+    assert graceful[0].get_name().startswith("easycat-capacity-drain-graceful-")
     drain_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await drain_task
 
     await asyncio.wait_for(session.force_started.wait(), timeout=1)
-    await asyncio.gather(*list(gate._drain_tasks))
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     assert gate.active_keys() == ()
+    assert gate._drain_task_scope.tasks() == ()
 
 
 @pytest.mark.parametrize("disconnect_error", [None, RuntimeError("peer close failed")])

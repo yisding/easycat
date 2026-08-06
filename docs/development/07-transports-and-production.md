@@ -172,7 +172,11 @@ flowchart TD
 
 WebSocket and WebRTC share the same gate and active-session map. A WebRTC-only
 load therefore counts against the same server capacity and drain behavior as
-WebSocket clients.
+WebSocket clients. `CapacityGate` also owns graceful stop workers, its
+cancellation-shielded drain finisher, and per-session force escalations in one
+named task scope. Cancelling the caller or reaching the hard force deadline
+therefore leaves any cancellation-resistant teardown attached directly to the
+gate until it settles.
 
 The aiohttp health/signaling application and raw WebSocket listener are
 distinct listener resources but one process lifecycle. `VoiceServer.run()` is
