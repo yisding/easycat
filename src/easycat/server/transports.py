@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 _CAPACITY_DRAIN_TASK = "capacity_gate_drain"
 _CAPACITY_DRAIN_COHORT = "capacity-gate-drain"
+_WEBSOCKET_CLEANUP_TASK = "websocket_cleanup"
+_WEBSOCKET_CLEANUP_COHORT = "websocket-cleanup"
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
@@ -169,6 +171,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         self._sessions: dict[int, SessionT] = {}
         self._connections: dict[int, ConnectionT] = {}
         self._handler_tasks: set[asyncio.Task[object]] = set()
+        self._cleanup_task_scope = RuntimeTaskScope(
+            owner_label=f"{runtime_id}-cleanup",
+            member_name=_WEBSOCKET_CLEANUP_TASK,
+            cohort=_WEBSOCKET_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="WebSocket runtime cleanup task failed",
+            drop_if_closed=False,
+        )
 
     @property
     def survivor_registry(self) -> SurvivorRegistry:
@@ -295,11 +305,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             deadline=force_deadline,
             label="WebSocket server handlers",
         )
-        sweep_completed, sweep_result = await self._bounded_cleanup(
-            self.manager.stop_all(),
-            timeout_s=_remaining_timeout(force_deadline),
-            label="WebSocket sessions",
-        )
+        try:
+            sweep_completed, sweep_result = await self._bounded_cleanup(
+                self.manager.stop_all(),
+                timeout_s=_remaining_timeout(force_deadline),
+                label="WebSocket sessions",
+            )
+        finally:
+            await self._cleanup_task_scope.release_standalone_if_empty()
         sweep_error: RuntimeError | None = None
         if isinstance(sweep_result, SessionStopReport) and log_session_stop_failures(
             sweep_result,
@@ -326,19 +339,23 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             (key, self._sessions[key]) for key in self.gate.active_keys() if key in self._sessions
         ]
 
-    @staticmethod
     async def _bounded_cleanup(
+        self,
         awaitable: Awaitable[object],
         *,
         timeout_s: float,
         label: str,
     ) -> tuple[bool, object | None]:
-        future = asyncio.ensure_future(awaitable)
-        completed = await _await_with_hard_timeout(future, timeout_s=timeout_s)
+        task = self._cleanup_task_scope.create_task(
+            _await_cleanup_result(awaitable),
+            task_name="easycat-websocket-runtime-cleanup",
+        )
+        assert task is not None
+        completed = await _await_with_hard_timeout(task, timeout_s=timeout_s)
         if not completed:
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
             return False, None
-        return True, future.result()
+        return True, task.result()
 
     async def _bounded_listener_wait(
         self,
@@ -713,6 +730,11 @@ def _call_stop(
 async def _await_stop_result(awaitable: Awaitable[object]) -> None:
     """Normalize an arbitrary session stop awaitable into an owned coroutine."""
     await awaitable
+
+
+async def _await_cleanup_result(awaitable: Awaitable[object]) -> object:
+    """Normalize a cleanup awaitable into the WebSocket runtime's task scope."""
+    return await awaitable
 
 
 async def _escalate_graceful_stop(

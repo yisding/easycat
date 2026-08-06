@@ -186,7 +186,9 @@ are reported with the connection-close task identity, while the hard deadline
 keeps cancellation-resistant closes owned after the stop path advances.
 Listener-created WebSocket handler tasks are adopted into their own cohort so
 expected stop cancellation stays quiet and cleanup failures retain the handler
-task identity.
+task identity. The raw-WebSocket runtime's final manager sweep also starts in a
+named cleanup scope, so a Session that resists the shared force deadline stays
+attached to that runtime after `drain()` returns.
 HTTP site and runner cleanup stages use a third named cohort plus a stage-keyed
 retry ledger, preventing a later `stop()` from racing a second cleanup call
 against an operation that survived the prior hard deadline.

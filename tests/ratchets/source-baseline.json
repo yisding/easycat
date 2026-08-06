@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "rationale": "CapacityGate drain workers moved from raw task starts into one named RuntimeTaskScope",
+  "rationale": "WebSocket runtime bounded cleanup moved into a named RuntimeTaskScope",
   "counts": {
     "cancelled_error_handler": 100,
     "epoch_field": 17,
     "gather_return_exceptions": 22,
     "module_task_set": 1,
-    "raw_task_spawn": 26,
+    "raw_task_spawn": 25,
     "shield_loop": 4,
     "task_cancelling": 51
   },
@@ -158,7 +158,6 @@
     "raw_task_spawn\tintegrations/agents/responses_api.py\t_aiter_lines_with_cancellation\tasyncio.ensure_future\t3236350b538dee4c\t0",
     "raw_task_spawn\tintegrations/agents/responses_api.py\t_aiter_lines_with_cancellation\tasyncio.ensure_future\t41ba48ba9387c249\t0",
     "raw_task_spawn\truntime/journal.py\tappend_journal_record_async\tasyncio.create_task\tb4a0a6b20b70d669\t0",
-    "raw_task_spawn\tserver/transports.py\tWebSocketSessionRuntime._bounded_cleanup\tasyncio.ensure_future\t2197525e3944cdd4\t0",
     "raw_task_spawn\tserver/transports.py\t_await_with_hard_timeout\tasyncio.ensure_future\t2197525e3944cdd4\t0",
     "raw_task_spawn\tserver/transports.py\t_safe_await\tasyncio.ensure_future\t2197525e3944cdd4\t0",
     "raw_task_spawn\tserver/transports.py\tclose_websocket_connections\tasyncio.ensure_future\td0b144f338429d6b\t0",
