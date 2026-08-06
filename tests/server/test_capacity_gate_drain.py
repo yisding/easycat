@@ -231,6 +231,18 @@ async def test_safe_await_propagates_new_cancellation_count() -> None:
     assert owned.cancelled()
 
 
+async def test_timed_safe_await_rejects_and_closes_unowned_coroutine() -> None:
+    async def cleanup() -> None:
+        await asyncio.Event().wait()
+
+    awaitable = cleanup()
+
+    with pytest.raises(TypeError, match="already-owned Future or Task"):
+        await server_transports._safe_await(awaitable, timeout_s=0.01)
+
+    assert awaitable.cr_frame is None
+
+
 @pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])
 def test_capacity_gate_rejects_invalid_session_caps(max_sessions: object) -> None:
     with pytest.raises(ValueError, match="max_sessions"):

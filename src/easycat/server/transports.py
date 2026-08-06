@@ -805,7 +805,6 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     (the same idiom as
     :mod:`easycat.runtime.scope` and :mod:`easycat.config._telephony_wiring`).
     """
-    future = asyncio.ensure_future(awaitable)
     current_task = asyncio.current_task()
     # Deliver a cancellation already pending at helper entry before recording
     # the stale-request baseline. A previously caught request leaves
@@ -814,20 +813,31 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
         try:
             await asyncio.sleep(0)
         except asyncio.CancelledError:
-            future.cancel()
-            await asyncio.gather(future, return_exceptions=True)
+            await _discard_awaitable(awaitable)
             raise
     cancellation_requests = current_task.cancelling() if current_task is not None else 0
+    if timeout_s is not None and not isinstance(awaitable, asyncio.Future):
+        await _discard_awaitable(awaitable)
+        raise TypeError("Timed _safe_await requires an already-owned Future or Task")
     try:
         if timeout_s is not None:
-            await _await_with_hard_timeout(future, timeout_s=timeout_s)
+            await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
         else:
-            await future
+            await awaitable
     except asyncio.CancelledError:
         if current_task is not None and current_task.cancelling() > cancellation_requests:
             raise
     except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
         pass
+
+
+async def _discard_awaitable(awaitable: Awaitable[object]) -> None:
+    """Cancel an owned future or close a coroutine that was never started."""
+    if isinstance(awaitable, asyncio.Future):
+        awaitable.cancel()
+        await asyncio.gather(awaitable, return_exceptions=True)
+    elif isinstance(awaitable, Coroutine):
+        awaitable.close()
 
 
 _BACKGROUND_TIMEOUT_TASKS: set[asyncio.Future[object]] = set()
