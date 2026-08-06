@@ -59,6 +59,8 @@ _CAPACITY_DRAIN_TASK = "capacity_gate_drain"
 _CAPACITY_DRAIN_COHORT = "capacity-gate-drain"
 _WEBSOCKET_CLEANUP_TASK = "websocket_cleanup"
 _WEBSOCKET_CLEANUP_COHORT = "websocket-cleanup"
+_WEBSOCKET_CLOSE_TASK = "websocket_close"
+_WEBSOCKET_CLOSE_COHORT = "websocket-close"
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
@@ -83,6 +85,7 @@ def _validate_max_sessions(value: object) -> None:
 async def close_websocket_connections(
     connections: Iterable[object],
     *,
+    task_scope: RuntimeTaskScope,
     timeout_s: float | None,
     code: int = 1001,
     reason: str = "Server shutdown after drain",
@@ -110,7 +113,12 @@ async def close_websocket_connections(
         except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
             continue
         if isinstance(result, Awaitable):
-            close_tasks.append(asyncio.ensure_future(result))
+            task = task_scope.create_task(
+                _await_cleanup_result(result),
+                task_name=f"easycat-websocket-close-{identity}",
+            )
+            assert task is not None
+            close_tasks.append(task)
     if close_tasks:
         await _safe_await(
             asyncio.gather(*close_tasks, return_exceptions=True),
@@ -177,6 +185,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             cohort=_WEBSOCKET_CLEANUP_COHORT,
             logger=logger,
             failure_message="WebSocket runtime cleanup task failed",
+            drop_if_closed=False,
+        )
+        self._connection_close_task_scope = RuntimeTaskScope(
+            owner_label=f"{runtime_id}-connection-close",
+            member_name=_WEBSOCKET_CLOSE_TASK,
+            cohort=_WEBSOCKET_CLOSE_COHORT,
+            logger=logger,
+            failure_message="WebSocket connection close task failed",
             drop_if_closed=False,
         )
 
@@ -292,10 +308,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             force_timeout_s=max(force_timeout_s, 0.0),
         )
         assert force_deadline is not None
-        await close_websocket_connections(
-            self._connections.values(),
-            timeout_s=_remaining_timeout(force_deadline),
-        )
+        try:
+            await close_websocket_connections(
+                self._connections.values(),
+                task_scope=self._connection_close_task_scope,
+                timeout_s=_remaining_timeout(force_deadline),
+            )
+        finally:
+            await self._connection_close_task_scope.release_standalone_if_empty()
         await cancel_handler_tasks(
             self._handler_tasks,
             timeout_s=_remaining_timeout(force_deadline),

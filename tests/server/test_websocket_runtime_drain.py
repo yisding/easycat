@@ -502,14 +502,21 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     elapsed = loop.time() - started
 
     assert elapsed < 0.15
+    close_tasks = runtime._connection_close_task_scope.tasks()
+    assert len(close_tasks) == 1
+    assert close_tasks[0].get_name().startswith("easycat-websocket-close-")
 
     release.set()
     await asyncio.gather(
         handler,
+        *close_tasks,
+        *runtime._cleanup_task_scope.tasks(),
         *runtime.survivor_registry.supervisor.tasks(),
         *tuple(server_transports._BACKGROUND_TIMEOUT_TASKS),
         return_exceptions=True,
     )
+    await asyncio.sleep(0)
+    assert runtime._connection_close_task_scope.tasks() == ()
 
 
 class _CancellationResistantServer:

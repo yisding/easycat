@@ -188,7 +188,9 @@ Listener-created WebSocket handler tasks are adopted into their own cohort so
 expected stop cancellation stays quiet and cleanup failures retain the handler
 task identity. The raw-WebSocket runtime's final manager sweep also starts in a
 named cleanup scope, so a Session that resists the shared force deadline stays
-attached to that runtime after `drain()` returns.
+attached to that runtime after `drain()` returns. Its surviving connection
+closes use a separate named scope with the same property; invalid connection
+objects and asynchronous close failures retain the existing best-effort policy.
 HTTP site and runner cleanup stages use a third named cohort plus a stage-keyed
 retry ledger, preventing a later `stop()` from racing a second cleanup call
 against an operation that survived the prior hard deadline.
