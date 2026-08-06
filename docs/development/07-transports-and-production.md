@@ -176,7 +176,10 @@ WebSocket clients.
 
 The aiohttp health/signaling application and raw WebSocket listener are
 distinct listener resources but one process lifecycle. `VoiceServer.run()` is
-the only loop owner; `serve()` is the composable async operation.
+the only loop owner; `serve()` is the composable async operation. Forced
+raw-WebSocket connection closes run in a named task cohort; completed failures
+are reported with the connection-close task identity, while the hard deadline
+keeps cancellation-resistant closes owned after the stop path advances.
 
 Read [`server/transports.py`](../../src/easycat/server/transports.py) for
 `CapacityGate` and hard-timeout helpers, and

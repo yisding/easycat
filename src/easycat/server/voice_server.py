@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.server.auth import from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
@@ -73,6 +74,8 @@ _WS_DRAINING_CLOSE_REASON = "Server is draining"
 # Auth rejection uses 1008 (RFC 6455 "Policy Violation").
 _WS_UNAUTHORIZED_CLOSE_CODE = 1008
 _WS_UNAUTHORIZED_CLOSE_REASON = "Missing or invalid bearer token"
+_WS_CLOSE_TASK = "voice_server_ws_close"
+_WS_CLOSE_COHORT = "voice-server-ws-close"
 
 
 class VoiceServer:
@@ -120,6 +123,14 @@ class VoiceServer:
         # ``ws_server.wait_closed()`` — blocked forever.
         self._ws_handler_tasks: set[asyncio.Task[None]] = set()
         self._ws_connections: dict[int, Any] = {}
+        self._ws_close_task_scope = RuntimeTaskScope(
+            owner_label="voice-server-ws-close",
+            member_name=_WS_CLOSE_TASK,
+            cohort=_WS_CLOSE_COHORT,
+            logger=logger,
+            failure_message="VoiceServer raw-WebSocket close task failed",
+            drop_if_closed=False,
+        )
         self._await_natural_end_drain = False
 
         # In-process metric snapshot for ``GET /metrics`` (M8). The
@@ -850,22 +861,56 @@ class VoiceServer:
 
     async def _close_active_ws_connections(self) -> None:
         """Close still-active raw WebSocket connections after natural drain expires."""
-        connections = list(self._ws_connections.values())
+        connections = list(self._ws_connections.items())
         if not connections:
             return
-        close_tasks = [
-            asyncio.create_task(ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON))
-            for ws in connections
-        ]
+        close_tasks: list[asyncio.Task[Any]] = []
+        for key, ws in connections:
+            task = self._ws_close_task_scope.create_task(
+                ws.close(code=1001, reason=_WS_DRAINING_CLOSE_REASON),
+                task_name=f"easycat-raw-ws-close-{key}",
+            )
+            assert task is not None
+            close_tasks.append(task)
+        close_group = asyncio.gather(*close_tasks, return_exceptions=True)
         closed = await _await_with_hard_timeout(
-            asyncio.gather(*close_tasks, return_exceptions=True),
+            close_group,
             timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
         )
+        if closed:
+            self._report_shutdown_task_results(
+                "raw-WebSocket close",
+                close_tasks,
+                close_group.result(),
+                explicitly_cancelled=set(),
+            )
+        await self._ws_close_task_scope.release_standalone_if_empty()
         if not closed:
             logger.warning(
                 "VoiceServer: raw-ws connections did not close within "
                 "force_shutdown_timeout_s=%ss; cancelling handlers",
                 self.config.force_shutdown_timeout_s,
+            )
+
+    @staticmethod
+    def _report_shutdown_task_results(
+        stage: str,
+        tasks: list[asyncio.Task[Any]],
+        results: list[Any],
+        *,
+        explicitly_cancelled: set[asyncio.Task[Any]],
+    ) -> None:
+        """Log unexpected shutdown failures with the owning task's identity."""
+        for task, result in zip(tasks, results, strict=True):
+            if not isinstance(result, BaseException):
+                continue
+            if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
+                continue
+            logger.error(
+                "VoiceServer %s task %s failed",
+                stage,
+                task.get_name(),
+                exc_info=result,
             )
 
     def _reset_gate_bookkeeping(self) -> None:

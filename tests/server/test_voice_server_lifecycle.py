@@ -40,6 +40,46 @@ def _idle_server(**kwargs: object) -> VoiceServer:
     return VoiceServer(config, session_factory=lambda _t: _FakeSession())
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_active_websocket_close_reports_only_failures_with_task_name(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    close_fails: bool,
+) -> None:
+    task_names: list[str] = []
+
+    class _Connection:
+        async def close(self, *, code: int, reason: str) -> None:
+            assert code == 1001
+            assert reason == "Server is draining"
+            current = asyncio.current_task()
+            assert current is not None
+            task_names.append(current.get_name())
+            if close_fails:
+                raise RuntimeError("connection close failed")
+
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.1,
+    )
+    server._ws_connections[41] = _Connection()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._close_active_ws_connections()
+
+    expected = "VoiceServer raw-WebSocket close task easycat-raw-ws-close-41 failed"
+    messages = [record.getMessage() for record in caplog.records]
+    if close_fails:
+        assert expected in messages
+    else:
+        assert not any(
+            message.startswith("VoiceServer raw-WebSocket close task ") for message in messages
+        )
+    assert task_names == ["easycat-raw-ws-close-41"]
+    assert server._ws_close_task_scope.tasks() == ()
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 
