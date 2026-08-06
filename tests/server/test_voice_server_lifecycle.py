@@ -605,6 +605,9 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
         await asyncio.wait_for(server.stop(force=True), timeout=0.5)
 
     assert stop_started.is_set()
+    listener_task = server._listener_cleanup_tasks["HTTP site stop"]
+    assert listener_task.get_name() == "easycat-voice-server-listener-cleanup-http-site-stop"
+    assert server._listener_cleanup_task_scope.tasks() == (listener_task,)
     assert session.stopped.is_set()
     # AppRunner.cleanup() stops its registered sites. Do not invoke it while
     # the retained site.stop() call is still pending, or aiohttp receives two
@@ -627,6 +630,7 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
     assert server._runner is None
     assert server._gate.is_draining is False
     assert server._lifecycle_cleanup_error is None
+    assert server._listener_cleanup_task_scope.tasks() == ()
 
 
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(

@@ -183,6 +183,9 @@ keeps cancellation-resistant closes owned after the stop path advances.
 Listener-created WebSocket handler tasks are adopted into their own cohort so
 expected stop cancellation stays quiet and cleanup failures retain the handler
 task identity.
+HTTP site and runner cleanup stages use a third named cohort plus a stage-keyed
+retry ledger, preventing a later `stop()` from racing a second cleanup call
+against an operation that survived the prior hard deadline.
 
 Read [`server/transports.py`](../../src/easycat/server/transports.py) for
 `CapacityGate` and hard-timeout helpers, and

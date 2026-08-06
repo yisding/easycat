@@ -79,6 +79,8 @@ _WS_CLOSE_TASK = "voice_server_ws_close"
 _WS_CLOSE_COHORT = "voice-server-ws-close"
 _WS_HANDLER_TASK = "voice_server_ws_handler"
 _WS_HANDLER_COHORT = "voice-server-ws-handler"
+_LISTENER_CLEANUP_TASK = "voice_server_listener_cleanup"
+_LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
 
 
 class VoiceServer:
@@ -175,7 +177,15 @@ class VoiceServer:
         # retaining the original cleanup ownership for a later retry. Reissuing
         # ``site.stop()`` concurrently with the first invocation is not a safe
         # retry strategy.
-        self._listener_cleanup_tasks: dict[str, asyncio.Future[Any]] = {}
+        self._listener_cleanup_task_scope = RuntimeTaskScope(
+            owner_label="voice-server-listener-cleanup",
+            member_name=_LISTENER_CLEANUP_TASK,
+            cohort=_LISTENER_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="VoiceServer listener cleanup task failed",
+            drop_if_closed=False,
+        )
+        self._listener_cleanup_tasks: dict[str, asyncio.Task[Any]] = {}
 
         # The mounted WebRTC route unit (M7). WebRTC ``/offer`` reserve through
         # the SAME shared ``_gate`` and register into the SAME
@@ -732,7 +742,7 @@ class VoiceServer:
         stage: str,
         cleanup: Callable[[], Awaitable[Any]],
         cleanup_errors: list[Exception],
-    ) -> tuple[asyncio.Future[Any] | None, bool]:
+    ) -> tuple[asyncio.Task[Any] | None, bool]:
         """Return a pending listener cleanup task or a completed retry result."""
         task = self._listener_cleanup_tasks.get(stage)
         if task is not None:
@@ -748,14 +758,25 @@ class VoiceServer:
                     return None, True
 
         try:
-            task = asyncio.ensure_future(cleanup())
+            stage_slug = stage.lower().replace(" ", "-")
+            task_name = f"easycat-voice-server-listener-cleanup-{stage_slug}"
+            task = self._listener_cleanup_task_scope.create_task(
+                self._run_listener_cleanup(cleanup),
+                task_name=task_name,
+            )
+            assert task is not None
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self._record_cleanup_error(stage, exc, cleanup_errors)
             return None, False
         self._listener_cleanup_tasks[stage] = task
         return task, False
 
-    async def _wait_for_listener_cleanup_task(self, task: asyncio.Future[Any]) -> bool:
+    @staticmethod
+    async def _run_listener_cleanup(cleanup: Callable[[], Awaitable[Any]]) -> Any:
+        """Invoke one listener cleanup operation inside its named owner task."""
+        return await cleanup()
+
+    async def _wait_for_listener_cleanup_task(self, task: asyncio.Task[Any]) -> bool:
         """Wait one bounded slice while preserving a listener cleanup task's ownership."""
         try:
             done, _ = await asyncio.wait(
@@ -775,7 +796,7 @@ class VoiceServer:
     async def _finish_listener_cleanup_task(
         self,
         stage: str,
-        task: asyncio.Future[Any],
+        task: asyncio.Task[Any],
         cleanup_errors: list[Exception],
     ) -> bool:
         """Reap a completed listener cleanup task and preserve caller cancellation."""
