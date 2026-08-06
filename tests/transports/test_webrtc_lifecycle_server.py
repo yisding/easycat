@@ -508,6 +508,81 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
+    async def test_connect_authorizes_the_backend_capability(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.server.auth as auth_module
+        import easycat.transports.webrtc as webrtc_module
+
+        web, runner, _site = _fake_serve_web()
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        error = RuntimeError("rejected at backend capability")
+        guard_calls = 0
+
+        def guard(*_args: object, **_kwargs: object) -> None:
+            nonlocal guard_calls
+            guard_calls += 1
+            if guard_calls == 2:
+                raise error
+
+        monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+            await transport.connect()
+
+        assert exc_info.value is error
+        assert guard_calls == 2
+        runner.setup.assert_awaited_once()
+        web.TCPSite.assert_not_called()
+        runner.cleanup.assert_awaited_once()
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._connected is False
+
+    @pytest.mark.asyncio
+    async def test_connect_public_without_token_uses_shared_guard(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        require_backend = Mock()
+        monkeypatch.setattr(webrtc_module, "require_module", require_backend)
+        transport = WebRTCTransport(WebRTCTransportConfig(host="0.0.0.0", static_dir=None))
+
+        with pytest.raises(ValueError) as exc_info:
+            await transport.connect()
+
+        assert "auth_token" in str(exc_info.value)
+        assert "non-loopback" in str(exc_info.value)
+        require_backend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connect_preserves_exact_backend_exception_and_partial_site(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        error = RuntimeError("site bind failed")
+        web, runner, site = _fake_serve_web(start_error=error)
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        with pytest.raises(RuntimeError, match="site bind failed") as exc_info:
+            await transport.connect()
+
+        assert exc_info.value is error
+        site.start.assert_awaited_once()
+        site.stop.assert_awaited_once()
+        runner.cleanup.assert_awaited_once()
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._connected is False
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("cancel_count", [1, 2])
     async def test_connect_rollback_preserves_new_caller_cancellation(
         self,

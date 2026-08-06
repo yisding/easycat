@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from easycat._concurrency import shielded_cleanup
 from easycat._epoch import Epoch, Lease
 from easycat._extras import require_module
-from easycat._net import is_loopback_host, normalize_auth_token
+from easycat._net import normalize_auth_token
 from easycat.audio_format import AudioChunk
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.scope import RuntimeScope
@@ -315,12 +315,22 @@ class WebRTCTransport(AudioQueueMixin):
                 "again before reconnecting"
             ) from self._disconnect_cleanup_error
 
-        auth_token = normalize_auth_token(self._config.auth_token)
-        if not is_loopback_host(self._config.host) and auth_token is None:
+        from easycat.server.auth import authorized_bind, enforce_bind_guard
+
+        auth_policy = self._auth_policy()
+        try:
+            enforce_bind_guard(
+                self._config.host,
+                auth=auth_policy,
+            )
+        except ValueError:
+            # This transport intentionally has no unsafe public-bind escape
+            # hatch. Preserve its established actionable error instead of the
+            # shared guard's generic advice to pass an unavailable option.
             raise ValueError(
                 "WebRTCTransportConfig.auth_token is required when binding WebRTC "
                 "signaling to a non-loopback host"
-            )
+            ) from None
 
         self._web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
         web = self._web
@@ -361,10 +371,20 @@ class WebRTCTransport(AudioQueueMixin):
 
         runner = web.AppRunner(app)
         site: Any | None = None
-        try:
-            await runner.setup()
+
+        async def start_site() -> Any:
+            nonlocal site
             site = web.TCPSite(runner, self._config.host, self._config.port)
             await site.start()
+            return site
+
+        try:
+            await runner.setup()
+            site = await authorized_bind(
+                self._config.host,
+                auth=auth_policy,
+                binder=start_site,
+            )
         except BaseException as startup_error:
             # Publish the partial stack before protected rollback so cleanup
             # failures and repeated caller cancellation remain retryable.
