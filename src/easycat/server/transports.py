@@ -44,7 +44,7 @@ from easycat._concurrency import (
     start_owned,
 )
 from easycat._numeric import is_finite_number
-from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 
 if TYPE_CHECKING:
@@ -371,7 +371,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             task_name="easycat-websocket-runtime-cleanup",
         )
         assert task is not None
-        completed = await _await_with_hard_timeout(task, timeout_s=timeout_s)
+        completed = await wait_for_owned_future(task, timeout_s=timeout_s)
         if not completed:
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
             return False, None
@@ -821,7 +821,10 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
         raise TypeError("Timed _safe_await requires an already-owned Future or Task")
     try:
         if timeout_s is not None:
-            await _await_with_hard_timeout(awaitable, timeout_s=timeout_s)
+            await wait_for_owned_future(
+                cast("asyncio.Future[object]", awaitable),
+                timeout_s=timeout_s,
+            )
         else:
             await awaitable
     except asyncio.CancelledError:
@@ -838,53 +841,3 @@ async def _discard_awaitable(awaitable: Awaitable[object]) -> None:
         await asyncio.gather(awaitable, return_exceptions=True)
     elif isinstance(awaitable, Coroutine):
         awaitable.close()
-
-
-_BACKGROUND_TIMEOUT_TASKS: set[asyncio.Future[object]] = set()
-
-
-async def _await_with_hard_timeout(
-    awaitable: Awaitable[object],
-    *,
-    timeout_s: float,
-) -> bool:
-    """Wait no longer than ``timeout_s`` without awaiting cancellation cleanup.
-
-    ``asyncio.wait_for`` is not a hard bound: after its deadline it cancels the
-    child and waits for that cancellation to finish. A teardown coroutine can
-    catch cancellation and keep the caller blocked indefinitely. This helper
-    instead requests cancellation, leaves any still-unfinished work owned in a
-    background set, and returns immediately at the deadline. It returns
-    ``True`` when the awaitable completed in time and ``False`` when it remains
-    in progress.
-    """
-    future = asyncio.ensure_future(awaitable)
-    try:
-        done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
-    except asyncio.CancelledError:
-        _track_background_timeout(future)
-        raise
-    if future not in done:
-        future.cancel()
-        _track_background_timeout(future)
-        # Give cooperative cancellation one event-loop turn without waiting for
-        # a coroutine that deliberately resists it.
-        await asyncio.sleep(0)
-        return False
-    await future
-    return True
-
-
-def _track_background_timeout(future: asyncio.Future[object]) -> None:
-    """Keep timed-out teardown work owned and consume its eventual result."""
-    _BACKGROUND_TIMEOUT_TASKS.add(future)
-
-    def finish(done: asyncio.Future[object]) -> None:
-        _BACKGROUND_TIMEOUT_TASKS.discard(done)
-        if not done.cancelled():
-            try:
-                done.exception()
-            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
-                pass
-
-    future.add_done_callback(finish)

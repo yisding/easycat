@@ -18,7 +18,6 @@ from easycat._concurrency import (
     reap,
     start_owned,
 )
-from easycat.server import transports as server_transports
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session_manager import SessionManager
 
@@ -512,7 +511,6 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
         *close_tasks,
         *runtime._cleanup_task_scope.tasks(),
         *runtime.survivor_registry.supervisor.tasks(),
-        *tuple(server_transports._BACKGROUND_TIMEOUT_TASKS),
         return_exceptions=True,
     )
     await asyncio.sleep(0)

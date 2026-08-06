@@ -203,9 +203,13 @@ joined by the retry.
 The final `SessionManager.stop_all(force=True)` sweep is named and scope-owned
 as well, so a cancellation-resistant Session remains attached to the server's
 cleanup owner after the hard deadline records an incomplete stop.
+Every remaining server hard deadline now waits on a future that one of these
+scopes or ledgers already owns. The shared wait primitive never creates a task
+or retains work in a module-global set; it only requests cancellation at the
+deadline and leaves the surviving task with its lifecycle owner.
 
 Read [`server/transports.py`](../../src/easycat/server/transports.py) for
-`CapacityGate` and hard-timeout helpers, and
+`CapacityGate` and raw-WebSocket runtime ownership, and
 [`tests/server/test_voice_server_lifecycle.py`](../../tests/server/test_voice_server_lifecycle.py)
 for lifecycle behavior.
 

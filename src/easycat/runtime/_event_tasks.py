@@ -17,6 +17,30 @@ from easycat.runtime.scope import (
 )
 
 
+async def wait_for_owned_future(
+    future: asyncio.Future[Any],
+    *,
+    timeout_s: float,
+) -> bool:
+    """Apply a hard duration bound without creating or retaining hidden work.
+
+    The caller must establish and retain ownership before calling this helper.
+    A timeout requests cancellation, gives cooperative cleanup one event-loop
+    turn, and returns ``False`` without waiting for cancellation-resistant work.
+    Cancelling the caller leaves the owned future running and propagates the
+    caller's cancellation.
+    """
+    if not isinstance(future, asyncio.Future):
+        raise TypeError("wait_for_owned_future requires an already-owned Future or Task")
+    done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
+    if future not in done:
+        future.cancel()
+        await asyncio.sleep(0)
+        return False
+    await future
+    return True
+
+
 class RuntimeTaskScope:
     """Own self-pruning tasks under an attached or standalone root."""
 

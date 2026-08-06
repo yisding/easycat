@@ -60,9 +60,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
-from easycat.server.transports import _await_with_hard_timeout
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
@@ -594,7 +593,7 @@ class WebRTCRoutes:
             if timeout_s is None:
                 results = await cleanup
             else:
-                completed = await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+                completed = await wait_for_owned_future(cleanup, timeout_s=timeout_s)
                 results = cleanup.result() if completed else None
             if results is not None:
                 self._report_cleanup_results(
@@ -754,7 +753,7 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
                 task_name="easycat-standalone-webrtc-session-sweep",
             )
             assert sweep_task is not None
-            swept = await _await_with_hard_timeout(
+            swept = await wait_for_owned_future(
                 sweep_task,
                 timeout_s=max(force_shutdown_timeout_s, 0.0),
             )

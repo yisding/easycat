@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.runtime.scope import (
     RuntimeScope,
     RuntimeScopeState,
@@ -234,3 +234,56 @@ async def test_attached_scope_can_cancel_workers_during_graceful_close() -> None
     assert task.cancelled()
     assert cleaned_up.is_set()
     assert parent.state is RuntimeScopeState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_owned_future_hard_timeout_retains_cancellation_resistant_task() -> None:
+    tasks = _task_scope()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def worker() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+
+    task = tasks.create_task(worker(), task_name="owned-hard-timeout")
+    assert task is not None
+
+    assert await wait_for_owned_future(task, timeout_s=0.01) is False
+    await asyncio.wait_for(cancellation_seen.wait(), timeout=1)
+    assert tasks.tasks() == (task,)
+
+    release.set()
+    await task
+    await asyncio.sleep(0)
+    await tasks.release_standalone_if_empty()
+    assert tasks.tasks() == ()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_owned_future_waiter_does_not_cancel_owned_work() -> None:
+    tasks = _task_scope()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def worker() -> None:
+        started.set()
+        await release.wait()
+
+    task = tasks.create_task(worker(), task_name="externally-cancelled-wait")
+    assert task is not None
+    await started.wait()
+    waiter = asyncio.create_task(wait_for_owned_future(task, timeout_s=60.0))
+    await asyncio.sleep(0)
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert task.cancelled() is False
+    assert tasks.tasks() == (task,)
+    release.set()
+    await task

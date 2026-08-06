@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
-from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.server.auth import from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
@@ -42,7 +42,7 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate, _await_with_hard_timeout
+from easycat.server.transports import CapacityGate
 from easycat.session_manager import (
     SessionManager,
     SessionStopReport,
@@ -613,7 +613,7 @@ class VoiceServer:
         assert sweep_task is not None
         sweep_succeeded, swept = await self._attempt_cleanup(
             "SessionManager hard sweep",
-            _await_with_hard_timeout(
+            wait_for_owned_future(
                 sweep_task,
                 timeout_s=self.config.force_shutdown_timeout_s,
             ),
@@ -934,7 +934,7 @@ class VoiceServer:
             assert task is not None
             close_tasks.append(task)
         close_group = asyncio.gather(*close_tasks, return_exceptions=True)
-        closed = await _await_with_hard_timeout(
+        closed = await wait_for_owned_future(
             close_group,
             timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
         )
@@ -1030,7 +1030,7 @@ class VoiceServer:
             if timeout_s is None:
                 results = await gathered
             else:
-                completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                completed = await wait_for_owned_future(gathered, timeout_s=timeout_s)
                 results = gathered.result() if completed else None
             if results is not None:
                 self._report_shutdown_task_results(
