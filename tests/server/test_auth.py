@@ -14,6 +14,7 @@ from easycat.server.auth import (
     EASYCAT_SERVE_TOKEN_ENV,
     BearerTokenAuth,
     NoAuth,
+    authorized_bind,
     bearer_auth_from_env,
     enforce_bind_guard,
     from_aiohttp_request,
@@ -236,6 +237,40 @@ def test_bind_guard_honors_bearer_token_policy_escape_hatch() -> None:
         "0.0.0.0",
         auth=BearerTokenAuth(token="", unsafe_allow_no_auth=True),
     )
+
+
+@pytest.mark.asyncio
+async def test_authorized_bind_rejects_before_constructing_binder() -> None:
+    called = False
+
+    async def binder() -> object:
+        nonlocal called
+        called = True
+        return object()
+
+    with pytest.raises(ValueError, match="without a token"):
+        await authorized_bind("0.0.0.0", auth=None, binder=binder)
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_authorized_bind_preserves_backend_result_and_error() -> None:
+    result = object()
+
+    async def successful_binder() -> object:
+        return result
+
+    assert await authorized_bind("127.0.0.1", auth=None, binder=successful_binder) is result
+
+    error = RuntimeError("bind failed")
+
+    async def failing_binder() -> object:
+        raise error
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await authorized_bind("127.0.0.1", auth=None, binder=failing_binder)
+    assert exc_info.value is error
 
 
 # ── bearer_auth_from_env ─────────────────────────────────────────────

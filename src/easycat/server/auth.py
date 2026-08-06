@@ -35,8 +35,9 @@ light.
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, TypeGuard, runtime_checkable
+from typing import Any, Literal, Protocol, TypeGuard, TypeVar, runtime_checkable
 
 from easycat._net import constant_time_strings_equal, is_loopback_host
 
@@ -45,6 +46,7 @@ from easycat._net import constant_time_strings_equal, is_loopback_host
 EASYCAT_SERVE_TOKEN_ENV = "EASYCAT_SERVE_TOKEN"
 
 AuthReason = Literal["allowed", "missing", "invalid"]
+_BindResult = TypeVar("_BindResult")
 
 
 @runtime_checkable
@@ -297,3 +299,25 @@ def enforce_bind_guard(
         "loopback, or pass unsafe_allow_no_auth=True to bind an unauthenticated "
         "endpoint."
     )
+
+
+async def authorized_bind(
+    host: str,
+    *,
+    auth: AuthPolicy | None,
+    binder: Callable[[], Awaitable[_BindResult]],
+    unsafe_allow_no_auth: bool = False,
+) -> _BindResult:
+    """Authorize ``host`` immediately before invoking one async binder.
+
+    Keeping the binder behind a zero-argument callback makes the guard part of
+    the socket-opening capability: a rejected bind cannot even construct or
+    call the backend awaitable. Backend exceptions and return values propagate
+    unchanged.
+    """
+    enforce_bind_guard(
+        host,
+        auth=auth,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+    )
+    return await binder()

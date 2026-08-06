@@ -58,6 +58,7 @@ from easycat.server.auth import (
     AuthResult,
     BearerTokenAuth,
     NoAuth,
+    authorized_bind,
     bearer_auth_from_env,
     enforce_bind_guard,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "VoiceServerConfig",
     "VoiceServerHealth",
     "WebRTCRoutes",
+    "authorized_bind",
     "bearer_auth_from_env",
     "enforce_bind_guard",
     "run_webrtc_config_server",
