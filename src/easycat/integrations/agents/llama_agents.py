@@ -43,6 +43,8 @@ _RESET_CLEANUP_TASK = "llama_reset_cleanup"
 _RESET_CLEANUP_COHORT = "llama-reset-cleanup"
 _CANCEL_CLEANUP_TASK = "llama_cancel_cleanup"
 _CANCEL_CLEANUP_COHORT = "llama-cancel-cleanup"
+_STREAM_RACE_TASK = "llama_stream_race"
+_STREAM_RACE_COHORT = "llama-stream-race"
 
 
 _TEXT_FIELDS = (
@@ -1113,6 +1115,38 @@ class _SuspendableSource:
         await _aclose_iterator(self._iter)
 
 
+async def _wait_for_cancel(cancel_token: CancelToken) -> None:
+    await cancel_token.wait()
+
+
+async def _close_stream_race(
+    race_tasks: RuntimeTaskScope,
+    cancel_wait: asyncio.Task[None],
+    next_item: asyncio.Task[Any] | None,
+    iterator: AsyncIterator[Any],
+    *,
+    exhausted: bool,
+) -> None:
+    """Reap both race arms, release their scope, then close the source."""
+    try:
+        if next_item is not None:
+            if not next_item.done():
+                next_item.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                await next_item
+            race_tasks.discard_task(next_item)
+        cancel_wait.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cancel_wait
+        race_tasks.discard_task(cancel_wait)
+    finally:
+        try:
+            await race_tasks.release_standalone_if_empty()
+        finally:
+            if not exhausted:
+                await _aclose_iterator(iterator)
+
+
 async def _aiter_with_cancellation(
     source: AsyncIterator[Any],
     cancel_token: CancelToken | None,
@@ -1154,11 +1188,27 @@ async def _aiter_with_cancellation(
                 await _aclose_iterator(iterator)
         return
 
-    cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
+    race_tasks = RuntimeTaskScope(
+        owner_label="llama-agents-stream-race",
+        member_name=_STREAM_RACE_TASK,
+        cohort=_STREAM_RACE_COHORT,
+        logger=logger,
+        failure_message="LlamaAgents stream race task failed",
+        drop_if_closed=False,
+    )
+    cancel_wait = race_tasks.create_task(
+        _wait_for_cancel(cancel_token),
+        task_name="easycat-llama-stream-cancel",
+    )
+    assert cancel_wait is not None
     next_item: asyncio.Task[Any] | None = None
     try:
         while not cancel_token.is_cancelled:
-            next_item = asyncio.ensure_future(iterator.__anext__())
+            next_item = race_tasks.create_awaitable_task(
+                iterator.__anext__(),
+                task_name="easycat-llama-stream-next",
+            )
+            assert next_item is not None
             await asyncio.wait(
                 (next_item, cancel_wait),
                 return_when=asyncio.FIRST_COMPLETED,
@@ -1172,22 +1222,20 @@ async def _aiter_with_cancellation(
                 return
             # Read consumed; clear so the finally does not re-handle it and a
             # hard cancel during ``yield`` is not mistaken for a pending read.
+            race_tasks.discard_task(next_item)
             next_item = None
             yield item
     finally:
         # A hard task cancel can land on ``asyncio.wait()`` above while the
         # read is still pending; closing the iterator is not enough while
         # ``__anext__()`` runs, so cancel and await it first.
-        if next_item is not None:
-            if not next_item.done():
-                next_item.cancel()
-            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
-                await next_item
-        cancel_wait.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cancel_wait
-        if not exhausted:
-            await _aclose_iterator(iterator)
+        await _close_stream_race(
+            race_tasks,
+            cancel_wait,
+            next_item,
+            iterator,
+            exhausted=exhausted,
+        )
 
 
 _REMOTE_FAILURE_STATUSES = frozenset(

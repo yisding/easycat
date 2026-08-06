@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from typing import Any
 
 from easycat.runtime.scope import (
@@ -161,6 +161,32 @@ class RuntimeTaskScope:
             if scope.state is RuntimeScopeState.OPEN or not self._drop_if_closed:
                 raise
             coro.close()
+            self._logger.debug("Could not start task - runtime scope is closed")
+            return None
+        task.add_done_callback(self._on_done)
+        return task
+
+    def create_awaitable_task(
+        self,
+        awaitable: Awaitable[Any],
+        *,
+        task_name: str,
+    ) -> asyncio.Task[Any] | None:
+        """Create one owned task from an SDK-specific non-coroutine awaitable."""
+        scope = self.ensure_scope()
+        try:
+            task = scope.create_awaitable_task(
+                self._member_name,
+                awaitable,
+                task_name=task_name,
+                policy=self._policy,
+            )
+        except RuntimeError:
+            if scope.state is RuntimeScopeState.OPEN or not self._drop_if_closed:
+                raise
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
             self._logger.debug("Could not start task - runtime scope is closed")
             return None
         task.add_done_callback(self._on_done)

@@ -58,6 +58,10 @@ class TestAiterWithCancellation:
         agen = _aiter_with_cancellation(source, token)
 
         assert await agen.__anext__() == "first"
+        assert source.read_task_names == ["easycat-llama-stream-next"]
+        assert any(
+            task.get_name() == "easycat-llama-stream-cancel" for task in asyncio.all_tasks()
+        )
         await asyncio.wait_for(agen.aclose(), timeout=2.0)
 
         assert source.closed is True

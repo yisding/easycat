@@ -208,6 +208,36 @@ async def test_cancel_and_drain_closes_standalone_root() -> None:
 
 
 @pytest.mark.asyncio
+async def test_awaitable_task_owns_async_generator_next_read() -> None:
+    tasks = _task_scope()
+    closed = False
+
+    async def values():
+        nonlocal closed
+        try:
+            yield "value"
+        finally:
+            closed = True
+
+    iterator = values()
+    task = tasks.create_awaitable_task(
+        iterator.__anext__(),
+        task_name="sdk-stream-next",
+    )
+    assert task is not None
+    assert task.get_name() == "sdk-stream-next"
+    assert tasks.tasks() == (task,)
+
+    assert await task == "value"
+    await asyncio.sleep(0)
+    assert tasks.tasks() == ()
+
+    await tasks.release_standalone_if_empty()
+    await iterator.aclose()
+    assert closed
+
+
+@pytest.mark.asyncio
 async def test_attached_scope_can_cancel_workers_during_graceful_close() -> None:
     tasks = _task_scope(
         graceful_action=RuntimeTaskAction.CANCEL,
